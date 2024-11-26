@@ -31,7 +31,7 @@ SELECT * FROM my_table /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 
 ## Limit Read
 
-The Fluss source support limit read for both the primary-key table and the log table. It is useful to preview the latest N records in a table.
+The Fluss sources supports limiting reads for both primary-key tables and log tables, making it convenient to preview the latest `N` records in a table.
 
 ### Example
 1. Create a table and prepare data
@@ -65,8 +65,7 @@ SELECT * FROM log_table LIMIT 10;
 
 ## Point Query
 
-The Fluss source supports point query for primary-key tables. It is useful to inspect a specific record in a table. Currently, the point query only supports the primary-key table.
-
+The Fluss source supports point queries for primary-key tables, allowing you to inspect specific records efficiently. Currently, this functionality is exclusive to primary-key tables.
 
 ### Example
 1. Create a table and prepare data
@@ -103,7 +102,7 @@ SELECT * FROM pk_table WHERE c_custkey = 1;
 ## Read Options
 
 ### scan.startup.mode
-Currently, Fluss supports the following `scan.startup.mode`:
+The scan startup mode enables you to specify the starting point for data consumption. Fluss currently supports the following `scan.startup.mode` options:
 - `initial` (default): For primary key tables, it first consumes the full data set and then consumes incremental data. For log tables, it starts consuming from the earliest offset.
 - `earliest`: For primary key tables, it starts consuming from the earliest changelog offset; for log tables, it starts consuming from the earliest log offset.
 - `latest`: For primary key tables, it starts consuming from the latest changelog offset; for log tables, it starts consuming from the latest log offset.

@@ -5,24 +5,26 @@ sidebar_position: 1
 
 # Real-Time Analytics With Flink
 
-The guide will get you up and running with Flink to do real-time analytics, covering some powerful features of Fluss. 
-The guide is derived from from [TPC-H](https://www.tpc.org/tpch/) Q5. You can learn more about running with Flink by 
-checking out the [Engine Flink](engine-flink/getting-started.md) section.
+This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss. 
+The guide is derived from from [TPC-H](https://www.tpc.org/tpch/) **Q5**. 
+
+For more information on working with Flink, refer to the [Apache Flink Engine](engine-flink/getting-started.md) section.
 
 ## Environment Setup
 ### Prerequisites
-To go through this guide, [Docker](https://docs.docker.com/engine/install/) needs to be already installed in your machine.
+Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/engine/install/) is installed on your machine.
 
 ### Starting components required
-The components required in this tutorial are all managed in containers, so we will use `docker-compose` to start them.
+We will use `docker-compose` to spin up all the required components for this tutorial.
 
-1. Create a directory to put the `docker-compose.yaml` file, it will be your working directory in this guide.
+1. Create a directory to serve as your working directory for this guide and add the `docker-compose.yaml` file to it.
+
 ```shell
 mkdir fluss-quickstart-flink
 cd fluss-quickstart-flink
 ```
 
-2. Create `docker-compose.yml` file using following contents:
+2. Create `docker-compose.yml` file with the following content:
 ```yaml
 services:
   coordinator-server:
@@ -84,17 +86,20 @@ volumes:
 ```
 
 The Docker Compose environment consists of the following containers:
-- Fluss Cluster: a Fluss CoordinatorServer, a Fluss TabletServer and a ZooKeeper server.
-- Flink Cluster: a Flink JobManager and a Flink TaskManager container to execute queries.
-The image `fluss/quickstart-flink` is from [flink:1.20.0-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256-381ed7399c95b6b03a7b5ee8baca91fd84e24def9965ce9d436fb22773d66717), but 
-has packaged the [fluss-connector-flink](engine-flink/getting-started.md), [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
+- **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
+- **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
+
+**Note:** The `fluss/quickstart-flink` image is based on [flink:1.20.0-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256-381ed7399c95b6b03a7b5ee8baca91fd84e24def9965ce9d436fb22773d66717) and 
+includes the [fluss-connector-flink](engine-flink/getting-started.md) and [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
 3. To start all containers, run the following command in the directory that contains the `docker-compose.yml` file:
 ```shell
 docker-compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in a detached mode.
-Run `docker ps` to check whether these containers are running properly. You can also visit http://localhost:8081/ to see if Flink is running normally.
+Run `docker ps` to check whether these containers are running properly. 
+
+You can also visit http://localhost:8081/ to see if Flink is running normally.
 
 :::note
 - If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](engine-flink/getting-started.md), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases) connector jars and then put them to `FLINK_HOME/lib/`.
@@ -107,9 +112,8 @@ First, use the following command to enter the Flink SQL CLI Container:
 docker-compose exec jobmanager ./sql-client
 ```
 
-**NOTE**:
-To simplify this guide, it has prepared three temporary `faker` tables to generate data, you can use `describe table source_customer` 
-, `describe table source_order` and `describe table source_nation` to see the schema of the pre-created tables.
+**Note**:
+To simplify this guide, three temporary tables have been pre-created with `faker` to generate data. You can view their schemas by running the following commands: `DESCRIBE TABLE source_customer`, `DESCRIBE TABLE source_order`, and `DESCRIBE TABLE source_nation`.
 
 ## Create Fluss Tables
 ### Create Fluss Catalog
@@ -175,9 +179,9 @@ First, run the following sql to sync data from source tables to Fluss tables:
 ```sql  title="Flink SQL Client"
 EXECUTE STATEMENT SET
 BEGIN
-INSERT INTO fluss_nation SELECT * FROM `default_catalog`.`default_database`.source_nation;
-INSERT INTO fluss_customer SELECT * FROM `default_catalog`.`default_database`.source_customer;
-INSERT INTO fluss_order SELECT * FROM `default_catalog`.`default_database`.source_order;
+    INSERT INTO fluss_nation SELECT * FROM `default_catalog`.`default_database`.source_nation;
+    INSERT INTO fluss_customer SELECT * FROM `default_catalog`.`default_database`.source_customer;
+    INSERT INTO fluss_order SELECT * FROM `default_catalog`.`default_database`.source_order;
 END;
 ```
 
@@ -187,11 +191,22 @@ primary-key tables `fluss_customer` and `fluss_nation` to enrich the `fluss_orde
 
 ```sql  title="Flink SQL Client"
 INSERT INTO enriched_orders
-SELECT o.order_key, o.cust_key, o.total_price, o.order_date, o.order_priority, o.clerk,
-    c.name, c.phone, c.acctbal, c.mktsegment, n.name
+SELECT o.order_key, 
+       o.cust_key, 
+       o.total_price,
+       o.order_date, 
+       o.order_priority,
+       o.clerk,
+       c.name,
+       c.phone,
+       c.acctbal, 
+       c.mktsegment,
+       n.name
 FROM fluss_order o 
-LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c` ON o.cust_key = c.cust_key
-LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n` ON c.nation_key = n.nation_key;
+LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c` 
+    ON o.cust_key = c.cust_key
+LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n` 
+    ON c.nation_key = n.nation_key;
 ```
 
 ## Real-Time Analytics on Fluss Tables
@@ -222,4 +237,4 @@ The result should be returned quickly since Fluss supports fast lookup by primar
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run `docker-compose down` to stop all containers.
 
 ## Learn more
-Now that you're up an running with Fluss and Flink, check out the [Engine Flink](engine-flink/getting-started.md) docs to learn more features with Flink!
+Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink!

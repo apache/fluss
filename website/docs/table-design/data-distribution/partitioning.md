@@ -4,10 +4,15 @@ sidebar_position: 2
 
 # Partitioning
 
-TODO: first introduce Partitioned Table and the concept of Partition.
+## Partitioned Tables
+In Fluss, a **Partitioned Table** organizes data based on one or more partition keys, providing a way to improve query performance and manageability for large datasets. Partitions allow the system to divide data into distinct segments, each corresponding to specific values of the partition keys.
 
-## Introduction
 For partitioned tables, Fluss supports auto partitioning creation. Partitions can be automatically created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data not expanding unlimited.
+
+### Key Benefits of Partitioned Tables
+- **Improved Query Performance:** By narrowing down the query scope to specific partitions, the system reads less data, reducing query execution time.
+- **Data Organization:** Partitions help in logically organizing data, making it easier to manage and query.
+- **Scalability:** Partitioning large datasets distributes the data across smaller, manageable chunks, improving scalability.
 
 ## Restrictions
 - Only one partition key is supported, and the type of the partition key must be STRING.
@@ -48,13 +53,13 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 ### Partition Generation Rules
 The time unit for the automatic partition table `auto-partition.time-unit` can take values of HOUR, DAY, MONTH, QUARTER, or YEAR. Automatic partitioning will use the following format to create partitions.
 
-| 时间单位      | 分区格式          | 示例         |
-|-----------|---------------|------------|
-| HOUR      | yyyyMMddHH    | 2024091922 |
-| DAY       | yyyyMMdd      | 20240919   |
-| MONTH     | yyyyMM        | 202409     |
-| QUARTER   | yyyyQ         | 20241      |
-| YEAR      | yyyy          | 2024       |
+| Time Unit | Partition Format | Example    |
+|-----------|------------------|------------|
+| HOUR      | yyyyMMddHH       | 2024091922 |
+| DAY       | yyyyMMdd         | 20240919   |
+| MONTH     | yyyyMM           | 202409     |
+| QUARTER   | yyyyQ            | 20241      |
+| YEAR      | yyyy             | 2024       |
 	
 ### Fluss Cluster Configuration
 Below are the configuration items related to Fluss cluster and automatic partitioning.

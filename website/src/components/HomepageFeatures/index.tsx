@@ -30,37 +30,37 @@ const FeatureList: FeatureItem[] = [
     {
         title: 'Sub-Second Latency',
         content:
-            'Supports streaming reads and writes with low latency like Kafka. Fluss + Flink can build high-throughput, low-latency streaming data warehouses for real-time applications.',
+            'Fluss supports low-latency streaming reads and writes, similar to Apache Kafka. Combined with Apache Flink, Fluss enables the creation of high-throughput, low-latency streaming data warehouses, optimized for real-time applications.',
         Svg: require('@site/static/img/feature_real_time.svg').default
     },
     {
         title: 'Columnar Stream',
         content:
-            'Fluss stores streaming data in columnar format. This improves streaming read perfromance to 10x and lowers networking costs by pushdown projections.',
+            'Fluss stores streaming data in a columnar format, delivering up to 10x improvement in streaming read performance. Networking costs are significantly reduced through efficient pushdown projections.',
         Svg: require('@site/static/img/feature_column.svg').default
     },
     {
-        title: 'Unified Stream/Lakehouse',
+        title: 'Streaming & Lakehouse Unification',
         content:
-            'Fluss unifies data streaming and data lakehouse by serving streaming data on top of lakehouse. This brings low latency to lakehouse and powerful analytics to streams.',
+            'Fluss unifies data streaming and the data Lakehouse by serving streaming data on top of the Lakehouse. This allows for low latencies on the Lakehouse and powerful analytics to data streams.',
         Svg: require('@site/static/img/feature_lake.svg').default
     },
     {
         title: 'Real-Time Updates',
         content:
-            'Primary-Key Table supports real-time streaming updates of large-scale data. It also supports partial-updates to enrich wide table with lower cost than join operations.',
+            'The Primary Key Table supports real-time streaming updates for large-scale data. It also enables cost-efficient partial updates, making it ideal for enriching wide tables without expensive join operations.',
         Svg: require('@site/static/img/feature_update.svg').default
     },
     {
-        title: 'Changelog Tracking',
+        title: 'Changelog Generation & Tracking',
         content:
-            'Updates generate comprehensive changelogs which can be directly consumed by streaming processors in real-time. This simplifies and reduces costs for streaming analytics.',
+            'Updates generate complete changelogs that can be directly consumed by streaming processors in real time. This allows to streamline streaming analytics workflows and reduce operational costs.',
         Svg: require('@site/static/img/feature_changelog.svg').default
     },
     {
         title: 'Lookup Queries',
         content:
-            'Fluss supports ultra-high QPS for point lookup on primary keys. This enables Fluss to serve as dimension tables, working with Flink for high-throughput lookup joins.',
+            'Fluss supports ultra-high QPS for primary key point lookups, making it an ideal solution for serving dimension tables. When combined with Apache Flink, it enables high-throughput lookup joins with exceptional efficiency.',
         Svg: require('@site/static/img/feature_lookup.svg').default
     },
     // {

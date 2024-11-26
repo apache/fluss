@@ -4,6 +4,7 @@ sidebar_position: 5
 ---
 
 # Flink Lookup Joins
+Flink lookup joins are important because they enable efficient, real-time enrichment of streaming data with reference data, a common requirement in many real-time analytics and processing scenarios.
 
 ## Instructions
 - Use a primary key table as a dimension table,  and the join condition must include all primary keys of the dimension table.

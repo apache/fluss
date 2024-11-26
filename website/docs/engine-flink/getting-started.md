@@ -5,7 +5,8 @@ sidebar_position: 1
 
 # Getting Started with Flink Engine
 ## Quick Start
-If you want to quickly start running with Flink, see the [Quick Start](../quickstart/flink.md).
+For a quick introduction to running Flink, refer to the [Quick Start](../quickstart/flink.md) guide.
+
 
 ## Support Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
@@ -145,7 +146,7 @@ SELECT * FROM pk_table /*+ OPTIONS('scan.startup.mode' = 'timestamp',
 ## Type Conversion
 Fluss's integration for Flink automatically converts between Flink and Fluss types.
 
-### Fluss to Flink
+### Fluss -> Apache Flink
 
 | Fluss         | Flink         |
 |---------------|---------------|
@@ -165,7 +166,7 @@ Fluss's integration for Flink automatically converts between Flink and Fluss typ
 | TIMESTAMP_LTZ | TIMESTAMP_LTZ |
 | BYTES         | BYTES         |
 
-### Flink to Fluss
+### Apache Flink -> Fluss
 
 | Flink         | Fluss          | 
 |---------------|----------------|
