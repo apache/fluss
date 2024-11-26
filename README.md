@@ -3,7 +3,6 @@ Fluss
 
 FLUSS is a **FL**ink **U**nified **S**treaming **S**torage.
 
-
 ## Development
 
 ### Code Formatting
@@ -15,7 +14,7 @@ Please see the [documents](https://nightlies.apache.org/flink/flink-docs-master/
 
 Fluss uses [AssertJ](https://assertj.github.io/doc/) as testing assertion framework ([why](https://flink.apache.org/how-to-contribute/code-style-and-quality-common/#tooling)). Please do not use JUnit assertions, Hamcrest matchers, Mockito assertions or any other assertion framework.
 If you have a lot of JUnit assertions in code, you can use [Assertions2Assertj](https://plugins.jetbrains.com/plugin/10345-assertions2assertj) IntelliJ IDEA plugin to easy convert Junit assertions into AssertJ.
-For conversion, you can right click on the test file in IntelliJ IDEA and select `Refactor` -> `Convert Assertions to AssertJ` -> `Convert current file`.
+For conversion, you can right-click on the test file in IntelliJ IDEA and select `Refactor` -> `Convert Assertions to AssertJ` -> `Convert current file`.
 
 Besides, [please avoid using @Timeout in JUnit tests](https://flink.apache.org/how-to-contribute/code-style-and-quality-common/#avoid-timeouts-in-junit-tests).
 
