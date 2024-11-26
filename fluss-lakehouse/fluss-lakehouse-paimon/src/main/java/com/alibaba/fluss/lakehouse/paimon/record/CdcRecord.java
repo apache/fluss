@@ -18,13 +18,10 @@ package com.alibaba.fluss.lakehouse.paimon.record;
 
 import org.apache.flink.table.data.RowData;
 
-import java.io.Serializable;
 import java.util.Objects;
 
 /** A data change mess from the Fluss source. */
-public class CdcRecord implements Serializable {
-
-    private static final long serialVersionUID = 1L;
+public class CdcRecord {
 
     private long offset;
     private long timestamp;
