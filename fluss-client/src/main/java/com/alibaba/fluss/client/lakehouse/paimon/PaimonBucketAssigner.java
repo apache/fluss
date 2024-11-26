@@ -16,9 +16,9 @@
 
 package com.alibaba.fluss.client.lakehouse.paimon;
 
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
+import com.alibaba.fluss.types.RowType;
 
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.serializer.InternalRowSerializer;
@@ -36,24 +36,22 @@ public class PaimonBucketAssigner {
     private final InternalRowSerializer bucketKeyRowSerializer;
     private final ProjectedRow bucketKeyProjectedRow;
 
-    public PaimonBucketAssigner(TableDescriptor tableDescriptor, int bucketNum) {
+    public PaimonBucketAssigner(RowType rowType, List<String> bucketKey, int bucketNum) {
         this.bucketNum = bucketNum;
-        int[] bucketKeyIndex = getBucketKeyIndex(tableDescriptor, tableDescriptor.getBucketKey());
+        int[] bucketKeyIndex = getBucketKeyIndex(rowType, bucketKey);
         this.bucketKeyProjectedRow = ProjectedRow.from(bucketKeyIndex);
         DataType[] bucketKeyDataTypes =
-                tableDescriptor.getSchema().toRowType().project(bucketKeyIndex).getChildren()
-                        .stream()
+                rowType.project(bucketKeyIndex).getChildren().stream()
                         .map(dataType -> dataType.accept(FlussDataTypeToPaimonDataType.INSTANCE))
                         .toArray(DataType[]::new);
         this.bucketKeyRowSerializer = new InternalRowSerializer(bucketKeyDataTypes);
         this.flussRowWrapper = new FlussRowWrapper();
     }
 
-    private int[] getBucketKeyIndex(TableDescriptor tableDescriptor, List<String> bucketKeys) {
-        List<String> columnNames = tableDescriptor.getSchema().getColumnNames();
-        int[] bucketKeyIndex = new int[bucketKeys.size()];
-        for (int i = 0; i < bucketKeys.size(); i++) {
-            bucketKeyIndex[i] = columnNames.indexOf(bucketKeys.get(i));
+    private static int[] getBucketKeyIndex(RowType rowType, List<String> bucketKey) {
+        int[] bucketKeyIndex = new int[bucketKey.size()];
+        for (int i = 0; i < bucketKey.size(); i++) {
+            bucketKeyIndex[i] = rowType.getFieldIndex(bucketKey.get(i));
         }
         return bucketKeyIndex;
     }

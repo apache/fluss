@@ -105,19 +105,43 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         assertThat(paimonSnapshotRows.toString().replace("+U", "+I"))
                 .isEqualTo(sortedRows(expectedRows).toString());
 
+        // test point query with fluss
+        String queryFilterStr = "a = 2222";
+        String partitionName =
+                isPartitioned ? waitUntilPartitions(t1).values().iterator().next() : null;
+        if (partitionName != null) {
+            queryFilterStr = queryFilterStr + " and c = '" + partitionName + "'";
+        }
+
         // test point query
         List<String> paimonPointQueryRows =
                 toSortedRows(
                         batchTEnv.executeSql(
-                                String.format("select * from %s$lake where a = 2222", tableName)));
+                                String.format(
+                                        "select * from %s$lake where %s",
+                                        tableName, queryFilterStr)));
         List<String> expectedPointQueryRows =
                 expectedRows.stream()
-                        .filter(row -> row.getField(1).equals(2222))
+                        .filter(
+                                row -> {
+                                    boolean isMatch = row.getField(1).equals(2222);
+                                    if (partitionName != null) {
+                                        isMatch = isMatch && row.getField(3).equals(partitionName);
+                                    }
+                                    return isMatch;
+                                })
                         .map(Row::toString)
                         .sorted()
                         .collect(Collectors.toList());
 
         assertThat(paimonPointQueryRows).isEqualTo(expectedPointQueryRows);
+
+        List<String> flussPointQueryRows =
+                toSortedRows(
+                        batchTEnv.executeSql(
+                                String.format(
+                                        "select * from %s where %s", tableName, queryFilterStr)));
+        assertThat(flussPointQueryRows).isEqualTo(expectedPointQueryRows);
 
         // read paimon system table
         List<String> paimonOptionsRows =

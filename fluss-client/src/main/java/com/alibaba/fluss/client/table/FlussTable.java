@@ -17,6 +17,7 @@
 package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
 import com.alibaba.fluss.client.lookup.LookupClient;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.scanner.RemoteFileDownloader;
@@ -101,6 +102,7 @@ public class FlussTable implements Table {
     private final TableInfo tableInfo;
     private final boolean hasPrimaryKey;
     private final int numBuckets;
+    private final RowType keyRowType;
     // encode the key bytes for kv lookups
     private final KeyEncoder keyEncoder;
     // decode the lookup bytes to result row
@@ -117,6 +119,8 @@ public class FlussTable implements Table {
 
     private volatile RemoteFileDownloader remoteFileDownloader;
     private volatile SecurityTokenManager securityTokenManager;
+
+    private @Nullable LakeTableBucketAssigner lakeTableBucketAssigner;
 
     public FlussTable(
             Configuration conf,
@@ -142,7 +146,7 @@ public class FlussTable implements Table {
         Schema schema = tableDescriptor.getSchema();
         this.hasPrimaryKey = tableDescriptor.hasPrimaryKey();
         this.numBuckets = metadataUpdater.getBucketCount(tablePath);
-        RowType keyRowType = getKeyRowType(schema);
+        this.keyRowType = getKeyRowType(schema);
         this.keyEncoder =
                 KeyEncoder.createKeyEncoder(
                         keyRowType, keyRowType.getFieldNames(), tableDescriptor.getPartitionKeys());
@@ -173,7 +177,7 @@ public class FlussTable implements Table {
         // a row
         byte[] keyBytes = keyEncoder.encode(key);
         Long partitionId = keyRowPartitionGetter == null ? null : getPartitionId(key);
-        int bucketId = HashBucketAssigner.bucketForRowKey(keyBytes, numBuckets);
+        int bucketId = getBucketId(keyBytes, key);
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
         return lookupClientSupplier
                 .get()
@@ -186,6 +190,22 @@ public class FlussTable implements Table {
                                             : kvValueDecoder.decodeValue(valueBytes).row;
                             return new LookupResult(row);
                         });
+    }
+
+    private int getBucketId(byte[] keyBytes, InternalRow key) {
+        if (!tableInfo.getTableDescriptor().isDataLakeEnabled()) {
+            return HashBucketAssigner.bucketForRowKey(keyBytes, numBuckets);
+        } else {
+            if (lakeTableBucketAssigner == null) {
+                lakeTableBucketAssigner =
+                        new LakeTableBucketAssigner(
+                                keyRowType,
+                                tableInfo.getTableDescriptor().getBucketKey(),
+                                numBuckets);
+            }
+            return lakeTableBucketAssigner.assignBucket(
+                    keyBytes, key, metadataUpdater.getCluster());
+        }
     }
 
     @Override

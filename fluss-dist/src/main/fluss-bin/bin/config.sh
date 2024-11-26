@@ -46,6 +46,21 @@ constructFlussClassPath() {
     echo "$FLUSS_CLASSPATH""$FLUSS_SERVER"
 }
 
+constructPluginJars() {
+  plugin="$1"
+  local PLUGIN_JARS=()
+  while read -d '' -r jarfile ; do
+      if [[ "$jarfile" =~ .*/$plugin/[^/]*.jar$ ]]; then
+        PLUGIN_JARS+=("file://$jarfile")
+      fi
+  done < <(find "$FLUSS_PLUGINS_DIR" ! -type d -name '*.jar' -print0 | sort -z)
+
+  if [ ${#PLUGIN_JARS[@]} -gt 0 ]; then
+    IFS=';'
+    echo "${PLUGIN_JARS[*]}"
+  fi
+}
+
 constructLogClassClassPath() {
   local LOG_CLASSPATH
   while read -d '' -r jarfile ; do

@@ -21,8 +21,11 @@ import com.alibaba.fluss.client.write.BucketAssigner;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
+
+import java.util.List;
 
 /** A bucket assigner for table with data lake enabled. */
 public class LakeTableBucketAssigner implements BucketAssigner {
@@ -33,7 +36,15 @@ public class LakeTableBucketAssigner implements BucketAssigner {
     private final PaimonBucketAssigner paimonBucketAssigner;
 
     public LakeTableBucketAssigner(TableDescriptor tableDescriptor, int bucketNum) {
-        this.paimonBucketAssigner = new PaimonBucketAssigner(tableDescriptor, bucketNum);
+        this.paimonBucketAssigner =
+                new PaimonBucketAssigner(
+                        tableDescriptor.getSchema().toRowType(),
+                        tableDescriptor.getBucketKey(),
+                        bucketNum);
+    }
+
+    public LakeTableBucketAssigner(RowType rowType, List<String> bucketKey, int bucketNum) {
+        this.paimonBucketAssigner = new PaimonBucketAssigner(rowType, bucketKey, bucketNum);
     }
 
     @Override

@@ -32,6 +32,25 @@ err="${FLUSS_LOG_PREFIX}.err"
 
 log_setting=("-Dlog.file=${log}" "-Dlog4j.configuration=file:${FLUSS_CONF_DIR}/log4j-console.properties" "-Dlog4j.configurationFile=file:${FLUSS_CONF_DIR}/log4j-console.properties" "-Dlogback.configurationFile=file:${FLUSS_CONF_DIR}/logback-console.xml")
 
+get_schema() {
+    uri="$1"
+    if echo "$uri" | grep -q '://'; then
+        echo "$uri" | grep -o '^[^:]*'
+    else
+        echo "file"
+    fi
+}
+
+addition_jars=""
+
+# for fluss client to access remote filesystem, we need to prepare filesystem plugins
+fluss_filesystem_scheme=$(get_schema "$REMOTE_DATA_DIR")
+fluss_plugin_jars=$(constructPluginJars ${fluss_filesystem_scheme})
+
+if [ ! -z "$fluss_plugin_jars" ]; then
+    addition_jars="${fluss_plugin_jars}"
+fi
+
 echo "Starting lakehouse tiering service"
 
 LAKEHOUSE_SERVICE_CLASS_TO_RUN=com.alibaba.fluss.lakehouse.cli.FlussLakehouseCli
@@ -39,7 +58,13 @@ LAKEHOUSE_SERVICE_CLASSPATH=`findLakehouseCliJar`
 
 LAKEHOUSE_PAIMON_JAR=`findLakehousePaimonJar`
 
-args=("run" "${LAKEHOUSE_PAIMON_JAR}" "--configDir" "${FLUSS_CONF_DIR}" "${args[@]}")
+base_args=("run" "${LAKEHOUSE_PAIMON_JAR}" "--configDir" "${FLUSS_CONF_DIR}")
+# add the addition jars to pipeline jars
+if [ ! -z "$addition_jars" ]; then
+  base_args+=("-Dflink.pipeline.jars=${addition_jars}")
+fi
+
+args=("${base_args[@]}" "${args[@]}")
 
 FLUSS_LOG_CLASSPATH=`constructLogClassClassPath`
 

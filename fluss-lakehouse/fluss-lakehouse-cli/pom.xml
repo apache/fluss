@@ -33,6 +33,36 @@
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-math3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.alibaba.fluss</groupId>
+                    <artifactId>fluss-shaded-guava</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.alibaba.fluss</groupId>
+                    <artifactId>fluss-shaded-jackson</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.alibaba.fluss</groupId>
+                    <artifactId>fluss-shaded-netty:jar</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.alibaba.fluss</groupId>
+                    <artifactId>fluss-shaded-arrow</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.ververica</groupId>
+                    <artifactId>frocksdbjni</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.flink</groupId>
@@ -61,27 +91,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes combine.children="append">
-                                    <include>com.alibaba.fluss:fluss-common</include>
-                                    <include>org.apache.flink:flink-table-common</include>
-                                    <include>org.apache.flink:flink-clients</include>
-                                    <include>commons-cli:commons-cli</include>
-                                    <include>org.slf4j:slf4j-api</include>
-                                    <include>org.apache.flink:flink-core</include>
-                                    <include>org.apache.flink:flink-streaming-java</include>
-                                    <include>org.apache.flink:flink-shaded-guava</include>
-                                    <include>org.apache.flink:flink-runtime</include>
-                                    <include>org.apache.flink:flink-java</include>
-                                    <include>org.apache.commons:commons-lang3</include>
-                                    <include>org.apache.flink:flink-shaded-asm-9</include>
-                                    <include>org.apache.flink:flink-metrics-core</include>
-                                    <include>org.objenesis:objenesis</include>
-                                    <include>com.esotericsoftware.kryo:kryo</include>
-                                    <incldue>com.esotericsoftware.minlog:minlog</incldue>
-                                    <include>com.twitter:chill-java</include>
-                                    <include>org.apache.flink:flink-optimizer</include>
-                                    <include>org.apache.flink:flink-shaded-netty</include>
-                                    <include>org.apache.flink:flink-shaded-jackson</include>
-                                    <include>org.apache.flink:flink-rpc-core</include>
+                                   <include>*:*</include>
                                 </includes>
                             </artifactSet>
                             <transformers>

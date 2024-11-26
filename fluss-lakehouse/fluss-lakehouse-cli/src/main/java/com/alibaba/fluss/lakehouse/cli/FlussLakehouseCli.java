@@ -130,7 +130,7 @@ public class FlussLakehouseCli {
         List<CustomCommandLine> customCommandLines = new ArrayList<>();
         customCommandLines.add(new DefaultCLI());
 
-        CliFrontend cliFrontend = new CliFrontend(flinkConfig, customCommandLines);
+        CliFrontend cliFrontend = new FlussCliFronted(flinkConfig, customCommandLines);
         // let's combine fluss config and lake config as arguments
         List<String> arguments =
                 new ArrayList<>(

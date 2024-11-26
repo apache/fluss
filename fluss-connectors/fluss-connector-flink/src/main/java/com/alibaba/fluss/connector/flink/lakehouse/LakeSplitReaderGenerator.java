@@ -31,9 +31,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.paimon.catalog.Catalog;
-import org.apache.paimon.catalog.CatalogContext;
-import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.flink.FlinkCatalogFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.ReadBuilder;
@@ -124,9 +123,8 @@ public class LakeSplitReaderGenerator {
         try (Admin admin = connection.getAdmin()) {
             LakeStorageInfo dataLakeInfo = admin.describeLakeStorage().get();
             try (Catalog paimonCatalog =
-                    CatalogFactory.createCatalog(
-                            CatalogContext.create(
-                                    Options.fromMap(dataLakeInfo.getCatalogProperties())))) {
+                    FlinkCatalogFactory.createPaimonCatalog(
+                            Options.fromMap(dataLakeInfo.getCatalogProperties()))) {
                 fileStoreTable =
                         (FileStoreTable)
                                 paimonCatalog.getTable(

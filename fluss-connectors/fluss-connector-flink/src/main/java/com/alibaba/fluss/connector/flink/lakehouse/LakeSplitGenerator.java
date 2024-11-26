@@ -29,9 +29,8 @@ import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
-import org.apache.paimon.catalog.CatalogContext;
-import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.flink.FlinkCatalogFactory;
 import org.apache.paimon.flink.source.FileStoreSourceSplit;
 import org.apache.paimon.flink.source.FileStoreSourceSplitGenerator;
 import org.apache.paimon.options.MemorySize;
@@ -294,8 +293,7 @@ public class LakeSplitGenerator {
     private FileStoreTable getTable(long snapshotId, Map<String, String> catalogProperties)
             throws Exception {
         try (Catalog catalog =
-                CatalogFactory.createCatalog(
-                        CatalogContext.create(Options.fromMap(catalogProperties)))) {
+                FlinkCatalogFactory.createPaimonCatalog(Options.fromMap(catalogProperties))) {
             return (FileStoreTable)
                     catalog.getTable(
                                     Identifier.create(
