@@ -3,3 +3,9 @@ jark:
   title: Creator of Fluss project
   url: https://github.com/wuchong
   image_url: https://github.com/wuchong.png
+
+giannis:
+  name: Giannis Polyzos
+  title: Fluss Lead @ Ververica
+  url: https://github.com/polyzos
+  image_url: https://github.com/polyzos.png
