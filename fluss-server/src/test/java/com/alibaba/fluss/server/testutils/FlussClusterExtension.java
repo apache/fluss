@@ -85,6 +85,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public final class FlussClusterExtension
         implements BeforeAllCallback, AfterAllCallback, BeforeEachCallback, AfterEachCallback {
 
+    public static final String BUILTIN_DATABASE = "fluss";
+
     private static final String HOST_ADDRESS = "127.0.0.1";
 
     private final int initialNumOfTabletServers;
@@ -131,7 +133,7 @@ public final class FlussClusterExtension
 
     @Override
     public void afterEach(ExtensionContext extensionContext) {
-        String defaultDb = "fluss";
+        String defaultDb = BUILTIN_DATABASE;
         // TODO: we need to cleanup all zk nodes, including the assignments,
         //  but currently, we don't have a good way to do it
         if (metaDataManager != null) {

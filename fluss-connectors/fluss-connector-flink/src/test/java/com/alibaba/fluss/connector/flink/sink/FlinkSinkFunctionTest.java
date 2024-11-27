@@ -71,7 +71,7 @@ public class FlinkSinkFunctionTest extends FlinkTestBase {
         InterceptingOperatorMetricGroup interceptingOperatorMetricGroup =
                 new InterceptingOperatorMetricGroup();
         MockStreamingRuntimeContext mockStreamingRuntimeContext =
-                new MockStreamingRuntimeContext(false, 1, 1) {
+                new MockStreamingRuntimeContext(false, 1, 0) {
                     @Override
                     public OperatorMetricGroup getMetricGroup() {
                         return interceptingOperatorMetricGroup;

@@ -48,6 +48,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for fluss reporting metrics to Flink. */
@@ -95,6 +96,7 @@ class FlinkMetricsITCase extends FlinkTestBase {
 
     @AfterEach
     void afterEach() {
+        tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
         MINI_CLUSTER_EXTENSION.after();
     }
