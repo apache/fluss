@@ -365,7 +365,7 @@ public class PushdownUtils {
                                 .collect(Collectors.toList()));
             }
 
-            return rowDataList.subList(0, (int) limit);
+            return limit < responseList.size() ? rowDataList.subList(0, (int) limit) : rowDataList;
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }

@@ -207,6 +207,13 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThat(collected).isSubsetOf(expected);
         assertThat(collected).hasSize(2);
 
+        // limit which is larger than all the data.
+        query = String.format("SELECT * FROM %s limit 10", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = assertAndCollectRecords(iterRows, 5);
+        assertThat(collected).isSubsetOf(expected);
+        assertThat(collected).hasSize(5);
+
         // projection scan
         query = String.format("SELECT id, name FROM %s limit 3", tableName);
         iterRows = tEnv.executeSql(query).collect();
