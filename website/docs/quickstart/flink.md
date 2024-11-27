@@ -18,7 +18,7 @@ Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/
 ### Starting components required
 We will use `docker-compose` to spin up all the required components for this tutorial.
 
-1. Create a directory to serve as your working directory for this guide and add the `docker-compose.yaml` file to it.
+1. Create a directory to serve as your working directory for this guide and add the `docker-compose.yml` file to it.
 
 ```shell
 mkdir fluss-quickstart-flink
