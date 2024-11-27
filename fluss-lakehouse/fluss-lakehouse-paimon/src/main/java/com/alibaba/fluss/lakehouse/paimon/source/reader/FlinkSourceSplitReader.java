@@ -202,8 +202,11 @@ public class FlinkSourceSplitReader
         }
 
         if (currentLogScannerIterator.hasNext()) {
-            LogScanner logScanner = currentLogScannerIterator.next();
-            return forLogRecords(logScanner.poll(POLL_TIMEOUT));
+            try (LogScanner logScanner = currentLogScannerIterator.next()) {
+                return forLogRecords(logScanner.poll(POLL_TIMEOUT));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         } else {
             // maybe has moved to the end of the iterator, need to reset the iterator
             // to move to the start of the iterator
