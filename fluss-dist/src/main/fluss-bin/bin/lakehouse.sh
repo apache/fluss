@@ -68,4 +68,4 @@ args=("${base_args[@]}" "${args[@]}")
 
 FLUSS_LOG_CLASSPATH=`constructLogClassClassPath`
 
-"$JAVA_RUN" "${log_setting[@]}" -classpath "`manglePathList "$FLUSS_LOG_CLASSPATH:$LAKEHOUSE_SERVICE_CLASSPATH"`" ${LAKEHOUSE_SERVICE_CLASS_TO_RUN} "${args[@]}"
+"$JAVA_RUN" $JVM_ARGS ${FLUSS_ENV_JAVA_OPTS} "${log_setting[@]}" -classpath "`manglePathList "$FLUSS_LOG_CLASSPATH:$LAKEHOUSE_SERVICE_CLASSPATH"`" ${LAKEHOUSE_SERVICE_CLASS_TO_RUN} "${args[@]}"
