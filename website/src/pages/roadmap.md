@@ -22,7 +22,7 @@ The integration will include:
 - Support Union Read for Spark, Trino, StarRocks.
 - Avoid data shuffle in compaction service to directly compact Arrow files of Fluss into Parquet files of data lakes.
 
-## No ZooKeeper
+## ZooKeeper Removal
 
 Fluss currently utilizes **ZooKeeper** for cluster coordination, metadata storage, and cluster configuration management.
 In upcoming releases, **ZooKeeper will be replaced** by **KvStore** for metadata storage and **Raft** for cluster coordination and ensuring consistency.

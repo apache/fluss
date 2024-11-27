@@ -120,7 +120,7 @@ const config: Config = {
       Apache®, Apache Flink®, Flink®, Apache Kafka®, Kafka®, Spark® and associated open source project names and logos are trademarks of the Apache Software Foundation.`,
     },
     prism: {
-      theme: prismThemes.github,
+      theme: prismThemes.vsDark,
       darkTheme: prismThemes.dracula,
     },
     algolia: {

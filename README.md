@@ -1,21 +1,20 @@
-Fluss
-----
+<p align="center">
+  <img src="website/static/img/banner.png" />
+</p>
 
-Fluss is a streaming storage built for real-time analytics which can serve as the real-time data layer
-for Lakehouse architectures. With its columnar stream and real-time update capabilities,
-Fluss integrates seamlessly with Apache Flink to enable high-throughput, low-latency, cost-effective
-streaming data warehouses tailored for real-time applications.
+<p align="center">
+  <a href="https://alibaba.github.io/fluss-docs/docs/">Documentation</a> | <a href="https://alibaba.github.io/fluss-docs/docs/quickstart/flink/">QuickStart</a> | <a href="https://alibaba.github.io/fluss-docs/docs/dev/ide-setup/">Development</a>
+</p>
 
-The Fluss project, named after the German word for 'river' and pronounced `/flus/`,
-symbolizes the essence of streaming data continuously flowing, converging, and distributing like a river.
+## What is Fluss?
 
-## Documentation
+Fluss is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures.
 
-Learn more about Fluss at [https://alibaba.github.io/fluss-docs](https://alibaba.github.io/fluss-docs/).
+It bridges the gap between **data streaming** and **data Lakehouse** by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines like **Apache Flink**, while Apache Spark, and StarRocks are coming soon.
 
-[QuickStart](https://alibaba.github.io/fluss-docs/docs/quickstart/flink/) | [Architecture](https://alibaba.github.io/fluss-docs/docs/concepts/architecture/) | [Development](https://alibaba.github.io/fluss-docs/docs/dev/ide-setup/)
+**Fluss (German: river, pronounced `/flus/`)** enables streaming data continuously converging, distributing and flowing into lakes, like a river 🌊
 
-## Build
+## Building
 
 Prerequisites for building Fluss:
 
