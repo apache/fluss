@@ -458,10 +458,9 @@ public class FileLogRecords implements LogRecords, Closeable {
                         StandardOpenOption.READ,
                         StandardOpenOption.WRITE);
             } else {
-                try (RandomAccessFile randomAccessFile = new RandomAccessFile(file, "rw")) {
-                    randomAccessFile.setLength(initFileSize);
-                    return randomAccessFile.getChannel();
-                }
+                RandomAccessFile randomAccessFile = new RandomAccessFile(file, "rw");
+                randomAccessFile.setLength(initFileSize);
+                return randomAccessFile.getChannel();
             }
         } else {
             return FileChannel.open(file.toPath());
