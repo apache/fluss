@@ -410,19 +410,12 @@ public class FlinkTableSource
             List<AggregateExpression> aggregateExpressions,
             DataType dataType) {
         // Only supports 'select count(*)/count(1) from source' for log table now.
-        if (streaming || aggregateExpressions.size() != 1) {
-            return false;
-        }
-
-        if (hasPrimaryKey()) {
-            throw new IllegalArgumentException(
-                    "Currently, Fluss Connector doesn't support COUNT(*) query on primary-key table in batch execution mode.");
-        }
-
-        if (groupingSets.size() > 1
+        if (streaming
+                || aggregateExpressions.size() != 1
+                || hasPrimaryKey()
+                || groupingSets.size() > 1
                 || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)) {
-            throw new IllegalArgumentException(
-                    "Currently, Fluss Connector doesn't support Group Aggregation on log table in batch execution mode.");
+            return false;
         }
 
         FunctionDefinition functionDefinition = aggregateExpressions.get(0).getFunctionDefinition();

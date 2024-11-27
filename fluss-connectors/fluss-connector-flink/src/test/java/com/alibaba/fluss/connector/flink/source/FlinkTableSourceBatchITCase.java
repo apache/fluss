@@ -291,7 +291,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Currently, Fluss Connector doesn't support Group Aggregation on log table in batch execution mode.");
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
 
         // test not support primary key now
         String primaryTableName = prepareSourceTable(new String[] {"id"}, null);
@@ -303,7 +303,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         primaryTableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Currently, Fluss Connector doesn't support COUNT(*) query on primary-key table in batch execution mode.");
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
     }
 
     private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {
