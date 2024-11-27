@@ -104,6 +104,7 @@ const config: Config = {
         },
         {to: '/blog', label: 'Blog', position: 'left'},
         {to: '/community', label: 'Community', position: 'left'},
+        {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
         {
           href: 'https://github.com/alibaba/fluss',

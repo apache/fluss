@@ -5,16 +5,17 @@ authors: [jark, giannis]
 ---
 
 ## Fluss Is Now Open Source
-Earlier this year at Flink Forward 2024 Berlin we announced Fluss and today we are thrilled to announce open-sourcing the project. 
+Earlier this year at Flink Forward 2024 Berlin we [announced Fluss](https://www.ververica.com/blog/introducing-fluss) and today we are thrilled to announce open-sourcing the project.
 Fluss is a **streaming storage system** designed to power real-time analytics. It aspires to change how organizations approach real-time data by acting as the **real-time data layer** for the Lakehouse. 
 Its cutting-edge design enables businesses to achieve **sub-second latency**, **high throughput**, and **cost efficiency** for data analytics, making it the ideal solution for modern data-driven applications.
 
-We have historically invested a lot of effort into advancing the data streaming ecosystem, being major contributors to [Apache FlinkⓇ](https://flink.apache.org/), [Apache Flink CDC](https://www.ververica.com/blog/ververica-donates-flink-cdc-empowering-real-time-data-integration-for-the-community), and [Apache Paimon](https://paimon.apache.org/). 
+We have historically invested a lot of effort into advancing the data streaming ecosystem, being major contributors to [Apache Flink®](https://flink.apache.org/), [Apache Flink CDC](https://www.ververica.com/blog/ververica-donates-flink-cdc-empowering-real-time-data-integration-for-the-community), and [Apache Paimon](https://paimon.apache.org/).
 As part of our commitment, Fluss is now open source under the Apache 2.0 license and is available on [GitHub](https://github.com/alibaba/fluss), inviting users to create the next generation of real-time architectures.
 
 
 ![FF Announcement](assets/fluss_announcement/ff_os.png)
 
+<!-- truncate -->
 
 ### Real-Time Streaming Storage for the Lakehouse Era
 The need for real-time insights has grown exponentially - especially with the recent explosion of AI. Still, the tools and architectures we’ve relied on for years weren’t designed with streaming-first analytical workflows in mind. Traditional architectures often involve complex integrations between message queues like Kafka, processing engines like Flink, and storage systems that are more batch-oriented than real-time. This approach not only increases latency but also adds operational overhead and cost. Fluss offers a **unified streaming storage layer** purpose-built for **real-time analytics**.

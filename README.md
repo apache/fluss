@@ -1,25 +1,43 @@
 Fluss
 ----
 
-FLUSS is a **FL**ink **U**nified **S**treaming **S**torage.
+Fluss is a streaming storage built for real-time analytics which can serve as the real-time data layer
+for Lakehouse architectures. With its columnar stream and real-time update capabilities,
+Fluss integrates seamlessly with Apache Flink to enable high-throughput, low-latency, cost-effective
+streaming data warehouses tailored for real-time applications.
 
-## Development
+The Fluss project, named after the German word for 'river' and pronounced `/flus/`,
+symbolizes the essence of streaming data continuously flowing, converging, and distributing like a river.
 
-### Code Formatting
+## Documentation
 
-Fluss uses [Spotless](https://github.com/diffplug/spotless/tree/main/plugin-maven) together with [google-java-format](https://github.com/google/google-java-format) to format the Java code.
-Please see the [documents](https://nightlies.apache.org/flink/flink-docs-master/docs/flinkdev/ide_setup/#code-formatting) to setup the code formatting in your IDE. Please make sure you are using [google-java-format v1.7.0.6](https://plugins.jetbrains.com/plugin/8527-google-java-format/versions/stable/115957) and never update this plugin.
+Learn more about Fluss at [https://alibaba.github.io/fluss-docs](https://alibaba.github.io/fluss-docs/).
 
-### Testing
+[QuickStart](https://alibaba.github.io/fluss-docs/docs/quickstart/flink/) | [Architecture](https://alibaba.github.io/fluss-docs/docs/concepts/architecture/) | [Development](https://alibaba.github.io/fluss-docs/docs/dev/ide-setup/)
 
-Fluss uses [AssertJ](https://assertj.github.io/doc/) as testing assertion framework ([why](https://flink.apache.org/how-to-contribute/code-style-and-quality-common/#tooling)). Please do not use JUnit assertions, Hamcrest matchers, Mockito assertions or any other assertion framework.
-If you have a lot of JUnit assertions in code, you can use [Assertions2Assertj](https://plugins.jetbrains.com/plugin/10345-assertions2assertj) IntelliJ IDEA plugin to easy convert Junit assertions into AssertJ.
-For conversion, you can right-click on the test file in IntelliJ IDEA and select `Refactor` -> `Convert Assertions to AssertJ` -> `Convert current file`.
+## Build
 
-Besides, [please avoid using @Timeout in JUnit tests](https://flink.apache.org/how-to-contribute/code-style-and-quality-common/#avoid-timeouts-in-junit-tests).
+Prerequisites for building Fluss:
 
-#### Code Coverage
+- Unix-like environment (we use Linux, Mac OS X, Cygwin, WSL)
+- Git
+- Maven (we require version >= 3.8.6)
+- Java 8 or 11
 
-Fluss uses [JaCoCo](https://www.eclemma.org/jacoco/) to measure code coverage. Please make sure your code is covered by tests and CLASS coverage should not less than 70%.
-Otherwise, the compile will fail. You can use the `Run with Coverage` tool of IntelliJ IDEA to improve class coverage.
-For special cases, you can exclude class in the `jacoco-check` stage in the root `pom.xml` file.
+```bash
+git clone https://github.com/alibaba/fluss.git
+cd fluss
+mvn clean package -DskipTests
+```
+
+Fluss is now installed in `build-target`.
+
+## Contributing
+
+Fluss is open-source, and we’d love your help to keep it growing! Join the [discussions](https://github.com/alibaba/fluss/discussions),
+open [issues](https://github.com/alibaba/fluss/issues) if you find a bug or request features, contribute code and documentation,
+ or help us improve the project in any way. All contributions are welcome!
+
+## License
+
+Fluss project is licensed under the [Apache License 2.0](https://github.com/alibaba/fluss/blob/main/LICENSE).
