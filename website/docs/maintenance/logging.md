@@ -7,7 +7,7 @@ sidebar_position: 6
 
 All Fluss processes(CoordinatorServer/TabletServer) create a log text file that contains messages for various events happening in that process. These logs provide deep insights into the inner workings of Fluss, and can be used to detect problems (in the form of WARN/ERROR messages) and can help in debugging them.
 
-The logging in [Fluss](http://www.slf4j.org/) uses the SLF4J logging interface. This allows you to use any logging framework that supports SLF4J, without having to modify the Fluss source code.
+The logging in Fluss uses the [SLF4J](http://www.slf4j.org/) logging interface. This allows you to use any logging framework that supports SLF4J, without having to modify the Fluss source code.
 
 By default, [Log4j 2](https://logging.apache.org/log4j/2.x/index.html) is used as the underlying logging framework.
 
