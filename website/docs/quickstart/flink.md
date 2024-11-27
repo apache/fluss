@@ -58,8 +58,6 @@ services:
         lakehouse.storage: paimon
         paimon.catalog.metastore: filesystem
         paimon.catalog.warehouse: /tmp/paimon
-    volumes:
-      - shared-tmpfs:/tmp/fluss/remote-data
   zookeeper:
     restart: always
     image: zookeeper:3.8.4

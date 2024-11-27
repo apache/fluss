@@ -168,8 +168,8 @@ to interact with Fluss.
 docker run \
     --name jobmanager \
     --network=fluss-demo \
-    --env FLUSS_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
-    -p 8081:8081 \
+    --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
+    -p 8083:8081 \
     --volume shared-tmpfs:/tmp/fluss \
     -d fluss/quickstart-flink jobmanager
 ```
@@ -180,7 +180,7 @@ docker run \
 docker run \
     --name taskmanager \
     --network=fluss-demo \
-    --env FLUSS_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
+    --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
     --volume shared-tmpfs:/tmp/fluss \
     -d fluss/quickstart-flink taskmanager
 ```
@@ -416,7 +416,7 @@ services:
   jobmanager:
     image: fluss/quickstart-flink
     ports:
-      - "8081:8081"
+      - "8083:8081"
     command: jobmanager
     environment:
       - |
