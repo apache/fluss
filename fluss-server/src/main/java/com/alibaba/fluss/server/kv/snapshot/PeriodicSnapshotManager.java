@@ -141,8 +141,8 @@ public class PeriodicSnapshotManager implements Closeable {
     }
 
     public void start() {
-        // disable periodic snapshot when periodicMaterializeDelay is negative
-        if (!started && periodicSnapshotDelay >= 0) {
+        // disable periodic snapshot when periodicMaterializeDelay is not positive
+        if (!started && periodicSnapshotDelay > 0) {
 
             started = true;
 

@@ -54,6 +54,7 @@ services:
         tablet-server.host: tablet-server
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
+        kv.snapshot.interval: 0s
         lakehouse.storage: paimon
         paimon.catalog.metastore: filesystem
         paimon.catalog.warehouse: /tmp/paimon
