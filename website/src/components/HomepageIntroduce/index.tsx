@@ -30,7 +30,7 @@ const IntroduceList: IntroduceItem[] = [
     title: 'What is Fluss?',
     description: (
       <>
-        Fluss is a streaming storage purpose-built for real-time analytics which can serve as the real-time data layer for modern Lakehouse architectures. With its columnar stream and real-time update capabilities, Fluss integrates seamlessly with Apache Flink to enable high-throughput, low-latency, cost-effective streaming data warehouses tailored for real-time applications.
+        Fluss is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures. With its columnar stream and real-time update capabilities, Fluss integrates seamlessly with Apache Flink to enable high-throughput, low-latency, cost-effective streaming data warehouses tailored for real-time applications.
       </>
     ),
     image: require('@site/static/img/fluss.png').default,

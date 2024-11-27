@@ -225,3 +225,12 @@
 .breadcrumbs__item--active .breadcrumbs__link {
   background: var(--ifm-menu-color-background-active);
 }
+
+.footer__copyright {
+    color: #dfe5f0;
+    font-size: .75rem;
+    line-height: 1.8;
+    opacity: .6;
+    text-align: center;
+    width: 98%;
+}
