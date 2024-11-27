@@ -5,19 +5,29 @@ sidebar_position: 1
 # Bucketing
 
 A bucketing strategy is a data distribution technique that divides table data into small pieces 
-and distributes the data to multiple hosts and services. Fluss, uses Hash bucketing as the default bucket splitting strategy.
+and distributes the data to multiple hosts and services.
+
+When creating a Fluss table, you can specify the number of buckets by setting `'bucket.num' = '<num>'` property for the table, see more details in [DDL](../engine-flink/ddl.md).
+Currently, Fluss supports 3 bucketing strategies: **Hash Bucketing**, **Sticky Bucketing** and **Round-Robin Bucketing**.
+Primary-Key Tables only allows to use **Hash Bucketing**. Log Tables use **Sticky Bucketing** by default but can use other two bucketing strategies.
 
 ## Hash Bucketing
-**Hash Bucketing** is common in OLAP scenarios. Typical systems include Kafka, StarRocks and Paimon.
+**Hash Bucketing** is common in OLAP scenarios.
 The advantage is that it can be very evenly distributed to multiple nodes, making full use of the capabilities of distributed computing, and has excellent
-scalability (rescale buckets or clusters) to cope with massive data. The disadvantage is that that range queries are not efficient, because they have to be reordered at the calculation layer.
+scalability (rescale buckets or clusters) to cope with massive data.
 
-**Usage** We use in DDL `DISTRIBUTED BY HASH (<bucket_key>...) INTO n BUCKETS` to describe the bucket key and bucket number.
-The bucket key can be omitted, and the primary key is used by default (provided that the primary key is defined).
+**Usage**: setting `'bucket.key' = 'col1, col2'` property for the table to specify the bucket key for hash bucketing.
+Primary-Key Tables use primary key (excluding partition key) as the bucket key by default.
 
-## Hash Algorithm
-To reduce the amount of data that needs to be moved during rescale buckets, we introduce a concept similar to Flink KeyGroup, that is 
-**key -> key_group_id -> bucket_id**. The `bucket_id` is calculated with the following formula:
-> key_group_id = hash(key) % max_buckets, bucket_id = key_group_id / buckets. 
+## Sticky Bucketing
 
-The capacity scaling process is similar to Flink rescale keyed state. 
+**Sticky Bucketing** enables larger batches and reduce latency when writing records into Log Tables. After sending a batch, the sticky bucket changes. Over time, the records are spread out evenly among all the buckets.
+Sticky Bucketing is the default bucketing strategy for Log Tables. This is quite important because Log Tables uses Apache Arrow as the underling data format which is efficient for large batches.
+
+**Usage**: setting `'client.writer.bucket.no-key-assigner'='sticky'` property for the table to enable this strategy. PrimaryKey Tables do not support this strategy.
+
+## Random-Robin Bucketing
+
+**Random-Robin Bucketing** is a simple strategy that randomly selects a bucket for each record before writing it in. This strategy is suitable for scenarios where the data distribution is relatively uniform and the data is not skewed.
+
+**Usage**: setting `'client.writer.bucket.no-key-assigner'='round_robin'` property for the table to enable this strategy. PrimaryKey Tables do not support this strategy.

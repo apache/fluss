@@ -8,7 +8,7 @@ sidebar_position: 2
 A Database is a collection of Table objects. You can create/delete databases or create/modify/delete tables under a database.
 
 ## Table
-n Fluss, a Table is the fundamental unit of user data storage, organized into rows and columns. Tables are stored within specific databases, adhering to a hierarchical structure (database -> table).
+In Fluss, a Table is the fundamental unit of user data storage, organized into rows and columns. Tables are stored within specific databases, adhering to a hierarchical structure (database -> table).
 
 Tables are classified into two types based on the presence of a primary key:
 - **Log Tables:**
@@ -36,7 +36,7 @@ Each unique value (or combination of values) in the partition column(s) defines 
 
 ### Bucket
 A **bucket** horizontally divides the data of a table/partition into `N` buckets according to the bucketing policy.
-The number of buckets `N` can be configured per table. A bucket is the smallest unit od  data migration and backup.
+The number of buckets `N` can be configured per table. A bucket is the smallest unit of data migration and backup.
 The data of a bucket consists of a LogTablet and a (optional) KvTablet.
 
 ### LogTablet
@@ -48,5 +48,5 @@ as the log data for the primary table data.
 - **.log:** Compact arrangement of log data. 
 
 ### KvTablet
-Each bucket of the PrimaryKey table needs to generate a KvTablet, but it does not need to append the table. 
+Each bucket of the PrimaryKey table needs to generate a KvTablet. Underlying, each KvTablet correspond to an embedded RocksDB instance. RocksDB is a LSM (log structured merge) engine which helps KvTablet supports high-performance updates and lookup query.
 

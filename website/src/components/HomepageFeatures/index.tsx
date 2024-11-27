@@ -48,7 +48,7 @@ const FeatureList: FeatureItem[] = [
     {
         title: 'Real-Time Updates',
         content:
-            'The Primary Key Table supports real-time streaming updates for large-scale data. It also enables cost-efficient partial updates, making it ideal for enriching wide tables without expensive join operations.',
+            'The PrimaryKey Table supports real-time streaming updates for large-scale data. It also enables cost-efficient partial updates, making it ideal for enriching wide tables without expensive join operations.',
         Svg: require('@site/static/img/feature_update.svg').default
     },
     {
