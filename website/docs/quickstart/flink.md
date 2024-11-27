@@ -253,6 +253,15 @@ You may be interested in the particular customer, you can lookup it by `cust_key
 -- lookup by primary key
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
+The result looks like:
+```shell
++----------+---------------+--------------+------------+---------+------------+
+| cust_key |          name |        phone | nation_key | acctbal | mktsegment |
++----------+---------------+--------------+------------+---------+------------+
+|        1 | Al K. Seltzer | 817-617-7960 |          1 |  533.41 | AUTOMOBILE |
++----------+---------------+--------------+------------+---------+------------+
+```
+
 The result should be returned quickly since Fluss supports fast lookup by primary key for primary key table.
 
 ## Update/Delete rows on Fluss Tables
