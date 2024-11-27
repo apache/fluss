@@ -100,16 +100,3 @@ SET execution.runtime-mode = batch;
 -- The condition must include all primary key equality conditions.
 UPDATE pk_table SET total_amount = 2 WHERE shop_id = 10000 and user_id = 123456;
 ```
-
-
-## Hint Options
-You can set the following parameters through SQL hints to dynamically adjust the parallelism of the result table operator.
-
-| Option           | Type | Required | Description                              |
-|------------------|------|----------|------------------------------------------|
-| sink.parallelism | int  | optional | the parallelism of the Fluss sink table. |                                                                                                          |
-
-For example, the following SQL will manually set the parallelism of the Fluss sink table operator to 10.
-```sql
-INSERT INTO fluss_table /*+ OPTIONS('sink.parallelism' = '10') */ SELECT * FROM source;
-```
