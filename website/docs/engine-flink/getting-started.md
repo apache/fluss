@@ -140,13 +140,12 @@ To preview some data in a table, you can use the LIMIT query:
 SELECT * FROM pk_table LIMIT 10;
 ```
 
-Fluss supports processing incremental data in flink streaming jobs which starts from a timestamp:
+Fluss supports processing incremental data in flink streaming jobs:
 ```sql title="Flink SQL Client"
 -- Submit the flink job in streaming mode for current session.
 SET 'execution.runtime-mode' = 'streaming';
--- reading changelogs from the primary-key table since 2023-12-09 00:00:00
-SELECT * FROM pk_table /*+ OPTIONS('scan.startup.mode' = 'timestamp',
-  'scan.startup.timestamp' = '2023-12-09 00:00:00') */;
+-- reading changelogs from the primary-key table from beginning.
+SELECT * FROM pk_table /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 ```
 
 ## Type Conversion
