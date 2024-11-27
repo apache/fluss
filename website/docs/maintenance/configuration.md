@@ -250,9 +250,10 @@ CREATE TABLE my_table (
   'client.writer.acks ' = 'all');
 ```
 
-2. Also you can change the client configuration use hint like:
+2. Also, you can change the client configuration use [Flink SQL Hints](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/hints/#dynamic-table-options) like:
+
 ```sql
-INSERT INTO my_table
-SELECT * FROM my_source
-/*+ OPTIONS('client.writer.acks' = 'all') */
+INSERT INTO my_table /*+ OPTIONS('client.writer.acks' = '0') */
+SELECT *
+FROM my_source
 ```

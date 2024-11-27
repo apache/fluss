@@ -70,12 +70,18 @@ A catalog is created and named by executing the following query (replace `<catal
 ```sql title="Flink SQL Client"
 CREATE CATALOG fluss_catalog WITH (
   'type'='fluss',
-  'bootstrap.servers' = 'fluss-server-1:9123'
+  'bootstrap.servers' = 'localhost:9123'
 );
 ```
 
-The `bootstrap.servers` is used to discover all the nodes in the Fluss cluster. You can configure it with 1 or 3 Fluss server (either CoordinatorServer or TabletServer) addresses using comma separated.
-
+:::note
+1. The `bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
+   you should start the Fluss server first. See [Deploying Fluss](/docs/install-deploy/overview/#how-to-deploy-fluss)
+   for how to build a Fluss cluster.
+   Here, we suppose you have built a Fluss cluster in local machine and the CoordinatorServer port is 9123.
+2. The `bootstrap.servers` is used to discover all the nodes in the Fluss cluster. You can configure it with 1 or 3
+   Fluss server (either CoordinatorServer or TabletServer) addresses using comma separated.
+:::
 
 ## Creating a table
 ```sql title="Flink SQL Client"
