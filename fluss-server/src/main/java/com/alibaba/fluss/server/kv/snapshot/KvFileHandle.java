@@ -20,11 +20,13 @@ import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.Objects;
 import java.util.Optional;
 
 /** A handle to a single file(a remote path after updated) of kv. */
-public class KvFileHandle {
+public class KvFileHandle implements Serializable {
+    private static final long serialVersionUID = 1L;
 
     /** The path to the kv file. */
     private final FsPath filePath;
