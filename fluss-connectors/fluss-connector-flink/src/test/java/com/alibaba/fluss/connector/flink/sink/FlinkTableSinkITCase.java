@@ -458,6 +458,9 @@ class FlinkTableSinkITCase {
                                 + " primary key (a) not enforced"
                                 + ")",
                         tableName));
+        // test delete without data.
+        tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE a = 5").await();
+
         List<String> insertValues =
                 Arrays.asList(
                         "(1, 3501, 'Beijing')",
