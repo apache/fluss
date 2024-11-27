@@ -79,6 +79,10 @@ CREATE TABLE my_log_table (
 The following SQL statement creates a Partitioned PrimaryKey Table in Fluss. Note that the partitioned field (`dt` in this case) must be a subset of the primary key (`dt, shop_id, user_id` in this case).
 Currently, Fluss only supports one partitioned field with `STRING` type.
 
+:::note
+Currently, partitioned table must enable auto partition and set auto partition time unit.
+:::
+
 ```sql 
 CREATE TABLE my_part_pk_table (
   dt STRING,
@@ -104,7 +108,9 @@ CREATE TABLE my_part_log_table (
   address STRING,
   dt STRING
 ) PARTITIONED BY (dt) WITH (
-  'bucket.num' = '8'
+  'bucket.num' = '8',
+  'table.auto-partition.enabled' = 'true',
+  'table.auto-partition.time-unit' = 'hour'
 );
 ```
 
