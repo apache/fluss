@@ -29,19 +29,19 @@ Flink empowers you to decide to choose which view:
 - Combing Fluss and Paimon means a better data freshness but with analytics performance degrading
 
 #### Read data only in Paimon
-To point to read data in Paimon, you must specify the table with `$datalake` suffix, the following
+To point to read data in Paimon, you must specify the table with `$lake` suffix, the following
 SQL shows how to do that:
 
 ```sql title="Flink SQL"
 -- assume we have a table named `orders`
 
 -- read from paimon
-SELECT COUNT(*) FROM orders$datalake;
+SELECT COUNT(*) FROM orders$lake;
 
 -- we can also query the system tables 
-SELECT * FROM orders$datalake$snapshots;
+SELECT * FROM orders$lake$snapshots;
 ```
-When specify the table with `$datalake` suffix in query, it just acts like a normal Paimon table, so it inherits all ability of Paimon table.
+When specify the table with `$lake` suffix in query, it just acts like a normal Paimon table, so it inherits all ability of Paimon table.
 You can enjoy all the features that Flink's query supports/optimization on Paimon, like query system tables, time travel, etc. See more
 about Paimon's [sql-query](https://paimon.apache.org/docs/0.9/flink/sql-query/#sql-query).
 
