@@ -18,7 +18,7 @@
 # --------------
 # Stream edition
 # --------------
-FROM openjdk:17-alpine AS builder
+FROM eclipse-temurin:17-jre-jammy AS builder
 
 # Install dependencies
 RUN set -ex; \
@@ -26,6 +26,7 @@ RUN set -ex; \
   apt-get -y install gpg libsnappy1v5 gettext-base libjemalloc-dev; \
   rm -rf /var/lib/apt/lists/*
 
+# Please copy build-target to the docker dictory first, then copy to the image.
 COPY --chown=fluss:fluss build-target/ /opt/fluss/
 
  # Prepare environment
