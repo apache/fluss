@@ -215,7 +215,7 @@ More details please refer to [Flink Getting started](/docs/engine-flink/getting-
 ## Deploy with Docker Compose
 
 The following is a brief overview of how to quickly create a complete Fluss testing cluster
-using the `docker-compose up` commands.
+using the `docker-compose up -d` commands in a detached mode.
 
 ### Create docker-compose.yml file
 
@@ -443,6 +443,7 @@ volumes:
       type: "tmpfs"
       device: "tmpfs"
 ```
+Save the `docker-compose.yaml` script and execute the docker-compose up -d command in the same directory to create the cluster.
 
 #### Enter into SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:
