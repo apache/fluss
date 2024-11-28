@@ -19,7 +19,7 @@ can gain much storage cost reduction and analytics performance improvement.
 
 Lakehouse Storage disabled by default, you must enable it manually.
 
-### Cluster configurations about lakehouse storage
+### Lakehouse Storage Cluster Configurations
 First, you must configure the lakehouse storage in `server.yaml`. Take Paimon
 as an example, you must configure the following configurations:
 ```yaml
@@ -30,7 +30,7 @@ paimon.catalog.type: filesystem
 paimon.catalog.warehouse: /tmp/paimon_data_warehouse
 ```
 
-### Start datalake tiering service
+### Start The Datalake Tiering Service
 Then, you must start the datalake tiering service to compact Fluss's data to the lakehouse storage.
 To start the datalake tiering service, you must have a Flink cluster running since Fluss currently only supports Flink as a tiering service backend.
 
@@ -51,5 +51,5 @@ cd $FLUSS_HOME
 ./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=10s
 ```
 
-### Enable lakehouse storage per table
+### Enable Lakehouse Storage Per Table
 To enable lakehouse storage for a table, the table must be created with the option `'table.datalake.enabled' = 'true'`.
