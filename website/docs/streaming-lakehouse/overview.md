@@ -20,9 +20,9 @@ reads which must now deal with masses of small files.
 2. If you require read efficiency, then you accumulate data until you can write to large Parquet files, but this introduces
 much higher latency.
 
-At all, these data lake formats are all at most in minute-level data freshness under the best usage.
+Overall, these data lake formats typically achieve data freshness at best within minute-level granularity, even under optimal usage conditions.
 
-## Streaming Lakehouse: Unified Stream/Lakehouse
+## Streaming Lakehouse: Streaming & Lakehouse Unification
 
 Fluss is a streaming storage supporting streaming reads and writes with sub-second low latency.
 With [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md), Fluss unifies data streaming and data Lakehouse by serving real-time streaming data on top of Lakehouse.
