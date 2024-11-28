@@ -443,7 +443,7 @@ volumes:
       type: "tmpfs"
       device: "tmpfs"
 ```
-Save the `docker-compose.yaml` script and execute the docker-compose up -d command in the same directory to create the cluster.
+Save the `docker-compose.yaml` script and execute the `docker-compose up -d` command in the same directory to create the cluster.
 
 #### Enter into SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:
