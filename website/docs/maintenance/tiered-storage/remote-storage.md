@@ -22,12 +22,12 @@ If you don't want to copy log segments to remote storage, you can set `remote.lo
 
 Below is the list for all configurations to control the log segments tiered behavior in cluster level:
 
-| Configuration                       | type       | Default | Description                                                                                                                                                                                                                |
-|-------------------------------------|------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| remote.log.task-interval-duration   | Duration   | 1min    | Interval at which remote log manager runs the scheduled tasks like copy segments, clean up remote log segments, delete local log segments etc. If the value is set to 0, it means that the remote log storage is disabled. |
-| remote.log.index-file-cache-size    | MemorySize | 1gb     | The total size of the space allocated to store index files fetched from remote storage in the local storage.                                                                                                               |
-| remote.log-manager.thread-pool-size | Integer    | 4       | Size of the thread pool used in scheduling tasks to copy segments, fetch remote log indexes and clean up remote log segments.                                                                                              |
-| remote.log.data-transfer-thread-num | Integer    | 4       | The number of threads the server uses to transfer (download and upload) remote log file can be  data file, index file and remote log metadata file.                                                                        |
+| Configuration                       | type       | Default | Description                                                                                                                                                                                                                 |
+|-------------------------------------|------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| remote.log.task-interval-duration   | Duration   | 1min    | Interval at which remote log manager runs the scheduled tasks like copy segments, clean up remote log segments, delete local log segments etc. If the value is set to 0s, it means that the remote log storage is disabled. |
+| remote.log.index-file-cache-size    | MemorySize | 1gb     | The total size of the space allocated to store index files fetched from remote storage in the local storage.                                                                                                                |
+| remote.log-manager.thread-pool-size | Integer    | 4       | Size of the thread pool used in scheduling tasks to copy segments, fetch remote log indexes and clean up remote log segments.                                                                                               |
+| remote.log.data-transfer-thread-num | Integer    | 4       | The number of threads the server uses to transfer (download and upload) remote log file can be  data file, index file and remote log metadata file.                                                                         |
 
 
 ### Table configurations about remote log

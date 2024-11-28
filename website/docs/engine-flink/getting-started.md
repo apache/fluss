@@ -41,11 +41,15 @@ tar -xzf fluss-0.5.0-bin.tgz
 
 - **Copy Fluss Connector Jar**
 
-Download [Fluss connector jar](/downloads) and copy to the lib directory of your Flink home.
+Download [Fluss connector jar](/downloads#fluss-connector) and copy to the lib directory of your Flink home.
 
 ```shell
 cp fluss-connector-flink-0.5.0.jar <FLINK_HOME>/lib/
 ```
+:::note
+If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](/docs/maintenance/tiered-storage/remote-storage), 
+you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also copy it to the lib directory of your Flink home.
+:::
 
 - **Start a local cluster**
 

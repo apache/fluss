@@ -139,7 +139,7 @@ SELECT * FROM log_table
 ```
 
 ### scan.partition.discovery.interval
-The interval in milliseconds for the Fluss source to discover the new partitions for partitioned table while scanning.  A non-positive value disables the partition discovery.
+The interval in milliseconds for the Fluss source to discover the new partitions for partitioned table while scanning.  The default value is 10s. A non-positive value disables the partition discovery.
 
 
 

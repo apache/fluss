@@ -136,15 +136,6 @@ public class ConfigOptions {
                                     + " (discover all the servers in the cluster), the value of"
                                     + " this config option should be a static hostname or address.");
 
-    /** The local address of the network interface that the coordinator server binds to. */
-    public static final ConfigOption<String> COORDINATOR_BIND_HOST =
-            key("coordinator.bind-host")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The local address of the network interface that the coordinator server binds to. If not"
-                                    + " configured, '0.0.0.0' will be used.");
-
     /**
      * The config parameter defining the network port to connect to for communication with the
      * coordinator server.
@@ -172,17 +163,6 @@ public class ConfigOptions {
                                     + " (“50100,50101”), ranges (“50100-50200”) or a combination"
                                     + " of both.");
 
-    /** The local port that the coordinator server binds to. */
-    public static final ConfigOption<Integer> COORDINATOR_BIND_PORT =
-            key("coordinator.bind-port")
-                    .intType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The local RPC port that the coordinator server binds to. If not configured, the external port"
-                                    + " (configured by '"
-                                    + COORDINATOR_PORT.key()
-                                    + "') will be used.");
-
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()
@@ -206,15 +186,6 @@ public class ConfigOptions {
                                     + " Because different TabletServer need different values for this option, usually it is specified in an"
                                     + " additional non-shared TabletServer-specific config file.");
 
-    /** The local address of the network interface that the tablet-server binds to. */
-    public static final ConfigOption<String> TABLET_SERVER_BIND_HOST =
-            key("tablet-server.bind-host")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The local address of the network interface that the task manager binds to. If not"
-                                    + " configured, '0.0.0.0' will be used.");
-
     /**
      * The default network port the tablet server expects incoming IPC connections. The {@code "0"}
      * means that the TabletServer searches for a free port.
@@ -224,17 +195,6 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("0")
                     .withDescription("The external RPC port where the TabletServer is exposed.");
-
-    /** The local port that the task manager binds to. */
-    public static final ConfigOption<Integer> TABLET_SERVER_BIND_PORT =
-            key("tablet-server.bind-port")
-                    .intType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The local RPC port that the TabletServer binds to. If not configured, the external port"
-                                    + " (configured by '"
-                                    + TABLET_SERVER_PORT.key()
-                                    + "') will be used.");
 
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
