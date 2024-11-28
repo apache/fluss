@@ -46,7 +46,7 @@ Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 wi
 Go to the [downloads page](/downloads) and download the latest Fluss release. After downloading the latest release, copy the archive to all the nodes and extract it:
 
 ```shell
-tar -xzf fluss-0.5.0-bin.tar.gz
+tar -xzf fluss-0.5.0-bin.tgz
 cd fluss-0.5.0/
 ```
 
@@ -85,7 +85,7 @@ tablet-server.id: 3
 
 :::note
 - `tablet-server.id` is the unique id of the TabletServer, if you have multiple TabletServers, you should set different id for each TabletServer.
-- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](../../maintenance/configuration/) for more details.
+- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](/docs/maintenance/configuration/) for more details.
   :::
 
 ### Starting Fluss

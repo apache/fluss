@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Getting Started with Flink Engine
 ## Quick Start
-For a quick introduction to running Flink, refer to the [Quick Start](../quickstart/flink.md) guide.
+For a quick introduction to running Flink, refer to the [Quick Start](/docs/quickstart/flink.md) guide.
 
 
 ## Support Flink Versions
@@ -36,7 +36,7 @@ Fluss only supports Apache Flink's Table API.
 Flink runs on all UNIX-like environments, i.e. Linux, Mac OS X, and Cygwin (for Windows).
 If you haven’t downloaded Flink, you can download [the binary release](https://flink.apache.org/downloads.html) of Flink, then extract the archive with the following command.
 ```shell
-tar -xzf flink-*.tgz
+tar -xzf fluss-0.5.0-bin.tgz
 ```
 
 - **Copy Fluss Connector Jar**
@@ -44,7 +44,7 @@ tar -xzf flink-*.tgz
 Download [Fluss connector jar](/downloads) and copy to the lib directory of your Flink home.
 
 ```shell
-cp fluss-connector-flink-*.jar <FLINK_HOME>/lib/
+cp fluss-connector-flink-0.5.0.jar <FLINK_HOME>/lib/
 ```
 
 - **Start a local cluster**
@@ -173,27 +173,27 @@ Fluss's integration for Flink automatically converts between Flink and Fluss typ
 
 ### Apache Flink -> Fluss
 
-| Flink         | Fluss          | 
-|---------------|----------------|
-| BOOLEAN       | BOOLEAN        |       
-| SMALLINT      | SMALLINT       |
-| INT           | INT            |
-| BIGINT        | BIGINT         |
-| FLOAT         | FLOAT          |
-| DOUBLE        | DOUBLE         |
-| CHAR          | CHAR           |
-| STRING        | STRING         |
-| DECIMAL       | DECIMAL        |
-| DATE          | DATE           |
-| TIME          | TIME           |
-| TIMESTAMP     | TIMESTAMP      |
-| TIMESTAMP_LTZ | TIMESTAMP_LTZ  |
-| BYTES         | BYTES          |
-| VARCHAR       | Not supported, suggest to use STRING instead.  |
+| Flink         | Fluss                                         | 
+|---------------|-----------------------------------------------|
+| BOOLEAN       | BOOLEAN                                       |       
+| SMALLINT      | SMALLINT                                      |
+| INT           | INT                                           |
+| BIGINT        | BIGINT                                        |
+| FLOAT         | FLOAT                                         |
+| DOUBLE        | DOUBLE                                        |
+| CHAR          | CHAR                                          |
+| STRING        | STRING                                        |
+| DECIMAL       | DECIMAL                                       |
+| DATE          | DATE                                          |
+| TIME          | TIME                                          |
+| TIMESTAMP     | TIMESTAMP                                     |
+| TIMESTAMP_LTZ | TIMESTAMP_LTZ                                 |
+| BYTES         | BYTES                                         |
+| VARCHAR       | Not supported, suggest to use STRING instead. |
 | VARBINARY     | Not supported, suggest to use BYTES instead.  |
-| INTERVAL      | Not supported  |
-| ARRAY         | Not supported  |
-| MAP           | Not supported  |
-| MULTISET      | Not supported  |
-| ROW           | Not supported  |
-| RAW           | Not supported  |
+| INTERVAL      | Not supported                                 |
+| ARRAY         | Not supported                                 |
+| MAP           | Not supported                                 |
+| MULTISET      | Not supported                                 |
+| ROW           | Not supported                                 |
+| RAW           | Not supported                                 |

@@ -29,7 +29,7 @@ cd fluss-quickstart-flink
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -43,7 +43,7 @@ services:
         paimon.catalog.metastore: filesystem
         paimon.catalog.warehouse: /tmp/paimon
   tablet-server:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -63,7 +63,7 @@ services:
     image: zookeeper:3.8.4
 
   jobmanager:
-    image: fluss/quickstart-flink
+    image: fluss/quickstart-flink:1.20-0.5
     ports:
       - "8083:8081"
     command: jobmanager
@@ -74,7 +74,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink
+    image: fluss/quickstart-flink:1.20-0.5
     depends_on:
       - jobmanager
     command: taskmanager
@@ -114,7 +114,7 @@ Run `docker ps` to check whether these containers are running properly.
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
 :::note
-- If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](engine-flink/getting-started.md), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
+- If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
 - All the following commands involving docker-compose should be executed in the directory of the `docker-compose.yml` file.
   :::
 
