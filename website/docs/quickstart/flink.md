@@ -272,7 +272,7 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 
 ## Update/Delete rows on Fluss Tables
 
-You can use `UPDATE` and `DELETE` statement to Dpdate/delete rows on Fluss tables.
+You can use `UPDATE` and `DELETE` statements to update/delete rows on Fluss tables.
 ### Update
 ```sql title="Flink SQL Client"
 -- update by primary key
@@ -333,7 +333,7 @@ CREATE TABLE datalake_enriched_orders (
 ) WITH ('table.datalake.enabled' = 'true');
 ```
 
-Next, perform streaming data writing into the `datalake-enabled` table, `datalake_enriched_orders`:
+Next, perform streaming data writing into the **datalake-enabled** table, `datalake_enriched_orders`:
 ```sql  title="Flink SQL Client"
 -- switch to streaming mode
 SET 'execution.runtime-mode' = 'streaming';
@@ -361,10 +361,10 @@ FROM fluss_order o
 
 The data for the `datalake_enriched_orders` table is stored in Fluss (for real-time data) and Paimon (for historical data).
 
-When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and Paimon to provide a complete result set -- combines `real-time` and `historical` data.
+When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and Paimon to provide a complete result set -- combines **real-time** and **historical** data.
 
 If you wish to query only the data stored in Paimon—offering high-performance access without the overhead of unioning data—you can use the `datalake_enriched_orders$lake` table by appending the `$lake` suffix. 
-This approach also enables all the optimizations and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$snapshots`.
+This approach also enables all the optimizations and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$lake$snapshots`.
 
 To query the snapshots directly from Paimon, use the following SQL:
 ```sql  title="Flink SQL Client"
