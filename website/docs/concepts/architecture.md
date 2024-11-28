@@ -3,7 +3,7 @@ sidebar_position: 1
 ---
 
 # Architecture
-A Fluss cluster consists of two main processes: **CoordinatorServer** and **TabletServer**.
+A Fluss cluster consists of two main processes: the **CoordinatorServer** and the **TabletServer**.
 
 ![Fluss Architecture](../assets/architecture.png)
 
@@ -28,7 +28,7 @@ This architecture ensures the **TabletServer** delivers tailored data handling c
 ### LogStore
 The **LogStore** is designed to store log data, functioning similarly to a database binlog. 
 Messages can only be appended, not modified, ensuring data integrity. 
-Its primary purposes are to enable low-latency streaming reads and to serve as the write-ahead log (WAL) for restoring the **KvStore**.
+Its primary purpose is to enable low-latency streaming reads and to serve as the write-ahead log (WAL) for restoring the **KvStore**.
 
 ### KvStore
 The **KvStore** is used to store table data, functioning similarly to database tables. It supports data updates and deletions, enabling efficient querying and table management. Additionally, it generates comprehensive changelogs to track data modifications.

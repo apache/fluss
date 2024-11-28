@@ -4,12 +4,11 @@ sidebar_position: 1
 
 # Overview
 
-Below, we briefly explain the building blocks of a Fluss cluster, their functionalities and implementations,
-and we will introduce the different deployment way to deploy Fluss.
+Below, we provide an overview of the key components of a Fluss cluster, detailing their functionalities and implementations. Additionally, we will introduce the various deployment methods available for Fluss.
 
 ## Overview and Reference Architecture
 
-The figure below shows the building blocks of every Fluss cluster:
+The figure below shows the building blocks of Fluss clusters:
 
 <img width="1200px" src={require('./deployment_overview.png').default} />
 

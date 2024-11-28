@@ -196,7 +196,7 @@ CREATE TABLE enriched_orders (
 
 ## Streaming into Fluss
 
-First, run the following sql to sync data from source tables to Fluss tables:
+First, run the following SQL to sync data from source tables to Fluss tables:
 ```sql  title="Flink SQL Client"
 EXECUTE STATEMENT SET
 BEGIN
@@ -206,9 +206,8 @@ BEGIN
 END;
 ```
 
-Fluss primary-key tables support high QPS point lookup on primary keys, so it's efficient to
-[lookup join](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/joins/#lookup-join)
-primary-key tables `fluss_customer` and `fluss_nation` to enrich the `fluss_orders` table.
+Fluss primary-key tables support high QPS point lookup queries on primary keys. Performing a [lookup join](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/joins/#lookup-join) is really efficient and you can use it to enrich
+to enrich the `fluss_orders` table with information from the `fluss_customer` and `fluss_nation` primary-key tables.
 
 ```sql  title="Flink SQL Client"
 INSERT INTO enriched_orders
@@ -231,9 +230,9 @@ LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
 ```
 
 
-## Query on Fluss Tables
-Now, you can have a real-time analytics on Fluss tables. For example, to count the number of orders of one
-particular customer, running the following sql to see the real-time result.
+## Run Ad-hoc Queries on Fluss Tables
+You can now perform real-time analytics directly on Fluss tables. 
+For instance, to calculate the number of orders placed by a specific customer, you can execute the following SQL query to obtain instant, real-time results.
 
 ```sql  title="Flink SQL Client"
 -- use tableau result mode
@@ -246,7 +245,7 @@ SET 'execution.runtime-mode' = 'batch';
 SELECT * FROM enriched_orders LIMIT 2;
 ```
 
-The result looks like:
+**Sample Output**
 ```
 +-----------+----------+-------------+------------+----------------+--------+------------+----------------+--------------+-----------------+-------------+
 | order_key | cust_key | total_price | order_date | order_priority |  clerk |  cust_name |     cust_phone | cust_acctbal | cust_mktsegment | nation_name |
@@ -255,13 +254,13 @@ The result looks like:
 |  10715776 |        2 |      924.43 | 2024-11-04 |         medium | Clerk3 | Rita Booke | (925) 775-0717 |       172.39 |       FURNITURE |      UNITED |
 +-----------+----------+-------------+------------+----------------+--------+------------+----------------+--------------+-----------------+-------------+
 ```
+If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`. 
 
-You may be interested in the particular customer, you can lookup it by `cust_key` with the following SQL:
 ```sql title="Flink SQL Client"
 -- lookup by primary key
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
-The result looks like:
+**Sample Output**
 ```shell
 +----------+---------------+--------------+------------+---------+------------+
 | cust_key |          name |        phone | nation_key | acctbal | mktsegment |
@@ -269,22 +268,21 @@ The result looks like:
 |        1 | Al K. Seltzer | 817-617-7960 |          1 |  533.41 | AUTOMOBILE |
 +----------+---------------+--------------+------------+---------+------------+
 ```
-
-The result should be returned quickly since Fluss supports fast lookup by primary key for primary key table.
+**Note:** Overall the query results are returned really fast, as Fluss enables efficient primary key lookups for tables with defined primary keys.
 
 ## Update/Delete rows on Fluss Tables
 
-You can use `UPDATE` and `DELETE` statement to update/delete rows on Fluss tables.
+You can use `UPDATE` and `DELETE` statement to Dpdate/delete rows on Fluss tables.
 ### Update
 ```sql title="Flink SQL Client"
 -- update by primary key
 UPDATE fluss_customer SET `name` = 'fluss_updated' WHERE `cust_key` = 1;
 ```
-Then you can lookup the row:
+Then you can `lookup` the specific row:
 ```sql title="Flink SQL Client"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
-The result looks like:
+**Sample Output**
 ```shell
 +----------+---------------+--------------+------------+---------+------------+
 | cust_key |          name |        phone | nation_key | acctbal | mktsegment |
@@ -292,31 +290,32 @@ The result looks like:
 |        1 | fluss_updated | 817-617-7960 |          1 |  533.41 | AUTOMOBILE |
 +----------+---------------+--------------+------------+---------+------------+
 ```
-The `name` column is updated to `fluss_updated`.
+Notice that the `name` column has been updated to `fluss_updated`.
 
 ### Delete
 ```sql title="Flink SQL Client
 DELETE FROM fluss_customer WHERE `cust_key` = 1;
 ```
-Then, you should get empty set if lookup the row by the following SQL:
+The following SQL query should return an empty result.
 ```sql title="Flink SQL Client"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
 ## Integrate with Paimon
-### Start lakehouse tiering service
-To integrate with Paimon, you must start the lakehouse tiering service firstly. Open a new terminal and change working directory to `fluss-quickstart-flink`.
-Run the following command in the working directly `fluss-quickstart-flink` to start the lakehouse tiering service:
+### Start the Lakehouse Tiering Service
+To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
+Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
 ```shell
 docker-compose exec coordinator-server ./bin/lakehouse.sh -D flink.rest.address=jobmanager -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=30s
 ```
 You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
 
 ### Streaming into Fluss datalake-enabled tables
-By default, table is datalake disabled, so the lakehouse tiering service won't tier the data of the table to datalake.
 
-You must create a table with table option `table.datalake.enabled = true` to enabled lakehouse as a tiered storage for the table.
-Back to sql-client, run the following SQL to create a datalake-enabled table
+By default, tables are created with data lake integration disabled, meaning the Lakehouse Tiering Service will not tier the table's data to the data lake.
+
+To enable lakehouse functionality as a tiered storage solution for a table, you must create the table with the configuration option `table.datalake.enabled = true`. 
+Return to the `SQL client` and execute the following SQL statement to create a table with data lake integration enabled:
 ```sql  title="Flink SQL Client"
 CREATE TABLE datalake_enriched_orders (
     `order_key` BIGINT,
@@ -334,7 +333,7 @@ CREATE TABLE datalake_enriched_orders (
 ) WITH ('table.datalake.enabled' = 'true');
 ```
 
-Then, streaming writing data to the datalake-enabled table `datalake_enriched_orders`:
+Next, perform streaming data writing into the `datalake-enabled` table, `datalake_enriched_orders`:
 ```sql  title="Flink SQL Client"
 -- switch to streaming mode
 SET 'execution.runtime-mode' = 'streaming';
@@ -358,15 +357,16 @@ FROM fluss_order o
                  ON c.nation_key = n.nation_key;
 ```
 
-### Real-Time Analytics on Fluss datalake-enabled tables
-Now, the data of the table `datalake_enriched_orders` is in Fluss(for rel-time data) and Paimon(for historical data).
+### Real-Time Analytics on Fluss datalake-enabled Tables
 
-When you query with specifying table `datalake_enriched_orders`, Fluss will union the data in Fluss and Paimon to get the full result.
+The data for the `datalake_enriched_orders` table is stored in Fluss (for real-time data) and Paimon (for historical data).
 
-In the case you only want to query the data in Paimon directly which is high performance without extra union, you can specifying table `datalake_enriched_orders$lake` with `$lake` suffix.
-With that, you will also get all the optimization and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) using with `datalake_enriched_orders$snapshots`, etc.
+When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and Paimon to provide a complete result set -- combines `real-time` and `historical` data.
 
-Use the following SQL to query the snapshots on Paimon:
+If you wish to query only the data stored in Paimon—offering high-performance access without the overhead of unioning data—you can use the `datalake_enriched_orders$lake` table by appending the `$lake` suffix. 
+This approach also enables all the optimizations and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$snapshots`.
+
+To query the snapshots directly from Paimon, use the following SQL:
 ```sql  title="Flink SQL Client"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';
@@ -374,7 +374,7 @@ SET 'execution.runtime-mode' = 'batch';
 -- to query snapshots in paimon
 SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapshots;
 ```
-The result looks like:
+**Sample Output:**
 ```shell
 +-------------+--------------------+
 | snapshot_id | total_record_count |
@@ -382,14 +382,14 @@ The result looks like:
 |           1 |                650 |
 +-------------+--------------------+
 ```
-If it return empty, you may need to wait for checkpoint finish, around 30s.
+**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshotsm, otherwise the result will be empty.
 
 Then, you can run the following SQL to do analytics on Paimon data:
 ```sql  title="Flink SQL Client"
 -- to sum prices of all orders in paimon
 SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
 ```
-The result looks like:
+**Sample Output:**
 ```shell
 +------------+
 |  sum_price |
@@ -398,7 +398,7 @@ The result looks like:
 +------------+
 ```
 
-If want to result with sub-second data freshness, you can query the table directly with union Fluss and Paimon data:
+To achieve results with sub-second data freshness, you can query the table directly, which seamlessly unifies data from both Fluss and Paimon:
 ```sql  title="Flink SQL Client"
 -- to sum prices of all orders in fluss and paimon
 SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
@@ -411,14 +411,14 @@ The result looks like:
 | 1777908.36 |
 +------------+
 ```
-You can run the real-time analytics query multi-times, the result should be different in every one run since the data are written to Fluss in real-time.
+You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-
-At last, you can use the following command to see the files in paimon:
+Finally, you can use the following command to view the files stored in Paimon:
 ```shell
 docker-compose exec taskmanager tree /tmp/paimon/fluss.db
 ```
-It looks like:
+
+**Sample Output:**
 ```shell
 /tmp/paimon/fluss.db
 └── datalake_enriched_orders
@@ -438,8 +438,7 @@ It looks like:
         ├── LATEST
         └── snapshot-1
 ```
-It's standard format of Paimon which enables you query on it with other engines, like [StartRocks](https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/).
-
+The files adhere to Paimon's standard format, enabling seamless querying with other engines such as [StartRocks](https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/).
 
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run `docker-compose down -v` to stop all containers.
