@@ -23,6 +23,7 @@ import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -66,6 +67,14 @@ class PeriodicSnapshotManagerTest {
         periodicSnapshotManager = createSnapshotManager(NopSnapshotTarget.INSTANCE);
         periodicSnapshotManager.start();
         checkOnlyOneScheduledTasks();
+    }
+
+    @Test
+    void testInitWithNonPositiveSnapshotInterval() {
+        periodicSnapshotManager = createSnapshotManager(0, NopSnapshotTarget.INSTANCE);
+        periodicSnapshotManager.start();
+        // periodic snapshot is disabled when periodicMaterializeDelay is not positive
+        Assertions.assertEquals(0, scheduledExecutorService.getAllScheduledTasks().size());
     }
 
     @Test
@@ -129,6 +138,12 @@ class PeriodicSnapshotManagerTest {
     }
 
     private PeriodicSnapshotManager createSnapshotManager(
+        PeriodicSnapshotManager.SnapshotTarget target) {
+        return createSnapshotManager(periodicMaterializeDelay, target);
+    }
+
+    private PeriodicSnapshotManager createSnapshotManager(
+            long periodicMaterializeDelay,
             PeriodicSnapshotManager.SnapshotTarget target) {
         return new PeriodicSnapshotManager(
                 tableBucket,
