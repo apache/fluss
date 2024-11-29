@@ -119,7 +119,10 @@ public class PeriodicSnapshotManager implements Closeable {
         this.periodicExecutor = periodicExecutor;
         this.guardedExecutor = guardedExecutor;
         this.asyncOperationsThreadPool = asyncOperationsThreadPool;
-        this.initialDelay = periodicSnapshotDelay > 0 ? MathUtils.murmurHash(tableBucket.hashCode()) % periodicSnapshotDelay : 0;
+        this.initialDelay =
+                periodicSnapshotDelay > 0
+                        ? MathUtils.murmurHash(tableBucket.hashCode()) % periodicSnapshotDelay
+                        : 0;
 
         registerMetrics(bucketMetricGroup);
     }

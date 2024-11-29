@@ -138,13 +138,12 @@ class PeriodicSnapshotManagerTest {
     }
 
     private PeriodicSnapshotManager createSnapshotManager(
-        PeriodicSnapshotManager.SnapshotTarget target) {
+            PeriodicSnapshotManager.SnapshotTarget target) {
         return createSnapshotManager(periodicMaterializeDelay, target);
     }
 
     private PeriodicSnapshotManager createSnapshotManager(
-            long periodicMaterializeDelay,
-            PeriodicSnapshotManager.SnapshotTarget target) {
+            long periodicMaterializeDelay, PeriodicSnapshotManager.SnapshotTarget target) {
         return new PeriodicSnapshotManager(
                 tableBucket,
                 target,

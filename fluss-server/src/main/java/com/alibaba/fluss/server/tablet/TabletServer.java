@@ -128,8 +128,7 @@ public class TabletServer extends ServerBase {
     }
 
     public static void main(String[] args) {
-        Configuration configuration =
-                loadConfiguration(args, TabletServer.class.getSimpleName());
+        Configuration configuration = loadConfiguration(args, TabletServer.class.getSimpleName());
         TabletServer tabletServer = new TabletServer(configuration);
         startServer(tabletServer);
     }
