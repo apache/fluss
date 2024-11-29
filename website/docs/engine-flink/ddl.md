@@ -10,7 +10,7 @@ Fluss supports creating and managing tables through the Fluss Catalog.
 ```sql 
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
-  'bootstrap.servers' = 'fluss-server-1:9123',
+  'bootstrap.servers' = 'fluss-server-1:9123'
 );
 
 USE CATALOG fluss_catalog;
