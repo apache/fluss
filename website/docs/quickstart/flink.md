@@ -26,6 +26,9 @@ cd fluss-quickstart-flink
 ```
 
 2. Create `docker-compose.yml` file with the following content:
+
+> **Note:** Depending on the docker-compose version installed on your system, you might need to specify a version field at the beginning of your yaml file.
+
 ```yaml
 services:
   coordinator-server:
