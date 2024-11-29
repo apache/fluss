@@ -28,7 +28,6 @@ import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
-import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
@@ -68,7 +67,7 @@ public class TabletServer extends ServerBase {
 
     private static final String SERVER_NAME = "TabletServer";
 
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorServer.class);
+    private static final Logger LOG = LoggerFactory.getLogger(TabletServer.class);
 
     private static final long ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS = 60 * 1000L;
     private static final long ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS = 3 * 1000L;
@@ -130,7 +129,7 @@ public class TabletServer extends ServerBase {
 
     public static void main(String[] args) {
         Configuration configuration =
-                loadConfiguration(args, CoordinatorServer.class.getSimpleName());
+                loadConfiguration(args, TabletServer.class.getSimpleName());
         TabletServer tabletServer = new TabletServer(configuration);
         startServer(tabletServer);
     }
