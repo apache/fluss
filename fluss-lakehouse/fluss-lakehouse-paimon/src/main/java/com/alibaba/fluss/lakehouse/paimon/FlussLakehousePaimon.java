@@ -29,6 +29,8 @@ import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -42,6 +44,8 @@ public class FlussLakehousePaimon {
     private static final String FLUSS_CONF_PREFIX = "fluss.";
     // for paimon config
     private static final String PAIMON_CATALOG_CONF_PREFIX = "paimon.catalog.";
+
+    private static final Logger logger = LoggerFactory.getLogger(FlussLakehousePaimon.class);
 
     public static void main(String[] args) throws Exception {
         // parse params
@@ -94,7 +98,7 @@ public class FlussLakehousePaimon {
                 new PaimonDataBaseSyncSinkBuilder(paimonConfig, flussConfig).withInput(input);
         paimonDataBaseSyncSinkBuilder.build();
 
-        System.out.println("Starting data tiering service to Paimon.....");
+        logger.info("Starting data tiering service to Paimon...");
         execEnv.executeAsync();
     }
 
