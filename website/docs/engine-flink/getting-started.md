@@ -36,9 +36,8 @@ Fluss only supports Apache Flink's Table API.
 Flink runs on all UNIX-like environments, i.e. Linux, Mac OS X, and Cygwin (for Windows).
 If you haven’t downloaded Flink, you can download [the binary release](https://flink.apache.org/downloads.html) of Flink, then extract the archive with the following command.
 ```shell
-tar -xzf fluss-0.5.0-bin.tgz
+tar -xzf flink-1.20.0-bin-scala_2.12.tgz
 ```
-
 - **Copy Fluss Connector Jar**
 
 Download [Fluss connector jar](/downloads#fluss-connector) and copy to the lib directory of your Flink home.
