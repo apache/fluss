@@ -47,13 +47,13 @@ public class NewTablesAddedPaimonListener implements NewTablesAddedListener {
 
     private final Configuration configuration;
 
-    private final Set<Long> addedTabels;
+    private final Set<Long> addedTables;
 
     private transient Catalog paimonCatalog;
 
     public NewTablesAddedPaimonListener(Configuration configuration) {
         this.configuration = configuration;
-        this.addedTabels = new HashSet<>();
+        this.addedTables = new HashSet<>();
     }
 
     @Override
@@ -69,12 +69,12 @@ public class NewTablesAddedPaimonListener implements NewTablesAddedListener {
                                     new FlinkFileIOLoader()));
         }
         for (TableInfo tableInfo : newTables) {
-            if (addedTabels.contains(tableInfo.getTableId())) {
+            if (addedTables.contains(tableInfo.getTableId())) {
                 continue;
             }
             try {
                 createTable(tableInfo);
-                addedTabels.add(tableInfo.getTableId());
+                addedTables.add(tableInfo.getTableId());
             } catch (Exception e) {
                 throw new RuntimeException(
                         "Failed to create table in paimon." + tableInfo.getTablePath(), e);
