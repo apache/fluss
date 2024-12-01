@@ -207,7 +207,7 @@ END;
 ```
 
 Fluss primary-key tables support high QPS point lookup queries on primary keys. Performing a [lookup join](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/joins/#lookup-join) is really efficient and you can use it to enrich
-to enrich the `fluss_orders` table with information from the `fluss_customer` and `fluss_nation` primary-key tables.
+the `fluss_orders` table with information from the `fluss_customer` and `fluss_nation` primary-key tables.
 
 ```sql  title="Flink SQL Client"
 INSERT INTO enriched_orders
