@@ -146,9 +146,13 @@ public class JMXReporter implements MetricReporter {
             }
         } catch (NotCompliantMBeanException e) {
             // implementation error on our side
-            LOG.debug("Metric did not comply with JMX MBean rules.", e);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Metric did not comply with JMX MBean rules.", e);
+            }
         } catch (InstanceAlreadyExistsException e) {
-            LOG.warn("A metric with the name {} was already registered.", jmxName, e);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("A metric with the name {} was already registered.", jmxName, e);
+            }
         } catch (Throwable t) {
             LOG.warn("Failed to register metric", t);
         }
