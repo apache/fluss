@@ -20,8 +20,9 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 
-import java.util.HashMap;
 import java.util.Map;
+
+import static com.alibaba.fluss.utils.OptionsUtils.convertToPropertiesWithPrefix;
 
 /** Utility class for accessing data lake related configurations. */
 public class DataLakeUtils {
@@ -43,16 +44,7 @@ public class DataLakeUtils {
         }
 
         // currently, extract datalake catalog config
-        Map<String, String> datalakeConfig = new HashMap<>();
-        Map<String, String> flussConfig = tableOptions.toMap();
         String dataLakePrefix = "table.datalake." + datalakeFormat + ".";
-        for (Map.Entry<String, String> configEntry : flussConfig.entrySet()) {
-            String configKey = configEntry.getKey();
-            String configValue = configEntry.getValue();
-            if (configKey.startsWith(dataLakePrefix)) {
-                datalakeConfig.put(configKey.substring(dataLakePrefix.length()), configValue);
-            }
-        }
-        return datalakeConfig;
+        return convertToPropertiesWithPrefix(tableOptions.toMap(), dataLakePrefix, true);
     }
 }

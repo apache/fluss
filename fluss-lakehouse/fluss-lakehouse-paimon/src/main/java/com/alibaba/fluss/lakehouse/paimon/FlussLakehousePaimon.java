@@ -30,9 +30,10 @@ import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
+
+import static com.alibaba.fluss.utils.OptionsUtils.convertToPropertiesWithPrefix;
 
 /** The entrypoint for fluss tier data to Paimon. */
 public class FlussLakehousePaimon {
@@ -52,7 +53,8 @@ public class FlussLakehousePaimon {
         String database = paramsMap.get(DATABASE);
 
         // extract fluss config
-        Map<String, String> flussConfigMap = extractConfigStartWith(paramsMap, FLUSS_CONF_PREFIX);
+        Map<String, String> flussConfigMap =
+                convertToPropertiesWithPrefix(paramsMap, FLUSS_CONF_PREFIX, true);
         // we need to get bootstrap.servers
         String bootstrapServers = paramsMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
         if (bootstrapServers == null) {
@@ -61,7 +63,8 @@ public class FlussLakehousePaimon {
         flussConfigMap.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
 
         // extract paimon config
-        Map<String, String> paimonConfig = extractConfigStartWith(paramsMap, PAIMON_CONF_PREFIX);
+        Map<String, String> paimonConfig =
+                convertToPropertiesWithPrefix(paramsMap, PAIMON_CONF_PREFIX, true);
 
         // then build the fluss to paimon job
         final StreamExecutionEnvironment execEnv =
@@ -109,18 +112,5 @@ public class FlussLakehousePaimon {
         public boolean test(String database) {
             return databasePattern.matcher(database).matches();
         }
-    }
-
-    private static Map<String, String> extractConfigStartWith(
-            Map<String, String> configParams, String prefix) {
-        Map<String, String> extractedConfig = new HashMap<>();
-        for (Map.Entry<String, String> configEntry : configParams.entrySet()) {
-            String configKey = configEntry.getKey();
-            String configValue = configEntry.getValue();
-            if (configKey.startsWith(prefix)) {
-                extractedConfig.put(configKey.substring(prefix.length()), configValue);
-            }
-        }
-        return extractedConfig;
     }
 }

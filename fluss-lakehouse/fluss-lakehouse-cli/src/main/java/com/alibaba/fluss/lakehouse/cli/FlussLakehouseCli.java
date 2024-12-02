@@ -35,6 +35,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.utils.OptionsUtils.convertToPropertiesWithPrefix;
 import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.CHECKPOINTING_INTERVAL;
 
 /** Cli for Fluss lakehouse integrating. */
@@ -162,13 +163,7 @@ public class FlussLakehouseCli {
                             + ConfigOptions.DATALAKE_FORMAT.key());
         }
         String datalakeConfigPrefix = "datalake." + datalakeFormat + ".";
-        Map<String, String> lakeStorageConfig = new HashMap<>();
-        for (Map.Entry<String, String> entry : configuration.toMap().entrySet()) {
-            if (entry.getKey().startsWith(datalakeConfigPrefix)) {
-                lakeStorageConfig.put(entry.getKey(), entry.getValue());
-            }
-        }
-        return lakeStorageConfig;
+        return convertToPropertiesWithPrefix(configuration.toMap(), datalakeConfigPrefix, false);
     }
 
     private static String getFlussBootStrapServers(Configuration configuration) {

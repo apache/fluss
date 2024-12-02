@@ -37,6 +37,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.utils.OptionsUtils.removePrefixMap;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
@@ -75,13 +76,7 @@ public class CatalogPropertiesUtils {
     private static final Pattern SCHEMA_COLUMN_NAME_SUFFIX = Pattern.compile("\\d+\\.name");
 
     public static Map<String, String> deserializeOptions(Map<String, String> map) {
-        return map.entrySet().stream()
-                .filter(
-                        e -> {
-                            final String key = e.getKey();
-                            return !key.startsWith(SCHEMA + SEPARATOR);
-                        })
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        return removePrefixMap(map, SCHEMA);
     }
 
     public static void deserializeWatermark(Map<String, String> map, Schema.Builder builder) {
