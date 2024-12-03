@@ -126,7 +126,7 @@ public class FlussLakeTableSnapshotCommitter implements LakeTableSnapshotCommitt
                 // when it's still reading pk table's snapshot, we have no log end offset
                 if (logEndOffset >= 0) {
                     lakeTableOffsetForBucket.setLogEndOffset(
-                            // we plus 1 to align with FLuss's end log offset
+                            // we plus 1 to align with Fluss's end log offset
                             bucketEndOffsetEntry.getValue() + 1);
                 }
 

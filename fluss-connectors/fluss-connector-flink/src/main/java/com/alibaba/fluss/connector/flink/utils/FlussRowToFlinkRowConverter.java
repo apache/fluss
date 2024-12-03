@@ -115,7 +115,7 @@ public class FlussRowToFlinkRowConverter {
     public interface FlussDeserializationConverter extends Serializable {
 
         /**
-         * Convert a FLuss field object of {@link InternalRow} to the Flink's internal data
+         * Convert a Fluss field object of {@link InternalRow} to the Flink's internal data
          * structure object.
          *
          * @param flussField A single field of a {@link InternalRow}

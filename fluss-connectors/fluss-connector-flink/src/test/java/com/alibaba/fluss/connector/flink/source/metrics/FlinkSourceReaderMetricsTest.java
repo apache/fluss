@@ -28,7 +28,7 @@ import java.util.Optional;
 import static com.alibaba.fluss.connector.flink.source.metrics.FlinkSourceReaderMetrics.BUCKET_GROUP;
 import static com.alibaba.fluss.connector.flink.source.metrics.FlinkSourceReaderMetrics.FLUSS_METRIC_GROUP;
 import static com.alibaba.fluss.connector.flink.source.metrics.FlinkSourceReaderMetrics.PARTITION_GROUP;
-import static com.alibaba.fluss.connector.flink.source.metrics.FlinkSourceReaderMetrics.REDARE_METRIC_GROUP;
+import static com.alibaba.fluss.connector.flink.source.metrics.FlinkSourceReaderMetrics.READER_METRIC_GROUP;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -74,7 +74,7 @@ class FlinkSourceReaderMetricsTest {
             currentOffsetGauge =
                     metricListener.getGauge(
                             FLUSS_METRIC_GROUP,
-                            REDARE_METRIC_GROUP,
+                        READER_METRIC_GROUP,
                             BUCKET_GROUP,
                             String.valueOf(tb.getBucket()),
                             FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
@@ -82,7 +82,7 @@ class FlinkSourceReaderMetricsTest {
             currentOffsetGauge =
                     metricListener.getGauge(
                             FLUSS_METRIC_GROUP,
-                            REDARE_METRIC_GROUP,
+                        READER_METRIC_GROUP,
                             PARTITION_GROUP,
                             String.valueOf(tb.getPartitionId()),
                             BUCKET_GROUP,

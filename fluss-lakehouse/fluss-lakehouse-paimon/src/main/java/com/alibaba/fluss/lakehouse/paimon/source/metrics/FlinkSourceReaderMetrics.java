@@ -48,7 +48,7 @@ public class FlinkSourceReaderMetrics {
 
     // Constants
     public static final String FLUSS_METRIC_GROUP = "fluss";
-    public static final String REDARE_METRIC_GROUP = "reader";
+    public static final String READER_METRIC_GROUP = "reader";
     public static final String PARTITION_GROUP = "partition";
     public static final String BUCKET_GROUP = "bucket";
     public static final String CURRENT_OFFSET_METRIC_GAUGE = "currentOffset";
@@ -71,7 +71,7 @@ public class FlinkSourceReaderMetrics {
     public FlinkSourceReaderMetrics(SourceReaderMetricGroup sourceReaderMetricGroup) {
         this.sourceReaderMetricGroup = sourceReaderMetricGroup;
         this.flussSourceReaderMetricGroup =
-                sourceReaderMetricGroup.addGroup(FLUSS_METRIC_GROUP).addGroup(REDARE_METRIC_GROUP);
+                sourceReaderMetricGroup.addGroup(FLUSS_METRIC_GROUP).addGroup(READER_METRIC_GROUP);
     }
 
     public void reportRecordEventTime(long lag) {

@@ -140,7 +140,7 @@ import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
  * <h2>Updating File Contents</h2>
  *
  * <p>Many file systems either do not support overwriting contents of existing files at all, or do
- * not support consistent visibility of the updated contents in that case. For that reason, FLuss's
+ * not support consistent visibility of the updated contents in that case. For that reason, Fluss's
  * FileSystem does not support appending to existing files, or seeking within output streams so that
  * previously written data could be overwritten.
  *
