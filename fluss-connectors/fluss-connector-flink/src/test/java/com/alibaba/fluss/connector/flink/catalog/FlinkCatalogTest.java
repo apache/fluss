@@ -361,6 +361,24 @@ class FlinkCatalogTest {
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
     }
 
+    @Test
+    public void testEarlyTablePathCheck()
+            throws TableAlreadyExistException, DatabaseNotExistException {
+        Map<String, String> options = new HashMap<>();
+        CatalogTable table = this.newCatalogTable(options);
+        catalog.createTable(this.tableInDefaultDb, table, false);
+        assertThat(catalog.tableExists(this.tableInDefaultDb)).isTrue();
+
+        ObjectPath lakeTable = new ObjectPath(DEFAULT_DB, "t1$lake");
+
+        assertThat(catalog.tableExists(lakeTable)).isFalse();
+
+        assertThatThrownBy(() -> catalog.dropTable(lakeTable, false))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        "Table (or view) default.t1$lake does not exist in Catalog test-catalog.");
+    }
+
     private void createAndCheckAndDropTable(
             final ResolvedSchema schema, ObjectPath tablePath, Map<String, String> options)
             throws Exception {
