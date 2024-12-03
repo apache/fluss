@@ -87,10 +87,11 @@ public class PaimonSyncTestBase extends FlinkPaimonTestBase {
 
         DataStreamSource<MultiplexCdcRecord> input =
                 execEnv.fromSource(
-                        flussDatabaseSyncSource,
-                        WatermarkStrategy.noWatermarks(),
-                        "flinkSycDatabaseSource");
-
+                                flussDatabaseSyncSource,
+                                WatermarkStrategy.noWatermarks(),
+                                "flinkSycDatabaseSource")
+                        // limit resource usage
+                        .setParallelism(2);
         Map<String, String> paimonCatalogConf = FlinkPaimonTestBase.getPaimonCatalogConf();
 
         return new PaimonDataBaseSyncSinkBuilder(paimonCatalogConf, configuration).withInput(input);
@@ -120,7 +121,7 @@ public class PaimonSyncTestBase extends FlinkPaimonTestBase {
 
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
-                        .distributedBy(bucketNum)
+                        .distributedBy(bucketNum, "a")
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
 
         if (isPartitioned) {

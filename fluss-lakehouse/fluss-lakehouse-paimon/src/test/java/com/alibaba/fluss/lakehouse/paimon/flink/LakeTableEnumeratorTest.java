@@ -126,8 +126,9 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
                 TableBucket tableBucket = new TableBucket(t1Id, i);
                 // no any paimon data written for the bucket
                 if (bucketLogEndOffset.get(i) <= 0) {
-                    expectedAssignment.put(
-                            i, Collections.singletonList(new LogSplit(tableBucket, null, -2, 0)));
+                    expectedAssignment
+                            .computeIfAbsent(i, (k) -> new ArrayList<>())
+                            .add(new LogSplit(tableBucket, null, -2, 0));
                 }
             }
             Map<Integer, List<SourceSplitBase>> actualAssignment =

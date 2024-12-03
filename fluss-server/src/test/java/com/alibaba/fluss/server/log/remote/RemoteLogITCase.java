@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.Objects;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
@@ -64,7 +65,9 @@ public class RemoteLogITCase {
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
-        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        int leader =
+                Objects.requireNonNull(
+                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb).getLeaderId());
         TabletServerGateway leaderGateWay =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // produce many records to trigger remote log copy.

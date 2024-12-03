@@ -245,6 +245,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // assert the cluster should have tablet server number to be 3
         assertHasTabletServerNumber(3);
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
         // we can create the table now
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();

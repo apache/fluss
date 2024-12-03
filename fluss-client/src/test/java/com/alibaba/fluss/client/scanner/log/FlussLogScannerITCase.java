@@ -275,9 +275,13 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testScanFromStartTimestamp(boolean isPartitioned) throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1",
+                        "test_scan_from_timestamp" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
                 createTable(
-                        DATA1_TABLE_PATH,
+                        tablePath,
                         isPartitioned
                                 ? DATA1_PARTITIONED_TABLE_INFO.getTableDescriptor()
                                 : DATA1_TABLE_INFO.getTableDescriptor(),
@@ -289,7 +293,7 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
         } else {
             Map<String, Long> partitionNameAndIds =
-                    FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH);
+                    FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
             // just pick one partition
             Map.Entry<String, Long> partitionNameAndIdEntry =
                     partitionNameAndIds.entrySet().iterator().next();
@@ -298,12 +302,12 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
         }
 
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH, partitionName);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
 
         long firstStartTimestamp = System.currentTimeMillis();
         int batchRecordSize = 10;
         List<IndexedRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(tablePath)) {
             // 1. first write one batch of data.
             AppendWriter appendWriter = table.getAppendWriter();
             for (int i = 0; i < batchRecordSize; i++) {
@@ -314,6 +318,9 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
                 expectedRows.add(row);
                 appendWriter.append(row).get();
             }
+
+            // sleep a while to avoid secondStartTimestamp is same with firstStartTimestamp
+            Thread.sleep(10);
 
             // record second batch start timestamp, we move this before first scan to make it
             // as early as possible to avoid potential time backwards
@@ -371,9 +378,13 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testScanFromLatestOffsets(boolean isPartitioned) throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1",
+                        "test_scan_from_latest_offsets" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
                 createTable(
-                        DATA1_TABLE_PATH,
+                        tablePath,
                         isPartitioned
                                 ? DATA1_PARTITIONED_TABLE_INFO.getTableDescriptor()
                                 : DATA1_TABLE_INFO.getTableDescriptor(),
@@ -384,16 +395,16 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
         } else {
             Map<String, Long> partitionNameAndIds =
-                    FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH);
+                    FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
             // just pick one partition
             partitionName = partitionNameAndIds.keySet().iterator().next();
             partitionId = partitionNameAndIds.get(partitionName);
             FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
         }
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH, partitionName);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
 
         int batchRecordSize = 10;
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(tablePath)) {
             // 1. first write one batch of data.
             AppendWriter appendWriter = table.getAppendWriter();
             for (int i = 0; i < batchRecordSize; i++) {

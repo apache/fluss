@@ -75,6 +75,10 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyBucketForPartitionInState;
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyBucketForTableInState;
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyReplicaForPartitionInState;
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyReplicaForTableInState;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
@@ -161,7 +165,7 @@ class CoordinatorEventProcessorTest {
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 eventProcessor.getCoordinatorContext(), testCoordinatorChannelManager);
         // create a table,
-        TablePath t1 = TablePath.of(defaultDatabase, "t1");
+        TablePath t1 = TablePath.of(defaultDatabase, "create_drop_t1");
         TableDescriptor tableDescriptor = TEST_TABLE;
         int nBuckets = 3;
         int replicationFactor = 3;
@@ -170,7 +174,7 @@ class CoordinatorEventProcessorTest {
                         nBuckets, replicationFactor, new int[] {0, 1, 2});
         long t1Id = metaDataManager.createTable(t1, tableDescriptor, tableAssignment, false);
 
-        TablePath t2 = TablePath.of(defaultDatabase, "t2");
+        TablePath t2 = TablePath.of(defaultDatabase, "create_drop_t2");
         long t2Id = metaDataManager.createTable(t2, tableDescriptor, tableAssignment, false);
 
         verifyTableCreated(coordinatorContext, t2Id, tableAssignment, nBuckets, replicationFactor);
@@ -181,9 +185,8 @@ class CoordinatorEventProcessorTest {
         verifyTableDropped(coordinatorContext, t1Id);
 
         // replicas and buckets for t2 should still be online
-        CoordinatorTestUtils.verifyBucketForTableInState(
-                coordinatorContext, t2Id, nBuckets, BucketState.OnlineBucket);
-        CoordinatorTestUtils.verifyReplicaForTableInState(
+        verifyBucketForTableInState(coordinatorContext, t2Id, nBuckets, BucketState.OnlineBucket);
+        verifyReplicaForTableInState(
                 coordinatorContext, t2Id, nBuckets * replicationFactor, ReplicaState.OnlineReplica);
 
         // shutdown event processor and delete the table node for t2 from zk
@@ -242,7 +245,7 @@ class CoordinatorEventProcessorTest {
         waitUtil(
                 () -> coordinatorContext.getTablePathById(t1Id) != null,
                 Duration.ofMinutes(1),
-                "Fail to wait for coordinator handling create table event for table %s" + t1Id);
+                "Fail to wait for coordinator handling create table event for table " + t1Id);
 
         // drop the table;
         metaDataManager.dropTable(t1, false);
@@ -360,8 +363,10 @@ class CoordinatorEventProcessorTest {
         retry(
                 Duration.ofMinutes(1),
                 () ->
-                        assertThat(coordinatorContext.getLiveTabletServers())
-                                .containsKey(newlyServerId));
+                        assertThat(
+                                        new HashSet<>(
+                                                coordinatorContext.getLiveTabletServers().keySet()))
+                                .contains(newlyServerId));
 
         // make sure the bucket that remains in offline should be online again
         // since the server become online
@@ -422,7 +427,7 @@ class CoordinatorEventProcessorTest {
                         .add(0, BucketAssignment.of(0, 1, 2))
                         .add(1, BucketAssignment.of(1, 2, 0))
                         .build();
-        TablePath tablePath = TablePath.of(defaultDatabase, "t1");
+        TablePath tablePath = TablePath.of(defaultDatabase, "t_restart");
         long table1Id = metaDataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
 
         // let's restart
@@ -462,8 +467,14 @@ class CoordinatorEventProcessorTest {
 
         // check the changed leader and isr info
         CoordinatorTestUtils.checkLeaderAndIsr(zookeeperClient, t1Bucket0, 1, 1);
-        assertThat(coordinatorContext.getBucketState(t1Bucket0)).isEqualTo(OnlineBucket);
-        assertThat(coordinatorContext.getBucketState(t1Bucket1)).isEqualTo(OnlineBucket);
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(coordinatorContext.getBucketState(t1Bucket0))
+                            .isEqualTo(OnlineBucket);
+                    assertThat(coordinatorContext.getBucketState(t1Bucket1))
+                            .isEqualTo(OnlineBucket);
+                });
         // only replica0 will be offline
         verifyReplicaOnlineOrOffline(
                 coordinatorContext, table1Id, tableAssignment, Collections.singleton(failedServer));
@@ -556,6 +567,11 @@ class CoordinatorEventProcessorTest {
         long tableId =
                 metaDataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
 
+        retry(
+                Duration.ofMinutes(1),
+                // retry util the table has been put into context
+                () -> assertThat(coordinatorContext.getTablePathById(tableId)).isNotNull());
+
         // create partition
         long partition1Id = zookeeperClient.getPartitionIdAndIncrement();
         long partition2Id = zookeeperClient.getPartitionIdAndIncrement();
@@ -645,13 +661,19 @@ class CoordinatorEventProcessorTest {
                             .isTrue();
                 });
         // make sure all should be online
-        CoordinatorTestUtils.verifyBucketForTableInState(
-                coordinatorContext, tableId, nBuckets, BucketState.OnlineBucket);
-        CoordinatorTestUtils.verifyReplicaForTableInState(
-                coordinatorContext,
-                tableId,
-                nBuckets * replicationFactor,
-                ReplicaState.OnlineReplica);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyBucketForTableInState(
+                                coordinatorContext, tableId, nBuckets, BucketState.OnlineBucket));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyReplicaForTableInState(
+                                coordinatorContext,
+                                tableId,
+                                nBuckets * replicationFactor,
+                                ReplicaState.OnlineReplica));
         for (TableBucket tableBucket : coordinatorContext.getAllBucketsForTable(tableId)) {
             CoordinatorTestUtils.checkLeaderAndIsr(
                     zookeeperClient,
@@ -687,13 +709,22 @@ class CoordinatorEventProcessorTest {
                             .isTrue();
                 });
         // make sure all should be online
-        CoordinatorTestUtils.verifyBucketForPartitionInState(
-                coordinatorContext, tablePartition, nBuckets, BucketState.OnlineBucket);
-        CoordinatorTestUtils.verifyReplicaForPartitionInState(
-                coordinatorContext,
-                tablePartition,
-                nBuckets * replicationFactor,
-                ReplicaState.OnlineReplica);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyBucketForPartitionInState(
+                                coordinatorContext,
+                                tablePartition,
+                                nBuckets,
+                                BucketState.OnlineBucket));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyReplicaForPartitionInState(
+                                coordinatorContext,
+                                tablePartition,
+                                nBuckets * replicationFactor,
+                                ReplicaState.OnlineReplica));
         for (TableBucket tableBucket :
                 coordinatorContext.getAllBucketsForPartition(
                         tablePartition.getTableId(), tablePartition.getPartitionId())) {
@@ -761,12 +792,25 @@ class CoordinatorEventProcessorTest {
                                         new TableBucketReplica(bucket, replica);
                                 // if expected to be offline
                                 if (expectedOfflineReplicas.contains(replica)) {
-                                    assertThat(coordinatorContext.getReplicaState(bucketReplica))
-                                            .isEqualTo(OfflineReplica);
+                                    retry(
+                                            Duration.ofMinutes(1),
+                                            () ->
+                                                    assertThat(
+                                                                    coordinatorContext
+                                                                            .getReplicaState(
+                                                                                    bucketReplica))
+                                                            .isEqualTo(OfflineReplica));
+
                                 } else {
                                     // otherwise, should be online
-                                    assertThat(coordinatorContext.getReplicaState(bucketReplica))
-                                            .isEqualTo(OnlineReplica);
+                                    retry(
+                                            Duration.ofMinutes(1),
+                                            () -> {
+                                                assertThat(
+                                                                coordinatorContext.getReplicaState(
+                                                                        bucketReplica))
+                                                        .isEqualTo(OnlineReplica);
+                                            });
                                 }
                             }
                         });

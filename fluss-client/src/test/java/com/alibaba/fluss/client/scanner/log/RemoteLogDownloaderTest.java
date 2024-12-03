@@ -100,7 +100,7 @@ class RemoteLogDownloaderTest {
         retry(
                 Duration.ofMinutes(1),
                 () -> {
-                    for (int i = 0; i < 3; i++) {
+                    for (int i = 0; i < 4; i++) {
                         assertThat(futures.get(i).isDone()).isTrue();
                     }
                 });

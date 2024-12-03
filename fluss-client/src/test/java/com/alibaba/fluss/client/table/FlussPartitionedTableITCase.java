@@ -119,10 +119,11 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testUnsubscribePartitionBucket() throws Exception {
         // write rows
-        Schema schema = createPartitionedTable(DATA1_TABLE_PATH, false);
+        TablePath tablePath = TablePath.of("test_db_1", "unsubscribe_partition_bucket_table");
+        Schema schema = createPartitionedTable(tablePath, false);
         Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH);
-        Table table = conn.getTable(DATA1_TABLE_PATH);
+                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+        Table table = conn.getTable(tablePath);
 
         Map<Long, List<InternalRow>> expectPartitionAppendRows =
                 writeRows(table, schema, partitionIdByNames);

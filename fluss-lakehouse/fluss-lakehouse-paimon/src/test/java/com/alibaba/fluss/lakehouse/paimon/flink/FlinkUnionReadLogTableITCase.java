@@ -103,13 +103,13 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
             for (String partition : partitionNameById.values()) {
-                for (int i = 0; i < 10; i++) {
-                    flinkRows.addAll(writeRows(tablePath, 3, partition));
+                for (int i = 0; i < 3; i++) {
+                    flinkRows.addAll(writeRows(tablePath, 10, partition));
                 }
             }
         } else {
-            for (int i = 0; i < 10; i++) {
-                flinkRows.addAll(writeRows(tablePath, 3, null));
+            for (int i = 0; i < 3; i++) {
+                flinkRows.addAll(writeRows(tablePath, 10, null));
             }
         }
         return t1Id;

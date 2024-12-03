@@ -47,6 +47,7 @@ import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
+import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.NetUtils;
 
 import org.apache.curator.test.TestingServer;
@@ -59,6 +60,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -142,6 +144,11 @@ public final class FlussClusterExtension
             for (String database : databases) {
                 if (!database.equals(defaultDb)) {
                     metaDataManager.dropDatabase(database, true, true);
+                    // delete the data dirs
+                    for (int serverId : tabletServers.keySet()) {
+                        String dataDir = getDataDir(serverId);
+                        FileUtils.deleteDirectoryQuietly(Paths.get(dataDir, database).toFile());
+                    }
                 }
             }
             List<String> tables = metaDataManager.listTables(defaultDb);
@@ -239,8 +246,7 @@ public final class FlussClusterExtension
         if (tabletServers.containsKey(serverId)) {
             throw new IllegalArgumentException("Tablet server " + serverId + " already exists.");
         }
-        String dataDir = tempDir.getAbsolutePath() + File.separator + "tablet-server-" + serverId;
-
+        String dataDir = getDataDir(serverId);
         final ServerNode serverNode;
         final TabletServer tabletServer;
         try (NetUtils.Port availablePort = getAvailablePort()) {
@@ -267,6 +273,10 @@ public final class FlussClusterExtension
 
         tabletServers.put(serverId, tabletServer);
         tabletServerNodes.add(serverNode);
+    }
+
+    private String getDataDir(int serverId) {
+        return tempDir.getAbsolutePath() + File.separator + "tablet-server-" + serverId;
     }
 
     private void setRemoteDataDir(Configuration conf) {

@@ -116,7 +116,7 @@ class KvReplicaRestoreITCase {
         final int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
         Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
 
-        int recordsNum = 3000;
+        int recordsNum = 10000;
         // create pretty many records to make can flush to file
         List<KvRecord> records = new ArrayList<>(recordsNum);
         for (int i = 0; i < recordsNum; i++) {
@@ -140,7 +140,11 @@ class KvReplicaRestoreITCase {
                     return false;
                 },
                 Duration.ofMinutes(2),
-                "Fail to wait for the replica to restore in another server");
+                "Fail to wait for the replica to restore in another server. "
+                        + "Previous leader is "
+                        + leaderServer
+                        + ", restored leader is "
+                        + newLeaderServer.get());
         // wait the new replica become leader
         TabletServerGateway leaderGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeaderServer.get());
