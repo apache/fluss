@@ -19,8 +19,10 @@ package com.alibaba.fluss.connector.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
+import org.apache.commons.lang3.time.DateFormatUtils;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
@@ -47,6 +49,7 @@ import java.util.Map;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.waitUntilPartitions;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -187,6 +190,7 @@ class FlinkCatalogITCase {
                 "create table test_partitioned_table (a int, b string) partitioned by (b) "
                         + "with ('table.auto-partition.enabled' = 'true',"
                         + " 'table.auto-partition.time-unit' = 'day')");
+        tEnv.executeSql("show partitions test_partitioned_table$lake").print();
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
         Schema expectedSchema = schemaBuilder.build();
@@ -195,6 +199,40 @@ class FlinkCatalogITCase {
                         catalog.getTable(new ObjectPath(DEFAULT_DB, "test_partitioned_table"));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         assertThat(table.getPartitionKeys()).isEqualTo(Collections.singletonList("b"));
+    }
+
+    @Test
+    void testListPartitionInfos() throws Exception {
+        tEnv.executeSql(
+                "create table test_partitioned_table (a int, b string) partitioned by (b) "
+                        + "with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.time-unit' = 'day',"
+                        + " 'table.auto-partition.num-precreate' = '1')");
+
+        CatalogTable table =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_partitioned_table"));
+        assertThat(table.getPartitionKeys()).isEqualTo(Collections.singletonList("b"));
+
+        String today = DateFormatUtils.format(System.currentTimeMillis(), "yyyyMMdd");
+        // Wait until ${today} partition is created.
+        waitUntilPartitions(
+                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                TablePath.of(DEFAULT_DB, "test_partitioned_table"),
+                1);
+
+        List<Row> partitionInfos =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql("show partitions test_partitioned_table").collect());
+
+        assertThat(partitionInfos).containsExactlyInAnyOrder(Row.of("b=" + today));
+
+        // show the lake table partitions info.
+        List<Row> lakeTablePartitionInfos =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql("show partitions test_partitioned_table$lake").collect());
+
+        assertThat(lakeTablePartitionInfos).containsExactlyInAnyOrder(Row.of("b=" + today));
     }
 
     @Test

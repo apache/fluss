@@ -25,6 +25,7 @@ import com.alibaba.fluss.connector.flink.lakehouse.LakeCatalog;
 import com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtil;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -67,6 +68,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static org.apache.flink.util.Preconditions.checkArgument;
@@ -359,8 +361,45 @@ public class FlinkCatalog implements Catalog {
     @Override
     public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
-        // TODO: use admin.listPartitionInfos()
-        return Collections.emptyList();
+
+        String tableName = objectPath.getObjectName();
+        TablePath tablePath;
+        try {
+            if (tableName.contains(LAKE_TABLE_SPLITTER)) {
+                tablePath =
+                        TablePath.of(
+                                objectPath.getDatabaseName(),
+                                tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]);
+            } else {
+                tablePath = toTablePath(objectPath);
+            }
+            TableInfo tableInfo = admin.getTable(tablePath).get();
+            TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
+            if (!tableDescriptor.isPartitioned()) {
+                throw new TableNotPartitionedException(getName(), objectPath);
+            }
+            String partitionField = tableDescriptor.getPartitionKeys().get(0);
+            List<PartitionInfo> partitionInfoList = admin.listPartitionInfos(tablePath).get();
+            return partitionInfoList.stream()
+                    .map(
+                            par ->
+                                    new CatalogPartitionSpec(
+                                            Collections.singletonMap(
+                                                    partitionField, par.getPartitionName())))
+                    .collect(Collectors.toList());
+
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtil.isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to list table [%s]'s partition infos in %s",
+                                objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
@@ -368,6 +407,7 @@ public class FlinkCatalog implements Catalog {
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, CatalogException {
+        // TODO Supports listing infos of specified partitions.
         throw new UnsupportedOperationException();
     }
 

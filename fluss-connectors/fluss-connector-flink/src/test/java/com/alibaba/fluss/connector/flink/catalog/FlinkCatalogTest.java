@@ -18,13 +18,16 @@ package com.alibaba.fluss.connector.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
+import org.apache.commons.lang3.time.DateFormatUtils;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ObjectPath;
@@ -37,6 +40,7 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
+import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
 import org.apache.flink.table.factories.FactoryUtil;
@@ -54,6 +58,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.waitUntilPartitions;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.addOptions;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
@@ -359,6 +364,64 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
+    }
+
+    @Test
+    public void testListPartitionInfos() throws Exception {
+        Map<String, String> options = new HashMap<>();
+        assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s does not exist in Catalog %s.",
+                                tableInDefaultDb, CATALOG_NAME));
+
+        // test create partition table
+        options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true");
+        options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "day");
+        options.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "1");
+        ResolvedSchema resolvedSchema = this.createSchema();
+        CatalogTable table =
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                                "test comment",
+                                Collections.singletonList("first"),
+                                options),
+                        resolvedSchema);
+        catalog.createTable(this.tableInDefaultDb, table, false);
+        assertThat(catalog.tableExists(this.tableInDefaultDb)).isTrue();
+
+        String today = DateFormatUtils.format(System.currentTimeMillis(), "yyyyMMdd");
+        // Wait until ${today} partition is created.
+        waitUntilPartitions(
+                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                TablePath.of(
+                        this.tableInDefaultDb.getDatabaseName(),
+                        this.tableInDefaultDb.getObjectName()),
+                1);
+
+        List<CatalogPartitionSpec> result = catalog.listPartitions(this.tableInDefaultDb);
+        assertThat(result)
+                .containsExactlyInAnyOrder(
+                        new CatalogPartitionSpec(Collections.singletonMap("first", today)));
+
+        // Query the partition infos of the lake table.
+        List<CatalogPartitionSpec> lakeTablePartitions =
+                catalog.listPartitions(new ObjectPath(DEFAULT_DB, "t1$lake"));
+        assertThat(lakeTablePartitions)
+                .containsExactlyInAnyOrder(
+                        new CatalogPartitionSpec(Collections.singletonMap("first", today)));
+    }
+
+    @Test
+    public void testNotPartitionedTable() throws Exception {
+        CatalogTable table = this.newCatalogTable(new HashMap<>());
+        catalog.createTable(this.tableInDefaultDb, table, false);
+        assertThatThrownBy(() -> catalog.listPartitions(this.tableInDefaultDb))
+                .hasCauseInstanceOf(TableNotPartitionedException.class)
+                .hasRootCauseMessage(
+                        "Table default.t1 in catalog test-catalog is not partitioned.");
     }
 
     private void createAndCheckAndDropTable(
