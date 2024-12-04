@@ -11,7 +11,7 @@ Fluss leverages the well-known Lakehouse storage solutions like Apache Paimon, A
 the tiered storage layer. Currently, only Apache Paimon is supported, but more kinds of Lakehouse storage support are on the ways.
 
 Fluss's datalake tiering service will compact Fluss's data to the Lakehouse storage continuously. The data in Lakehouse storage can be read both by Fluss's client in a streaming manner and accessed directly
-by external systems such as Flink, Spark, StarRocks and others. With data tired in Lakehouse storage, Fluss
+by external systems such as Flink, Spark, StarRocks and others. With data tiered in Lakehouse storage, Fluss
 can gain much storage cost reduction and analytics performance improvement.
 
 

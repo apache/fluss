@@ -76,7 +76,7 @@ public class FlinkPaimonTestBase {
         conf.set(ConfigOptions.LAKEHOUSE_STORAGE, "paimon");
         try {
             warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-tired")
+                    Files.createTempDirectory("fluss-testing-datalake-tiered")
                             .resolve("warehouse")
                             .toString();
         } catch (Exception e) {

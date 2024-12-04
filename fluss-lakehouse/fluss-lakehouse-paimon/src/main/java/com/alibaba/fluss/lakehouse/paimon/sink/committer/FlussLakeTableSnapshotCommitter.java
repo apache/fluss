@@ -72,7 +72,7 @@ public class FlussLakeTableSnapshotCommitter implements LakeTableSnapshotCommitt
             coordinatorGateway.commitLakeTableSnapshot(request).get();
         } catch (Exception e) {
             throw new IOException(
-                    "Error committing data lake tired %s to Fluss",
+                    "Error committing data lake tiered %s to Fluss",
                     ExceptionUtils.stripCompletionException(e));
         }
     }

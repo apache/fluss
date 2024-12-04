@@ -59,7 +59,7 @@ run the query multi-times, you should get different results in every one run as 
 
 ### Read by other engines
 
-As the tired data in Paimon compacted from Fluss is also a standard Paimon table, you can use
+As the tiered data in Paimon compacted from Fluss is also a standard Paimon table, you can use
 [any engines](https://paimon.apache.org/docs/0.9/engines/overview/) that support Paimon to read the data. Here, we take [StarRocks](https://paimon.apache.org/docs/master/engines/starrocks/) as the engine to read the data:
 
 First, create a Paimon catalog for StarRocks:
