@@ -74,7 +74,7 @@ class FlinkSourceReaderMetricsTest {
             currentOffsetGauge =
                     metricListener.getGauge(
                             FLUSS_METRIC_GROUP,
-                        READER_METRIC_GROUP,
+                            READER_METRIC_GROUP,
                             BUCKET_GROUP,
                             String.valueOf(tb.getBucket()),
                             FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
@@ -82,7 +82,7 @@ class FlinkSourceReaderMetricsTest {
             currentOffsetGauge =
                     metricListener.getGauge(
                             FLUSS_METRIC_GROUP,
-                        READER_METRIC_GROUP,
+                            READER_METRIC_GROUP,
                             PARTITION_GROUP,
                             String.valueOf(tb.getPartitionId()),
                             BUCKET_GROUP,
