@@ -19,7 +19,6 @@ package com.alibaba.fluss.server.kv.snapshot;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.utils.function.FunctionWithException;
 import com.alibaba.fluss.utils.function.SupplierWithException;
-import com.alibaba.fluss.utils.types.Tuple2;
 
 import java.util.Collections;
 import java.util.List;
@@ -28,9 +27,6 @@ import java.util.Optional;
 /** An implementation of {@link CompletedSnapshotStore} for test purpose. */
 public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandleStore {
 
-    private final SupplierWithException<List<Tuple2<CompletedSnapshotHandle, String>>, Exception>
-            getAllSupplier;
-
     private final SupplierWithException<Optional<CompletedSnapshotHandle>, Exception>
             getLatestSupplier;
 
@@ -38,11 +34,8 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
 
     public TestCompletedSnapshotHandleStore(
             FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction,
-            SupplierWithException<List<Tuple2<CompletedSnapshotHandle, String>>, Exception>
-                    getAllSupplier,
             SupplierWithException<Optional<CompletedSnapshotHandle>, Exception> getLatestSupplier) {
         this.addFunction = addFunction;
-        this.getAllSupplier = getAllSupplier;
         this.getLatestSupplier = getLatestSupplier;
     }
 
@@ -86,11 +79,8 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
         private FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction =
                 (ignore) -> null;
 
-        private SupplierWithException<List<Tuple2<CompletedSnapshotHandle, String>>, Exception>
-                getAllSupplier = Collections::emptyList;
-
         private SupplierWithException<Optional<CompletedSnapshotHandle>, Exception>
-                getLatestSupplier = () -> Optional.empty();
+                getLatestSupplier = Optional::empty;
 
         public Builder setAddFunction(
                 FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction) {
@@ -106,8 +96,7 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
         }
 
         public TestCompletedSnapshotHandleStore build() {
-            return new TestCompletedSnapshotHandleStore(
-                    addFunction, getAllSupplier, getLatestSupplier);
+            return new TestCompletedSnapshotHandleStore(addFunction, getLatestSupplier);
         }
     }
 }

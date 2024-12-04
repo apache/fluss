@@ -52,7 +52,7 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
     @Override
     public Map<Integer, Long> earliestOffsets(
             @Nullable String partitionName, Collection<Integer> buckets) {
-        Map<Integer, Long> bucketWithOffset = new HashMap<>();
+        Map<Integer, Long> bucketWithOffset = new HashMap<>(buckets.size());
         for (Integer bucket : buckets) {
             bucketWithOffset.put(bucket, EARLIEST_OFFSET);
         }

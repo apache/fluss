@@ -28,11 +28,9 @@ import com.alibaba.fluss.row.arrow.ArrowWriter;
 public class ArrowWalBuilder implements WalBuilder {
 
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
-    private final AbstractPagedOutputView outputView;
 
     public ArrowWalBuilder(int schemaId, ArrowWriter writer, AbstractPagedOutputView outputView) {
         this.recordsBuilder = MemoryLogRecordsArrowBuilder.builder(schemaId, writer, outputView);
-        this.outputView = outputView;
     }
 
     @Override

@@ -309,7 +309,7 @@ public class PaimonStoreMultiCommitter
         }
     }
 
-    Long getLogStartOffset(
+    private Long getLogStartOffset(
             Identifier identifier,
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
@@ -343,7 +343,7 @@ public class PaimonStoreMultiCommitter
         return null;
     }
 
-    List<Split> getSplits(
+    private List<Split> getSplits(
             Identifier identifier,
             long snapshotId,
             FileStoreTable fileStoreTable,
@@ -377,9 +377,7 @@ public class PaimonStoreMultiCommitter
     private PaimonAndFlussCommittable toCommittable(
             List<PaimonWrapperManifestCommittable> committables) {
         Map<Identifier, List<ManifestCommittable>> paimonManifestCommittable = new HashMap<>();
-
         Map<Long, Map<TableBucket, Long>> flussLogEndOffsetByTableId = new HashMap<>();
-
         Map<Identifier, Long> tableIdByPaimonIdentifier = new HashMap<>();
         Map<Long, String> partitionNameById = new HashMap<>();
 

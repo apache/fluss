@@ -90,7 +90,6 @@ public class ReplicaFetcherThreadTest {
     private ReplicaManager leaderRM;
     private ServerNode leader;
     private ReplicaManager followerRM;
-    private ServerNode follower;
     private ReplicaFetcherThread followerFetcher;
 
     @BeforeAll
@@ -110,7 +109,8 @@ public class ReplicaFetcherThreadTest {
         followerRM = createReplicaManager(followerServerId);
         // with local test leader end point.
         leader = new ServerNode(leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER);
-        follower = new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER);
+        ServerNode follower =
+                new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER);
         followerFetcher =
                 new ReplicaFetcherThread(
                         "test-fetcher-thread",

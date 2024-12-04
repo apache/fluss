@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
 
-    private static final String name = "tabletserver";
+    private static final String NAME = "tabletserver";
 
     private final Map<PhysicalTablePath, PhysicalTableMetricGroup> metricGroupByPhysicalTable =
             new ConcurrentHashMap<>();
@@ -46,7 +46,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, int serverId) {
-        super(registry, new String[] {clusterId, hostname, name}, null);
+        super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
@@ -66,7 +66,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return NAME;
     }
 
     public Counter replicationBytesIn() {
