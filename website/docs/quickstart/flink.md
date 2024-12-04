@@ -7,7 +7,7 @@ sidebar_position: 1
 
 This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss,
 including integrating with Paimon.
-The guide is derived from from [TPC-H](https://www.tpc.org/tpch/) **Q5**.
+The guide is derived from [TPC-H](https://www.tpc.org/tpch/) **Q5**.
 
 For more information on working with Flink, refer to the [Apache Flink Engine](engine-flink/getting-started.md) section.
 

@@ -124,22 +124,20 @@ public class FlussRowToFlinkRowConverter {
             case BIGINT:
             case FLOAT:
             case DOUBLE:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+            case BYTES:
+            case BINARY:
                 return (flussField) -> flussField;
             case CHAR:
             case STRING:
                 return (flussField) -> StringData.fromBytes(((BinaryString) flussField).toBytes());
-            case BYTES:
-            case BINARY:
-                return (flussField) -> flussField;
             case DECIMAL:
                 return (flussField) -> {
                     Decimal decimal = (Decimal) flussField;
                     return DecimalData.fromBigDecimal(
                             decimal.toBigDecimal(), decimal.precision(), decimal.scale());
                 };
-            case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-                return (flussField) -> flussField;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return (flussField) -> {
                     TimestampNtz timestampNtz = (TimestampNtz) flussField;
