@@ -19,6 +19,7 @@ This docs provides a simple example of how to deploy a distributed cluster on th
 
 Before you start to setup the system, make sure you have the following software installed **on each node**:
 - **Java 17** or higher (Java 8 and Java 11 are not recommended)
+- **Zookeeper 3.6.0** or higher (It is not recommended to use zookeeper versions below 3.6.0)
 
 If your cluster does not fulfill these software requirements you will need to install/upgrade it.
 
