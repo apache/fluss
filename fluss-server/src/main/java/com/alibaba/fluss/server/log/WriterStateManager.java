@@ -82,6 +82,7 @@ public class WriterStateManager {
     private final Map<Long, WriterStateEntry> writers = new HashMap<>();
 
     private final File logTabletDir;
+
     /** The same as writers#size, but for lock-free access. */
     private volatile int writerIdCount = 0;
 

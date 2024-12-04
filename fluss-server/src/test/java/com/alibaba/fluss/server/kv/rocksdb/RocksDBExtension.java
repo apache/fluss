@@ -38,6 +38,7 @@ public class RocksDBExtension implements BeforeEachCallback, AfterEachCallback {
     private File rockDbDir;
 
     private RocksDBResourceContainer rocksDBResourceContainer;
+
     /** The RocksDB instance object. */
     private RocksDBKv rocksDBKv;
 

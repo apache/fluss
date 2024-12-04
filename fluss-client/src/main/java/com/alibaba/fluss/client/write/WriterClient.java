@@ -68,6 +68,7 @@ public class WriterClient {
     private static final Logger LOG = LoggerFactory.getLogger(WriterClient.class);
 
     public static final String SENDER_THREAD_PREFIX = "fluss-write-sender";
+
     /**
      * {@link ConfigOptions#CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET} should be less than or
      * equal to this value when idempotence producer enabled to ensure message ordering.

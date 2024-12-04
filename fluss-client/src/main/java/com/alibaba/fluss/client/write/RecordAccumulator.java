@@ -816,6 +816,7 @@ public final class RecordAccumulator {
     public static final class RecordAppendResult {
         public final boolean batchIsFull;
         public final boolean newBatchCreated;
+
         /** Whether this record was abort because the new batch created in record accumulator. */
         public final boolean abortRecordForNewBatch;
 

@@ -36,6 +36,7 @@ public class KvSnapshotHandle {
 
     /** The shared file(like data file) handles of the kv snapshot. */
     private final List<KvFileHandleAndLocalPath> sharedFileHandles;
+
     /** The private file(like meta file) handles of the kv snapshot. */
     private final List<KvFileHandleAndLocalPath> privateFileHandles;
 

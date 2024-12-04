@@ -36,6 +36,7 @@ public class FsRemoteLogOutputStream extends FSDataOutputStream {
     private final FsPath basePath;
     private final FileSystem fs;
     private final byte[] writeBuffer;
+
     /** The file path can be log file, index file or remote log metadata file. */
     private final FsPath remoteLogFilePath;
 

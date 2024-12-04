@@ -24,6 +24,7 @@ import org.apache.paimon.flink.source.FileStoreSourceSplit;
 public class PaimonSnapshotSplitState extends SourceSplitState {
 
     private final PaimonSnapshotSplit paimonSnapshotSplit;
+
     /** The records to skip while reading a snapshot. */
     private long recordsToSkip;
 

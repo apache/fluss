@@ -42,8 +42,10 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     private final int followerServerId;
     private final ServerNode remoteNode;
     private final TabletServerGateway tabletServerGateway;
+
     /** The max size for the fetch response. */
     private final int maxFetchSize;
+
     /** The max fetch size for a bucket in bytes. */
     private final int maxFetchSizeForBucket;
 

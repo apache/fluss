@@ -81,6 +81,7 @@ public class PeriodicSnapshotManager implements Closeable {
     private volatile boolean started = false;
 
     private final long initialDelay;
+
     /** The table bucket that the snapshot manager is for. */
     private final TableBucket tableBucket;
 

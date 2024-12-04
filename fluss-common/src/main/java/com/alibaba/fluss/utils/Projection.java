@@ -41,10 +41,13 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
 public class Projection {
     /** the projection indexes including both selected fields and reordering them. */
     final int[] projection;
+
     /** the projection indexes that only select fields but not reordering them. */
     final int[] projectionInOrder;
+
     /** the indexes to reorder the fields of {@link #projectionInOrder} to {@link #projection}. */
     final int[] reorderingIndexes;
+
     /** the flag to indicate whether reordering is needed. */
     final boolean reorderingNeeded;
 

@@ -366,8 +366,10 @@ public class FlinkCatalog implements Catalog {
     @Override
     public List<CatalogPartitionSpec> listPartitions(
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
-            throws TableNotExistException, TableNotPartitionedException,
-                    PartitionSpecInvalidException, CatalogException {
+            throws TableNotExistException,
+                    TableNotPartitionedException,
+                    PartitionSpecInvalidException,
+                    CatalogException {
         throw new UnsupportedOperationException();
     }
 
@@ -397,8 +399,10 @@ public class FlinkCatalog implements Catalog {
             CatalogPartitionSpec catalogPartitionSpec,
             CatalogPartition catalogPartition,
             boolean b)
-            throws TableNotExistException, TableNotPartitionedException,
-                    PartitionSpecInvalidException, PartitionAlreadyExistsException,
+            throws TableNotExistException,
+                    TableNotPartitionedException,
+                    PartitionSpecInvalidException,
+                    PartitionAlreadyExistsException,
                     CatalogException {
         throw new UnsupportedOperationException();
     }

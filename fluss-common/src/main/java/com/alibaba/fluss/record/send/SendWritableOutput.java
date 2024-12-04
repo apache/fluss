@@ -33,7 +33,9 @@ public class SendWritableOutput extends ByteBufWritableOutput {
     /** The current reader index of the underlying {@link #buf} for building next {@link Send}. */
     private int currentReaderIndex = 0;
 
-    /** @param buf The ByteBuf that has capacity of data size excluding zero-copy. */
+    /**
+     * @param buf The ByteBuf that has capacity of data size excluding zero-copy.
+     */
     public SendWritableOutput(ByteBuf buf) {
         super(buf);
         this.sends = new ArrayDeque<>(1);

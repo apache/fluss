@@ -451,6 +451,7 @@ public class PushdownUtils {
             throw new FlussRuntimeException(e);
         }
     }
+
     // ------------------------------------------------------------------------------------------
 
     /** A structure represents a source field equal literal expression. */
