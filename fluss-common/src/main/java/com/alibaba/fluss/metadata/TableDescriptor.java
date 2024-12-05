@@ -22,6 +22,7 @@ import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.ConfigurationUtils;
+import com.alibaba.fluss.lakehouse.DataLakeType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
@@ -242,6 +243,10 @@ public final class TableDescriptor implements Serializable {
     /** Whether the data lake is enabled. */
     public boolean isDataLakeEnabled() {
         return configuration().get(ConfigOptions.TABLE_DATALAKE_ENABLED);
+    }
+
+    public DataLakeType getDataLakeType() {
+        return configuration().get(ConfigOptions.TABLE_DATALAKE_TYPE);
     }
 
     public TableDescriptor copy(Map<String, String> newProperties) {

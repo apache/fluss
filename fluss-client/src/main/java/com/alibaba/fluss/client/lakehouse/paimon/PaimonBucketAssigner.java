@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.client.lakehouse.paimon;
 
+import com.alibaba.fluss.client.lakehouse.AbstractBucketAssigner;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.types.RowType;
@@ -28,7 +29,7 @@ import org.apache.paimon.types.DataType;
 import java.util.List;
 
 /** A bucket assigner to align with Paimon. */
-public class PaimonBucketAssigner {
+public class PaimonBucketAssigner implements AbstractBucketAssigner {
 
     private final int bucketNum;
 
@@ -56,6 +57,7 @@ public class PaimonBucketAssigner {
         return bucketKeyIndex;
     }
 
+    @Override
     public int assignBucket(InternalRow row) {
         BinaryRow bucketKey = getBucketRow(row);
         return KeyAndBucketExtractor.bucket(

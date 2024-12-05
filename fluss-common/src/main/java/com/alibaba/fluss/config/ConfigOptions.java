@@ -18,6 +18,7 @@ package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.lakehouse.DataLakeType;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.utils.ArrayUtils;
@@ -883,6 +884,12 @@ public class ConfigOptions {
                             "Whether enable lakehouse storage for the table. Disabled by default. "
                                     + "When this option is set to ture and the datalake tiering service is up,"
                                     + " the table will be tiered and compacted into datalake format stored on lakehouse storage.");
+
+    public static final ConfigOption<DataLakeType> TABLE_DATALAKE_TYPE =
+            key("table.datalake.type")
+                    .enumType(DataLakeType.class)
+                    .defaultValue(DataLakeType.PAIMON)
+                    .withDescription("Datalake type, currently only supports paimon.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv

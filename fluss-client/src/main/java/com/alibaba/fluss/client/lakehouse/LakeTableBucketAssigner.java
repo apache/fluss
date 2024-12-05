@@ -19,6 +19,7 @@ package com.alibaba.fluss.client.lakehouse;
 import com.alibaba.fluss.client.lakehouse.paimon.PaimonBucketAssigner;
 import com.alibaba.fluss.client.write.BucketAssigner;
 import com.alibaba.fluss.cluster.Cluster;
+import com.alibaba.fluss.lakehouse.DataLakeType;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.RowType;
@@ -30,21 +31,34 @@ import java.util.List;
 /** A bucket assigner for table with data lake enabled. */
 public class LakeTableBucketAssigner implements BucketAssigner {
 
-    // the bucket extractor of bucket, fluss will use the the bucket
-    // that paimon assign to align with paimon when data lake is enabled
-    // todo: make it pluggable
-    private final PaimonBucketAssigner paimonBucketAssigner;
+    private final AbstractBucketAssigner bucketAssigner;
 
     public LakeTableBucketAssigner(TableDescriptor tableDescriptor, int bucketNum) {
-        this.paimonBucketAssigner =
-                new PaimonBucketAssigner(
-                        tableDescriptor.getSchema().toRowType(),
-                        tableDescriptor.getBucketKey(),
-                        bucketNum);
+        DataLakeType dataLakeType = tableDescriptor.getDataLakeType();
+        switch (dataLakeType) {
+            case PAIMON:
+                this.bucketAssigner =
+                        new PaimonBucketAssigner(
+                                tableDescriptor.getSchema().toRowType(),
+                                tableDescriptor.getBucketKey(),
+                                bucketNum);
+                break;
+            default:
+                throw new UnsupportedOperationException(
+                        "Data lake type " + dataLakeType + " is not supported.");
+        }
     }
 
-    public LakeTableBucketAssigner(RowType rowType, List<String> bucketKey, int bucketNum) {
-        this.paimonBucketAssigner = new PaimonBucketAssigner(rowType, bucketKey, bucketNum);
+    public LakeTableBucketAssigner(
+            RowType rowType, List<String> bucketKey, int bucketNum, DataLakeType dataLakeType) {
+        switch (dataLakeType) {
+            case PAIMON:
+                this.bucketAssigner = new PaimonBucketAssigner(rowType, bucketKey, bucketNum);
+                break;
+            default:
+                throw new UnsupportedOperationException(
+                        "Data lake type " + dataLakeType + " is not supported.");
+        }
     }
 
     @Override
@@ -57,7 +71,7 @@ public class LakeTableBucketAssigner implements BucketAssigner {
 
     @Override
     public int assignBucket(@Nullable byte[] key, InternalRow row, Cluster cluster) {
-        return paimonBucketAssigner.assignBucket(row);
+        return bucketAssigner.assignBucket(row);
     }
 
     @Override

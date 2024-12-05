@@ -201,7 +201,8 @@ public class FlussTable implements Table {
                         new LakeTableBucketAssigner(
                                 keyRowType,
                                 tableInfo.getTableDescriptor().getBucketKey(),
-                                numBuckets);
+                                numBuckets,
+                                tableInfo.getTableDescriptor().getDataLakeType());
             }
             return lakeTableBucketAssigner.assignBucket(
                     keyBytes, key, metadataUpdater.getCluster());
