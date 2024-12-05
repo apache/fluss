@@ -51,8 +51,8 @@ public class LakeTableBucketAssigner implements BucketAssigner {
     public int assignBucket(@Nullable byte[] key, Cluster cluster) {
         // shouldn't come in here
         throw new UnsupportedOperationException(
-                "Method assignBucket(byte[], Cluster) is not supported "
-                        + "in LakeTableBucketAssigner.");
+                "Method assignBucket(byte[], Cluster) is not supported in "
+                        + getClass().getSimpleName());
     }
 
     @Override
