@@ -60,6 +60,14 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
+        <!-- paimon bundle -->
+        <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-bundle</artifactId>
+            <version>${paimon.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- RocksDB dependencies -->
         <!-- todo: currently, we package rocksdb in here directly, but in the future,
         the rocksdb should be provided as a kv plugin to used by client & server.

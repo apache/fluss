@@ -14,40 +14,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.lakehouse.paimon;
-
-import com.alibaba.fluss.types.ArrayType;
-import com.alibaba.fluss.types.BigIntType;
-import com.alibaba.fluss.types.BinaryType;
-import com.alibaba.fluss.types.BooleanType;
-import com.alibaba.fluss.types.BytesType;
-import com.alibaba.fluss.types.CharType;
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.types.DataTypeVisitor;
-import com.alibaba.fluss.types.DateType;
-import com.alibaba.fluss.types.DecimalType;
-import com.alibaba.fluss.types.DoubleType;
-import com.alibaba.fluss.types.FloatType;
-import com.alibaba.fluss.types.IntType;
-import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.types.MapType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.types.SmallIntType;
-import com.alibaba.fluss.types.StringType;
-import com.alibaba.fluss.types.TimeType;
-import com.alibaba.fluss.types.TimestampType;
-import com.alibaba.fluss.types.TinyIntType;
+package com.alibaba.fluss.types;
 
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
-/**
- * Convert from Fluss's data type to Paimon's data type.
- *
- * <p>Copied from com.alibaba.fluss.lakehouse.paimon.sink.FlussDataTypeToPaimonDataType
- *
- * <p>// todo: extract it to a common class
- */
+/** Convert from Fluss's data type to Paimon's data type. */
 public class FlussDataTypeToPaimonDataType implements DataTypeVisitor<DataType> {
 
     public static final FlussDataTypeToPaimonDataType INSTANCE =

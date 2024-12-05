@@ -21,6 +21,7 @@ import com.alibaba.fluss.lakehouse.paimon.source.NewTablesAddedListener;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.types.FlussDataTypeToPaimonDataType;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;

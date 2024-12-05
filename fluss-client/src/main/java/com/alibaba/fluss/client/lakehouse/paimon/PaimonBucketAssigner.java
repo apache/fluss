@@ -18,6 +18,7 @@ package com.alibaba.fluss.client.lakehouse.paimon;
 
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
+import com.alibaba.fluss.types.FlussDataTypeToPaimonDataType;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.paimon.data.BinaryRow;
