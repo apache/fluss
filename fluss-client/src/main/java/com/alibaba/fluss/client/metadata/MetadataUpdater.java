@@ -34,6 +34,7 @@ import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.RpcGatewayCache;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
@@ -53,6 +54,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 
 /** The updater to initialize and update client metadata. */
@@ -61,6 +63,7 @@ public class MetadataUpdater {
 
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
+    private final RpcGatewayCache<AdminReadOnlyGateway> adminReadOnlyGateways;
 
     public MetadataUpdater(Configuration configuration, RpcClient rpcClient) {
         this(rpcClient, initializeCluster(configuration, rpcClient));
@@ -70,6 +73,7 @@ public class MetadataUpdater {
     public MetadataUpdater(RpcClient rpcClient, Cluster cluster) {
         this.rpcClient = rpcClient;
         this.cluster = cluster;
+        this.adminReadOnlyGateways = new RpcGatewayCache<>();
     }
 
     public Cluster getCluster() {
@@ -232,7 +236,11 @@ public class MetadataUpdater {
                 cluster =
                         sendMetadataRequestAndRebuildCluster(
                                 cluster,
-                                rpcClient,
+                                () ->
+                                        adminReadOnlyGateways.getOCreateGatewayProxy(
+                                                getOneAvailableTabletServerNode(cluster),
+                                                rpcClient,
+                                                AdminReadOnlyGateway.class),
                                 tablePaths,
                                 tablePartitionNames,
                                 tablePartitionIds);

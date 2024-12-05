@@ -26,8 +26,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
-import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
@@ -47,6 +45,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
@@ -72,16 +71,12 @@ public class MetadataUtils {
      */
     public static Cluster sendMetadataRequestAndRebuildCluster(
             Cluster cluster,
-            RpcClient client,
+            Supplier<AdminReadOnlyGateway> adminReadOnlyGatewaySupplier,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
             @Nullable Collection<Long> tablePartitionIds)
             throws ExecutionException, InterruptedException {
-        AdminReadOnlyGateway gateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> getOneAvailableTabletServerNode(cluster),
-                        client,
-                        AdminReadOnlyGateway.class);
+        AdminReadOnlyGateway gateway = adminReadOnlyGatewaySupplier.get();
         return sendMetadataRequestAndRebuildCluster(
                 gateway, true, cluster, tablePaths, tablePartitionNames, tablePartitionIds);
     }

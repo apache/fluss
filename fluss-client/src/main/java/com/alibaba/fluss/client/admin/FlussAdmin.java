@@ -32,6 +32,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.RpcGatewayCache;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -80,6 +81,7 @@ public class FlussAdmin implements Admin {
     private final AdminGateway gateway;
     private final MetadataUpdater metadataUpdater;
     private final RpcClient client;
+    private final RpcGatewayCache<TabletServerGateway> tabletServerGateways;
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
         this.gateway =
@@ -87,6 +89,7 @@ public class FlussAdmin implements Admin {
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
         this.client = client;
+        this.tabletServerGateways = new RpcGatewayCache<>();
     }
 
     @Override
@@ -305,7 +308,7 @@ public class FlussAdmin implements Admin {
         return listOffsetsRequests;
     }
 
-    private static void sendListOffsetsRequest(
+    private void sendListOffsetsRequest(
             MetadataUpdater metadataUpdater,
             RpcClient client,
             Map<Integer, ListOffsetsRequest> leaderToRequestMap,
@@ -313,8 +316,8 @@ public class FlussAdmin implements Admin {
         leaderToRequestMap.forEach(
                 (leader, request) -> {
                     TabletServerGateway gateway =
-                            GatewayClientProxy.createGatewayProxy(
-                                    () -> metadataUpdater.getTabletServer(leader),
+                            tabletServerGateways.getOCreateGatewayProxy(
+                                    metadataUpdater.getTabletServer(leader),
                                     client,
                                     TabletServerGateway.class);
                     gateway.listOffsets(request)

@@ -35,8 +35,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.RpcGatewayCache;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
@@ -104,6 +104,7 @@ public class LogFetcher implements Closeable {
 
     private final MetadataUpdater metadataUpdater;
     private final ScannerMetricGroup scannerMetricGroup;
+    private final RpcGatewayCache<TabletServerGateway> tabletServerGateways;
 
     public LogFetcher(
             TableInfo tableInfo,
@@ -134,6 +135,7 @@ public class LogFetcher implements Closeable {
         this.scannerMetricGroup = scannerMetricGroup;
         this.remoteLogDownloader =
                 new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
+        this.tabletServerGateways = new RpcGatewayCache<>();
     }
 
     /**
@@ -182,10 +184,9 @@ public class LogFetcher implements Closeable {
     }
 
     private void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
-        // TODO cache the tablet server gateway.
         TabletServerGateway gateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> metadataUpdater.getTabletServer(destination),
+                tabletServerGateways.getOCreateGatewayProxy(
+                        metadataUpdater.getTabletServer(destination),
                         rpcClient,
                         TabletServerGateway.class);
 
