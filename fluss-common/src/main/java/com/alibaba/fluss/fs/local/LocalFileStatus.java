@@ -33,7 +33,7 @@ public class LocalFileStatus implements FileStatus {
     /** The file this file status belongs to. */
     private final File file;
 
-    /** The path of this file this file status belongs to. */
+    /** The path of this file status belongs to. */
     private final FsPath path;
 
     /** Cached length field, to avoid repeated native/syscalls. */

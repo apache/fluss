@@ -79,7 +79,7 @@ public class PaimonStoreMultiCommitter
 
     private final LakeTableSnapshotCommitter lakeTableSnapshotCommitter;
 
-    // the commited buckets, used to help not to commit
+    // the committed buckets, used to help not to commit
     // start log offset in every commit to Fluss
     private final Set<TableBucket> committedBuckets;
 
