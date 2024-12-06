@@ -333,7 +333,7 @@ public class WriterClient {
             ConfigOptions.NoKeyAssigner noKeyAssigner =
                     conf.get(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER);
             if (noKeyAssigner == ROUND_ROBIN) {
-                return new RoundRabinBucketAssigner(physicalTablePath);
+                return new RoundRobinBucketAssigner(physicalTablePath);
             } else if (noKeyAssigner == STICKY) {
                 return new StickyBucketAssigner(physicalTablePath);
             } else {

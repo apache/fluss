@@ -28,13 +28,13 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** The bucket assigner use round-rabin strategy. */
+/** The bucket assigner use round-robin strategy. */
 @Internal
-public class RoundRabinBucketAssigner implements BucketAssigner {
+public class RoundRobinBucketAssigner implements BucketAssigner {
     private final PhysicalTablePath physicalTablePath;
     private final AtomicInteger counter = new AtomicInteger(new Random().nextInt());
 
-    public RoundRabinBucketAssigner(PhysicalTablePath physicalTablePath) {
+    public RoundRobinBucketAssigner(PhysicalTablePath physicalTablePath) {
         this.physicalTablePath = physicalTablePath;
     }
 
