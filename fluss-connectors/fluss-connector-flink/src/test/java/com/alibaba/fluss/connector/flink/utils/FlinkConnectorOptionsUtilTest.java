@@ -28,21 +28,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkConnectorOptionsUtils}. */
 class FlinkConnectorOptionsUtilTest {
+    private final long expectedTimestamp = 1702156152000L;
+
     @Test
     void testParseTimestamp() {
         assertThat(
                         parseTimestamp(
-                                "1702134552000",
+                                "1702156152000",
                                 SCAN_STARTUP_TIMESTAMP.key(),
                                 ZoneId.systemDefault()))
-                .isEqualTo(1702134552000L);
+                .isEqualTo(expectedTimestamp);
 
         assertThat(
                         parseTimestamp(
                                 "2023-12-09 23:09:12",
                                 SCAN_STARTUP_TIMESTAMP.key(),
                                 ZoneId.systemDefault()))
-                .isEqualTo(1702134552000L);
+                .isEqualTo(expectedTimestamp);
 
         assertThatThrownBy(
                         () ->
