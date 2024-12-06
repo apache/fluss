@@ -55,18 +55,18 @@ public class LookupClient {
 
     private final LookupQueue lookupQueue;
 
-    private final ExecutorService lookupSenderTheadPool;
+    private final ExecutorService lookupSenderThreadPool;
     private final LookupSender lookupSender;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
         this.lookupQueue = new LookupQueue(conf);
-        this.lookupSenderTheadPool = createThreadPool();
+        this.lookupSenderThreadPool = createThreadPool();
         this.lookupSender =
                 new LookupSender(
                         metadataUpdater,
                         lookupQueue,
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE));
-        lookupSenderTheadPool.submit(lookupSender);
+        lookupSenderThreadPool.submit(lookupSender);
     }
 
     private ExecutorService createThreadPool() {
@@ -88,20 +88,20 @@ public class LookupClient {
             lookupSender.initiateClose();
         }
 
-        if (lookupSenderTheadPool != null) {
-            lookupSenderTheadPool.shutdown();
+        if (lookupSenderThreadPool != null) {
+            lookupSenderThreadPool.shutdown();
             try {
-                if (lookupSenderTheadPool.awaitTermination(
+                if (lookupSenderThreadPool.awaitTermination(
                         timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                    lookupSenderTheadPool.shutdownNow();
+                    lookupSenderThreadPool.shutdownNow();
 
-                    if (!lookupSenderTheadPool.awaitTermination(
+                    if (!lookupSenderThreadPool.awaitTermination(
                             timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                         LOG.error("Failed to shutdown lookup client.");
                     }
                 }
             } catch (InterruptedException e) {
-                lookupSenderTheadPool.shutdownNow();
+                lookupSenderThreadPool.shutdownNow();
                 Thread.currentThread().interrupt();
             }
         }
