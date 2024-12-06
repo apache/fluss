@@ -19,8 +19,8 @@ package com.alibaba.fluss.server.utils;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
+import com.alibaba.fluss.utils.MapUtils;
 
-import java.util.HashMap;
 import java.util.Map;
 
 /** Utils for Fluss lake storage. */
@@ -49,15 +49,9 @@ public class LakeStorageUtils {
 
         // currently, extract catalog config
         String catalogPrefix = datalakeStorage + "." + CATALOG_PREFIX;
-        Map<String, String> catalogConfig = new HashMap<>();
         Map<String, String> flussConfig = configuration.toMap();
-        for (Map.Entry<String, String> configEntry : flussConfig.entrySet()) {
-            String configKey = configEntry.getKey();
-            String configValue = configEntry.getValue();
-            if (configKey.startsWith(catalogPrefix)) {
-                catalogConfig.put(configKey.substring(catalogPrefix.length()), configValue);
-            }
-        }
+        Map<String, String> catalogConfig =
+                MapUtils.extractByKeyPrefix(flussConfig, catalogPrefix, true);
         return new LakeStorageInfo(datalakeStorage, catalogConfig);
     }
 }

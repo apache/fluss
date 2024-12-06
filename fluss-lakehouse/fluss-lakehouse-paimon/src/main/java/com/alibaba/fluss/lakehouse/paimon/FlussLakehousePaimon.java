@@ -24,13 +24,13 @@ import com.alibaba.fluss.lakehouse.paimon.sink.PaimonDataBaseSyncSinkBuilder;
 import com.alibaba.fluss.lakehouse.paimon.source.Filter;
 import com.alibaba.fluss.lakehouse.paimon.source.FlussDatabaseSyncSource;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.utils.MapUtils;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -114,14 +114,6 @@ public class FlussLakehousePaimon {
 
     public static Map<String, String> extractConfigStartWith(
             Map<String, String> configParams, String prefix) {
-        Map<String, String> extractedConfig = new HashMap<>();
-        for (Map.Entry<String, String> configEntry : configParams.entrySet()) {
-            String configKey = configEntry.getKey();
-            String configValue = configEntry.getValue();
-            if (configKey.startsWith(prefix)) {
-                extractedConfig.put(configKey.substring(prefix.length()), configValue);
-            }
-        }
-        return extractedConfig;
+        return MapUtils.extractByKeyPrefix(configParams, prefix, true);
     }
 }
