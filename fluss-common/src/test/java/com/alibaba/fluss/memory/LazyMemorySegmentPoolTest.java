@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.utils.function.ThrowingRunnable.unchecked;
+import static org.assertj.core.api.Assertions.as;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -52,6 +53,7 @@ public class LazyMemorySegmentPoolTest {
         CountDownLatch returnAllLatch = asyncReturnAll(source, Arrays.asList(ms1, ms2));
         CountDownLatch getNextSegmentLatch = asyncGetNextSegment(source);
         assertThat(getNextSegmentLatch.getCount()).isEqualTo(1);
+        assertThat(source.queued()).isEqualTo(1);
         returnAllLatch.countDown();
         assertThat(getNextSegmentLatch.await(Long.MAX_VALUE, TimeUnit.SECONDS)).isTrue();
     }
@@ -75,6 +77,28 @@ public class LazyMemorySegmentPoolTest {
                                                 MemorySegment.allocateHeapMemory(10),
                                                 MemorySegment.allocateHeapMemory(10))))
                 .hasMessage("Return too more memories.");
+    }
+
+    @Test
+    void testMultiThreadCallNextSegment() throws InterruptedException {
+        LazyMemorySegmentPool source = buildLazyMemorySegmentSource(1, 10);
+        assertThat(source.pageSize()).isEqualTo(10);
+        assertThat(source.freePages()).isEqualTo(1);
+
+        CountDownLatch countDownLatch = new CountDownLatch(2);
+        new Thread(() -> {
+            source.nextSegment(true);
+            countDownLatch.countDown();
+        }).start();
+        new Thread(() -> {
+            source.nextSegment(true);
+            countDownLatch.countDown();
+        }).start();
+
+        boolean await = countDownLatch.await(2000, TimeUnit.MILLISECONDS);
+        assertThat(await).isFalse();
+        assertThat(source.freePages()).isEqualTo(0);
+        assertThat(source.queued()).isEqualTo(1);
     }
 
     private LazyMemorySegmentPool buildLazyMemorySegmentSource(int maxPages, int pageSize) {

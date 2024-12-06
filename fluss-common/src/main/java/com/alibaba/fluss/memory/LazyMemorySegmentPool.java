@@ -32,9 +32,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
@@ -55,7 +59,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     private final ReentrantLock lock = new ReentrantLock();
 
     @GuardedBy("lock")
-    private final List<MemorySegment> cachePages;
+    private final BlockingQueue<MemorySegment> cachePages;
 
     @GuardedBy("lock")
     private final Deque<Condition> waiters;
@@ -79,7 +83,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                         "Page size should be less than PER_REQUEST_MEMORY_SIZE. Page size is:"
                                 + " %s KB, PER_REQUEST_MEMORY_SIZE is %s KB.",
                         pageSize / 1024, PER_REQUEST_MEMORY_SIZE / 1024));
-        this.cachePages = new ArrayList<>();
+        this.cachePages = new LinkedBlockingQueue<>();
         this.pageUsage = 0;
         this.maxPages = maxPages;
         this.pageSize = pageSize;
@@ -107,18 +111,11 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     @Override
     public MemorySegment nextSegment(boolean waiting) {
-        return inLock(
+        inLock(
                 lock,
                 () -> {
                     checkClosed();
                     int freePages = freePages();
-                    if (freePages == 0) {
-                        if (waiting) {
-                            return waitForSegment();
-                        } else {
-                            return null;
-                        }
-                    }
 
                     if (cachePages.isEmpty()) {
                         int numPages = Math.min(freePages, perRequestPages);
@@ -126,33 +123,32 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                             cachePages.add(MemorySegment.allocateHeapMemory(pageSize));
                         }
                     }
-
-                    this.pageUsage++;
-                    return cachePages.remove(this.cachePages.size() - 1);
+                    if (freePages != 0) {
+                        this.pageUsage++;
+                    }
                 });
+        return waitForSegment(waiting);
     }
 
-    private MemorySegment waitForSegment() {
+    private MemorySegment waitForSegment(boolean waiting) {
         Condition moreMemory = lock.newCondition();
         waiters.addLast(moreMemory);
         try {
-            while (cachePages.isEmpty()) {
-                boolean success = moreMemory.await(maxTimeToBlockMs, TimeUnit.MILLISECONDS);
-                if (!success) {
-                    throw new BufferExhaustedException(
-                            "Failed to allocate new segment within the configured max blocking time "
-                                    + maxTimeToBlockMs
-                                    + " ms. Total memory: "
-                                    + totalSize()
-                                    + " bytes. Available memory: "
-                                    + freePages() * pageSize
-                                    + " bytes. page size: "
-                                    + pageSize
-                                    + " bytes");
-                }
-                checkClosed();
+            MemorySegment memorySegment = cachePages.poll(waiting ? maxTimeToBlockMs : 0, TimeUnit.MILLISECONDS);
+            if (Objects.isNull(memorySegment) && waiting) {
+                throw new BufferExhaustedException(
+                        "Failed to allocate new segment within the configured max blocking time "
+                                + maxTimeToBlockMs
+                                + " ms. Total memory: "
+                                + totalSize()
+                                + " bytes. Available memory: "
+                                + freePages() * pageSize
+                                + " bytes. page size: "
+                                + pageSize
+                                + " bytes");
             }
-            return cachePages.remove(cachePages.size() - 1);
+            checkClosed();
+            return memorySegment;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlussRuntimeException(e);
@@ -218,6 +214,6 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     @VisibleForTesting
     public List<MemorySegment> getAllCachePages() {
-        return cachePages;
+        return new ArrayList<>(cachePages);
     }
 }
