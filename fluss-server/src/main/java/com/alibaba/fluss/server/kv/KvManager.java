@@ -75,12 +75,8 @@ public final class KvManager extends TabletManagerBase {
     private final MemorySegmentPool memorySegmentPool;
 
     private KvManager(
-            File dataDir,
-            Configuration conf,
-            ZooKeeperClient zkClient,
-            int recoveryThreadsPerDataDir,
-            LogManager logManager) {
-        super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
+            File dataDir, Configuration conf, ZooKeeperClient zkClient, LogManager logManager) {
+        super(TabletType.KV, dataDir, conf);
         this.logManager = logManager;
         this.arrowBufferAllocator = new RootAllocator(Long.MAX_VALUE);
         this.memorySegmentPool = LazyMemorySegmentPool.create(conf);
@@ -91,12 +87,7 @@ public final class KvManager extends TabletManagerBase {
             Configuration conf, ZooKeeperClient zkClient, LogManager logManager) {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
-        return new KvManager(
-                dataDir,
-                conf,
-                zkClient,
-                conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                logManager);
+        return new KvManager(dataDir, conf, zkClient, logManager);
     }
 
     public void startup() {

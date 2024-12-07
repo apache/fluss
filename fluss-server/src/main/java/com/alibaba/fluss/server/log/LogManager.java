@@ -85,11 +85,10 @@ public final class LogManager extends TabletManagerBase {
             File dataDir,
             Configuration conf,
             ZooKeeperClient zkClient,
-            int recoveryThreadsPerDataDir,
             Scheduler scheduler,
             Clock clock)
             throws Exception {
-        super(TabletType.LOG, dataDir, conf, recoveryThreadsPerDataDir);
+        super(TabletType.LOG, dataDir, conf);
         this.zkClient = zkClient;
         this.scheduler = scheduler;
         this.clock = clock;
@@ -103,13 +102,7 @@ public final class LogManager extends TabletManagerBase {
             throws Exception {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
-        return new LogManager(
-                dataDir,
-                conf,
-                zkClient,
-                conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                scheduler,
-                clock);
+        return new LogManager(dataDir, conf, zkClient, scheduler, clock);
     }
 
     public void startup() {

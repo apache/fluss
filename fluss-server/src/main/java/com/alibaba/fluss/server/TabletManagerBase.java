@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server;
 
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LogStorageException;
@@ -75,18 +76,16 @@ public abstract class TabletManagerBase {
 
     protected final Lock tabletCreationOrDeletionLock = new ReentrantLock();
 
-    // TODO make this parameter configurable.
-    private final int recoveryThreads;
+    private final int poolThreadsNum;
     private final TabletType tabletType;
     private final String tabletDirPrefix;
 
-    public TabletManagerBase(
-            TabletType tabletType, File dataDir, Configuration conf, int recoveryThreads) {
+    public TabletManagerBase(TabletType tabletType, File dataDir, Configuration conf) {
         this.tabletType = tabletType;
         this.tabletDirPrefix = getTabletDirPrefix(tabletType);
         this.dataDir = dataDir;
         this.conf = conf;
-        this.recoveryThreads = recoveryThreads;
+        this.poolThreadsNum = conf.getInt(ConfigOptions.TABLET_MANAGER_POOL_THREADS_NUM);
     }
 
     /**
@@ -135,7 +134,7 @@ public abstract class TabletManagerBase {
     }
 
     protected ExecutorService createThreadPool(String poolName) {
-        return Executors.newFixedThreadPool(recoveryThreads, new ExecutorThreadFactory(poolName));
+        return Executors.newFixedThreadPool(poolThreadsNum, new ExecutorThreadFactory(poolName));
     }
 
     /** Running a series of jobs in a thread pool, and return the count of the successful job. */

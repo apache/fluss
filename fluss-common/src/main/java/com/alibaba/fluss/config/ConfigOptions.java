@@ -227,6 +227,13 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> TABLET_MANAGER_POOL_THREADS_NUM =
+            key("tablet-manager.pool.threads.num")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "Number of threads used for recovery per data dir or close operations. The default value is 8.");
+
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------
