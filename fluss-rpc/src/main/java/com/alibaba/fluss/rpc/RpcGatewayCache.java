@@ -17,12 +17,11 @@
 package com.alibaba.fluss.rpc;
 
 import com.alibaba.fluss.cluster.ServerNode;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.shaded.guava32.com.google.common.cache.Cache;
-import com.alibaba.fluss.shaded.guava32.com.google.common.cache.CacheBuilder;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import java.time.Duration;
-import java.util.concurrent.ExecutionException;
 
 /** The cache utils class for {@link RpcGateway}. */
 public class RpcGatewayCache<T extends RpcGateway> {
@@ -30,13 +29,12 @@ public class RpcGatewayCache<T extends RpcGateway> {
     private final Cache<ServerNode, T> cache;
 
     public RpcGatewayCache() {
-        this(8, Duration.ofHours(1L), 64);
+        this(Duration.ofMinutes(30L), 64);
     }
 
-    public RpcGatewayCache(int concurrencyLevel, Duration expireAfterAccess, int maximumSize) {
+    public RpcGatewayCache(Duration expireAfterAccess, int maximumSize) {
         this.cache =
-                CacheBuilder.newBuilder()
-                        .concurrencyLevel(concurrencyLevel)
+                Caffeine.newBuilder()
                         .expireAfterAccess(expireAfterAccess)
                         .maximumSize(maximumSize)
                         .build();
@@ -44,14 +42,10 @@ public class RpcGatewayCache<T extends RpcGateway> {
 
     public T getOrCreateGatewayProxy(
             ServerNode serverNode, RpcClient client, Class<T> gatewayClass) {
-        try {
-            return cache.get(
-                    serverNode,
-                    () ->
-                            GatewayClientProxy.createGatewayProxy(
-                                    () -> serverNode, client, gatewayClass));
-        } catch (ExecutionException e) {
-            throw new FlussRuntimeException(e);
-        }
+        return cache.get(
+                serverNode,
+                nonExistedNode ->
+                        GatewayClientProxy.createGatewayProxy(
+                                () -> nonExistedNode, client, gatewayClass));
     }
 }

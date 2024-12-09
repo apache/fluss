@@ -105,6 +105,8 @@
         <junit5.version>5.9.1</junit5.version>
         <mockito.version>3.4.6</mockito.version>
         <assertj.version>3.23.1</assertj.version>
+        <!-- 2.9.3 is the latest version that supports JDK 8 -->
+        <caffeine.version>2.9.3</caffeine.version>
 
         <protobuf.version>3.25.5</protobuf.version>
         <protostuff.version>1.7.2</protostuff.version>

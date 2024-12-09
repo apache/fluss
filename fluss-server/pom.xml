@@ -35,8 +35,6 @@
 
     <properties>
         <commons-cli.version>1.5.0</commons-cli.version>
-        <!-- 2.9.3 is the latest version that supports JDK 8 -->
-        <caffeine.version>2.9.3</caffeine.version>
     </properties>
 
     <dependencies>
