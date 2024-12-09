@@ -59,7 +59,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.alibaba.fluss.config.ConfigOptions.SCHEDULER_THREADS;
+import static com.alibaba.fluss.config.ConfigOptions.TABLET_SERVER_SCHEDULER_THREADS;
 
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
@@ -153,7 +153,7 @@ public class TabletServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
-            this.scheduler = new FlussScheduler(conf.get(SCHEDULER_THREADS));
+            this.scheduler = new FlussScheduler(conf.get(TABLET_SERVER_SCHEDULER_THREADS));
             scheduler.startup();
 
             this.logManager =
