@@ -279,7 +279,7 @@ public class FlussTable implements Table {
             }
         } else {
             LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(tableInfo, null);
+                    LogRecordReadContext.createReadContext(tableInfo, false, null);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the

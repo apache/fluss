@@ -610,8 +610,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testAppendAndProject() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"INDEXED", "ARROW"})
+    void testAppendAndProject(String format) throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -619,7 +620,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("c", DataTypes.STRING())
                         .column("d", DataTypes.BIGINT())
                         .build();
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .logFormat(LogFormat.fromString(format))
+                        .build();
         TablePath tablePath = TablePath.of("test_db_1", "test_append_and_project");
         createTable(tablePath, tableDescriptor, false);
 
@@ -652,6 +657,29 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+
+            // fetch data with projection reorder.
+            logScanner = createLogScanner(table, new int[] {2, 0});
+            subscribeFromBeginning(logScanner, table);
+            count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                    assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(0).toString())
+                                .isEqualTo("hello, friend" + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(0)).isTrue();
                     }
                     count++;
                 }
@@ -784,10 +812,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         Table table = conn.getTable(DATA1_TABLE_PATH);
 
         // validation on projection
-        assertThatThrownBy(() -> createLogScanner(table, new int[] {1}))
+        assertThatThrownBy(() -> createLogScanner(table, new int[] {1, 2, 3, 4, 5}))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Only ARROW log format supports column projection, but the log format "
-                                + "of table 'test_db_1.test_non_pk_table_1' is INDEXED");
+                        "Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
     }
 }

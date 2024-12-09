@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.replica;
 
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -527,7 +528,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 rowKinds,
-                values);
+                values,
+                LogFormat.ARROW);
     }
 
     private LogAppendInfo putRecordsToLeader(

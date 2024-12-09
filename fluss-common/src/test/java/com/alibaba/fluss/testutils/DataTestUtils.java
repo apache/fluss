@@ -22,6 +22,7 @@ import com.alibaba.fluss.memory.ManagedPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
 import com.alibaba.fluss.metadata.KvFormat;
+import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -132,7 +133,12 @@ public class DataTestUtils {
     public static MemoryLogRecords genMemoryLogRecordsByObject(List<Object[]> objects)
             throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, 0, System.currentTimeMillis(), objects);
+                DATA1_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                0,
+                System.currentTimeMillis(),
+                objects,
+                LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genMemoryLogRecordsWithWriterId(
@@ -148,7 +154,8 @@ public class DataTestUtils {
                 writerId,
                 batchSequence,
                 rowKinds,
-                objects);
+                objects,
+                LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genIndexedMemoryLogRecords(List<IndexedRow> rows)
@@ -168,13 +175,18 @@ public class DataTestUtils {
     public static MemoryLogRecords genMemoryLogRecordsWithBaseOffset(
             long offsetBase, List<Object[]> objects) throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, -1L, objects);
+                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, -1L, objects, LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genLogRecordsWithBaseOffsetAndTimestamp(
             long offsetBase, long maxTimestamp, List<Object[]> objects) throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, maxTimestamp, objects);
+                DATA1_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                offsetBase,
+                maxTimestamp,
+                objects,
+                LogFormat.ARROW);
     }
 
     public static KvRecordBatch genKvRecordBatch(List<Tuple2<Object[], Object[]>> keyAndValues)
@@ -246,11 +258,20 @@ public class DataTestUtils {
                 remoteLogTabletDir(remoteLogDir(conf), physicalTablePath, tableBucket);
         FsPath remoteLogSegmentDir =
                 remoteLogSegmentDir(remoteLogTabletDir, remoteLogSegment.remoteLogSegmentId());
-        genLogFile(DATA1_ROW_TYPE, new File(remoteLogSegmentDir.toString()), DATA1, baseOffset);
+        genLogFile(
+                DATA1_ROW_TYPE,
+                new File(remoteLogSegmentDir.toString()),
+                DATA1,
+                baseOffset,
+                LogFormat.ARROW);
     }
 
     public static File genLogFile(
-            RowType rowType, File segmentDir, List<Object[]> objects, long baseOffset)
+            RowType rowType,
+            File segmentDir,
+            List<Object[]> objects,
+            long baseOffset,
+            LogFormat logFormat)
             throws Exception {
         if (!segmentDir.exists()) {
             segmentDir.mkdirs();
@@ -264,7 +285,8 @@ public class DataTestUtils {
                         DEFAULT_SCHEMA_ID,
                         baseOffset,
                         System.currentTimeMillis(),
-                        objects));
+                        objects,
+                        logFormat));
         fileLogRecords.flush();
         fileLogRecords.close();
         return logFile;
@@ -305,7 +327,8 @@ public class DataTestUtils {
             int schemaId,
             long offsetBase,
             long maxTimestamp,
-            List<Object[]> objects)
+            List<Object[]> objects,
+            LogFormat logFormat)
             throws Exception {
         List<RowKind> rowKinds =
                 objects.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
@@ -317,7 +340,8 @@ public class DataTestUtils {
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 rowKinds,
-                objects);
+                objects,
+                logFormat);
     }
 
     public static MemoryLogRecords createBasicMemoryLogRecords(
@@ -328,19 +352,58 @@ public class DataTestUtils {
             long writerId,
             int batchSequence,
             List<RowKind> rowKinds,
-            List<Object[]> objects)
+            List<Object[]> objects,
+            LogFormat logFormat)
             throws Exception {
-        List<InternalRow> rows =
-                objects.stream().map(object -> row(rowType, object)).collect(Collectors.toList());
-        return createArrowMemoryLogRecords(
+        return createMemoryLogRecords(
                 rowType,
+                schemaId,
                 offsetBase,
                 maxTimestamp,
-                schemaId,
                 writerId,
                 batchSequence,
                 rowKinds,
-                rows);
+                objects,
+                logFormat);
+    }
+
+    public static MemoryLogRecords createMemoryLogRecords(
+            RowType rowType,
+            int schemaId,
+            long offsetBase,
+            long maxTimestamp,
+            long writerId,
+            int batchSequence,
+            List<RowKind> rowKinds,
+            List<Object[]> objects,
+            LogFormat logFormat)
+            throws Exception {
+        if (logFormat == LogFormat.ARROW) {
+            List<InternalRow> rows =
+                    objects.stream()
+                            .map(object -> row(rowType, object))
+                            .collect(Collectors.toList());
+            return createArrowMemoryLogRecords(
+                    rowType,
+                    offsetBase,
+                    maxTimestamp,
+                    schemaId,
+                    writerId,
+                    batchSequence,
+                    rowKinds,
+                    rows);
+        } else {
+            return createIndexedMemoryLogRecords(
+                    offsetBase,
+                    maxTimestamp,
+                    schemaId,
+                    writerId,
+                    batchSequence,
+                    rowKinds,
+                    objects.stream()
+                            .map(object -> row(rowType, object))
+                            .collect(Collectors.toList()));
+        }
     }
 
     private static MemoryLogRecords createIndexedMemoryLogRecords(

@@ -250,8 +250,7 @@ public class LogFetchBufferTest {
                 readContext,
                 logScannerStatus,
                 true,
-                0L,
-                null);
+                0L);
     }
 
     private PendingFetch makePendingFetch(TableBucket tableBucket) throws Exception {

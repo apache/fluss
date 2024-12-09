@@ -192,6 +192,69 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"ARROW", "INDEXED"})
+    void testAppendTableProjectPushDown(String logFormat) throws Exception {
+        String tableName = "append_table_project_push_down_" + logFormat;
+        tEnv.executeSql(
+                String.format(
+                        "create table %s (a int, b varchar, c bigint, d int, e int, f bigint) with"
+                                + " ('connector' = 'fluss', 'table.log.format' = '%s')",
+                        tableName, logFormat));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Table table = conn.getTable(tablePath);
+        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        List<InternalRow> rows =
+                Arrays.asList(
+                        genRow(false, dataType, new Object[] {1, "v1", 100L, 1000, 100, 1000L}),
+                        genRow(false, dataType, new Object[] {2, "v2", 200L, 2000, 200, 2000L}),
+                        genRow(false, dataType, new Object[] {3, "v3", 300L, 3000, 300, 3000L}),
+                        genRow(false, dataType, new Object[] {4, "v4", 400L, 4000, 400, 4000L}),
+                        genRow(false, dataType, new Object[] {5, "v5", 500L, 5000, 500, 5000L}),
+                        genRow(false, dataType, new Object[] {6, "v6", 600L, 6000, 600, 6000L}),
+                        genRow(false, dataType, new Object[] {7, "v7", 700L, 7000, 700, 7000L}),
+                        genRow(false, dataType, new Object[] {8, "v8", 800L, 8000, 800, 8000L}),
+                        genRow(false, dataType, new Object[] {9, "v9", 900L, 9000, 900, 9000L}),
+                        genRow(
+                                false,
+                                dataType,
+                                new Object[] {10, "v10", 1000L, 10000, 1000, 10000L}));
+        writeRows(tablePath, rows, true);
+
+        // projection + reorder.
+        String query = "select b, d, c from " + tableName;
+        // make sure the plan has pushed down the projection into source
+        assertThat(tEnv.explainSql(query))
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + tableName
+                                + ", project=[b, d, c]]], fields=[b, d, c])");
+
+        List<String> expected =
+                Arrays.asList(
+                        "+I[v1, 1000, 100]",
+                        "+I[v2, 2000, 200]",
+                        "+I[v3, 3000, 300]",
+                        "+I[v4, 4000, 400]",
+                        "+I[v5, 5000, 500]",
+                        "+I[v6, 6000, 600]",
+                        "+I[v7, 7000, 700]",
+                        "+I[v8, 8000, 800]",
+                        "+I[v9, 9000, 900]",
+                        "+I[v10, 10000, 1000]");
+        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(query).collect()) {
+            int expectRecords = expected.size();
+            List<String> actual = new ArrayList<>(expectRecords);
+            for (int i = 0; i < expectRecords; i++) {
+                Row r = rowIter.next();
+                String row = r.toString();
+                actual.add(row);
+            }
+            assertThat(actual).containsExactlyElementsOf(expected);
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"PK_SNAPSHOT", "PK_LOG", "LOG"})
     void testTableProjectPushDown(String mode) throws Exception {
         boolean isPkTable = mode.startsWith("PK");

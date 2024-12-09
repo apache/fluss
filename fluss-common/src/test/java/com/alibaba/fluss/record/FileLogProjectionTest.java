@@ -17,6 +17,7 @@
 package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
+import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
@@ -209,7 +210,8 @@ class FileLogProjectionTest {
                             DEFAULT_SCHEMA_ID,
                             offsetBase,
                             System.currentTimeMillis(),
-                            input));
+                            input,
+                            LogFormat.ARROW));
             offsetBase += input.size();
         }
         fileLogRecords.flush();

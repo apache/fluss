@@ -17,7 +17,6 @@
 package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -25,11 +24,14 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.ArrowUtils;
 import com.alibaba.fluss.utils.Projection;
 
 import javax.annotation.Nullable;
+
+import java.util.List;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -39,22 +41,26 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
 
     // the log format of the table
     private final LogFormat logFormat;
-    // the static schema of the table
-    private final RowType rowType;
+    // the schema of the date read form server or remote. (which is projected in the server side)
+    private final RowType dataRowType;
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int schemaId;
-    // the fieldGetter to get the log value of the table;
-    private final InternalRow.FieldGetter[] fieldGetters;
+    // the projectedFieldGetter to get the log value of the table after projection;
+    private final InternalRow.FieldGetter[] projectedFieldGetters;
     // the Arrow vector schema root of the table, should be null if not ARROW log format
     @Nullable private final VectorSchemaRoot vectorSchemaRoot;
     // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
     @Nullable private final BufferAllocator bufferAllocator;
+    // whether context is to read from remote
+    private final boolean readFromRemote;
+    // the projection info
+    @Nullable private final Projection projection;
 
     /**
      * Creates a LogRecordReadContext for the given table information and projection information.
      */
     public static LogRecordReadContext createReadContext(
-            TableInfo tableInfo, @Nullable Projection projection) {
+            TableInfo tableInfo, boolean readFromRemote, @Nullable Projection projection) {
         TableDescriptor desc = tableInfo.getTableDescriptor();
         RowType rowType = desc.getSchema().toRowType();
         LogFormat logFormat = desc.getLogFormat();
@@ -63,23 +69,23 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         if (logFormat == LogFormat.ARROW) {
             // TODO: use a more reasonable memory limit
             BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-            if (projection == null) {
+
+            // currently, For remote read, arrow log format do not support projection in remote.
+            if (projection == null || readFromRemote) {
                 VectorSchemaRoot vectorRoot =
                         VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
-                return createArrowReadContext(rowType, schemaId, vectorRoot, allocator);
+                return createArrowReadContext(
+                        rowType, schemaId, vectorRoot, allocator, readFromRemote, projection);
             } else {
                 RowType projectedRowType = projection.projectInOrder(rowType);
                 VectorSchemaRoot vectorRoot =
                         VectorSchemaRoot.create(
                                 ArrowUtils.toArrowSchema(projectedRowType), allocator);
-                return createArrowReadContext(projectedRowType, schemaId, vectorRoot, allocator);
+                return createArrowReadContext(
+                        projectedRowType, schemaId, vectorRoot, allocator, false, projection);
             }
         } else if (logFormat == LogFormat.INDEXED) {
-            if (projection != null) {
-                throw new InvalidColumnProjectionException(
-                        "Column projection is not supported for INDEXED log format.");
-            }
-            return createIndexedReadContext(rowType, schemaId);
+            return createIndexedReadContext(rowType, schemaId, readFromRemote, projection);
         } else {
             throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }
@@ -88,20 +94,30 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     /**
      * Creates a LogRecordReadContext for ARROW log format.
      *
-     * @param rowType the schema of the table
+     * @param dataRowType the schema of the date read form server or remote
      * @param schemaId the schemaId of the table
      * @param vectorSchemaRoot the shared vector schema root for the table
      * @param bufferAllocator the shared buffer allocator for the table
+     * @param readFromRemote whether context is to read from remote
+     * @param projection the projection info
      */
     public static LogRecordReadContext createArrowReadContext(
-            RowType rowType,
+            RowType dataRowType,
             int schemaId,
             VectorSchemaRoot vectorSchemaRoot,
-            BufferAllocator bufferAllocator) {
+            BufferAllocator bufferAllocator,
+            boolean readFromRemote,
+            @Nullable Projection projection) {
         checkNotNull(vectorSchemaRoot);
         checkNotNull(bufferAllocator);
         return new LogRecordReadContext(
-                LogFormat.ARROW, rowType, schemaId, vectorSchemaRoot, bufferAllocator);
+                LogFormat.ARROW,
+                dataRowType,
+                schemaId,
+                vectorSchemaRoot,
+                bufferAllocator,
+                readFromRemote,
+                projection);
     }
 
     /**
@@ -116,7 +132,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
         VectorSchemaRoot vectorRoot =
                 VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
-        return createArrowReadContext(rowType, schemaId, vectorRoot, allocator);
+        return createArrowReadContext(rowType, schemaId, vectorRoot, allocator, false, null);
     }
 
     /**
@@ -126,24 +142,43 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
      * @param schemaId the schemaId of the table
      */
     public static LogRecordReadContext createIndexedReadContext(RowType rowType, int schemaId) {
-        return new LogRecordReadContext(LogFormat.INDEXED, rowType, schemaId, null, null);
+        return new LogRecordReadContext(
+                LogFormat.INDEXED, rowType, schemaId, null, null, false, null);
+    }
+
+    /**
+     * Creates a LogRecordReadContext for INDEXED log format.
+     *
+     * @param rowType the schema of the table
+     * @param schemaId the schemaId of the table
+     * @param readFromRemote whether context is to read from remote
+     * @param projection the projection info
+     */
+    public static LogRecordReadContext createIndexedReadContext(
+            RowType rowType,
+            int schemaId,
+            boolean readFromRemote,
+            @Nullable Projection projection) {
+        return new LogRecordReadContext(
+                LogFormat.INDEXED, rowType, schemaId, null, null, readFromRemote, projection);
     }
 
     private LogRecordReadContext(
             LogFormat logFormat,
-            RowType rowType,
+            RowType dataRowType,
             int schemaId,
             VectorSchemaRoot vectorSchemaRoot,
-            BufferAllocator bufferAllocator) {
+            BufferAllocator bufferAllocator,
+            boolean readFromRemote,
+            @Nullable Projection projection) {
         this.logFormat = logFormat;
-        this.rowType = rowType;
+        this.dataRowType = dataRowType;
         this.schemaId = schemaId;
         this.vectorSchemaRoot = vectorSchemaRoot;
         this.bufferAllocator = bufferAllocator;
-        this.fieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
-        for (int i = 0; i < fieldGetters.length; i++) {
-            fieldGetters[i] = InternalRow.createFieldGetter(rowType.getChildren().get(i), i);
-        }
+        this.readFromRemote = readFromRemote;
+        this.projection = projection;
+        this.projectedFieldGetters = buildProjectedFieldGetters();
     }
 
     @Override
@@ -158,15 +193,57 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 "The schemaId (%s) in the record batch is not the same as the context (%s).",
                 schemaId,
                 this.schemaId);
-        return rowType;
+        return dataRowType;
     }
 
-    public RowType getRowType() {
-        return rowType;
+    public RowType getDataRowType() {
+        return dataRowType;
     }
 
-    public InternalRow.FieldGetter[] getFieldGetters() {
+    private InternalRow.FieldGetter[] buildProjectedFieldGetters() {
+        InternalRow.FieldGetter[] fieldGetters;
+        List<DataType> dataTypeList = dataRowType.getChildren();
+        if (readFromRemote) {
+            if (projection != null) {
+                int[] projectionInOrder = projection.getProjectionInOrder();
+                fieldGetters = new InternalRow.FieldGetter[projectionInOrder.length];
+                for (int i = 0; i < fieldGetters.length; i++) {
+                    fieldGetters[i] =
+                            InternalRow.createFieldGetter(
+                                    dataTypeList.get(projectionInOrder[i]), projectionInOrder[i]);
+                }
+            } else {
+                fieldGetters = new InternalRow.FieldGetter[dataTypeList.size()];
+                for (int i = 0; i < fieldGetters.length; i++) {
+                    fieldGetters[i] = InternalRow.createFieldGetter(dataTypeList.get(i), i);
+                }
+            }
+        } else {
+            // Arrow log format already project in the server side.
+            if (projection != null && logFormat != LogFormat.ARROW) {
+                int[] projectionInOrder = projection.getProjectionInOrder();
+                fieldGetters = new InternalRow.FieldGetter[projectionInOrder.length];
+                for (int i = 0; i < fieldGetters.length; i++) {
+                    fieldGetters[i] =
+                            InternalRow.createFieldGetter(
+                                    dataTypeList.get(projectionInOrder[i]), projectionInOrder[i]);
+                }
+            } else {
+                fieldGetters = new InternalRow.FieldGetter[dataTypeList.size()];
+                for (int i = 0; i < fieldGetters.length; i++) {
+                    fieldGetters[i] = InternalRow.createFieldGetter(dataTypeList.get(i), i);
+                }
+            }
+        }
         return fieldGetters;
+    }
+
+    public InternalRow.FieldGetter[] getProjectedFieldGetters() {
+        return projectedFieldGetters;
+    }
+
+    public @Nullable Projection getProjection() {
+        return projection;
     }
 
     @Override

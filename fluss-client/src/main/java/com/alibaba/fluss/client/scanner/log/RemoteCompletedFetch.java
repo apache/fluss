@@ -17,18 +17,10 @@
 package com.alibaba.fluss.client.scanner.log;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.FileLogRecords;
-import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordReadContext;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.utils.Projection;
-
-import javax.annotation.Nullable;
 
 import java.io.IOException;
 
@@ -52,7 +44,6 @@ class RemoteCompletedFetch extends CompletedFetch {
             LogScannerStatus logScannerStatus,
             boolean isCheckCrc,
             long fetchOffset,
-            @Nullable Projection projection,
             Runnable recycleCallback) {
         super(
                 tableBucket,
@@ -63,8 +54,7 @@ class RemoteCompletedFetch extends CompletedFetch {
                 readContext,
                 logScannerStatus,
                 isCheckCrc,
-                fetchOffset,
-                projection);
+                fetchOffset);
         this.fileLogRecords = fileLogRecords;
         this.recycleCallback = recycleCallback;
     }
@@ -80,27 +70,5 @@ class RemoteCompletedFetch extends CompletedFetch {
         }
         // call recycle to remove the fetched files and increment the prefetch semaphore
         recycleCallback.run();
-    }
-
-    // TODO: optimize this to avoid deep copying the record.
-    //  refactor #fetchRecords to return an iterator which lazily deserialize
-    //  from underlying record stream and arrow buffer.
-    @Override
-    protected ScanRecord toScanRecord(LogRecord record) {
-        GenericRow newRow = new GenericRow(fieldGetters.length);
-        InternalRow internalRow = record.getRow();
-        for (int i = 0; i < fieldGetters.length; i++) {
-            newRow.setField(i, fieldGetters[i].getFieldOrNull(internalRow));
-        }
-        if (projection != null) {
-            return new ScanRecord(
-                    record.logOffset(),
-                    record.timestamp(),
-                    record.getRowKind(),
-                    ProjectedRow.from(projection.projection()).replaceRow(newRow));
-        } else {
-            return new ScanRecord(
-                    record.logOffset(), record.timestamp(), record.getRowKind(), newRow);
-        }
     }
 }

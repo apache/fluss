@@ -556,7 +556,8 @@ class KvTabletTest {
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 rowKinds,
-                values);
+                values,
+                LogFormat.ARROW);
     }
 
     private MemoryLogRecords logRecords(
@@ -570,7 +571,8 @@ class KvTabletTest {
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 rowKinds,
-                values);
+                values,
+                LogFormat.ARROW);
     }
 
     private void checkEqual(
