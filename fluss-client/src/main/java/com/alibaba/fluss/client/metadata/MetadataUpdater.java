@@ -237,7 +237,7 @@ public class MetadataUpdater {
                         sendMetadataRequestAndRebuildCluster(
                                 cluster,
                                 () ->
-                                        adminReadOnlyGateways.getOCreateGatewayProxy(
+                                        adminReadOnlyGateways.getOrCreateGatewayProxy(
                                                 getOneAvailableTabletServerNode(cluster),
                                                 rpcClient,
                                                 AdminReadOnlyGateway.class),

@@ -185,7 +185,7 @@ public class LogFetcher implements Closeable {
 
     private void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
         TabletServerGateway gateway =
-                tabletServerGateways.getOCreateGatewayProxy(
+                tabletServerGateways.getOrCreateGatewayProxy(
                         metadataUpdater.getTabletServer(destination),
                         rpcClient,
                         TabletServerGateway.class);

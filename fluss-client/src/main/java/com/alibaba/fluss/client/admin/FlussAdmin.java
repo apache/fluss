@@ -316,7 +316,7 @@ public class FlussAdmin implements Admin {
         leaderToRequestMap.forEach(
                 (leader, request) -> {
                     TabletServerGateway gateway =
-                            tabletServerGateways.getOCreateGatewayProxy(
+                            tabletServerGateways.getOrCreateGatewayProxy(
                                     metadataUpdater.getTabletServer(leader),
                                     client,
                                     TabletServerGateway.class);

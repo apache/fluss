@@ -42,7 +42,7 @@ public class RpcGatewayCache<T extends RpcGateway> {
                         .build();
     }
 
-    public T getOCreateGatewayProxy(
+    public T getOrCreateGatewayProxy(
             ServerNode serverNode, RpcClient client, Class<T> gatewayClass) {
         try {
             return cache.get(
