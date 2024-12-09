@@ -44,7 +44,7 @@ So, for fault tolerance of local disk fail forever, Fluss will do snapshots to t
 The snapshot will keep a log offset representing the next unread change log while doing the snapshot. Then, when the machine holding the replica fails, Fluss can recover the replica in other live machines by downloading the snapshot from remote storage and apply the change log
 since last snapshot.
 
-What' more, with the snapshot and the consistent log offset, Fluss client can seamlessly switch from full reading phase(reading snapshot) to the incremental
+What's more, with the snapshot and the consistent log offset, Fluss client can seamlessly switch from full reading phase(reading snapshot) to the incremental
 phase (subscribe change log from the consistent log offset) without any data duplication or loss.
 
 ### Cluster configurations about remote snapshot
