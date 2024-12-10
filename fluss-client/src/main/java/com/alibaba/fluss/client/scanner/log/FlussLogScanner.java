@@ -26,6 +26,7 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metrics.Metric;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.types.RowType;
@@ -303,5 +304,10 @@ public class FlussLogScanner implements LogScanner {
             closed = true;
             release();
         }
+    }
+
+    @Override
+    public Map<String, Metric> metrics() {
+        return Collections.unmodifiableMap(scannerMetricGroup.metrics());
     }
 }
