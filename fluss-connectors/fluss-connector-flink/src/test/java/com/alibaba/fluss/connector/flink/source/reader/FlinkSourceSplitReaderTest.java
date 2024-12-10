@@ -43,6 +43,7 @@ import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
 import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
@@ -208,6 +209,81 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     @Test
+    void testPendingRecords() throws Exception {
+        final Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+
+        final TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1).build();
+        TablePath tablePath1 = TablePath.of(DEFAULT_DB, "test-only-log-table");
+        long tableId = createTable(tablePath1, tableDescriptor);
+        MetricListener metricListener = new MetricListener();
+        FlinkSourceReaderMetrics flinkSourceReaderMetrics =
+                new FlinkSourceReaderMetrics(
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath1, schema.toRowType(), flinkSourceReaderMetrics)) {
+
+            // no any records
+            List<SourceSplitBase> logSplits = new ArrayList<>();
+            Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
+            assignSplitsAndFetchUntilRetrieveRecords(
+                    splitReader, logSplits, expectedRecords, schema.toRowType());
+
+            assertThat(metricListener.getGauge(MetricNames.PENDING_RECORDS)).isNotPresent();
+
+            int rowCnt = 600;
+            // now, write some records into the table
+            List<InternalRow> internalRows = appendRows(tablePath1, rowCnt);
+            List<RecordAndPos> expected = new ArrayList<>(internalRows.size());
+            for (int i = 0; i < internalRows.size(); i++) {
+                expected.add(
+                        new RecordAndPos(
+                                new ScanRecord(i, i, RowKind.APPEND_ONLY, internalRows.get(i))));
+            }
+
+            TableBucket tableBucket = new TableBucket(tableId, 0);
+            String splitId = toLogSplitId(tableBucket);
+            expectedRecords.put(splitId, expected);
+
+            logSplits.add(new LogSplit(tableBucket, null, 0L));
+            assignSplits(splitReader, logSplits);
+            Set<String> finishedSplits = new HashSet<>();
+
+            int cnt = 0;
+            while (finishedSplits.size() < logSplits.size()) {
+
+                RecordsWithSplitIds<RecordAndPos> recordsBySplitIds = splitReader.fetch();
+                splitId = recordsBySplitIds.nextSplit();
+                RecordAndPos record;
+                if (splitId != null) {
+                    while ((record = recordsBySplitIds.nextRecordFromSplit()) != null) {
+                        cnt++;
+                    }
+                    // because lazy update this metric,client fetch all record in one batch
+                    assertThat(
+                                    metricListener
+                                            .getGauge(MetricNames.PENDING_RECORDS)
+                                            .get()
+                                            .getValue())
+                            .isEqualTo(600L);
+                    if (cnt >= rowCnt) {
+                        finishedSplits.add(splitId);
+                    }
+                }
+            }
+            RecordsWithSplitIds<RecordAndPos> recordsBySplitIds = splitReader.fetch();
+            // client update metric
+            assertThat(metricListener.getGauge(MetricNames.PENDING_RECORDS).get().getValue())
+                    .isEqualTo(0L);
+        }
+    }
+
+    @Test
     void testHandleMixSnapshotLogSplitChangesAndFetch() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-mix-snapshot-log-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
@@ -341,6 +417,14 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
                 clientConf, tablePath, rowType, null, createMockSourceReaderMetrics());
+    }
+
+    private FlinkSourceSplitReader createSplitReader(
+            TablePath tablePath,
+            RowType rowType,
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+        return new FlinkSourceSplitReader(
+                clientConf, tablePath, rowType, null, flinkSourceReaderMetrics);
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {
