@@ -371,4 +371,8 @@ public abstract class AbstractMetricGroup implements MetricGroup {
         VALUE,
         GENERIC
     }
+
+    public Map<String, Metric> metrics() {
+        return this.metrics;
+    }
 }
