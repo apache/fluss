@@ -30,8 +30,8 @@ import com.alibaba.fluss.metrics.Metric;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.ThreadSafeSimpleCounter;
 import com.alibaba.fluss.metrics.groups.AbstractMetricGroup;
+import com.alibaba.fluss.metrics.groups.GenericMetricGroup;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
-import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -59,7 +59,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     private volatile double pollIdleRatio;
     private volatile long lastPollMs;
     private volatile long pollStartMs;
-    private final Map<Integer, BucketMetricGroup> buckets = new HashMap<>();
+    private final Map<Integer, GenericMetricGroup> buckets = new HashMap<>();
 
     public ScannerMetricGroup(ClientMetricGroup parent, TablePath tablePath) {
         super(parent.getMetricRegistry(), makeScope(parent, name), parent);
@@ -127,7 +127,8 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
 
     public void recordBucketLag(int bucketId, long lag) {
         buckets.computeIfAbsent(
-                bucketId, (bucket) -> new BucketMetricGroup(registry, bucketId, this));
+                bucketId,
+                (bucket) -> new GenericMetricGroup(registry, this, String.valueOf(bucketId)));
         Metric metric = buckets.get(bucketId).metrics().get(bucketRecordsLagMetricName(bucketId));
         if (metric == null) {
             SimpleGauge simpleGauge = new SimpleGauge(lag);
