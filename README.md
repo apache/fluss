@@ -20,13 +20,13 @@ Prerequisites for building Fluss:
 
 - Unix-like environment (we use Linux, Mac OS X, Cygwin, WSL)
 - Git
-- Maven (we require version >= 3.8.6)
+- Maven (we require version >= 3.8.6). A compatible Maven Wrapper (`mvnw`) is included in this project.
 - Java 8 or 11
 
 ```bash
 git clone https://github.com/alibaba/fluss.git
 cd fluss
-mvn clean package -DskipTests
+./mvnw clean package -DskipTests
 ```
 
 Fluss is now installed in `build-target`.

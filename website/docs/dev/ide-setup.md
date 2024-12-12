@@ -9,7 +9,7 @@ for the development of Fluss itself.
 
 :::note
 Whenever something is not working in your IDE, try with the Maven
-command line first (`mvn clean package -DskipTests`) as it might be your IDE
+command line first (`./mvnw clean package -DskipTests`) as it might be your IDE
 that has a bug or is not properly set up.
 :::
 
@@ -41,7 +41,7 @@ The following guide has been written for [IntelliJ IDEA](https://www.jetbrains.c
 6. Continue by clicking "Next" until the import is finished.
 7. Open the "Maven" tab (or right-click on the imported project and find "Maven") and run
    "Generate Sources and Update Folders". Alternatively, you can run
-   `mvn clean package -DskipTests`.
+   `./mvnw clean package -DskipTests`.
 8. Build the Project ("Build" → "Build Project").
 
 ### Copyright Profile
@@ -110,7 +110,7 @@ For earlier IntelliJ IDEA versions:
 6. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
 7. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
 
-You can also format the whole project via Maven by using `mvn spotless:apply`.
+You can also format the whole project via Maven by using `./mvnw spotless:apply`.
 
 
 #### Checkstyle For Java
