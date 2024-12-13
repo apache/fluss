@@ -14,6 +14,6 @@ Fluss ensures the recent data is stored in local for higher write/read performan
 What's more, since the native format of Fluss's data is optimized for real-time write/read which is inevitable unfriendly to batch analytics, Fluss also introduces a [lakehouse storage](lakehouse-storage.md) which stores the data
 in the well-known open data lake format for better analytics performance. Currently, only Paimon is supported, but more kinds of data lake support are on the ways. Keep eyes on us!
 
-The over tiered storage architecture is shown in the following diagram:
+The overall tiered storage architecture is shown in the following diagram:
 
 <img width="600px" src={require('./tiered-storage.png').default} />
