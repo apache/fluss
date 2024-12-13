@@ -116,7 +116,17 @@ class LookupSender implements Runnable {
         for (Lookup lookup : lookups) {
             // get the leader node
             TableBucket tb = lookup.tableBucket();
-            int leader = metadataUpdater.leaderFor(tb);
+
+            int leader;
+            try {
+                // TODO this can be a re-triable operation. We should retry here instead of throwing
+                // exception.
+                leader = metadataUpdater.leaderFor(tb);
+            } catch (Exception e) {
+                lookup.future().completeExceptionally(e);
+                continue;
+            }
+
             lookupBatchesByLeader.computeIfAbsent(leader, k -> new ArrayList<>()).add(lookup);
         }
         return lookupBatchesByLeader;
@@ -188,9 +198,19 @@ class LookupSender implements Runnable {
                                     ? pbLookupRespForBucket.getPartitionId()
                                     : null,
                             pbLookupRespForBucket.getBucketId());
-            List<PbValue> pbValues = pbLookupRespForBucket.getValuesList();
             LookupBatch lookupBatch = lookupsByBucket.get(tableBucket);
-            lookupBatch.complete(pbValues);
+            if (pbLookupRespForBucket.hasErrorCode()) {
+                // TODO for re-triable error, we should retry here instead of throwing exception.
+                LOG.warn(
+                        "Get error lookup response on table bucket {}, fail. Error: {}",
+                        tableBucket,
+                        pbLookupRespForBucket.getErrorMessage());
+                lookupBatch.completeExceptionally(
+                        new FlussRuntimeException(pbLookupRespForBucket.getErrorMessage()));
+            } else {
+                List<PbValue> pbValues = pbLookupRespForBucket.getValuesList();
+                lookupBatch.complete(pbValues);
+            }
         }
     }
 
@@ -198,6 +218,7 @@ class LookupSender implements Runnable {
             Throwable t, Map<TableBucket, LookupBatch> lookupsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
         for (LookupBatch lookupBatch : lookupsByBucket.values()) {
+            // TODO for re-triable error, we should retry here instead of throwing exception.
             LOG.warn(
                     "Get error lookup response on table bucket {}, fail. Error: {}",
                     lookupBatch.tableBucket(),

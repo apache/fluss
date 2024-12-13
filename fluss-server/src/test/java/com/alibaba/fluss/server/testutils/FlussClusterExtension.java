@@ -459,13 +459,19 @@ public final class FlussClusterExtension
                 () -> {
                     Optional<LeaderAndIsr> leaderAndIsrOpt = zkClient.getLeaderAndIsr(tableBucket);
                     assertThat(leaderAndIsrOpt).isPresent();
-                    List<Integer> isr = leaderAndIsrOpt.get().isr();
+                    LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
+                    List<Integer> isr = leaderAndIsr.isr();
                     for (int replicaId : isr) {
                         ReplicaManager replicaManager =
                                 getTabletServerById(replicaId).getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
                     }
+
+                    int leader = leaderAndIsr.leader();
+                    ReplicaManager replicaManager = getTabletServerById(leader).getReplicaManager();
+                    assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
+                            .isTrue();
                 });
     }
 

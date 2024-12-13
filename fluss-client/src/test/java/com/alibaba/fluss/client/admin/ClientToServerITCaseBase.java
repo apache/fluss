@@ -211,6 +211,14 @@ public abstract class ClientToServerITCaseBase {
         verifyRows(rowType, actualRows, expectPartitionsRows);
     }
 
+    public static void waitAllReplicasReady(long tableId, TableDescriptor tableDescriptor) {
+        // retry until all replica ready.
+        int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        for (int i = 0; i < expectBucketCount; i++) {
+            FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(new TableBucket(tableId, i));
+        }
+    }
+
     protected static void verifyRows(
             RowType rowType,
             Map<Long, List<InternalRow>> actualRows,
