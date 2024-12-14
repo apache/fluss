@@ -18,7 +18,7 @@ on:
   push:
   pull_request:
     paths-ignore:
-      - 'docs/**'
+      - 'website/**'
       - '**/*.md'
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
