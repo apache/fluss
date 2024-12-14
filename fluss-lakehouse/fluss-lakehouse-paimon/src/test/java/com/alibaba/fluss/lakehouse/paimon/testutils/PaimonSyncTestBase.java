@@ -89,7 +89,7 @@ public class PaimonSyncTestBase extends FlinkPaimonTestBase {
                 execEnv.fromSource(
                         flussDatabaseSyncSource,
                         WatermarkStrategy.noWatermarks(),
-                        "flinkSycDatabaseSource");
+                        "flinkSyncDatabaseSource");
 
         Map<String, String> paimonCatalogConf = FlinkPaimonTestBase.getPaimonCatalogConf();
 

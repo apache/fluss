@@ -41,7 +41,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /** A sink to write {@link MultiplexCdcRecord} to fluss for testing purpose. */
-public class TestingDatabaseSycSink extends RichSinkFunction<MultiplexCdcRecord>
+public class TestingDatabaseSyncSink extends RichSinkFunction<MultiplexCdcRecord>
         implements CheckpointedFunction, Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -54,7 +54,7 @@ public class TestingDatabaseSycSink extends RichSinkFunction<MultiplexCdcRecord>
     private transient Admin admin;
     private transient Map<TablePath, SinkFunction<RowData>> sinkByTablePath;
 
-    public TestingDatabaseSycSink(String sinkDataBase, Configuration flussConfig) {
+    public TestingDatabaseSyncSink(String sinkDataBase, Configuration flussConfig) {
         this.sinkDataBase = sinkDataBase;
         this.flussConfig = flussConfig;
     }
