@@ -45,10 +45,14 @@ cd $FLUSS_HOME
 
 **Note:**
 - `flink.rest.address` and `flink.rest.port` are the Flink cluster's rest endpoint, you may need to change it according to your Flink cluster's configuration.
-- The datalake tiering service is actual a flink job, you can set the Flink configuration in `-D` arguments while starting the datalake tiering service. For example, if want to set the checkpoint interval to 10s,
-  you can use the following command to start the datalake tiering service:
+- The datalake tiering service is actual a flink job, you can set the Flink configuration in `-D` arguments while starting the datalake tiering service, There are some example commands for reference below.
 ```shell
+# If want to set the checkpoint interval to 10s, you can use the following command to start the datalake tiering service
 ./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=10s
+
+# By default, datalake tiering service synchronize all database and tables witch's `table.datalake.enabled` is true to datalake storage,
+# If you want to synchronize appointed database, you can use the parameter `database` by regular expression.
+./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D database=fluss_\\w+
 ```
 
 ### Enable Lakehouse Storage Per Table
