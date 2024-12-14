@@ -30,41 +30,6 @@
 
     <dependencies>
 
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-server</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <!-- start Fluss filesystem plugin -->
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-fs-oss</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-fs-s3</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-lakehouse-paimon</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-lakehouse-cli</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
         <!-- Concrete logging framework - we add this only here (and not in the
 			root POM) to not tie the projects to one specific framework and make
 			it easier for users to swap logging frameworks -->
@@ -196,10 +161,10 @@
                             <shadedArtifactAttached>false</shadedArtifactAttached>
                             <finalName>${project.artifactId}-${project.version}</finalName>
                             <artifactSet>
-                                <excludes>
-                                    <!-- log4j 2 is bundled separately from the fluss-server jar -->
-                                    <exclude>org.apache.logging.log4j:*</exclude>
-                                </excludes>
+                                <includes>
+                                    <!-- only include log4j-api to package source and javadoc to make sonatype happy -->
+                                    <include>org.apache.logging.log4j:log4j-api</include>
+                                </includes>
                             </artifactSet>
                         </configuration>
                     </execution>
@@ -246,15 +211,6 @@
                         </configuration>
                     </execution>
                 </executions>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-deploy-plugin</artifactId>
-                <version>2.4</version><!--$NO-MVN-MAN-VER$-->
-                <configuration>
-                    <skip>true</skip>
-                </configuration>
             </plugin>
         </plugins>
     </build>
