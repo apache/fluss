@@ -16,6 +16,10 @@
 name: Tests on JDK 8
 on:
   push:
+    branches:
+      - main
+      - release-**
+      - ci-**
   pull_request:
     paths-ignore:
       - 'website/**'
