@@ -13,21 +13,26 @@ For more information on working with Flink, refer to the [Apache Flink Engine](e
 
 ## Environment Setup
 ### Prerequisites
-Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/engine/install/) is installed on your machine.
 
-### Starting components required
-We will use `docker-compose` to spin up all the required components for this tutorial.
+Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) are installed on your machine.
+All commands were tested with Docker version 27.4.0 and Docker Compose version v2.30.3.
 
-1. Create a directory to serve as your working directory for this guide and add the `docker-compose.yml` file to it.
+:::note
+We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
+:::
+
+### Starting required components
+
+We will use `docker compose` to spin up the required components for this tutorial.
+
+1. Create a working directory for this guide.
 
 ```shell
 mkdir fluss-quickstart-flink
 cd fluss-quickstart-flink
 ```
 
-2. Create `docker-compose.yml` file with the following content:
-
-> **Note:** Depending on the docker-compose version installed on your system, you might need to specify a version field at the beginning of your yaml file.
+2. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 services:
@@ -107,24 +112,31 @@ The Docker Compose environment consists of the following containers:
 includes the [fluss-connector-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
-3. To start all containers, run the following command in the directory that contains the `docker-compose.yml` file:
+3. To start all containers, run:
 ```shell
-docker-compose up -d
+docker compose up -d
 ```
-This command automatically starts all the containers defined in the Docker Compose configuration in a detached mode.
-Run `docker ps` to check whether these containers are running properly.
+This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
+
+Run 
+```shell
+docker ps
+```
+to check whether all containers are running properly.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
-:::note
+:::note 
 - If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
-- All the following commands involving docker-compose should be executed in the directory of the `docker-compose.yml` file.
-  :::
+- All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
+:::
+
+Congratulations, you are all set!
 
 ## Enter into SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker-compose exec jobmanager ./sql-client
+docker compose exec jobmanager ./sql-client
 ```
 
 **Note**:
@@ -133,9 +145,13 @@ You can view their schemas by running the following commands:
 
 ```sql title="Flink SQL Client"
 SHOW CREATE TABLE source_customer;
+```
 
+```sql title="Flink SQL Client"
 SHOW CREATE TABLE source_order;
+```
 
+```sql title="Flink SQL Client"
 SHOW CREATE TABLE source_nation;
 ```
 
@@ -147,7 +163,9 @@ CREATE CATALOG my_fluss WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
+```
 
+```sql title="Flink SQL Client"
 USE CATALOG my_fluss;
 ```
 
@@ -164,7 +182,9 @@ CREATE TABLE fluss_order (
     `ptime` AS PROCTIME(),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
+```
 
+```sql  title="Flink SQL Client"
 CREATE TABLE fluss_customer (
     `cust_key` INT NOT NULL,
     `name` STRING,
@@ -174,13 +194,17 @@ CREATE TABLE fluss_customer (
     `mktsegment` STRING,
     PRIMARY KEY (`cust_key`) NOT ENFORCED
 );
+```
 
+```sql  title="Flink SQL Client"
 CREATE TABLE `fluss_nation` (
   `nation_key` INT NOT NULL,
   `name`       STRING,
    PRIMARY KEY (`nation_key`) NOT ENFORCED
 );
+```
 
+```sql  title="Flink SQL Client"
 CREATE TABLE enriched_orders (
     `order_key` BIGINT,
     `cust_key` INT NOT NULL,
@@ -240,10 +264,14 @@ For instance, to calculate the number of orders placed by a specific customer, y
 ```sql  title="Flink SQL Client"
 -- use tableau result mode
 SET 'sql-client.execution.result-mode' = 'tableau';
-    
+```
+
+```sql  title="Flink SQL Client"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';
-    
+```
+
+```sql  title="Flink SQL Client"
 -- use limit to query the enriched_orders table
 SELECT * FROM enriched_orders LIMIT 2;
 ```
@@ -309,7 +337,7 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
 Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
 ```shell
-docker-compose exec coordinator-server ./bin/lakehouse.sh -D flink.rest.address=jobmanager -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=30s
+docker compose exec coordinator-server ./bin/lakehouse.sh -D flink.rest.address=jobmanager -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=30s
 ```
 You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
 
@@ -340,7 +368,10 @@ Next, perform streaming data writing into the **datalake-enabled** table, `datal
 ```sql  title="Flink SQL Client"
 -- switch to streaming mode
 SET 'execution.runtime-mode' = 'streaming';
+```
 
+```sql  title="Flink SQL Client"
+-- insert tuples into datalake_enriched_orders
 INSERT INTO datalake_enriched_orders
 SELECT o.order_key,
        o.cust_key,
@@ -373,10 +404,13 @@ To query the snapshots directly from Paimon, use the following SQL:
 ```sql  title="Flink SQL Client"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';
+```
 
--- to query snapshots in paimon
+```sql  title="Flink SQL Client"
+-- query snapshots in paimon
 SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapshots;
 ```
+
 **Sample Output:**
 ```shell
 +-------------+--------------------+
@@ -387,7 +421,7 @@ SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapsh
 ```
 **Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
 
-Then, you can run the following SQL to do analytics on Paimon data:
+Run the following SQL to do analytics on Paimon data:
 ```sql  title="Flink SQL Client"
 -- to sum prices of all orders in paimon
 SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
@@ -418,7 +452,7 @@ You can execute the real-time analytics query multiple times, and the results wi
 
 Finally, you can use the following command to view the files stored in Paimon:
 ```shell
-docker-compose exec taskmanager tree /tmp/paimon/fluss.db
+docker compose exec taskmanager tree /tmp/paimon/fluss.db
 ```
 
 **Sample Output:**
@@ -444,7 +478,11 @@ docker-compose exec taskmanager tree /tmp/paimon/fluss.db
 The files adhere to Paimon's standard format, enabling seamless querying with other engines such as [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/).
 
 ## Clean up
-After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run `docker-compose down -v` to stop all containers.
+After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
+```shell
+docker compose down -v
+```
+to stop all containers.
 
 ## Learn more
 Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink!
