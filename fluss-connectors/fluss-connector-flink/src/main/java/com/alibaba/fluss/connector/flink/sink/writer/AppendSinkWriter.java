@@ -14,37 +14,32 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.connector.flink.sink;
+package com.alibaba.fluss.connector.flink.sink.writer;
 
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
+import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
-/** An append only sink for fluss log table. */
-class AppendSinkFunction extends FlinkSinkFunction {
-
-    private static final long serialVersionUID = 1L;
+/** An append only sink writer for fluss log table. */
+public class AppendSinkWriter extends FlinkSinkWriter {
 
     private transient AppendWriter appendWriter;
 
-    AppendSinkFunction(
-            TablePath tablePath,
-            Configuration flussConfig,
-            RowType tableRowType,
-            boolean ignoreDelete) {
+    public AppendWriter(TablePath tablePath, Configuration flussConfig, RowType tableRowType, boolean ignoreDelete) {
         super(tablePath, flussConfig, tableRowType, ignoreDelete);
     }
 
     @Override
-    public void open(org.apache.flink.configuration.Configuration config) {
-        super.open(config);
+    public void initialize(WriterInitContext context) {
+        super.initialize(context);
         appendWriter = table.newAppend().createWriter();
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
@@ -55,13 +50,13 @@ class AppendSinkFunction extends FlinkSinkFunction {
     }
 
     @Override
-    void flush() throws IOException {
-        appendWriter.flush();
-        checkAsyncException();
+    FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter() {
+        return FlinkRowToFlussRowConverter.create(tableRowType);
     }
 
     @Override
-    public void close() throws Exception {
-        super.close();
+    public void flush(boolean endOfInput) throws IOException {
+        appendWriter.flush();
+        checkAsyncException();
     }
 }
