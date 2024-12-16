@@ -141,6 +141,46 @@ public class MemoryLogRecordsArrowBuilderTest {
                         "The size of first segment of pagedOutputView is too small, need at least 44 bytes.");
     }
 
+    @Test
+    void testClose() throws Exception {
+        int maxSizeInBytes = 1024;
+        ArrowWriter writer =
+                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, 1024, DATA1_ROW_TYPE);
+        MemoryLogRecordsArrowBuilder builder = createMemoryLogRecordsArrowBuilder(writer, 10, 1024);
+        List<RowKind> rowKinds =
+                DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
+        List<InternalRow> rows =
+                DATA1.stream()
+                        .map(object -> row(DATA1_ROW_TYPE, object))
+                        .collect(Collectors.toList());
+        while (!builder.isFull()) {
+            int rndIndex = RandomUtils.nextInt(0, DATA1.size());
+            builder.append(rowKinds.get(rndIndex), rows.get(rndIndex));
+        }
+        assertThat(builder.isFull()).isTrue();
+
+        String tableSchemaId = 1L + "-" + 1;
+        assertThat(provider.freeWriters().size()).isEqualTo(0);
+        int sizeInBytesBeforeClose = builder.getSizeInBytes();
+        builder.close();
+        builder.serialize();
+        builder.setWriterState(1L, 0);
+        MemoryLogRecords.pointToByteBuffer(builder.build().getByteBuf().nioBuffer());
+        assertThat(provider.freeWriters().get(tableSchemaId).size()).isEqualTo(1);
+        int sizeInBytes = builder.getSizeInBytes();
+        assertThat(sizeInBytes).isEqualTo(sizeInBytesBeforeClose);
+        // get writer again, writer will be initial.
+        ArrowWriter writer1 =
+                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE);
+        assertThat(provider.freeWriters().get(tableSchemaId).size()).isEqualTo(0);
+
+        // Even if the writer has re-initialized, the sizeInBytes should be the same.
+        assertThat(builder.getSizeInBytes()).isEqualTo(sizeInBytes);
+
+        writer.close();
+        writer1.close();
+    }
+
     private MemoryLogRecordsArrowBuilder createMemoryLogRecordsArrowBuilder(
             ArrowWriter writer, int maxPages, int pageSizeInBytes) {
         conf.set(

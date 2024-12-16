@@ -66,6 +66,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private int sizeInBytes;
     private int recordCount;
     private boolean isClosed;
+    private boolean reCalculateSizeInBytes = false;
 
     private MemoryLogRecordsArrowBuilder(
             long baseLogOffset,
@@ -203,6 +204,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
         arrowWriter.writeRow(row);
         rowKindWriter.writeRowKind(rowKind);
+        reCalculateSizeInBytes = true;
     }
 
     public long writerId() {
@@ -246,12 +248,14 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     }
 
     public int getSizeInBytes() {
-        if (recordCount != arrowWriter.getRecordsCount()) {
+        if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
             sizeInBytes =
                     ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
             recordCount = arrowWriter.getRecordsCount();
         }
+
+        reCalculateSizeInBytes = false;
         return sizeInBytes;
     }
 

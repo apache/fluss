@@ -120,7 +120,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
     }
 
     @VisibleForTesting
-    Map<String, Deque<ArrowWriter>> freeWriters() {
+    public Map<String, Deque<ArrowWriter>> freeWriters() {
         return freeWriters;
     }
 }
