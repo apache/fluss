@@ -50,7 +50,7 @@ cd $FLUSS_HOME
 # If want to set the checkpoint interval to 10s, you can use the following command to start the datalake tiering service
 ./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=10s
 
-# By default, datalake tiering service synchronize all database and tables witch's `table.datalake.enabled` is true to datalake storage,
+# By default, datalake tiering service synchronizes all the tables with datalake enabled to Lakehouse Storage.
 # If you want to synchronize appointed database, you can use the parameter `database` by regular expression.
 ./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D database=fluss_\\w+
 ```
