@@ -488,7 +488,7 @@ public final class Replica {
     private void onBecomeNewLeader() {
         if (isKvTable()) {
             // if it's become new leader, we must
-            // fist destroy the old kv tablet
+            // first destroy the old kv tablet
             // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
             dropKv();
             // now, we can create a new kv tablet
