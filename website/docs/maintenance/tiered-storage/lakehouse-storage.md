@@ -51,7 +51,8 @@ cd $FLUSS_HOME
 ./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=10s
 
 # By default, datalake tiering service synchronizes all the tables with datalake enabled to Lakehouse Storage.
-# If you want to synchronize appointed database, you can use the parameter `database` by regular expression.
+# To distribute the workload of the datalake tiering service through multiple Flink jobs, 
+# you can specify the "database" parameter to synchronize only the datalake enabled tables in the specific database.
 ./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D database=fluss_\\w+
 ```
 
