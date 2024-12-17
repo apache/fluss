@@ -27,10 +27,11 @@
 
     <files>
         <!-- filesystem -->
+        <!-- output directory and plugin JAR should correspond to the file system *schema*, i.e., plugins/<schema>/ and fluss-fs-<schema>-${project.version}.jar -->
         <file>
             <source>../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar</source>
-            <outputDirectory>plugins/hadoop/</outputDirectory>
-            <destName>fluss-fs-hadoop-${project.version}.jar</destName>
+            <outputDirectory>plugins/hdfs/</outputDirectory>
+            <destName>fluss-fs-hdfs-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
 
