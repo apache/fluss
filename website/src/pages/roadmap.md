@@ -13,15 +13,15 @@ Fluss will provide deep integration with Apache Flink, enabling users a single e
 The integration will include:
 - Support for Flink **DataStream API** to read/write data from/to Fluss.
 - Support new [Delta Join](https://cwiki.apache.org/confluence/display/FLINK/FLIP-486%3A+Introduce+A+New+DeltaJoin) to address the pain-points of Stream-Stream Join.
-- More pushdown optimizations: Filter Pushdown, Partition Pruning, Aggregation Pushdown, etc.
+- More pushdown optimizations: Filter Pushdown ([#197](https://github.com/alibaba/fluss/issues/197)), Partition Pruning ([#196](https://github.com/alibaba/fluss/issues/196)), Aggregation Pushdown, etc.
 - Upgrade the Rule-Based Optimization into Cost-Based Optimization in Flink SQL streaming planner with leveraging statistics in Fluss tables.
 
 
 ## Streaming Lakehouse
 
-- Support for Iceberg as Lakehouse Storage. And DeltaLake, Hudi as well.
+- Support for Iceberg ([#102](https://github.com/alibaba/fluss/issues/102)) as Lakehouse Storage. And DeltaLake, Hudi as well.
 - Support Union Read for Spark, Trino, StarRocks.
-- Avoid data shuffle in compaction service to directly compact Arrow files of Fluss into Parquet files of data lakes.
+- Avoid data shuffle in compaction service to directly compact Arrow files of Fluss into Parquet files of data lakes ([#107](https://github.com/alibaba/fluss/issues/107)).
 
 ## ZooKeeper Removal
 
@@ -31,9 +31,9 @@ This transition aims to streamline operations and enhance system reliability.
 
 ## Storage Engine
 
-- Support for complex data types: Array, Map, Struct, Variant/JSON.
+- Support for complex data types: Array ([#168](https://github.com/alibaba/fluss/issues/168)), Map ([#169](https://github.com/alibaba/fluss/issues/169)), Struct ([#170](https://github.com/alibaba/fluss/issues/170)), Variant/JSON.
 - Support for schema evolution.
-- Support for secondary index for Delta Join with Flink.
+- Support for secondary index for Delta Join with Flink ([#65](https://github.com/alibaba/fluss/issues/65)).
 - Support for buckets rescale.
 
 ## Zero Disks
@@ -50,5 +50,5 @@ serverless, stateless, and elastic design, significantly minimizing operational 
 
 ## Miscellaneous
 
-- Upgrade programing language to Java 17.
-- Support for more connectors: Spark, Presto, DuckDB, etc.
+- Upgrade programing language to Java 17 ([#203](https://github.com/alibaba/fluss/issues/203)).
+- Support for more connectors: Spark ([#155](https://github.com/alibaba/fluss/issues/155)), Presto, DuckDB, etc.
