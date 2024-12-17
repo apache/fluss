@@ -202,13 +202,6 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription("The id for the tablet server.");
 
-    public static final ConfigOption<Integer> TABLET_SERVER_SCHEDULER_THREADS =
-            key("tablet-server.scheduler.threads")
-                    .intType()
-                    .defaultValue(10)
-                    .withDescription(
-                            "This configuration item to set the core threads for the fluss scheduler in tablet servers.");
-
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
                     .stringType()
@@ -233,6 +226,13 @@ public class ConfigOptions {
                             "The interval at which to remove writer ids that have expired due to "
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
+
+    public static final ConfigOption<Integer> BACKGROUND_THREADS =
+            key("server.background.threads")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The number of threads to use for various background processing tasks.");
 
     // ------------------------------------------------------------------
     // ZooKeeper Settings
