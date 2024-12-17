@@ -58,6 +58,7 @@ during the Fluss cluster working.
 | data.dir                                   | String   | /tmp/fluss-data | This configuration controls the directory where fluss will store its data. The default value is /tmp/fluss-data                                                                                                                               |
 | server.writer-id.expiration-time           | Duration | 7d              | The time that the tablet server will wait without receiving any write request from a client before expiring the related status. The default value is 7 days.                                                                                  |
 | server.writer-id.expiration-check-interval | Duration | 10min           | The interval at which to remove writer ids that have expired due to 'server.writer-id.expiration-time passing. The default value is 10 minutes.                                                                                               |
+| server.background.threads                  | Integer  | 10              | The number of threads to use for various background processing tasks. The default value is 10.                                                                                                                                                |
 
 ### Zookeeper
 

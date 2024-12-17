@@ -227,6 +227,13 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> BACKGROUND_THREADS =
+            key("server.background.threads")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The number of threads to use for various background processing tasks.");
+
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------

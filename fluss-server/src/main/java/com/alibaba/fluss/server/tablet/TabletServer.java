@@ -59,6 +59,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.alibaba.fluss.config.ConfigOptions.BACKGROUND_THREADS;
+
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
  * tablet.
@@ -151,8 +153,7 @@ public class TabletServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
-            // TODO set scheduler thread number.
-            this.scheduler = new FlussScheduler(10);
+            this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
 
             this.logManager =
