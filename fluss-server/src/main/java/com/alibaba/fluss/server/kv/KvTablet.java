@@ -409,7 +409,7 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     // when kv manager is closed which means kv tablet is already closed,
-                    // but the tablet server may still handles fetch log request from follower
+                    // but the tablet server may still handle fetch log request from follower
                     // as the tablet rpc service is closed asynchronously, then update the watermark
                     // and then flush the pre-write buffer.
 
