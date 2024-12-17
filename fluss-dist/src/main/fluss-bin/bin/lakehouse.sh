@@ -41,22 +41,11 @@ get_schema() {
     fi
 }
 
-# handles cases where the schema differs from the plugin name
-get_plugin_name_from_schema() {
-  schema="$1"
-  if [ "$schema" == "hdfs" ]; then
-    echo "hadoop"
-  else
-    echo "$schema"
-  fi
-}
-
 addition_jars=""
 
 # for fluss client to access remote filesystem, we need to prepare filesystem plugins
 fluss_filesystem_scheme=$(get_schema "$REMOTE_DATA_DIR")
-fluss_plugin_name=$(get_plugin_name_from_schema ${fluss_filesystem_scheme})
-fluss_plugin_jars=$(constructPluginJars ${fluss_plugin_name})
+fluss_plugin_jars=$(constructPluginJars ${fluss_filesystem_scheme})
 
 if [ ! -z "$fluss_plugin_jars" ]; then
     addition_jars="${fluss_plugin_jars}"
