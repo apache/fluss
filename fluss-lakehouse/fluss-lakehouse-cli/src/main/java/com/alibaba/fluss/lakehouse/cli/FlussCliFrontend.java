@@ -33,12 +33,12 @@ import java.util.List;
  * PackagedProgram)} to respect the configuration key {@link PipelineOptions#JARS} so that the
  * additional jar needed to run lakehouse tiering service can be submitted to fluss cluster as well.
  */
-public class FlussCliFronted extends CliFrontend {
+public class FlussCliFrontend extends CliFrontend {
 
     // the origin flink configuration before method #executeProgram
     private final Configuration originConfiguration;
 
-    public FlussCliFronted(
+    public FlussCliFrontend(
             Configuration configuration, List<CustomCommandLine> customCommandLines) {
         super(configuration, customCommandLines);
         this.originConfiguration = configuration;
