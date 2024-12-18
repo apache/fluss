@@ -55,7 +55,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
     private static final int DEFAULT_SHARDS = 512;
 
     private final String managerName;
-    private final Timer timoutTimer;
+    private final Timer timeoutTimer;
 
     private final int serverId;
     private final int purgeInterval;
@@ -68,7 +68,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
     public DelayedOperationManager(
             String managerName, int serverId, int purgeInterval, MetricGroup metricGroup) {
         this.managerName = managerName;
-        this.timoutTimer = new DefaultTimer(managerName);
+        this.timeoutTimer = new DefaultTimer(managerName);
         this.serverId = serverId;
         this.purgeInterval = purgeInterval;
         this.watcherLists = new ArrayList<>(DEFAULT_SHARDS);
@@ -117,7 +117,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
         // if it cannot be completed by now and hence is watched, add to the expiry queue also.
         if (!operation.isCompleted()) {
-            timoutTimer.add(operation);
+            timeoutTimer.add(operation);
 
             if (operation.isCompleted()) {
                 // cancel the timer task.
@@ -163,7 +163,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
     /** Return the number of delayed operations in the expiry queue. */
     public int numDelayed() {
-        return timoutTimer.numOfTimerTasks();
+        return timeoutTimer.numOfTimerTasks();
     }
 
     /**
@@ -220,7 +220,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         expirationReaper.initiateShutdown();
         // improve shutdown time by waking up any ShutdownableThread(s) blocked on poll by
         // sending a no-op.
-        timoutTimer.add(
+        timeoutTimer.add(
                 new TimerTask(0) {
                     @Override
                     public void run() {}
@@ -231,7 +231,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
             throw new FlussRuntimeException("Error while shutdown delayed operation manager", e);
         }
 
-        timoutTimer.shutdown();
+        timeoutTimer.shutdown();
     }
 
     /** A list of operation watching keys. */
@@ -346,7 +346,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         }
 
         private void advanceClock() throws InterruptedException {
-            timoutTimer.advanceClock(200L);
+            timeoutTimer.advanceClock(200L);
 
             // Trigger an expiry operation if the number of completed but still being watched
             // operations is
