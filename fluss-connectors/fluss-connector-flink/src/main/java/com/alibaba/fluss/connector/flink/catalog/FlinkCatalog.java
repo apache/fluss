@@ -76,13 +76,13 @@ public class FlinkCatalog implements Catalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
 
-    private final ClassLoader classLoader;
+    protected final ClassLoader classLoader;
 
-    private final String catalogName;
-    private final @Nullable String defaultDatabase;
-    private final String bootstrapServers;
-    private Connection connection;
-    private Admin admin;
+    protected final String catalogName;
+    protected final @Nullable String defaultDatabase;
+    protected final String bootstrapServers;
+    protected Connection connection;
+    protected Admin admin;
 
     private volatile @Nullable LakeCatalog lakeCatalog;
 
@@ -272,7 +272,7 @@ public class FlinkCatalog implements Catalog {
         }
     }
 
-    private CatalogBaseTable getLakeTable(String databaseName, String tableName)
+    protected CatalogBaseTable getLakeTable(String databaseName, String tableName)
             throws TableNotExistException, CatalogException {
         mayInitLakeCatalogCatalog();
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
@@ -514,7 +514,7 @@ public class FlinkCatalog implements Catalog {
         throw new UnsupportedOperationException();
     }
 
-    private TablePath toTablePath(ObjectPath objectPath) {
+    protected TablePath toTablePath(ObjectPath objectPath) {
         return TablePath.of(objectPath.getDatabaseName(), objectPath.getObjectName());
     }
 

@@ -70,6 +70,8 @@ import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbTableBucket;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
+import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -181,6 +183,11 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         return null;
+    }
+
+    @Override
+    public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        throw new UnsupportedOperationException();
     }
 
     @Override

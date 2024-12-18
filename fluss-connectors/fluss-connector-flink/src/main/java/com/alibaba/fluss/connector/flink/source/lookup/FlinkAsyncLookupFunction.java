@@ -18,7 +18,9 @@ package com.alibaba.fluss.connector.flink.source.lookup;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.table.LookupResult;
+import com.alibaba.fluss.client.lookup.LookupResult;
+import com.alibaba.fluss.client.lookup.LookupType;
+import com.alibaba.fluss.client.lookup.PrefixLookupResult;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.RemainingFilter;
@@ -40,8 +42,10 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** A flink async lookup function for fluss. */
@@ -55,9 +59,10 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final TablePath tablePath;
     private final int maxRetryTimes;
     private final RowType flinkRowType;
-    private final int[] pkIndexes;
+    private final int[] lookupKeyIndexes;
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
+    private final LookupType flussLookupType;
 
     private transient FlinkRowToFlussRowConverter flinkRowToFlussRowConverter;
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
@@ -68,7 +73,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             Configuration flussConfig,
             TablePath tablePath,
             RowType flinkRowType,
-            int[] pkIndexes,
+            int[] lookupKeyIndexes,
             int maxRetryTimes,
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection) {
@@ -76,9 +81,10 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         this.tablePath = tablePath;
         this.maxRetryTimes = maxRetryTimes;
         this.flinkRowType = flinkRowType;
-        this.pkIndexes = pkIndexes;
+        this.lookupKeyIndexes = lookupKeyIndexes;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
+        this.flussLookupType = lookupNormalizer.getFlussLookupType();
     }
 
     @Override
@@ -89,7 +95,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        FlinkUtils.projectRowType(flinkRowType, pkIndexes),
+                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes),
                         table.getDescriptor().getKvFormat());
 
         final RowType outputRowType;
@@ -132,53 +138,105 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             int currentRetry,
             InternalRow keyRow,
             @Nullable RemainingFilter remainingFilter) {
-        CompletableFuture<LookupResult> responseFuture = table.lookup(keyRow);
-        responseFuture.whenComplete(
-                (result, throwable) -> {
-                    if (throwable != null) {
-                        if (throwable instanceof TableNotExistException) {
-                            LOG.error("Table '{}' not found ", tablePath, throwable);
-                            resultFuture.completeExceptionally(
-                                    new RuntimeException(
-                                            "Fluss table '" + tablePath + "' not found.",
-                                            throwable));
-                        } else {
-                            LOG.error(
-                                    "Fluss asyncLookup error, retry times = {}",
-                                    currentRetry,
-                                    throwable);
-                            if (currentRetry >= maxRetryTimes) {
-                                String exceptionMsg =
-                                        String.format(
-                                                "Execution of Fluss asyncLookup failed: %s, retry times = %d.",
-                                                throwable.getMessage(), currentRetry);
-                                resultFuture.completeExceptionally(
-                                        new RuntimeException(exceptionMsg, throwable));
-                            } else {
-                                try {
-                                    Thread.sleep(1000L * currentRetry);
-                                } catch (InterruptedException e1) {
-                                    resultFuture.completeExceptionally(e1);
+        if (flussLookupType == LookupType.LOOKUP) {
+            table.lookup(keyRow)
+                    .whenComplete(
+                            (result, throwable) -> {
+                                if (throwable != null) {
+                                    handleLookupFailed(
+                                            resultFuture,
+                                            throwable,
+                                            currentRetry,
+                                            keyRow,
+                                            remainingFilter);
+                                } else {
+                                    handleLookupSuccess(resultFuture, result, remainingFilter);
                                 }
-                                fetchResult(
-                                        resultFuture, currentRetry + 1, keyRow, remainingFilter);
-                            }
-                        }
-                    } else {
-                        InternalRow row = result.getRow();
-                        if (row == null) {
-                            resultFuture.complete(Collections.emptyList());
-                        } else {
-                            RowData flinkRow =
-                                    flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
-                            if (remainingFilter != null && !remainingFilter.isMatch(flinkRow)) {
-                                resultFuture.complete(Collections.emptyList());
-                            } else {
-                                resultFuture.complete(Collections.singletonList(flinkRow));
-                            }
-                        }
-                    }
-                });
+                            });
+        } else if (flussLookupType == LookupType.PREFIX_LOOKUP) {
+            table.prefixLookup(keyRow)
+                    .whenComplete(
+                            (result, throwable) -> {
+                                if (throwable != null) {
+                                    handleLookupFailed(
+                                            resultFuture,
+                                            throwable,
+                                            currentRetry,
+                                            keyRow,
+                                            remainingFilter);
+                                } else {
+                                    handlePrefixLookupSuccess(
+                                            resultFuture, result, remainingFilter);
+                                }
+                            });
+        } else {
+            resultFuture.completeExceptionally(
+                    new UnsupportedOperationException(
+                            "Unsupported Fluss lookup type. Currently, Fluss only "
+                                    + "support lookup by primary keys or prefix lookup by bucket keys."));
+        }
+    }
+
+    private void handleLookupFailed(
+            CompletableFuture<Collection<RowData>> resultFuture,
+            Throwable throwable,
+            int currentRetry,
+            InternalRow keyRow,
+            @Nullable RemainingFilter remainingFilter) {
+        if (throwable instanceof TableNotExistException) {
+            LOG.error("Table '{}' not found ", tablePath, throwable);
+            resultFuture.completeExceptionally(
+                    new RuntimeException("Fluss table '" + tablePath + "' not found.", throwable));
+        } else {
+            LOG.error("Fluss asyncLookup error, retry times = {}", currentRetry, throwable);
+            if (currentRetry >= maxRetryTimes) {
+                String exceptionMsg =
+                        String.format(
+                                "Execution of Fluss asyncLookup failed: %s, retry times = %d.",
+                                throwable.getMessage(), currentRetry);
+                resultFuture.completeExceptionally(new RuntimeException(exceptionMsg, throwable));
+            } else {
+                try {
+                    Thread.sleep(1000L * currentRetry);
+                } catch (InterruptedException e1) {
+                    resultFuture.completeExceptionally(e1);
+                }
+                fetchResult(resultFuture, currentRetry + 1, keyRow, remainingFilter);
+            }
+        }
+    }
+
+    private void handleLookupSuccess(
+            CompletableFuture<Collection<RowData>> resultFuture,
+            LookupResult result,
+            @Nullable RemainingFilter remainingFilter) {
+        InternalRow row = result.getRow();
+        if (row == null) {
+            resultFuture.complete(Collections.emptyList());
+        } else {
+            RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
+            if (remainingFilter != null && !remainingFilter.isMatch(flinkRow)) {
+                resultFuture.complete(Collections.emptyList());
+            } else {
+                resultFuture.complete(Collections.singletonList(flinkRow));
+            }
+        }
+    }
+
+    private void handlePrefixLookupSuccess(
+            CompletableFuture<Collection<RowData>> resultFuture,
+            PrefixLookupResult result,
+            @Nullable RemainingFilter remainingFilter) {
+        List<RowData> projectedRow = new ArrayList<>();
+        for (InternalRow row : result.getRowList()) {
+            if (row != null) {
+                RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
+                if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
+                    projectedRow.add(flinkRow);
+                }
+            }
+        }
+        resultFuture.complete(projectedRow);
     }
 
     private InternalRow maybeProject(InternalRow row) {

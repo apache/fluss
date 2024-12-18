@@ -191,23 +191,33 @@ public class DataTestUtils {
 
     public static KvRecordBatch genKvRecordBatch(List<Tuple2<Object[], Object[]>> keyAndValues)
             throws Exception {
-        return genKvRecordBatchWithWriterId(keyAndValues, NO_WRITER_ID, NO_BATCH_SEQUENCE);
+        return genKvRecordBatch(DATA1_KEY_TYPE, DATA1_ROW_TYPE, keyAndValues);
+    }
+
+    public static KvRecordBatch genKvRecordBatch(
+            RowType keyType, RowType valueType, List<Tuple2<Object[], Object[]>> keyAndValues)
+            throws Exception {
+        return genKvRecordBatchWithWriterId(
+                keyAndValues, keyType, valueType, NO_WRITER_ID, NO_BATCH_SEQUENCE);
     }
 
     public static KvRecordBatch genKvRecordBatchWithWriterId(
-            List<Tuple2<Object[], Object[]>> keyAndValues, long writerId, int batchSequence)
+            List<Tuple2<Object[], Object[]>> keyAndValues,
+            RowType keyType,
+            RowType valueType,
+            long writerId,
+            int batchSequence)
             throws Exception {
-        KeyEncoder keyEncoder = new KeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        KeyEncoder keyEncoder = new KeyEncoder(keyType);
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
                 KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+                KvRecordTestUtils.KvRecordFactory.of(valueType);
         List<KvRecord> records = new ArrayList<>();
         for (Tuple2<Object[], Object[]> keyAndValue : keyAndValues) {
             records.add(
                     kvRecordFactory.ofRecord(
-                            keyEncoder.encode(row(DATA1_KEY_TYPE, keyAndValue.f0)),
-                            keyAndValue.f1));
+                            keyEncoder.encode(row(keyType, keyAndValue.f0)), keyAndValue.f1));
         }
         return kvRecordBatchFactory.ofRecords(records, writerId, batchSequence);
     }

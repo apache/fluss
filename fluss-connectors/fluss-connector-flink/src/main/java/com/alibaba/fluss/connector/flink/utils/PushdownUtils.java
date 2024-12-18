@@ -276,8 +276,8 @@ public class PushdownUtils {
 
     public static void deleteSingleRow(
             GenericRow deleteRow, TablePath tablePath, Configuration flussConfig) {
-        try (Connection connection = ConnectionFactory.createConnection(flussConfig)) {
-            Table table = connection.getTable(tablePath);
+        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
+                Table table = connection.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.getUpsertWriter();
             upsertWriter.delete(deleteRow).get();
         } catch (Exception e) {

@@ -201,6 +201,22 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         }
     }
 
+    public Counter totalPrefixLookupRequests() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.totalPrefixLookupRequests;
+        }
+    }
+
+    public Counter failedPrefixLookupRequests() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.failedPrefixLookupRequests;
+        }
+    }
+
     // ------------------------------------------------------------------------
     //  bucket groups
     // ------------------------------------------------------------------------
@@ -326,6 +342,8 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         private final Counter failedPutKvRequests;
         private final Counter totalLimitScanRequests;
         private final Counter failedLimitScanRequests;
+        private final Counter totalPrefixLookupRequests;
+        private final Counter failedPrefixLookupRequests;
 
         public KvMetricGroup(PhysicalTableMetricGroup physicalTableMetricGroup) {
             super(physicalTableMetricGroup, TabletType.KV);
@@ -349,6 +367,16 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
             meter(
                     MetricNames.FAILED_LIMIT_SCAN_REQUESTS_RATE,
                     new MeterView(failedLimitScanRequests));
+
+            // for index lookup request
+            totalPrefixLookupRequests = new ThreadSafeSimpleCounter();
+            meter(
+                    MetricNames.TOTAL_PREFIX_LOOKUP_REQUESTS_RATE,
+                    new MeterView(totalPrefixLookupRequests));
+            failedPrefixLookupRequests = new ThreadSafeSimpleCounter();
+            meter(
+                    MetricNames.FAILED_PREFIX_LOOKUP_REQUESTS_RATE,
+                    new MeterView(failedPrefixLookupRequests));
         }
 
         @Override

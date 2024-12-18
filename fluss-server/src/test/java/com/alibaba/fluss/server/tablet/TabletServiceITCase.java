@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.tablet;
 
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
 import com.alibaba.fluss.metadata.LogFormat;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -31,11 +32,16 @@ import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsResponse;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
+import com.alibaba.fluss.types.DataField;
+import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.types.RowType;
+import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -43,6 +49,8 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
@@ -57,6 +65,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static com.alibaba.fluss.server.testutils.KvTestUtils.assertPrefixLookupResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertLimitScanResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
@@ -65,6 +74,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newFetchLog
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLimitScanRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newListOffsetsRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newPrefixLookupRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
@@ -305,7 +315,7 @@ public class TabletServiceITCase {
     }
 
     @Test
-    void testGetKey() throws Exception {
+    void testLookup() throws Exception {
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
@@ -319,7 +329,7 @@ public class TabletServiceITCase {
         TabletServerGateway leaderGateWay =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
-        // first get key without in table, key = 1.
+        // first lookup without in table, key = 1.
         Object[] key1 = DATA_1_WITH_KEY_AND_VALUE.get(0).f0;
         KeyEncoder keyEncoder = new KeyEncoder(DATA1_ROW_TYPE, new int[] {0});
         byte[] key1Bytes = keyEncoder.encode(row(DATA1_KEY_TYPE, key1));
@@ -334,7 +344,7 @@ public class TabletServiceITCase {
                                         tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
                         .get());
 
-        // second get key in table, key = 1, value = 1, "a1".
+        // second lookup in table, key = 1, value = 1, "a1".
         Object[] value1 = DATA_1_WITH_KEY_AND_VALUE.get(3).f1;
         byte[] value1Bytes =
                 ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, value1));
@@ -354,12 +364,12 @@ public class TabletServiceITCase {
                         .get()
                         .getBucketsRespAt(0);
 
-        verifyError(
+        verifyLookupBucketError(
                 pbLookupRespForBucket,
                 Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
                 "Unknown table or bucket: TableBucket{tableId=10005, bucket=6}");
 
-        // Get key from a non-pk table.
+        // Lookup from a non-pk table.
         long logTableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
@@ -377,10 +387,136 @@ public class TabletServiceITCase {
                         .lookup(newLookupRequest(logTableId, 0, key3Bytes))
                         .get()
                         .getBucketsRespAt(0);
-        verifyError(
+        verifyLookupBucketError(
                 pbLookupRespForBucket,
                 Errors.NON_PRIMARY_KEY_TABLE_EXCEPTION,
                 "the primary key table not exists for TableBucket");
+    }
+
+    @Test
+    void testPrefixLookup() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_prefix_lookup_t1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        RowType rowType = schema.toRowType();
+        RowType primaryKeyType =
+                DataTypes.ROW(
+                        new DataField("a", DataTypes.INT()),
+                        new DataField("b", DataTypes.STRING()),
+                        new DataField("c", DataTypes.BIGINT()));
+        RowType prefixKeyType =
+                DataTypes.ROW(
+                        new DataField("a", DataTypes.INT()),
+                        new DataField("b", DataTypes.STRING()));
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        // first prefix lookup without in table, prefix key = (1, "a").
+        Object[] prefixKey1 = new Object[] {1, "a"};
+        KeyEncoder keyEncoder = new KeyEncoder(rowType, new int[] {0, 1});
+        byte[] prefixKey1Bytes = keyEncoder.encode(row(prefixKeyType, prefixKey1));
+        assertPrefixLookupResponse(
+                leaderGateWay
+                        .prefixLookup(
+                                newPrefixLookupRequest(
+                                        tableId, 0, Collections.singletonList(prefixKey1Bytes)))
+                        .get(),
+                Collections.singletonList(Collections.emptyList()));
+
+        // send one batch kv.
+        List<Tuple2<Object[], Object[]>> data1 =
+                Arrays.asList(
+                        Tuple2.of(new Object[] {1, "a", 1L}, new Object[] {1, "a", 1L, "value1"}),
+                        Tuple2.of(new Object[] {1, "a", 2L}, new Object[] {1, "a", 2L, "value2"}),
+                        Tuple2.of(new Object[] {1, "a", 3L}, new Object[] {1, "a", 3L, "value3"}),
+                        Tuple2.of(new Object[] {2, "a", 4L}, new Object[] {2, "a", 4L, "value4"}));
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId,
+                                        0,
+                                        1,
+                                        genKvRecordBatch(primaryKeyType, rowType, data1)))
+                        .get());
+
+        // second prefix lookup in table, prefix key = (1, "a").
+        List<byte[]> key1ExpectedValues =
+                Arrays.asList(
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {1, "a", 1L, "value1"})),
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {1, "a", 2L, "value2"})),
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {1, "a", 3L, "value3"})));
+        assertPrefixLookupResponse(
+                leaderGateWay
+                        .prefixLookup(
+                                newPrefixLookupRequest(
+                                        tableId, 0, Collections.singletonList(prefixKey1Bytes)))
+                        .get(),
+                Collections.singletonList(key1ExpectedValues));
+
+        // third prefix lookup in table for multi prefix keys, prefix key = (1, "a") and (2, "a").
+        Object[] prefixKey2 = new Object[] {2, "a"};
+        byte[] prefixKey2Bytes = keyEncoder.encode(row(prefixKeyType, prefixKey2));
+        List<byte[]> key2ExpectedValues =
+                Collections.singletonList(
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {2, "a", 4L, "value4"})));
+        assertPrefixLookupResponse(
+                leaderGateWay
+                        .prefixLookup(
+                                newPrefixLookupRequest(
+                                        tableId,
+                                        0,
+                                        Arrays.asList(prefixKey1Bytes, prefixKey2Bytes)))
+                        .get(),
+                Arrays.asList(key1ExpectedValues, key2ExpectedValues));
+
+        // Prefix lookup an unsupported prefixLookup table.
+        TableDescriptor unsupportedDescriptor = TableDescriptor.builder().schema(schema).build();
+        long tableId2 =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        TablePath.of("test_db_1", "test_unsupported_prefix_lookup_t1"),
+                        unsupportedDescriptor);
+        tb = new TableBucket(tableId2, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+        leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay2 =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        PbPrefixLookupRespForBucket pbPrefixLookupRespForBucket =
+                leaderGateWay2
+                        .prefixLookup(
+                                newPrefixLookupRequest(
+                                        tableId2, 0, Collections.singletonList(prefixKey1Bytes)))
+                        .get()
+                        .getBucketsRespAt(0);
+        verifyPrefixLookupBucketError(
+                pbPrefixLookupRespForBucket,
+                Errors.KV_STORAGE_EXCEPTION,
+                "Table bucket TableBucket{tableId="
+                        + tableId2
+                        + ", bucket=0} does not support prefix lookup");
     }
 
     @Test
@@ -564,12 +700,21 @@ public class TabletServiceITCase {
         }
     }
 
-    private static void verifyError(
+    private static void verifyLookupBucketError(
             PbLookupRespForBucket lookupRespForBucket,
             Errors expectedError,
             String expectErrMessage) {
         assertThat(lookupRespForBucket.hasErrorCode()).isTrue();
         assertThat(lookupRespForBucket.getErrorCode()).isEqualTo(expectedError.code());
         assertThat(lookupRespForBucket.getErrorMessage()).contains(expectErrMessage);
+    }
+
+    private static void verifyPrefixLookupBucketError(
+            PbPrefixLookupRespForBucket prefixLookupRespForBucket,
+            Errors expectedError,
+            String expectErrMessage) {
+        assertThat(prefixLookupRespForBucket.hasErrorCode()).isTrue();
+        assertThat(prefixLookupRespForBucket.getErrorCode()).isEqualTo(expectedError.code());
+        assertThat(prefixLookupRespForBucket.getErrorMessage()).contains(expectErrMessage);
     }
 }

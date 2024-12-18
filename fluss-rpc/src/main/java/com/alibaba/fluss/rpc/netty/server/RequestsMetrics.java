@@ -93,6 +93,8 @@ public class RequestsMetrics {
                 return "putKv";
             case LOOKUP:
                 return "lookup";
+            case PREFIX_LOOKUP:
+                return "indexLookup";
             case FETCH_LOG:
                 return isFromFollower ? "fetchLogFollower" : "fetchLogClient";
             default:

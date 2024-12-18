@@ -41,6 +41,8 @@ import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
+import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -62,7 +64,9 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeLookupResponse;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makePrefixLookupResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toLookupData;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.toPrefixLookupData;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase implements TabletServerGateway {
@@ -137,8 +141,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
-        replicaManager.multiLookupValues(
-                lookupData, value -> response.complete(makeLookupResponse(value)));
+        replicaManager.lookups(lookupData, value -> response.complete(makeLookupResponse(value)));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
+        replicaManager.prefixLookups(
+                toPrefixLookupData(request),
+                value -> response.complete(makePrefixLookupResponse(value)));
         return response;
     }
 

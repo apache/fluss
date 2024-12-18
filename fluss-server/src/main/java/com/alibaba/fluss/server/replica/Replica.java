@@ -166,6 +166,7 @@ public final class Replica {
     private final KvFormat kvFormat;
     private final long logTTLMs;
     private final boolean dataLakeEnabled;
+    private final boolean supportPrefixLookup;
     private final int tieredLogLocalSegments;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
@@ -231,6 +232,7 @@ public final class Replica {
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
+        this.supportPrefixLookup = supportPrefixLookup(tableDescriptor);
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         registerMetrics();
@@ -305,6 +307,10 @@ public final class Replica {
 
     public long getLogTTLMs() {
         return logTTLMs;
+    }
+
+    public boolean supportPrefixLookup() {
+        return supportPrefixLookup;
     }
 
     public int writerIdCount() {
@@ -1028,6 +1034,36 @@ public final class Replica {
                 });
     }
 
+    public List<byte[]> prefixLookup(byte[] prefixKey) {
+        if (!isKvTable()) {
+            throw new NonPrimaryKeyTableException(
+                    "Try to do prefix lookup on a non primary key table: " + getTablePath());
+        }
+
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    try {
+                        if (!isLeader()) {
+                            throw new NotLeaderOrFollowerException(
+                                    String.format(
+                                            "Leader not local for bucket %s on tabletServer %d",
+                                            tableBucket, localTabletServerId));
+                        }
+                        checkNotNull(
+                                kvTablet, "KvTablet for the replica to get key shouldn't be null.");
+                        return kvTablet.prefixLookup(prefixKey);
+                    } catch (IOException e) {
+                        String errorMsg =
+                                String.format(
+                                        "Failed to do prefix lookup from local kv for table bucket %s, the cause is: %s",
+                                        tableBucket, e.getMessage());
+                        LOG.error(errorMsg, e);
+                        throw new KvStorageException(errorMsg, e);
+                    }
+                });
+    }
+
     public DefaultValueRecordBatch limitKvScan(int limit) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
@@ -1697,6 +1733,11 @@ public final class Replica {
                 awaitingReplicas.stream()
                         .map(tuple -> "server-" + tuple.f0 + ":" + tuple.f1)
                         .collect(Collectors.toList()));
+    }
+
+    private boolean supportPrefixLookup(TableDescriptor tableDescriptor) {
+        return TableDescriptor.bucketKeysMatchPrefixLookupPattern(
+                tableDescriptor.getSchema(), tableDescriptor.getBucketKey());
     }
 
     @VisibleForTesting

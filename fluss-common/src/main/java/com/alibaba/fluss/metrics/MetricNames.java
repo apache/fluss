@@ -76,6 +76,10 @@ public class MetricNames {
     public static final String FAILED_PUT_KV_REQUESTS_RATE = "failedPutKvRequestsPerSecond";
     public static final String TOTAL_LIMIT_SCAN_REQUESTS_RATE = "totalLimitScanRequestsPerSecond";
     public static final String FAILED_LIMIT_SCAN_REQUESTS_RATE = "failedLimitScanRequestsPerSecond";
+    public static final String TOTAL_PREFIX_LOOKUP_REQUESTS_RATE =
+            "totalPrefixLookupRequestsPerSecond";
+    public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
+            "failedPrefixLookupRequestsPerSecond";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket

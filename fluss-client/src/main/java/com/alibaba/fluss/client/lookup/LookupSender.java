@@ -24,8 +24,12 @@ import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.LookupResponse;
 import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbValue;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbValueList;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
+import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,8 +39,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeLookupRequest;
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePrefixLookupRequest;
 
 /**
  * This background thread pool lookup operations from {@link #lookupQueue}, and send lookup requests
@@ -96,63 +102,105 @@ class LookupSender implements Runnable {
 
     /** Run a single iteration of sending. */
     private void runOnce(boolean drainAll) throws Exception {
-        List<Lookup> lookups = drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
+        List<AbstractLookup<?>> lookups = drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
         sendLookups(lookups);
     }
 
-    private void sendLookups(List<Lookup> lookups) {
+    private void sendLookups(List<AbstractLookup<?>> lookups) {
         if (lookups.isEmpty()) {
             return;
         }
         // group by <leader, lookup batches> to lookup batches
-        Map<Integer, List<Lookup>> lookupBatches = groupByLeader(lookups);
+        Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> lookupBatches =
+                groupByLeaderAndType(lookups);
         // now, send the batches
-        lookupBatches.forEach(this::sendLookups);
+        lookupBatches.forEach(
+                (destinationAndType, batch) ->
+                        sendLookups(destinationAndType.f0, destinationAndType.f1, batch));
     }
 
-    private Map<Integer, List<Lookup>> groupByLeader(List<Lookup> lookups) {
-        // leader -> lookup batches
-        Map<Integer, List<Lookup>> lookupBatchesByLeader = new HashMap<>();
-        for (Lookup lookup : lookups) {
-            // get the leader node
-            TableBucket tb = lookup.tableBucket();
-
+    private Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> groupByLeaderAndType(
+            List<AbstractLookup<?>> lookups) {
+        // <leader, LookupType> -> lookup batches
+        Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> lookupBatchesByLeader =
+                new HashMap<>();
+        for (AbstractLookup<?> abstractLookup : lookups) {
             int leader;
+            // lookup the leader node
+            TableBucket tb = abstractLookup.tableBucket();
             try {
-                // TODO this can be a re-triable operation. We should retry here instead of throwing
-                // exception.
+                // TODO this can be a re-triable operation. We should retry here instead of
+                // throwing exception.
                 leader = metadataUpdater.leaderFor(tb);
             } catch (Exception e) {
-                lookup.future().completeExceptionally(e);
+                abstractLookup.future().completeExceptionally(e);
                 continue;
             }
-
-            lookupBatchesByLeader.computeIfAbsent(leader, k -> new ArrayList<>()).add(lookup);
+            lookupBatchesByLeader
+                    .computeIfAbsent(
+                            Tuple2.of(leader, abstractLookup.lookupType()), k -> new ArrayList<>())
+                    .add(abstractLookup);
         }
         return lookupBatchesByLeader;
     }
 
-    private void sendLookups(int destination, List<Lookup> lookupBatches) {
+    private void sendLookups(
+            int destination, LookupType lookupType, List<AbstractLookup<?>> lookupBatches) {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
 
+        if (lookupType == LookupType.LOOKUP) {
+            sendLookupRequest(gateway, lookupBatches);
+        } else if (lookupType == LookupType.PREFIX_LOOKUP) {
+            sendPrefixLookupRequest(gateway, lookupBatches);
+        } else {
+            throw new IllegalArgumentException("Unsupported lookup type: " + lookupType);
+        }
+    }
+
+    private void sendLookupRequest(
+            TabletServerGateway gateway, List<AbstractLookup<?>> lookupBatches) {
         // table id -> (bucket -> lookups)
-        Map<Long, Map<TableBucket, LookupBatch>> lookupsByTableId = new HashMap<>();
-        for (Lookup lookup : lookupBatches) {
+        Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
+        for (AbstractLookup<?> abstractLookup : lookupBatches) {
+            Lookup lookup = (Lookup) abstractLookup;
             TableBucket tb = lookup.tableBucket();
             long tableId = tb.getTableId();
-            lookupsByTableId
+            lookupByTableId
                     .computeIfAbsent(tableId, k -> new HashMap<>())
                     .computeIfAbsent(tb, k -> new LookupBatch(tb))
                     .addLookup(lookup);
         }
 
-        lookupsByTableId.forEach(
+        lookupByTableId.forEach(
                 (tableId, lookupsByBucket) ->
                         sendLookupRequestAndHandleResponse(
                                 gateway,
                                 makeLookupRequest(tableId, lookupsByBucket.values()),
                                 tableId,
                                 lookupsByBucket));
+    }
+
+    private void sendPrefixLookupRequest(
+            TabletServerGateway gateway, List<AbstractLookup<?>> indexLookupBatches) {
+        // table id -> (bucket -> lookups)
+        Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
+        for (AbstractLookup<?> abstractLookup : indexLookupBatches) {
+            PrefixLookup prefixLookup = (PrefixLookup) abstractLookup;
+            TableBucket tb = prefixLookup.tableBucket();
+            long tableId = tb.getTableId();
+            lookupByTableId
+                    .computeIfAbsent(tableId, k -> new HashMap<>())
+                    .computeIfAbsent(tb, k -> new PrefixLookupBatch(tb))
+                    .addLookup(prefixLookup);
+        }
+
+        lookupByTableId.forEach(
+                (tableId, indexLookupBatch) ->
+                        sendPrefixLookupRequestAndHandleResponse(
+                                gateway,
+                                makePrefixLookupRequest(tableId, indexLookupBatch.values()),
+                                tableId,
+                                indexLookupBatch));
     }
 
     private void sendLookupRequestAndHandleResponse(
@@ -186,6 +234,38 @@ class LookupSender implements Runnable {
                         });
     }
 
+    private void sendPrefixLookupRequestAndHandleResponse(
+            TabletServerGateway gateway,
+            PrefixLookupRequest prefixLookupRequest,
+            long tableId,
+            Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
+        try {
+            maxInFlightReuqestsSemaphore.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new FlussRuntimeException("interrupted:", e);
+        }
+        gateway.prefixLookup(prefixLookupRequest)
+                .thenAccept(
+                        prefixLookupResponse -> {
+                            try {
+                                handlePrefixLookupResponse(
+                                        tableId, prefixLookupResponse, lookupsByBucket);
+                            } finally {
+                                maxInFlightReuqestsSemaphore.release();
+                            }
+                        })
+                .exceptionally(
+                        e -> {
+                            try {
+                                handlePrefixLookupException(e, lookupsByBucket);
+                                return null;
+                            } finally {
+                                maxInFlightReuqestsSemaphore.release();
+                            }
+                        });
+    }
+
     private void handleLookupResponse(
             long tableId,
             LookupResponse lookupResponse,
@@ -208,8 +288,56 @@ class LookupSender implements Runnable {
                         error.formatErrMsg());
                 lookupBatch.completeExceptionally(error.exception());
             } else {
-                List<PbValue> pbValues = pbLookupRespForBucket.getValuesList();
-                lookupBatch.complete(pbValues);
+                List<byte[]> byteValues =
+                        pbLookupRespForBucket.getValuesList().stream()
+                                .map(
+                                        pbValue -> {
+                                            if (pbValue.hasValues()) {
+                                                return pbValue.getValues();
+                                            } else {
+                                                return null;
+                                            }
+                                        })
+                                .collect(Collectors.toList());
+                lookupBatch.complete(byteValues);
+            }
+        }
+    }
+
+    private void handlePrefixLookupResponse(
+            long tableId,
+            PrefixLookupResponse prefixLookupResponse,
+            Map<TableBucket, PrefixLookupBatch> indexLookupsByBucket) {
+        for (PbPrefixLookupRespForBucket pbRespForBucket :
+                prefixLookupResponse.getBucketsRespsList()) {
+            TableBucket tableBucket =
+                    new TableBucket(
+                            tableId,
+                            pbRespForBucket.hasPartitionId()
+                                    ? pbRespForBucket.getPartitionId()
+                                    : null,
+                            pbRespForBucket.getBucketId());
+
+            PrefixLookupBatch prefixLookupBatch = indexLookupsByBucket.get(tableBucket);
+            if (pbRespForBucket.hasErrorCode()) {
+                // TODO for re-triable error, we should retry here instead of throwing exception.
+                ApiError error = ApiError.fromErrorMessage(pbRespForBucket);
+                LOG.warn(
+                        "Get error prefix lookup response on table bucket {}, fail. Error: {}",
+                        tableBucket,
+                        error.formatErrMsg());
+                prefixLookupBatch.completeExceptionally(error.exception());
+            } else {
+                List<List<byte[]>> result = new ArrayList<>();
+                for (int i = 0; i < pbRespForBucket.getValueListsCount(); i++) {
+                    PbValueList pbValueList = pbRespForBucket.getValueListAt(i);
+                    List<byte[]> keyResult = new ArrayList<>();
+                    for (int j = 0; j < pbValueList.getValuesCount(); j++) {
+                        keyResult.add(pbValueList.getValueAt(j));
+                    }
+                    result.add(keyResult);
+                }
+                prefixLookupBatch.complete(result);
             }
         }
     }
@@ -223,6 +351,16 @@ class LookupSender implements Runnable {
                     "Get error lookup response on table bucket {}, fail. Error: {}",
                     lookupBatch.tableBucket(),
                     error.formatErrMsg());
+            lookupBatch.completeExceptionally(error.exception());
+        }
+    }
+
+    private void handlePrefixLookupException(
+            Throwable t, Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
+        ApiError error = ApiError.fromThrowable(t);
+        // TODO If error, we need to retry send the request instead of throw exception.
+        LOG.warn("Get error prefix lookup response. Error: {}", error.formatErrMsg());
+        for (PrefixLookupBatch lookupBatch : lookupsByBucket.values()) {
             lookupBatch.completeExceptionally(error.exception());
         }
     }

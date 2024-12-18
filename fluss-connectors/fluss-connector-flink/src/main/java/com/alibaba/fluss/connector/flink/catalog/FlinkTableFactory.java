@@ -78,6 +78,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         == RuntimeExecutionMode.STREAMING;
 
         final ReadableConfig tableOptions = helper.getOptions();
+        RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
 
         ZoneId timeZone =
@@ -89,8 +90,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         ResolvedSchema resolvedSchema = context.getCatalogTable().getResolvedSchema();
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
         int[] primaryKeyIndexes = resolvedSchema.getPrimaryKeyIndexes();
-
-        RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
 
         // options for lookup
         LookupCache cache = null;

@@ -45,10 +45,12 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -213,6 +215,17 @@ public class RpcMessageTestUtils {
         PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
         pbLookupReqForBucket.setBucketId(bucketId).addKey(key);
         return lookupRequest;
+    }
+
+    public static PrefixLookupRequest newPrefixLookupRequest(
+            long tableId, int bucketId, List<byte[]> prefixKeys) {
+        PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);
+        PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket = prefixLookupRequest.addBucketsReq();
+        pbPrefixLookupReqForBucket.setBucketId(bucketId);
+        for (byte[] prefixKey : prefixKeys) {
+            pbPrefixLookupReqForBucket.addKey(prefixKey);
+        }
+        return prefixLookupRequest;
     }
 
     public static LimitScanRequest newLimitScanRequest(long tableId, int bucketId, int limit) {

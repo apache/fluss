@@ -768,8 +768,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         assertThatThrownBy(() -> tEnv.executeSql(dimJoinQuery))
                 .hasStackTraceContaining(
                         "Fluss lookup function only supports lookup table with "
-                                + "lookup keys contain all primary keys. Can't find primary "
-                                + "key 'name' in lookup keys [id]");
+                                + "lookup keys contain all primary keys or bucket keys. Can't find primary "
+                                + "key or bucket key 'name' in lookup keys [id]");
     }
 
     /**

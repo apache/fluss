@@ -23,56 +23,55 @@ import com.alibaba.fluss.metadata.TableBucket;
 import java.util.ArrayList;
 import java.util.List;
 
-/** A batch that contains the lookup operations that send to same tablet bucket together. */
+/**
+ * A batch that contains the prefix lookup operations that send to same destination and some table
+ * together.
+ */
 @Internal
-public class LookupBatch {
+public class PrefixLookupBatch {
 
     /** The table bucket that the lookup operations should fall into. */
     private final TableBucket tableBucket;
 
-    private final List<Lookup> lookups;
+    private final List<PrefixLookup> prefixLookups;
 
-    public LookupBatch(TableBucket tableBucket) {
+    public PrefixLookupBatch(TableBucket tableBucket) {
         this.tableBucket = tableBucket;
-        this.lookups = new ArrayList<>();
+        this.prefixLookups = new ArrayList<>();
     }
 
-    public void addLookup(Lookup lookup) {
-        lookups.add(lookup);
+    public void addLookup(PrefixLookup lookup) {
+        prefixLookups.add(lookup);
     }
 
-    public List<Lookup> lookups() {
-        return lookups;
+    public List<PrefixLookup> lookups() {
+        return prefixLookups;
     }
 
     public TableBucket tableBucket() {
         return tableBucket;
     }
 
-    /** Complete the lookup operations using given values . */
-    public void complete(List<byte[]> values) {
-        // if the size of return values of lookup operation are not equal to the number of lookups,
-        // should complete an exception.
-        if (values.size() != lookups.size()) {
+    public void complete(List<List<byte[]>> values) {
+        if (values.size() != prefixLookups.size()) {
             completeExceptionally(
                     new FlussRuntimeException(
                             String.format(
-                                    "The number of return values of lookup operation is not equal to the number of "
-                                            + "lookups. Return %d values, but expected %d.",
-                                    values.size(), lookups.size())));
+                                    "The number of values return by prefix lookup request is not equal to the number of "
+                                            + "index lookups send. Got %d values, but expected %d.",
+                                    values.size(), prefixLookups.size())));
         } else {
             for (int i = 0; i < values.size(); i++) {
-                AbstractLookup<byte[]> lookup = lookups.get(i);
-                // single value.
+                AbstractLookup<List<byte[]>> lookup = prefixLookups.get(i);
                 lookup.future().complete(values.get(i));
             }
         }
     }
 
-    /** Complete the lookup operations with given exception. */
+    /** Complete the get operations with given exception. */
     public void completeExceptionally(Exception exception) {
-        for (Lookup lookup : lookups) {
-            lookup.future().completeExceptionally(exception);
+        for (PrefixLookup prefixLookup : prefixLookups) {
+            prefixLookup.future().completeExceptionally(exception);
         }
     }
 }

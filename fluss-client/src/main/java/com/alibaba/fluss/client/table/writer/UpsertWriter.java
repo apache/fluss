@@ -42,6 +42,7 @@ import java.util.concurrent.CompletableFuture;
 public class UpsertWriter extends TableWriter {
 
     private final KeyEncoder keyEncoder;
+    private final KeyEncoder bucketKeyEncoder;
     private final @Nullable int[] targetColumns;
 
     public UpsertWriter(
@@ -54,13 +55,21 @@ public class UpsertWriter extends TableWriter {
         Schema schema = tableDescriptor.getSchema();
         sanityCheck(schema, upsertWrite.getPartialUpdateColumns());
 
+        RowType rowType = schema.toRowType();
         this.targetColumns = upsertWrite.getPartialUpdateColumns();
 
         this.keyEncoder =
                 KeyEncoder.createKeyEncoder(
-                        schema.toRowType(),
+                        rowType,
                         schema.getPrimaryKey().get().getColumnNames(),
                         tableDescriptor.getPartitionKeys());
+
+        int[] bucketKeyIndexes = tableDescriptor.getBucketKeyIndexes();
+        if (bucketKeyIndexes.length != 0) {
+            this.bucketKeyEncoder = new KeyEncoder(rowType, bucketKeyIndexes);
+        } else {
+            this.bucketKeyEncoder = keyEncoder;
+        }
     }
 
     private static void sanityCheck(Schema schema, @Nullable int[] targetColumns) {
@@ -111,8 +120,10 @@ public class UpsertWriter extends TableWriter {
      */
     public CompletableFuture<Void> upsert(InternalRow row) {
         byte[] key = keyEncoder.encode(row);
+        byte[] bucketKey = bucketKeyEncoder.encode(row);
         return send(
-                new WriteRecord(getPhysicalPath(row), WriteKind.PUT, key, key, row, targetColumns));
+                new WriteRecord(
+                        getPhysicalPath(row), WriteKind.PUT, key, bucketKey, row, targetColumns));
     }
 
     /**
@@ -124,8 +135,14 @@ public class UpsertWriter extends TableWriter {
      */
     public CompletableFuture<Void> delete(InternalRow row) {
         byte[] key = keyEncoder.encode(row);
+        byte[] bucketKey = bucketKeyEncoder.encode(row);
         return send(
                 new WriteRecord(
-                        getPhysicalPath(row), WriteKind.DELETE, key, key, null, targetColumns));
+                        getPhysicalPath(row),
+                        WriteKind.DELETE,
+                        key,
+                        bucketKey,
+                        null,
+                        targetColumns));
     }
 }

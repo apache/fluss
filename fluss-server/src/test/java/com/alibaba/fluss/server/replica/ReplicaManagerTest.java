@@ -18,7 +18,9 @@ package com.alibaba.fluss.server.replica;
 
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -32,6 +34,7 @@ import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.LimitScanResultForBucket;
 import com.alibaba.fluss.rpc.entity.ListOffsetsResultForBucket;
 import com.alibaba.fluss.rpc.entity.LookupResultForBucket;
+import com.alibaba.fluss.rpc.entity.PrefixLookupResultForBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.PutKvResultForBucket;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -47,6 +50,9 @@ import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.testutils.KvTestUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.testutils.DataTestUtils;
+import com.alibaba.fluss.types.DataField;
+import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
@@ -68,9 +74,11 @@ import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
+import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
@@ -377,7 +385,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @Test
     void testPutKv() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        makeKvTableAsLeader(tb.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
 
         // put kv records to kv store.
         CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
@@ -425,7 +433,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @Test
     void testPutKvWithOutOfBatchSequence() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        makeKvTableAsLeader(tb.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
 
         // 1. put kv records to kv store.
         List<Tuple2<Object[], Object[]>> data1 =
@@ -438,7 +446,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.putRecordsToKv(
                 20000,
                 1,
-                Collections.singletonMap(tb, genKvRecordBatchWithWriterId(data1, 100L, 0)),
+                Collections.singletonMap(
+                        tb,
+                        genKvRecordBatchWithWriterId(
+                                data1, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 0)),
                 null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 5));
@@ -475,7 +486,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.putRecordsToKv(
                 20000,
                 1,
-                Collections.singletonMap(tb, genKvRecordBatchWithWriterId(data2, 100L, 3)),
+                Collections.singletonMap(
+                        tb,
+                        genKvRecordBatchWithWriterId(
+                                data2, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 3)),
                 null,
                 future::complete);
         PutKvResultForBucket putKvResultForBucket = future.get().get(0);
@@ -508,7 +522,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.putRecordsToKv(
                 20000,
                 1,
-                Collections.singletonMap(tb, genKvRecordBatchWithWriterId(data3, 100L, 1)),
+                Collections.singletonMap(
+                        tb,
+                        genKvRecordBatchWithWriterId(
+                                data3, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 1)),
                 null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -534,7 +551,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @Test
     void testLookup() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        makeKvTableAsLeader(tb.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
 
         // first lookup key without in table, key = 1.
         Object[] key1 = DATA_1_WITH_KEY_AND_VALUE.get(0).f0;
@@ -563,10 +580,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         byte[] key3Bytes = keyEncoder.encode(row(DATA1_KEY_TYPE, key3));
         verifyLookup(tb, key3Bytes, null);
 
-        // Get key from none pk table.
+        // Lookup from none pk table.
         TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb2.getBucket());
-        replicaManager.multiLookupValues(
+        replicaManager.lookups(
                 Collections.singletonMap(tb2, Collections.singletonList(key1Bytes)),
                 (lookupResultForBuckets) -> {
                     LookupResultForBucket lookupResultForBucket = lookupResultForBuckets.get(tb2);
@@ -579,9 +596,112 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testPrefixLookup() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_prefix_lookup_t1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        RowType rowType = schema.toRowType();
+        RowType keyType =
+                DataTypes.ROW(
+                        new DataField("a", DataTypes.INT()),
+                        new DataField("b", DataTypes.STRING()),
+                        new DataField("c", DataTypes.BIGINT()));
+        RowType prefixKeyType =
+                DataTypes.ROW(
+                        new DataField("a", DataTypes.INT()),
+                        new DataField("b", DataTypes.STRING()));
+        long tableId =
+                registerTableInZkClient(
+                        tablePath,
+                        schema,
+                        1998232L,
+                        Arrays.asList("a", "b"), // bucket keys equals prefix keys.
+                        Collections.emptyMap());
+        TableBucket tb = new TableBucket(tableId, 0);
+        makeKvTableAsLeader(tableId, tablePath, tb.getBucket());
+
+        List<Tuple2<Object[], Object[]>> data1 =
+                Arrays.asList(
+                        Tuple2.of(new Object[] {1, "a", 1L}, new Object[] {1, "a", 1L, "value1"}),
+                        Tuple2.of(new Object[] {1, "a", 2L}, new Object[] {1, "a", 2L, "value2"}),
+                        Tuple2.of(new Object[] {1, "a", 3L}, new Object[] {1, "a", 3L, "value3"}),
+                        Tuple2.of(new Object[] {2, "a", 4L}, new Object[] {2, "a", 4L, "value4"}));
+        // send one batch kv.
+        CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data1)),
+                null,
+                future::complete);
+        assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 4));
+        // second prefix lookup in table, prefix key = (1, "a").
+        Object[] prefixKey1 = new Object[] {1, "a"};
+        KeyEncoder keyEncoder = new KeyEncoder(rowType, new int[] {0, 1});
+        byte[] prefixKey1Bytes = keyEncoder.encode(row(prefixKeyType, prefixKey1));
+        List<byte[]> key1ExpectedValues =
+                Arrays.asList(
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {1, "a", 1L, "value1"})),
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {1, "a", 2L, "value2"})),
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {1, "a", 3L, "value3"})));
+        verifyPrefixLookup(
+                tb,
+                Collections.singletonList(prefixKey1Bytes),
+                Collections.singletonList(key1ExpectedValues));
+
+        // third prefix lookup in table for multi prefix keys, prefix key = (1, "a") and (2, "a").
+        Object[] prefixKey2 = new Object[] {2, "a"};
+        byte[] prefixKey2Bytes = keyEncoder.encode(row(prefixKeyType, prefixKey2));
+        List<byte[]> key2ExpectedValues =
+                Collections.singletonList(
+                        ValueEncoder.encodeValue(
+                                DEFAULT_SCHEMA_ID,
+                                compactedRow(rowType, new Object[] {2, "a", 4L, "value4"})));
+        verifyPrefixLookup(
+                tb,
+                Arrays.asList(prefixKey1Bytes, prefixKey2Bytes),
+                Arrays.asList(key1ExpectedValues, key2ExpectedValues));
+
+        // Prefix lookup an unsupported prefixLookup table.
+        tablePath = TablePath.of("test_db_1", "test_unsupported_prefix_lookup_t1");
+        tableId =
+                registerTableInZkClient(
+                        tablePath,
+                        DATA1_SCHEMA_PK,
+                        200L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb3 = new TableBucket(tableId, 0);
+        makeKvTableAsLeader(tableId, tablePath, tb3.getBucket());
+        replicaManager.prefixLookups(
+                Collections.singletonMap(tb3, Collections.singletonList(prefixKey2Bytes)),
+                (prefixLookupResultForBuckets) -> {
+                    PrefixLookupResultForBucket lookupResultForBucket =
+                            prefixLookupResultForBuckets.get(tb3);
+                    assertThat(lookupResultForBucket.failed()).isTrue();
+                    ApiError apiError = lookupResultForBucket.getError();
+                    assertThat(apiError.error()).isEqualTo(Errors.KV_STORAGE_EXCEPTION);
+                    assertThat(apiError.message())
+                            .isEqualTo("Table bucket " + tb3 + " does not support prefix lookup");
+                });
+    }
+
+    @Test
     void testLimitScanPrimaryKeyTable() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        makeKvTableAsLeader(tb.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
         DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
 
         // first limit scan from an empty table.
@@ -797,7 +917,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @Test
     void testCompleteDelayPutKv() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        makeKvTableAsLeader(tb.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
 
         // put kv records to kv store as ack = -1, which will generate delayed write operation.
         CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
@@ -943,7 +1063,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // create multiple kv replicas and all do the snapshot operation
         int nBuckets = 5;
         List<TableBucket> tableBuckets = createTableBuckets(nBuckets);
-        makeKvTableAsLeader(tableBuckets, 0);
+        makeKvTableAsLeader(tableBuckets, DATA1_TABLE_PATH_PK, 0);
         Map<TableBucket, KvRecordBatch> entriesPerBucket = new HashMap<>();
         for (int i = 0; i < tableBuckets.size(); i++) {
             TableBucket tableBucket = tableBuckets.get(i);
@@ -1022,7 +1142,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // create multiple kv replicas and all do the snapshot operation
         int nBuckets = 3;
         List<TableBucket> tableBuckets = createTableBuckets(nBuckets);
-        makeKvTableAsLeader(tableBuckets, 0);
+        makeKvTableAsLeader(tableBuckets, DATA1_TABLE_PATH_PK, 0);
 
         Map<TableBucket, List<KvRecord>> kvRecordsPerBucket = new HashMap<>();
         Map<TableBucket, KvRecordBatch> kvRecordBatchPerBucket = new HashMap<>();
@@ -1037,7 +1157,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         putRecords(kvRecordBatchPerBucket);
 
         // make all become leader with a bigger leader epoch, which will cause restore
-        makeKvTableAsLeader(tableBuckets, 1);
+        makeKvTableAsLeader(tableBuckets, DATA1_TABLE_PATH_PK, 1);
 
         // let's check the result after restore
         checkKvDataForBuckets(kvRecordsPerBucket);
@@ -1060,7 +1180,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         checkKvDataForBuckets(kvRecordsPerBucket);
 
         // restore and check data again
-        makeKvTableAsLeader(tableBuckets, 2);
+        makeKvTableAsLeader(tableBuckets, DATA1_TABLE_PATH_PK, 2);
         checkKvDataForBuckets(kvRecordsPerBucket);
 
         // fetch log, make sure the log is correct after restore
@@ -1097,9 +1217,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         return tableBuckets;
     }
 
-    private void makeKvTableAsLeader(List<TableBucket> tableBuckets, int leaderEpoch) {
+    private void makeKvTableAsLeader(
+            List<TableBucket> tableBuckets, TablePath tablePath, int leaderEpoch) {
         for (TableBucket tableBucket : tableBuckets) {
-            makeKvTableAsLeader(tableBucket, leaderEpoch, false);
+            makeKvTableAsLeader(tableBucket, tablePath, leaderEpoch, false);
         }
     }
 
@@ -1150,5 +1271,30 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.lookup(tb, keyBytes, future::complete);
         byte[] lookupValues = future.get();
         assertThat(lookupValues).isEqualTo(expectValues);
+    }
+
+    private void verifyPrefixLookup(
+            TableBucket tb, List<byte[]> prefixKeyBytes, List<List<byte[]>> expectedValues)
+            throws Exception {
+        Map<TableBucket, List<byte[]>> entriesPerBucket = new HashMap<>();
+        entriesPerBucket.put(tb, prefixKeyBytes);
+
+        CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.prefixLookups(entriesPerBucket, future::complete);
+        Map<TableBucket, PrefixLookupResultForBucket> prefixResult = future.get();
+        assertThat(prefixResult.size()).isEqualTo(1);
+        PrefixLookupResultForBucket resultForBucket = prefixResult.get(tb);
+        assertThat(resultForBucket).isNotNull();
+        List<List<byte[]>> prefixLookupValues = resultForBucket.prefixLookupValues();
+        assertThat(prefixLookupValues.size()).isEqualTo(expectedValues.size());
+        for (int i = 0; i < expectedValues.size(); i++) {
+            List<byte[]> prefixValueList = prefixLookupValues.get(i);
+            List<byte[]> expectedValueList = expectedValues.get(i);
+            assertThat(prefixValueList.size()).isEqualTo(expectedValueList.size());
+            for (int j = 0; j < expectedValueList.size(); j++) {
+                assertThat(prefixValueList.get(j)).isEqualTo(expectedValueList.get(j));
+            }
+        }
     }
 }

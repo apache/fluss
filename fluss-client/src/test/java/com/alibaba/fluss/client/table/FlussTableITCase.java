@@ -19,6 +19,7 @@ package com.alibaba.fluss.client.table;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
+import com.alibaba.fluss.client.lookup.PrefixLookupResult;
 import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
 import com.alibaba.fluss.client.scanner.log.ScanRecords;
@@ -58,6 +59,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -213,6 +215,63 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         // now, check put/lookup data
         Table table2 = conn.getTable(data1PkTablePath2);
         verifyPutAndLookup(table2, schema, new Object[] {"a", 1});
+    }
+
+    @Test
+    void testPutAndPrefixLookup() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_put_and_prefix_lookup_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        createTable(tablePath, descriptor, false);
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, schema, new Object[] {1, "a", 1L, "value1"});
+        verifyPutAndLookup(table, schema, new Object[] {1, "a", 2L, "value2"});
+        verifyPutAndLookup(table, schema, new Object[] {1, "a", 3L, "value3"});
+        verifyPutAndLookup(table, schema, new Object[] {2, "a", 4L, "value4"});
+        RowType rowType = schema.toRowType();
+
+        // test prefix lookup.
+        Schema prefixKeySchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        CompletableFuture<PrefixLookupResult> result =
+                table.prefixLookup(
+                        compactedRow(prefixKeySchema.toRowType(), new Object[] {1, "a"}));
+        PrefixLookupResult prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        List<InternalRow> rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(3);
+        for (int i = 0; i < rowList.size(); i++) {
+            assertRowValueEquals(
+                    rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+        }
+
+        result =
+                table.prefixLookup(
+                        compactedRow(prefixKeySchema.toRowType(), new Object[] {2, "a"}));
+        prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(1);
+        assertRowValueEquals(rowType, rowList.get(0), new Object[] {2, "a", 4L, "value4"});
+
+        result =
+                table.prefixLookup(
+                        compactedRow(prefixKeySchema.toRowType(), new Object[] {3, "a"}));
+        prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(0);
     }
 
     @Test

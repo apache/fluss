@@ -61,7 +61,8 @@ public enum ApiKeys {
     NOTIFY_LAKE_TABLE_OFFSET(1031, 0, 0, PRIVATE),
     DESCRIBE_LAKE_STORAGE(1032, 0, 0, PUBLIC),
     GET_LAKE_TABLE_SNAPSHOT(1033, 0, 0, PUBLIC),
-    LIMIT_SCAN(1034, 0, 0, PUBLIC);
+    LIMIT_SCAN(1034, 0, 0, PUBLIC),
+    PREFIX_LOOKUP(1035, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

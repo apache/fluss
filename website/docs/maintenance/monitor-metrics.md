@@ -434,8 +434,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="31"><strong>tabletserver</strong></th>
-      <td rowspan="16">table</td>
+      <th rowspan="35"><strong>tabletserver</strong></th>
+      <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table</td>
       <td>Meter</td>
@@ -488,6 +488,26 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>failedLookupRequestsPerSecond</td>
       <td>The number of failed lookup requests to lookup value by key from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>totalLimitScanRequestsPerSecond</td>
+      <td>The number of limit scan requests to scan records with limit from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedLimitScanRequestsPerSecond</td>
+      <td>The number of failed limit scan requests to scan records with limit from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>totalIndexLookupRequestsPerSecond</td>
+      <td>The number of index lookup requests to index lookup value by key from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedIndexLookupRequestsPerSecond</td>
+      <td>The number of failed index lookup requests to index lookup value by key from this table per second.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -705,10 +725,10 @@ After extracting the archive, the contents of the working directory should be as
 ```
 
 
-2. Next, you need to adapt the `docker-compose.yml` manifest and 
+2. Next, you need to adapt the `docker-compose.yml` manifest and
 
 - add containers for Prometheus and Grafana and mount the corresponding configuration directories, and
-- configure Fluss to expose metrics via Prometheus 
+- configure Fluss to expose metrics via Prometheus
 ```
 metrics.reporters: prometheus
 metrics.reporter.prometheus.port: 9250
@@ -811,7 +831,7 @@ services:
     volumes:
       - ./fluss-quickstart-observability/grafana:/etc/grafana:ro
   #end
-  
+
 volumes:
   shared-tmpfs:
     driver: local
@@ -839,6 +859,6 @@ docker ps
 ```
 
 3. Now you are all set! You can visit
-                     
+
 - [Grafana](http://localhost:3002/dashboards) to observe the cluster status of the Fluss and Flink cluster with the provided dashboards, or
 - the [Prometheus Web UI](http://localhost:9092) to directly query Prometheus with [PromQL](https://prometheus.io/docs/prometheus/2.55/getting_started/).

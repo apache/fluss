@@ -23,8 +23,10 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -75,6 +77,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -86,7 +89,6 @@ import java.util.stream.Collectors;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
-import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -229,22 +231,23 @@ public class ReplicaTestBase {
         zkClient.registerSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
-    protected long registerTableInZkClient(int tieredLogLocalSegment) throws Exception {
-        long tableId = 200;
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(3)
-                        .property(
-                                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS,
-                                tieredLogLocalSegment)
-                        .build();
+    protected long registerTableInZkClient(
+            TablePath tablePath,
+            Schema schema,
+            long tableId,
+            List<String> bucketKeys,
+            Map<String, String> properties)
+            throws Exception {
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder().schema(schema).distributedBy(3, bucketKeys);
+        properties.forEach(builder::property);
+        TableDescriptor tableDescriptor = builder.build();
         // if exists, drop it firstly
-        if (zkClient.tableExist(DATA1_TABLE_PATH)) {
-            zkClient.deleteTable(DATA1_TABLE_PATH);
+        if (zkClient.tableExist(tablePath)) {
+            zkClient.deleteTable(tablePath);
         }
-        zkClient.registerTable(DATA1_TABLE_PATH, TableRegistration.of(tableId, tableDescriptor));
-        zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
+        zkClient.registerTable(tablePath, TableRegistration.of(tableId, tableDescriptor));
+        zkClient.registerSchema(tablePath, schema);
         return tableId;
     }
 
@@ -332,14 +335,16 @@ public class ReplicaTestBase {
 
     // TODO this is only for single tablet server unit test.
     // TODO add more test cases for partition table which make leader by this method.
-    protected void makeKvTableAsLeader(int bucketId) {
+    protected void makeKvTableAsLeader(long tableId, TablePath tablePath, int bucketId) {
         makeKvTableAsLeader(
-                new TableBucket(DATA1_TABLE_ID_PK, bucketId), INITIAL_LEADER_EPOCH, false);
+                new TableBucket(tableId, bucketId), tablePath, INITIAL_LEADER_EPOCH, false);
     }
 
-    protected void makeKvTableAsLeader(TableBucket tb, int leaderEpoch, boolean partitionTable) {
+    protected void makeKvTableAsLeader(
+            TableBucket tb, TablePath tablePath, int leaderEpoch, boolean partitionTable) {
         makeKvTableAsLeader(
                 tb,
+                tablePath,
                 Collections.singletonList(TABLET_SERVER_ID),
                 Collections.singletonList(TABLET_SERVER_ID),
                 leaderEpoch,
@@ -348,6 +353,7 @@ public class ReplicaTestBase {
 
     protected void makeKvTableAsLeader(
             TableBucket tb,
+            TablePath tablePath,
             List<Integer> replicas,
             List<Integer> isr,
             int leaderEpoch,
@@ -357,7 +363,7 @@ public class ReplicaTestBase {
                         new NotifyLeaderAndIsrData(
                                 partitionTable
                                         ? DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024
-                                        : DATA1_PHYSICAL_TABLE_PATH_PK,
+                                        : PhysicalTablePath.of(tablePath),
                                 tb,
                                 replicas,
                                 new LeaderAndIsr(

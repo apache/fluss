@@ -18,6 +18,8 @@ package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.lookup.LookupResult;
+import com.alibaba.fluss.client.lookup.PrefixLookupResult;
 import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
@@ -62,6 +64,24 @@ public interface Table extends AutoCloseable {
      * @return the result of get.
      */
     CompletableFuture<LookupResult> lookup(InternalRow key);
+
+    /**
+     * Prefix lookup certain rows from the given table by prefix key.
+     *
+     * <p>Only available for Primary Key Table. Will throw exception when the table isn't a Primary
+     * Key Table.
+     *
+     * <p>Note: Currently, if you want to use prefix lookup, the table you created must both define
+     * the primary key and the bucket key, in addition, the bucket key needs to be part of the
+     * primary key and must be a prefix of the primary key. For example, if a table has fields
+     * [a,b,c,d], and the primary key is set to [a, b, c], with the bucket key set to [a, b], then
+     * the prefix schema would also be [a, b]. This pattern can use PrefixLookup to lookup by prefix
+     * scan.
+     *
+     * @param prefixKey the given prefix key to do prefix lookup.
+     * @return the result of prefix lookup.
+     */
+    CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow prefixKey);
 
     /**
      * Extracts limit number of rows from the given table bucket.

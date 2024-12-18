@@ -470,6 +470,15 @@ public final class KvTablet {
                 });
     }
 
+    public List<byte[]> prefixLookup(byte[] prefixKey) throws IOException {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    return rocksDBKv.prefixLookup(prefixKey);
+                });
+    }
+
     public List<byte[]> limitScan(int limit) throws IOException {
         return inReadLock(
                 kvLock,

@@ -717,7 +717,7 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
-                    .defaultValue(256)
+                    .defaultValue(25600)
                     .withDescription("The maximum number of pending lookup operations.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
@@ -733,6 +733,14 @@ public class ConfigOptions {
                     .defaultValue(128)
                     .withDescription(
                             "The maximum number of unacknowledged lookup requests for lookup operations.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_BATCH_TIMEOUT =
+            key("client.lookup.batch-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The maximum time to wait for the lookup batch to full, if this timeout is reached, "
+                                    + "the lookup batch will be closed to send.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")

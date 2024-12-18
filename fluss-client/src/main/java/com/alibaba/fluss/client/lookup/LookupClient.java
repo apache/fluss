@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -79,6 +80,14 @@ public class LookupClient {
         Lookup lookup = new Lookup(tableBucket, keyBytes);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
+    }
+
+    public CompletableFuture<List<byte[]>> prefixLookup(
+            long tableId, int bucketId, byte[] keyBytes) {
+        // TODO index lookup support partition table.
+        PrefixLookup prefixLookup = new PrefixLookup(new TableBucket(tableId, bucketId), keyBytes);
+        lookupQueue.appendLookup(prefixLookup);
+        return prefixLookup.future();
     }
 
     public void close(Duration timeout) {

@@ -29,28 +29,32 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * A queue that buffers the pending lookup operations and provides a list of {@link Lookup} when
- * call method {@link #drain()}.
+ * call method {@link #drain(LookupType)}.
  */
 @ThreadSafe
 @Internal
 class LookupQueue {
 
     private volatile boolean closed;
-    private final ArrayBlockingQueue<Lookup> lookupQueue;
+    // Buffering both the Lookup and IndexLookup.
+    private final ArrayBlockingQueue<AbstractLookup<?>> lookupQueue;
     private final int maxBatchSize;
+    private final long batchTimeoutMs;
 
     LookupQueue(Configuration conf) {
         this.lookupQueue =
                 new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
+        this.batchTimeoutMs = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toMillis();
         this.closed = false;
     }
 
-    void appendLookup(Lookup lookup) {
+    void appendLookup(AbstractLookup<?> lookup) {
         if (closed) {
             throw new IllegalStateException(
                     "Can not append lookup operation since the LookupQueue is closed.");
         }
+
         try {
             lookupQueue.put(lookup);
         } catch (InterruptedException e) {
@@ -63,21 +67,33 @@ class LookupQueue {
     }
 
     /** Drain a batch of {@link Lookup}s from the lookup queue. */
-    List<Lookup> drain() throws Exception {
-        List<Lookup> lookups = new ArrayList<>(maxBatchSize);
-        Lookup firstLookup = lookupQueue.poll(300, TimeUnit.MILLISECONDS);
-        if (firstLookup != null) {
-            lookups.add(firstLookup);
-            lookupQueue.drainTo(lookups, maxBatchSize - 1);
+    List<AbstractLookup<?>> drain() throws Exception {
+        long start = System.currentTimeMillis();
+        List<AbstractLookup<?>> lookupOperations = new ArrayList<>(maxBatchSize);
+        int count = 0;
+        while (true) {
+            if (System.currentTimeMillis() - start > batchTimeoutMs) {
+                break;
+            }
+
+            AbstractLookup<?> lookup = lookupQueue.poll(300, TimeUnit.MILLISECONDS);
+            if (lookup == null) {
+                break;
+            }
+            count++;
+            lookupOperations.add(lookup);
+            if (count >= maxBatchSize) {
+                break;
+            }
         }
-        return lookups;
+        return lookupOperations;
     }
 
     /** Drain all the {@link Lookup}s from the lookup queue. */
-    List<Lookup> drainAll() {
-        List<Lookup> lookups = new ArrayList<>(lookupQueue.size());
-        lookupQueue.drainTo(lookups);
-        return lookups;
+    List<AbstractLookup<?>> drainAll() {
+        List<AbstractLookup<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
+        lookupQueue.drainTo(lookupOperations);
+        return lookupOperations;
     }
 
     public void close() {

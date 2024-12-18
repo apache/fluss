@@ -24,6 +24,7 @@ import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
+import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
@@ -46,6 +47,7 @@ import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.LimitScanResultForBucket;
 import com.alibaba.fluss.rpc.entity.ListOffsetsResultForBucket;
 import com.alibaba.fluss.rpc.entity.LookupResultForBucket;
+import com.alibaba.fluss.rpc.entity.PrefixLookupResultForBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.PutKvResultForBucket;
 import com.alibaba.fluss.rpc.entity.WriteResultForBucket;
@@ -409,7 +411,7 @@ public class ReplicaManager {
     /** Lookup a single key value. */
     @VisibleForTesting
     protected void lookup(TableBucket tableBucket, byte[] key, Consumer<byte[]> responseCallback) {
-        multiLookupValues(
+        lookups(
                 Collections.singletonMap(tableBucket, Collections.singletonList(key)),
                 multiLookupResponseCallBack -> {
                     LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
@@ -423,8 +425,8 @@ public class ReplicaManager {
                 });
     }
 
-    /** Multi-lookup from leader replica of the buckets. */
-    public void multiLookupValues(
+    /** Lookup with multi key from leader replica of the buckets. */
+    public void lookups(
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
         Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
@@ -454,6 +456,51 @@ public class ReplicaManager {
         }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
         responseCallback.accept(lookupResultForBucketMap);
+    }
+
+    /** Lookup multi prefixKeys by prefix scan on kv store. */
+    public void prefixLookups(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
+        PhysicalTableMetricGroup tableMetrics = null;
+        Map<TableBucket, PrefixLookupResultForBucket> result = new HashMap<>();
+        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            List<List<byte[]>> resultForBucket = new ArrayList<>();
+            try {
+                Replica replica = getReplicaOrException(tb);
+                if (!replica.supportPrefixLookup()) {
+                    result.put(
+                            tb,
+                            new PrefixLookupResultForBucket(
+                                    tb,
+                                    ApiError.fromThrowable(
+                                            new KvStorageException(
+                                                    "Table bucket "
+                                                            + tb
+                                                            + " does not support prefix lookup"))));
+                    continue;
+                }
+
+                tableMetrics = replica.tableMetrics();
+                tableMetrics.totalPrefixLookupRequests().inc();
+                for (byte[] prefixKey : entry.getValue()) {
+                    List<byte[]> resultForPerKey = new ArrayList<>(replica.prefixLookup(prefixKey));
+                    resultForBucket.add(resultForPerKey);
+                }
+            } catch (Exception e) {
+                if (isUnexpectedException(e)) {
+                    LOG.error("Error processing prefix lookup operation on replica {}", tb, e);
+                    if (tableMetrics != null) {
+                        tableMetrics.failedPrefixLookupRequests().inc();
+                    }
+                }
+                result.put(tb, new PrefixLookupResultForBucket(tb, ApiError.fromThrowable(e)));
+            }
+
+            result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));
+        }
+        responseCallback.accept(result);
     }
 
     public void listOffsets(

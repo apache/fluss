@@ -144,24 +144,21 @@ class TableDescriptorTest {
                                 + "The primary keys are [f0, f3], the partition keys are [], "
                                 + "the expected bucket keys are [f0, f3], but the user-defined bucket keys are [f0, f1].");
 
-        // bucket key is the subset of primary key.
+        // bucket key is the subset of primary key. This pattern can be support for prefixLookup.
         Schema schema0 =
                 Schema.newBuilder()
                         .column("f0", DataTypes.STRING())
                         .column("f1", DataTypes.BIGINT())
                         .primaryKey("f0", "f1")
                         .build();
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(schema0)
-                                        .distributedBy(12, "f0")
-                                        .build())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Currently, bucket keys must be equal to primary keys excluding partition keys for primary-key tables. "
-                                + "The primary keys are [f0, f1], the partition keys are [], "
-                                + "the expected bucket keys are [f0, f1], but the user-defined bucket keys are [f0].");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema0).distributedBy(12, "f0").build();
+        assertThat(tableDescriptor.getBucketKey()).containsExactlyInAnyOrder("f0");
+        assertThat(tableDescriptor.getBucketKeyIndexes()).isEqualTo(new int[] {0});
+        assertThat(
+                        TableDescriptor.bucketKeysMatchPrefixLookupPattern(
+                                schema0, Collections.singletonList("f0")))
+                .isTrue();
     }
 
     @Test

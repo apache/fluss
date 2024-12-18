@@ -14,30 +14,27 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table;
+package com.alibaba.fluss.client.lookup;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.row.InternalRow;
 
-import javax.annotation.Nullable;
-
-import java.util.Objects;
+import java.util.List;
 
 /**
- * The result of {@link Table#lookup(InternalRow)}.
+ * The result of {@link Table#prefixLookup(InternalRow)}}.
  *
  * @since 0.1
  */
-@PublicEvolving
-public final class LookupResult {
-    private final @Nullable InternalRow row;
+public class PrefixLookupResult {
+    private final List<InternalRow> rowList;
 
-    public LookupResult(@Nullable InternalRow row) {
-        this.row = row;
+    public PrefixLookupResult(List<InternalRow> rowList) {
+        this.rowList = rowList;
     }
 
-    public @Nullable InternalRow getRow() {
-        return row;
+    public List<InternalRow> getRowList() {
+        return rowList;
     }
 
     @Override
@@ -48,18 +45,17 @@ public final class LookupResult {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-
-        LookupResult lookupResult = (LookupResult) o;
-        return Objects.equals(row, lookupResult.row);
+        PrefixLookupResult that = (PrefixLookupResult) o;
+        return rowList.equals(that.rowList);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(row);
+        return rowList.hashCode();
     }
 
     @Override
     public String toString() {
-        return "LookupResult{row=" + row + '}';
+        return "PrefixLookupResult{" + "rowList=" + rowList + '}';
     }
 }
