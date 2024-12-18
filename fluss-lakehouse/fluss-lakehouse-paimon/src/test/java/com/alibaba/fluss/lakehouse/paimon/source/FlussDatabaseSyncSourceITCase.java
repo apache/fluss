@@ -19,7 +19,7 @@ package com.alibaba.fluss.lakehouse.paimon.source;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
-import com.alibaba.fluss.lakehouse.paimon.testutils.TestingDatabaseSycSink;
+import com.alibaba.fluss.lakehouse.paimon.testutils.TestingDatabaseSyncSink;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -79,7 +79,7 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
     }
 
     @Test
-    void testDatabaseSyc() throws Exception {
+    void testDatabaseSync() throws Exception {
         // first, write some records to a table
         TablePath t1 = TablePath.of(DEFAULT_DB, "sync_pktable");
         TableDescriptor table1Descriptor = createPkTableAndWriteRows(t1);
@@ -98,8 +98,8 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
                 execEnv.fromSource(
                         syncDatabaseFlussSource,
                         WatermarkStrategy.noWatermarks(),
-                        "flinkSycDatabaseSource");
-        input.addSink(new TestingDatabaseSycSink(sinkDataBase, clientConf));
+                        "flinkSyncDatabaseSource");
+        input.addSink(new TestingDatabaseSyncSink(sinkDataBase, clientConf));
 
         JobClient jobClient = execEnv.executeAsync();
         // check the records are synced to target database
@@ -216,8 +216,8 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
                 execEnv.fromSource(
                         syncDatabaseFlussSource,
                         WatermarkStrategy.noWatermarks(),
-                        "flinkSycDatabaseSource");
-        input.addSink(new TestingDatabaseSycSink(sinkDataBase, clientConf));
+                        "flinkSyncDatabaseSource");
+        input.addSink(new TestingDatabaseSyncSink(sinkDataBase, clientConf));
 
         // execute the sync job
         JobClient jobClient = execEnv.executeAsync();
