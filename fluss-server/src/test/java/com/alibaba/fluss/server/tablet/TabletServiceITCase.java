@@ -27,9 +27,12 @@ import com.alibaba.fluss.record.DefaultValueRecordBatch;
 import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 import com.alibaba.fluss.rpc.messages.InitWriterRequest;
 import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsResponse;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
@@ -48,6 +51,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -247,6 +251,96 @@ public class TabletServiceITCase {
                 0,
                 Errors.INVALID_COLUMN_PROJECTION.code(),
                 "Projected fields [2, 3] is out of bound for schema with 2 fields.");
+    }
+
+    @Test
+    void testFetchLogWithMinFetchSizeAndTimeout() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_INFO.getTableDescriptor());
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        // first send an empty fetch request, without min fetch size, the request will return
+        // immediately.
+        FetchLogResponse fetchLogResponse =
+                leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, 0, 0L)).get();
+        assertThat(fetchLogResponse.getTablesRespsCount()).isEqualTo(1);
+        PbFetchLogRespForTable fetchLogRespForTable = fetchLogResponse.getTablesRespsList().get(0);
+        assertThat(fetchLogRespForTable.getTableId()).isEqualTo(tableId);
+        assertThat(fetchLogRespForTable.getBucketsRespsCount()).isEqualTo(1);
+        PbFetchLogRespForBucket protoFetchedBucket =
+                fetchLogRespForTable.getBucketsRespsList().get(0);
+        assertThat(protoFetchedBucket.getHighWatermark()).isEqualTo(0L);
+        assertThat(protoFetchedBucket.getRecordsSize()).isEqualTo(0);
+
+        // second send a fetch request with minFetchSize and small maxFetchWaitMs, the request will
+        // also return immediately.
+        fetchLogResponse =
+                leaderGateWay
+                        .fetchLog(
+                                newFetchLogRequest(
+                                        -1, tableId, 0, 0L, null, 1, Integer.MAX_VALUE, 100))
+                        .get();
+        assertThat(fetchLogResponse.getTablesRespsCount()).isEqualTo(1);
+        fetchLogRespForTable = fetchLogResponse.getTablesRespsList().get(0);
+        assertThat(fetchLogRespForTable.getTableId()).isEqualTo(tableId);
+        assertThat(fetchLogRespForTable.getBucketsRespsCount()).isEqualTo(1);
+        protoFetchedBucket = fetchLogRespForTable.getBucketsRespsList().get(0);
+        assertThat(protoFetchedBucket.getHighWatermark()).isEqualTo(0L);
+        assertThat(protoFetchedBucket.getRecordsSize()).isEqualTo(0);
+
+        // third send a fetch request with minFetchSize and much bigger maxFetchWaitMs, the request
+        // will return after we send a produce log request to this bucket.
+        leaderGateWay
+                .fetchLog(
+                        newFetchLogRequest(
+                                -1,
+                                tableId,
+                                0,
+                                0L,
+                                null,
+                                1,
+                                Integer.MAX_VALUE,
+                                (int) Duration.ofMinutes(5).toMillis()))
+                .whenComplete(
+                        (res, throwable) -> assertFetchLogResponse(res, tableId, 0, 10L, DATA1));
+
+        // send a produce log request to trigger delay fetch log finish.
+        assertProduceLogResponse(
+                leaderGateWay
+                        .produceLog(
+                                newProduceLogRequest(
+                                        tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
+                        .get(),
+                0,
+                0L);
+
+        // return immediately.
+        assertFetchLogResponse(
+                leaderGateWay
+                        .fetchLog(
+                                newFetchLogRequest(
+                                        -1,
+                                        tableId,
+                                        0,
+                                        0L,
+                                        null,
+                                        1,
+                                        Integer.MAX_VALUE,
+                                        (int) Duration.ofMinutes(5).toMillis()))
+                        .get(),
+                tableId,
+                0,
+                10L,
+                DATA1);
     }
 
     @Test

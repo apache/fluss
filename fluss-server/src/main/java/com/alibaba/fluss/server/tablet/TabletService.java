@@ -63,6 +63,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.getFetchLogData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeLookupResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makePrefixLookupResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toLookupData;
@@ -112,9 +114,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
-        Map<TableBucket, FetchData> fetchLogData = RpcMessageUtils.getFetchLogData(request);
-        FetchParams fetchParams =
-                new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
+        Map<TableBucket, FetchData> fetchLogData = getFetchLogData(request);
+        FetchParams fetchParams;
+        if (request.hasMinBytes()) {
+            fetchParams =
+                    new FetchParams(
+                            request.getFollowerServerId(),
+                            request.getMaxBytes(),
+                            request.getMinBytes(),
+                            request.hasMaxWaitMs()
+                                    ? request.getMaxWaitMs()
+                                    : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE);
+        } else {
+            fetchParams = new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
+        }
         replicaManager.fetchLogRecords(
                 fetchParams,
                 fetchLogData,

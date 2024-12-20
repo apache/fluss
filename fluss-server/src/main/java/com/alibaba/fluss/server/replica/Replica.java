@@ -67,6 +67,7 @@ import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.LogOffsetMetadata;
+import com.alibaba.fluss.server.log.LogOffsetSnapshot;
 import com.alibaba.fluss.server.log.LogReadInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
@@ -74,9 +75,10 @@ import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
+import com.alibaba.fluss.server.replica.delay.DelayedFetchLog;
 import com.alibaba.fluss.server.replica.delay.DelayedOperationManager;
+import com.alibaba.fluss.server.replica.delay.DelayedTableBucketKey;
 import com.alibaba.fluss.server.replica.delay.DelayedWrite;
-import com.alibaba.fluss.server.replica.delay.DelayedWriteKey;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.server.zk.ZkSequenceIDCounter;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -157,6 +159,7 @@ public final class Replica {
 
     private final int localTabletServerId;
     private final DelayedOperationManager<DelayedWrite<?>> delayedWriteManager;
+    private final DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager;
     /** The manger to manger the isr expand and shrink. */
     private final AdjustIsrManager adjustIsrManager;
 
@@ -202,6 +205,7 @@ public final class Replica {
             int localTabletServerId,
             OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint,
             DelayedOperationManager<DelayedWrite<?>> delayedWriteManager,
+            DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager,
             AdjustIsrManager adjustIsrManager,
             SnapshotContext snapshotContext,
             ServerMetadataCache metadataCache,
@@ -218,6 +222,7 @@ public final class Replica {
         this.minInSyncReplicas = minInSyncReplicas;
         this.localTabletServerId = localTabletServerId;
         this.delayedWriteManager = delayedWriteManager;
+        this.delayedFetchLogManager = delayedFetchLogManager;
         this.adjustIsrManager = adjustIsrManager;
         this.fatalErrorHandler = fatalErrorHandler;
         this.bucketMetricGroup = bucketMetricGroup;
@@ -481,6 +486,15 @@ public final class Replica {
                 prev = i;
             }
         }
+    }
+
+    public LogOffsetSnapshot fetchOffsetSnapshot(boolean fetchOnlyFromLeader) throws IOException {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    LogTablet logTablet = localLogOrThrow(fetchOnlyFromLeader);
+                    return logTablet.fetchOffsetSnapshot();
+                });
     }
 
     // -------------------------------------------------------------------------------------------
@@ -1264,8 +1278,9 @@ public final class Replica {
     }
 
     private void tryCompleteDelayedOperations() {
-        DelayedWriteKey delayedWriteKey = new DelayedWriteKey(tableBucket);
-        delayedWriteManager.checkAndComplete(delayedWriteKey);
+        DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tableBucket);
+        delayedWriteManager.checkAndComplete(delayedTableBucketKey);
+        delayedFetchLogManager.checkAndComplete(delayedTableBucketKey);
     }
 
     private void validateBucketEpoch(int requestBucketEpoch) {

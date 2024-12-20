@@ -18,11 +18,14 @@ package com.alibaba.fluss.server.replica.delay;
 
 import com.alibaba.fluss.metadata.TableBucket;
 
-/** Delayed write key, used as watch key in delay operation manager. */
-public class DelayedWriteKey implements DelayedOperationKey {
+/**
+ * Delayed table bucket key, used as watch key in delay operation manager, such as {@link
+ * DelayedWrite} and {@link DelayedFetchLog}.
+ */
+public class DelayedTableBucketKey implements DelayedOperationKey {
     private final TableBucket tableBucket;
 
-    public DelayedWriteKey(TableBucket tableBucket) {
+    public DelayedTableBucketKey(TableBucket tableBucket) {
         this.tableBucket = tableBucket;
     }
 
@@ -43,7 +46,7 @@ public class DelayedWriteKey implements DelayedOperationKey {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        DelayedWriteKey that = (DelayedWriteKey) o;
+        DelayedTableBucketKey that = (DelayedTableBucketKey) o;
         return tableBucket.equals(that.tableBucket);
     }
 

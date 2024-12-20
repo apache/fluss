@@ -18,8 +18,6 @@ package com.alibaba.fluss.server.replica.delay;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.server.utils.timer.DefaultTimer;
 import com.alibaba.fluss.server.utils.timer.Timer;
 import com.alibaba.fluss.server.utils.timer.TimerTask;
@@ -65,8 +63,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
     private final AtomicInteger estimatedTotalOperations = new AtomicInteger(0);
     private final ExpiredOperationReaper expirationReaper;
 
-    public DelayedOperationManager(
-            String managerName, int serverId, int purgeInterval, MetricGroup metricGroup) {
+    public DelayedOperationManager(String managerName, int serverId, int purgeInterval) {
         this.managerName = managerName;
         this.timeoutTimer = new DefaultTimer(managerName);
         this.serverId = serverId;
@@ -78,8 +75,6 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
         this.expirationReaper = new ExpiredOperationReaper();
         expirationReaper.start();
-
-        metricGroup.gauge(MetricNames.DELAYED_OPERATIONS_SIZE, this::numDelayed);
     }
 
     /**

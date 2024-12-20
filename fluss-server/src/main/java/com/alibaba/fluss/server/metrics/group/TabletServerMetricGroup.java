@@ -43,6 +43,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     // ---- metrics ----
     private final Counter replicationBytesIn;
     private final Counter replicationBytesOut;
+    private final Counter delayedWriteExpireCount;
+    private final Counter delayedFetchLogFromFollowerExpireCount;
+    private final Counter delayedFetchLogFromClientExpireCount;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, int serverId) {
@@ -55,6 +58,17 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.REPLICATION_IN_RATE, new MeterView(replicationBytesIn));
         replicationBytesOut = new ThreadSafeSimpleCounter();
         meter(MetricNames.REPLICATION_OUT_RATE, new MeterView(replicationBytesOut));
+
+        delayedWriteExpireCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.DELAYED_WRITE_EXPIRATION_RATE, new MeterView(delayedWriteExpireCount));
+        delayedFetchLogFromFollowerExpireCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.DELAYED_FETCH_LOG_FROM_FOLLOWER_EXPIRATION_RATE,
+                new MeterView(delayedFetchLogFromFollowerExpireCount));
+        delayedFetchLogFromClientExpireCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.DELAYED_FETCH_LOG_FROM_CLIENT_EXPIRATION_RATE,
+                new MeterView(delayedFetchLogFromClientExpireCount));
     }
 
     @Override
@@ -75,6 +89,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter replicationBytesOut() {
         return replicationBytesOut;
+    }
+
+    public Counter delayedWriteExpireCount() {
+        return delayedWriteExpireCount;
+    }
+
+    public Counter delayedFetchLogFromFollowerExpireCount() {
+        return delayedFetchLogFromFollowerExpireCount;
+    }
+
+    public Counter delayedFetchLogFromClientExpireCount() {
+        return delayedFetchLogFromClientExpireCount;
     }
 
     // ------------------------------------------------------------------------

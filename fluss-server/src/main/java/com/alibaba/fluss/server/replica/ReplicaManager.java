@@ -71,10 +71,12 @@ import com.alibaba.fluss.server.kv.KvSnapshotResource;
 import com.alibaba.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.kv.snapshot.DefaultSnapshotContext;
 import com.alibaba.fluss.server.kv.snapshot.SnapshotContext;
+import com.alibaba.fluss.server.log.FetchDataInfo;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogManager;
+import com.alibaba.fluss.server.log.LogOffsetMetadata;
 import com.alibaba.fluss.server.log.LogReadInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
@@ -83,9 +85,11 @@ import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
+import com.alibaba.fluss.server.replica.delay.DelayedFetchLog;
+import com.alibaba.fluss.server.replica.delay.DelayedFetchLog.FetchBucketStatus;
 import com.alibaba.fluss.server.replica.delay.DelayedOperationManager;
+import com.alibaba.fluss.server.replica.delay.DelayedTableBucketKey;
 import com.alibaba.fluss.server.replica.delay.DelayedWrite;
-import com.alibaba.fluss.server.replica.delay.DelayedWriteKey;
 import com.alibaba.fluss.server.replica.fetcher.InitialFetchStatus;
 import com.alibaba.fluss.server.replica.fetcher.ReplicaFetcherManager;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
@@ -144,9 +148,20 @@ public class ReplicaManager {
 
     private final ServerMetadataCache metadataCache;
     private final Lock replicaStateChangeLock = new ReentrantLock();
-    // delayed write operation manager is used to manage the delayed write operation, which is
-    // waited for other follower replicas ack.
+
+    /**
+     * delayed write operation manager is used to manage the delayed write operation, which is
+     * waited for other follower replicas ack.
+     */
     private final DelayedOperationManager<DelayedWrite<?>> delayedWriteManager;
+
+    /**
+     * delayed fetch log operation manager is used to manage the delayed fetch log operation, which
+     * is waited for the available fetch log size bigger than the minLogFetchSize or the wait time
+     * is up.
+     */
+    private final DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager;
+
     private final ReplicaFetcherManager replicaFetcherManager;
     // The manager used to manager the replica alter, especially the isr expand and shrink.
     private final AdjustIsrManager adjustIsrManager;
@@ -229,8 +244,13 @@ public class ReplicaManager {
                 new DelayedOperationManager<>(
                         "delay write",
                         serverId,
-                        conf.getInt(ConfigOptions.LOG_REPLICA_WRITE_OPERATION_PURGE_NUMBER),
-                        serverMetricGroup);
+                        conf.getInt(ConfigOptions.LOG_REPLICA_WRITE_OPERATION_PURGE_NUMBER));
+        this.delayedFetchLogManager =
+                new DelayedOperationManager<>(
+                        "delay fetch log",
+                        serverId,
+                        conf.getInt(ConfigOptions.LOG_REPLICA_FETCH_LOG_OPERATION_PURGE_NUMBER));
+
         this.replicaFetcherManager = new ReplicaFetcherManager(conf, rpcClient, serverId, this);
         this.adjustIsrManager = new AdjustIsrManager(scheduler, coordinatorGateway, serverId);
         this.fatalErrorHandler = fatalErrorHandler;
@@ -266,6 +286,9 @@ public class ReplicaManager {
                 () -> onlineReplicas().filter(Replica::isLeader).count());
         serverMetricGroup.gauge(MetricNames.REPLICA_COUNT, allReplicas::size);
         serverMetricGroup.gauge(MetricNames.WRITE_ID_COUNT, this::writerIdCount);
+        serverMetricGroup.gauge(MetricNames.DELAYED_WRITE_SIZE, delayedWriteManager::numDelayed);
+        serverMetricGroup.gauge(
+                MetricNames.DELAYED_FETCH_LOG_SIZE, delayedFetchLogManager::numDelayed);
     }
 
     private Stream<Replica> onlineReplicas() {
@@ -370,14 +393,15 @@ public class ReplicaManager {
             Map<TableBucket, FetchData> bucketFetchInfo,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
         long startTime = System.currentTimeMillis();
-        Map<TableBucket, FetchLogResultForBucket> logFetchResults = read(params, bucketFetchInfo);
+        Map<TableBucket, LogReadStatus> logFetchResults = readFromLog(params, bucketFetchInfo);
         if (LOG.isTraceEnabled()) {
             LOG.trace(
                     "Fetch log records from local log in {} ms",
                     System.currentTimeMillis() - startTime);
         }
-        // TODO add delay fetch logic.
-        responseCallback.accept(logFetchResults);
+
+        // maybe do delay fetch log operation.
+        maybeAddDelayedFetchLog(params, bucketFetchInfo, logFetchResults, responseCallback);
     }
 
     /**
@@ -757,7 +781,7 @@ public class ReplicaManager {
                         .collect(Collectors.toSet()));
 
         replicasBecomeFollower.forEach(
-                replica -> completeDelayedWriteOperations(replica.getTableBucket()));
+                replica -> completeDelayedWriteAndFetchLogOperations(replica.getTableBucket()));
 
         LOG.info(
                 "Stopped fetchers as part of become follower request for {} replicas",
@@ -926,9 +950,9 @@ public class ReplicaManager {
         responseCallback.accept(limitScanResultForBucket);
     }
 
-    private Map<TableBucket, FetchLogResultForBucket> read(
+    public Map<TableBucket, LogReadStatus> readFromLog(
             FetchParams fetchParams, Map<TableBucket, FetchData> bucketFetchInfo) {
-        Map<TableBucket, FetchLogResultForBucket> logFetchResult = new HashMap<>();
+        Map<TableBucket, LogReadStatus> logFetchResult = new HashMap<>();
         boolean isFromFollower = fetchParams.isFromFollower();
         int limitBytes = fetchParams.maxFetchBytes();
         for (Map.Entry<TableBucket, FetchData> entry : bucketFetchInfo.entrySet()) {
@@ -957,7 +981,8 @@ public class ReplicaManager {
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
                 // level size limits.
-                int recordBatchSize = readInfo.getFetchedData().getRecords().sizeInBytes();
+                FetchDataInfo fetchedData = readInfo.getFetchedData();
+                int recordBatchSize = fetchedData.getRecords().sizeInBytes();
                 if (recordBatchSize > 0) {
                     fetchParams.markReadOneMessage();
                 }
@@ -965,10 +990,10 @@ public class ReplicaManager {
 
                 logFetchResult.put(
                         tb,
-                        new FetchLogResultForBucket(
-                                tb,
-                                readInfo.getFetchedData().getRecords(),
-                                readInfo.getHighWatermark()));
+                        new LogReadStatus(
+                                new FetchLogResultForBucket(
+                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
+                                fetchedData.getFetchOffsetMetadata()));
 
                 // update metrics
                 if (isFromFollower) {
@@ -995,7 +1020,8 @@ public class ReplicaManager {
                 } else {
                     result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
                 }
-                logFetchResult.put(tb, result);
+                logFetchResult.put(
+                        tb, new LogReadStatus(result, LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
             }
         }
         return logFetchResult;
@@ -1145,7 +1171,8 @@ public class ReplicaManager {
                             timeoutMs,
                             new DelayedWrite.DelayedWriteMetadata<>(requiredAcks, bucketStatusMap),
                             this,
-                            responseCallback);
+                            responseCallback,
+                            serverMetricGroup);
 
             // try to complete the request immediately, otherwise put it into the manager.
             // This is because while the delayed write operation is being created, new
@@ -1153,16 +1180,83 @@ public class ReplicaManager {
             delayedWriteManager.tryCompleteElseWatch(
                     delayedWrite,
                     bucketStatusMap.keySet().stream()
-                            .map(DelayedWriteKey::new)
+                            .map(DelayedTableBucketKey::new)
                             .collect(Collectors.toList()));
         } else {
             responseCallback.accept(new ArrayList<>(writeResults.values()));
         }
     }
 
-    private void completeDelayedWriteOperations(TableBucket tableBucket) {
-        DelayedWriteKey delayedWriteKey = new DelayedWriteKey(tableBucket);
-        delayedWriteManager.checkAndComplete(delayedWriteKey);
+    private void maybeAddDelayedFetchLog(
+            FetchParams params,
+            Map<TableBucket, FetchData> bucketFetchInfo,
+            Map<TableBucket, LogReadStatus> logFetchResults,
+            Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
+        long bytesReadable = 0;
+        boolean errorReadingData = false;
+        boolean hasFetchFromLocal = false;
+        Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap = new HashMap<>();
+        for (Map.Entry<TableBucket, LogReadStatus> logFetchResult : logFetchResults.entrySet()) {
+            TableBucket tb = logFetchResult.getKey();
+            LogReadStatus logReadStatus = logFetchResult.getValue();
+            FetchLogResultForBucket fetchLogResultForBucket =
+                    logReadStatus.getFetchLogResultForBucket();
+            if (fetchLogResultForBucket.failed()) {
+                errorReadingData = true;
+                break;
+            }
+
+            if (!fetchLogResultForBucket.fetchFromRemote()) {
+                hasFetchFromLocal = true;
+                bytesReadable += fetchLogResultForBucket.recordsOrEmpty().sizeInBytes();
+            }
+
+            fetchBucketStatusMap.put(
+                    tb,
+                    new FetchBucketStatus(
+                            bucketFetchInfo.get(tb),
+                            logReadStatus.getLogOffsetMetadata(),
+                            fetchLogResultForBucket));
+        }
+
+        if (!hasFetchFromLocal
+                || params.maxWaitMs() <= 0
+                || bucketFetchInfo.isEmpty()
+                || bytesReadable >= params.minFetchBytes()
+                || errorReadingData) {
+            responseCallback.accept(
+                    logFetchResults.entrySet().stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            Map.Entry::getKey,
+                                            entry ->
+                                                    entry.getValue()
+                                                            .getFetchLogResultForBucket())));
+        } else {
+            // need to put the fetch log request into delayed fetch log manager.
+            DelayedFetchLog delayedFetchLog =
+                    new DelayedFetchLog(
+                            params,
+                            this,
+                            fetchBucketStatusMap,
+                            responseCallback,
+                            serverMetricGroup);
+
+            // try to complete the request immediately, otherwise put it into the
+            // delayedFetchLogManager; this is because while the delayed fetch log operation is
+            // being created, new requests may arrive and hence make this operation completable.
+            delayedFetchLogManager.tryCompleteElseWatch(
+                    delayedFetchLog,
+                    fetchBucketStatusMap.keySet().stream()
+                            .map(DelayedTableBucketKey::new)
+                            .collect(Collectors.toList()));
+        }
+    }
+
+    private void completeDelayedWriteAndFetchLogOperations(TableBucket tableBucket) {
+        DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tableBucket);
+        delayedWriteManager.checkAndComplete(delayedTableBucketKey);
+        delayedFetchLogManager.checkAndComplete(delayedTableBucketKey);
     }
 
     /**
@@ -1279,7 +1373,7 @@ public class ReplicaManager {
 
         // If we were the leader, we may have some operations still waiting for completion.
         // We force completion to prevent them from timing out.
-        completeDelayedWriteOperations(tb);
+        completeDelayedWriteAndFetchLogOperations(tb);
 
         return new StopReplicaResultForBucket(tb);
     }
@@ -1346,6 +1440,7 @@ public class ReplicaManager {
                                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
                                         highWatermarkCheckpoint),
                                 delayedWriteManager,
+                                delayedFetchLogManager,
                                 adjustIsrManager,
                                 kvSnapshotContext,
                                 metadataCache,
@@ -1418,6 +1513,11 @@ public class ReplicaManager {
     }
 
     @VisibleForTesting
+    public DelayedOperationManager<DelayedFetchLog> getDelayedFetchLogManager() {
+        return delayedFetchLogManager;
+    }
+
+    @VisibleForTesting
     public AdjustIsrManager getAdjustIsrManager() {
         return adjustIsrManager;
     }
@@ -1457,8 +1557,30 @@ public class ReplicaManager {
         kvSnapshotResource.close();
         replicaFetcherManager.shutdown();
         delayedWriteManager.shutdown();
+        delayedFetchLogManager.shutdown();
 
         // Checkpoint highWatermark.
         checkpointHighWatermarks();
+    }
+
+    /** The status of reading log. */
+    public static final class LogReadStatus {
+        private final FetchLogResultForBucket fetchLogResultForBucket;
+        private final LogOffsetMetadata logOffsetMetadata;
+
+        public LogReadStatus(
+                FetchLogResultForBucket fetchLogResultForBucket,
+                LogOffsetMetadata logOffsetMetadata) {
+            this.fetchLogResultForBucket = fetchLogResultForBucket;
+            this.logOffsetMetadata = logOffsetMetadata;
+        }
+
+        public FetchLogResultForBucket getFetchLogResultForBucket() {
+            return fetchLogResultForBucket;
+        }
+
+        public LogOffsetMetadata getLogOffsetMetadata() {
+            return logOffsetMetadata;
+        }
     }
 }

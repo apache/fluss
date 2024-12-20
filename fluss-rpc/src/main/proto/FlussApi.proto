@@ -171,6 +171,8 @@ message FetchLogRequest {
   required int32 follower_server_id = 1;  // value -1 indicate the request from client.
   required int32 max_bytes = 2;
   repeated PbFetchLogReqForTable tables_req = 3;
+  optional int32 max_wait_ms = 4;
+  optional int32 min_bytes = 5;
 }
 
 message FetchLogResponse {

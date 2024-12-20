@@ -187,10 +187,32 @@ public class RpcMessageTestUtils {
 
     public static FetchLogRequest newFetchLogRequest(
             int followerId, long tableId, int bucketId, long fetchOffset, int[] selectedFields) {
+        return newFetchLogRequest(
+                followerId,
+                tableId,
+                bucketId,
+                fetchOffset,
+                selectedFields,
+                -1,
+                Integer.MAX_VALUE,
+                -1);
+    }
+
+    public static FetchLogRequest newFetchLogRequest(
+            int followerId,
+            long tableId,
+            int bucketId,
+            long fetchOffset,
+            int[] selectedFields,
+            int minFetchBytes,
+            int maxFetchBytes,
+            int maxWaitMs) {
         FetchLogRequest fetchLogRequest =
-                new FetchLogRequest()
-                        .setFollowerServerId(followerId)
-                        .setMaxBytes(Integer.MAX_VALUE);
+                new FetchLogRequest().setFollowerServerId(followerId).setMaxBytes(maxFetchBytes);
+        if (minFetchBytes > 0) {
+            fetchLogRequest.setMinBytes(minFetchBytes).setMaxWaitMs(maxWaitMs);
+        }
+
         PbFetchLogReqForTable fetchLogReqForTable = new PbFetchLogReqForTable().setTableId(tableId);
         if (selectedFields != null) {
             fetchLogReqForTable

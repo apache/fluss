@@ -161,6 +161,20 @@ class ReplicaManagerTest extends ReplicaTestBase {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb.getBucket());
 
+        // test fetch empty buckets without log segment.
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> emptyFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                buildFetchParams(-1),
+                Collections.singletonMap(tb, new FetchData(tb.getTableId(), 0L, 1024 * 1024)),
+                emptyFuture::complete);
+        Map<TableBucket, FetchLogResultForBucket> result = emptyFuture.get();
+        assertThat(result.size()).isEqualTo(1);
+        FetchLogResultForBucket resultForBucket = result.get(tb);
+        assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
+        assertThat(resultForBucket.getHighWatermark()).isEqualTo(0L);
+        assertThat(resultForBucket.records()).isNull();
+
         // produce one batch to this bucket.
         CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.appendRecordsToLog(
@@ -177,9 +191,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 buildFetchParams(-1),
                 Collections.singletonMap(tb, new FetchData(tb.getTableId(), 0L, 1024 * 1024)),
                 future1::complete);
-        Map<TableBucket, FetchLogResultForBucket> result = future1.get();
+        result = future1.get();
         assertThat(result.size()).isEqualTo(1);
-        FetchLogResultForBucket resultForBucket = result.get(tb);
+        resultForBucket = result.get(tb);
         assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
         assertThat(resultForBucket.getHighWatermark()).isEqualTo(10L);
         LogRecords records = resultForBucket.records();

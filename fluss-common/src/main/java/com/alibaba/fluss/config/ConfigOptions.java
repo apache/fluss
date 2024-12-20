@@ -385,6 +385,14 @@ public class ConfigOptions {
                             "The purge number (in number of requests) of the write operation manager, "
                                     + "the default value is 1000.");
 
+    public static final ConfigOption<Integer> LOG_REPLICA_FETCH_LOG_OPERATION_PURGE_NUMBER =
+            key("log.replica.fetch-log-operation-purge-number")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "The purge number (in number of requests) of the fetch log operation manager, "
+                                    + "the default value is 1000.");
+
     public static final ConfigOption<Integer> LOG_REPLICA_FETCHER_NUMBER =
             key("log.replica.fetcher-number")
                     .intType()
@@ -422,6 +430,27 @@ public class ConfigOptions {
                             "The maximum amount of data the server should return for a table bucket in fetch request. "
                                     + "Records are fetched in batches for consumer or follower, for one request batch, "
                                     + "the max bytes size is config by this option.");
+
+    public static final ConfigOption<Duration> LOG_FETCH_WAIT_MAX_TIME =
+            key("log.fetch.wait-max-time")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(500))
+                    .withDescription(
+                            "The maximum time to wait for enough bytes to be available for a fetch log response "
+                                    + "(including fetch log request from the follower or client). "
+                                    + "This value should always be less than the "
+                                    + "'log.replica.max-lag-time' at all times to prevent frequent shrinking of ISR for "
+                                    + "low throughput tables");
+
+    public static final ConfigOption<MemorySize> LOG_FETCH_MIN_BYTES =
+            key("log.fetch.min-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1b"))
+                    .withDescription(
+                            "The minimum bytes expected for each fetch log response (including fetch "
+                                    + "log request from the follower or client). If not enough bytes, wait up to "
+                                    + LOG_FETCH_WAIT_MAX_TIME.key()
+                                    + " time to return.");
 
     public static final ConfigOption<Integer> LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER =
             key("log.replica.min-in-sync-replicas-number")

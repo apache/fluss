@@ -427,6 +427,7 @@ public class ReplicaTestBase {
                                         conf.getString(ConfigOptions.DATA_DIR),
                                         HIGH_WATERMARK_CHECKPOINT_FILE_NAME))),
                 replicaManager.getDelayedWriteManager(),
+                replicaManager.getDelayedFetchLogManager(),
                 replicaManager.getAdjustIsrManager(),
                 snapshotContext,
                 serverMetadataCache,

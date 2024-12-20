@@ -112,6 +112,8 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     @Override
     public void doWork() {
         maybeFetch();
+        // TODO, if we support fetch from follower, we need to complete delayed fetch log operation
+        // here.
     }
 
     private void maybeFetch() {

@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.log;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.record.FileLogProjection;
+import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -28,6 +29,21 @@ import java.util.Objects;
 public final class FetchParams {
     /** Value -2L means we will fetch from log start offset. */
     public static final long FETCH_FROM_EARLIEST_OFFSET = -2L;
+
+    /**
+     * Default min fetch bytes, which means the fetch request will be satisfied even if no bytes
+     * fetched.
+     */
+    public static final int DEFAULT_MIN_FETCH_BYTES = -1;
+
+    /** Default max wait ms, which means the fetch request will be satisfied immediately. */
+    public static final long DEFAULT_MAX_WAIT_MS = -1L;
+
+    /**
+     * Default max wait ms when log fetch minBytes set in {@link FetchLogRequest} but maxWaitMs not
+     * set.
+     */
+    public static final long DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE = 100L;
 
     private final int replicaId;
     // Currently, FetchOnlyLeader can be set to false only for test,
@@ -46,20 +62,33 @@ public final class FetchParams {
     // the lazily initialized projection util to read and project file logs
     @Nullable private FileLogProjection fileLogProjection;
 
-    // TODO: add more params like epoch, minBytes etc.
+    private final int minFetchBytes;
+    private final long maxWaitMs;
+    // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
-        this(replicaId, true, maxFetchBytes);
+        this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS);
+    }
+
+    public FetchParams(int replicaId, int maxFetchBytes, int minFetchBytes, long maxWaitMs) {
+        this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs);
     }
 
     @VisibleForTesting
-    public FetchParams(int replicaId, boolean fetchOnlyLeader, int maxFetchBytes) {
+    public FetchParams(
+            int replicaId,
+            boolean fetchOnlyLeader,
+            int maxFetchBytes,
+            int minFetchBytes,
+            long maxWaitMs) {
         this.replicaId = replicaId;
         this.fetchOnlyLeader = fetchOnlyLeader;
         this.maxFetchBytes = maxFetchBytes;
         this.fetchIsolation = FetchIsolation.of(replicaId >= 0);
         this.minOneMessage = true;
         this.fetchOffset = -1;
+        this.minFetchBytes = minFetchBytes;
+        this.maxWaitMs = maxWaitMs;
     }
 
     public void setCurrentFetch(
@@ -118,6 +147,14 @@ public final class FetchParams {
         return maxFetchBytes;
     }
 
+    public int minFetchBytes() {
+        return minFetchBytes;
+    }
+
+    public long maxWaitMs() {
+        return maxWaitMs;
+    }
+
     public int replicaId() {
         return replicaId;
     }
@@ -143,12 +180,15 @@ public final class FetchParams {
             return false;
         }
         FetchParams that = (FetchParams) o;
-        return replicaId == that.replicaId && maxFetchBytes == that.maxFetchBytes;
+        return replicaId == that.replicaId
+                && maxFetchBytes == that.maxFetchBytes
+                && minFetchBytes == that.minFetchBytes
+                && maxWaitMs == that.maxWaitMs;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(replicaId, maxFetchBytes);
+        return Objects.hash(replicaId, maxFetchBytes, minFetchBytes, maxWaitMs);
     }
 
     @Override
@@ -158,6 +198,10 @@ public final class FetchParams {
                 + replicaId
                 + ", maxFetchBytes="
                 + maxFetchBytes
+                + ", minFetchBytes="
+                + minFetchBytes
+                + ", maxWaitMs="
+                + maxWaitMs
                 + ')';
     }
 }

@@ -500,6 +500,20 @@ public final class LogTablet {
         deleteSegments(remoteLogEndOffset);
     }
 
+    /**
+     * Fully materialize and return an offset snapshot including segment position info. This method
+     * will update the LogOffsetMetadata for the high watermark if they are message-only. Throws an
+     * offset out of range error if the segment info cannot be loaded.
+     */
+    public LogOffsetSnapshot fetchOffsetSnapshot() throws IOException {
+        LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata();
+        return new LogOffsetSnapshot(
+                logStartOffset(),
+                localLogStartOffset(),
+                localLog.getLocalLogEndOffsetMetadata(),
+                highWatermark);
+    }
+
     private void deleteSegments(long cleanUpToOffset) {
         // cache to local variables
         long localLogStartOffset = localLog.getLocalLogStartOffset();

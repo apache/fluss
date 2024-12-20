@@ -93,7 +93,7 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     public Optional<FetchLogRequest> buildFetchLogRequest(
             Map<TableBucket, BucketFetchStatus> replicas) {
         return RemoteLeaderEndpoint.buildFetchLogRequest(
-                replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket);
+                replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket, -1, -1);
     }
 
     @Override
