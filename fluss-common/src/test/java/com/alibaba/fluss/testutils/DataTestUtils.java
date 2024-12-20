@@ -25,7 +25,7 @@ import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.DefaultLogRecordBatch;
+import com.alibaba.fluss.record.MemoryLogRecordBatch;
 import com.alibaba.fluss.record.FileLogRecords;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -363,7 +363,7 @@ public class DataTestUtils {
         MemoryLogRecords memoryLogRecords = builder.build();
         memoryLogRecords.ensureValid();
 
-        ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
+        ((MemoryLogRecordBatch) memoryLogRecords.batches().iterator().next())
                 .setCommitTimestamp(maxTimestamp);
         return memoryLogRecords;
     }
@@ -398,7 +398,7 @@ public class DataTestUtils {
             MemoryLogRecords memoryLogRecords =
                     MemoryLogRecords.pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
 
-            ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
+            ((MemoryLogRecordBatch) memoryLogRecords.batches().iterator().next())
                     .setCommitTimestamp(maxTimestamp);
             memoryLogRecords.ensureValid();
             return memoryLogRecords;

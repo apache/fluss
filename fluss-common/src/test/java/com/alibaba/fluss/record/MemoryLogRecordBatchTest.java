@@ -30,8 +30,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link DefaultLogRecordBatch}. */
-public class DefaultLogRecordBatchTest extends LogTestBase {
+/** Test for {@link MemoryLogRecordBatch}. */
+public class MemoryLogRecordBatchTest extends LogTestBase {
 
     @Test
     void testRecordBatchSize() throws Exception {

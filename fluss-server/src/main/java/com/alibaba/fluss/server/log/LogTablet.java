@@ -31,7 +31,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.MeterView;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.record.DefaultLogRecordBatch;
+import com.alibaba.fluss.record.MemoryLogRecordBatch;
 import com.alibaba.fluss.record.FileLogProjection;
 import com.alibaba.fluss.record.FileLogRecords;
 import com.alibaba.fluss.record.LogRecordBatch;
@@ -667,10 +667,10 @@ public final class LogTablet {
             MemoryLogRecords records, long baseLogOffset, long commitTimestamp) {
         long initialOffset = baseLogOffset;
         for (LogRecordBatch batch : records.batches()) {
-            if (batch instanceof DefaultLogRecordBatch) {
-                DefaultLogRecordBatch defaultLogRecordBatch = (DefaultLogRecordBatch) batch;
-                defaultLogRecordBatch.setBaseLogOffset(initialOffset);
-                defaultLogRecordBatch.setCommitTimestamp(commitTimestamp);
+            if (batch instanceof MemoryLogRecordBatch) {
+                MemoryLogRecordBatch memoryLogRecordBatch = (MemoryLogRecordBatch) batch;
+                memoryLogRecordBatch.setBaseLogOffset(initialOffset);
+                memoryLogRecordBatch.setCommitTimestamp(commitTimestamp);
             } else {
                 throw new FlussRuntimeException(
                         "Currently, we only support DefaultLogRecordBatch.");

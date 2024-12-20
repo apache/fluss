@@ -72,9 +72,8 @@ import java.util.NoSuchElementException;
  *
  * @since 0.1
  */
-// TODO rename to MemoryLogRecordBatch
 @PublicEvolving
-public class DefaultLogRecordBatch implements LogRecordBatch {
+public class MemoryLogRecordBatch implements LogRecordBatch {
     protected static final int BASE_OFFSET_LENGTH = 8;
     public static final int LENGTH_LENGTH = 4;
     static final int MAGIC_LENGTH = 1;
@@ -248,7 +247,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             return false;
         }
 
-        DefaultLogRecordBatch that = (DefaultLogRecordBatch) o;
+        MemoryLogRecordBatch that = (MemoryLogRecordBatch) o;
         int sizeInBytes = sizeInBytes();
         return sizeInBytes == that.sizeInBytes()
                 && segment.equalTo(that.segment, position, that.position, sizeInBytes);
@@ -262,7 +261,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private CloseableIterator<LogRecord> rowRecordIterator(RowType rowType, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
-            int position = DefaultLogRecordBatch.this.position + RECORD_BATCH_HEADER_SIZE;
+            int position = MemoryLogRecordBatch.this.position + RECORD_BATCH_HEADER_SIZE;
             int rowId = 0;
 
             @Override

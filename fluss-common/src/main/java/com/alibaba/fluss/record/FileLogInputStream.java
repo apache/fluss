@@ -27,12 +27,12 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.util.Objects;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.MAGIC_LENGTH;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.MAGIC_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.BASE_OFFSET_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LENGTH_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LOG_OVERHEAD;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.MAGIC_LENGTH;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.MAGIC_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -182,7 +182,7 @@ public class FileLogInputStream
         }
 
         private LogRecordBatch toMemoryRecordBatch(ByteBuffer buffer) {
-            DefaultLogRecordBatch records = new DefaultLogRecordBatch();
+            MemoryLogRecordBatch records = new MemoryLogRecordBatch();
             records.pointTo(MemorySegment.wrap(buffer.array()), 0);
             return records;
         }

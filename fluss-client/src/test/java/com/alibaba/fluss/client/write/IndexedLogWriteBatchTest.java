@@ -20,7 +20,7 @@ import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.DefaultLogRecord;
-import com.alibaba.fluss.record.DefaultLogRecordBatch;
+import com.alibaba.fluss.record.MemoryLogRecordBatch;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
@@ -65,7 +65,7 @@ public class IndexedLogWriteBatchTest {
 
         for (int i = 0;
                 i
-                        < (writeLimit - DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE)
+                        < (writeLimit - MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE)
                                 / estimatedSizeInBytes;
                 i++) {
             boolean appendResult =
@@ -89,7 +89,7 @@ public class IndexedLogWriteBatchTest {
         logProducerBatch.close();
         logProducerBatch.serialize();
         BytesView bytesView = logProducerBatch.build();
-        DefaultLogRecordBatch recordBatch = new DefaultLogRecordBatch();
+        MemoryLogRecordBatch recordBatch = new MemoryLogRecordBatch();
         MemorySegmentBytesView firstBytesView = (MemorySegmentBytesView) bytesView;
         recordBatch.pointTo(firstBytesView.getMemorySegment(), firstBytesView.getPosition());
         assertDefaultLogRecordBatchEquals(recordBatch);
@@ -164,7 +164,7 @@ public class IndexedLogWriteBatchTest {
                         new MemorySegmentOutputView(memorySegment)));
     }
 
-    private void assertDefaultLogRecordBatchEquals(DefaultLogRecordBatch recordBatch) {
+    private void assertDefaultLogRecordBatchEquals(MemoryLogRecordBatch recordBatch) {
         assertThat(recordBatch.getRecordCount()).isEqualTo(1);
         assertThat(recordBatch.baseLogOffset()).isEqualTo(0L);
         assertThat(recordBatch.schemaId()).isEqualTo((short) DATA1_TABLE_INFO.getSchemaId());

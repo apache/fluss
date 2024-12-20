@@ -18,8 +18,8 @@ package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.memory.MemorySegment;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LENGTH_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LOG_OVERHEAD;
 
 /**
  * A byte buffer backed log input stream. This class avoids the need to copy records by returning
@@ -43,7 +43,7 @@ class MemorySegmentLogInputStream implements LogInputStream<LogRecordBatch> {
             return null;
         }
 
-        DefaultLogRecordBatch logRecords = new DefaultLogRecordBatch();
+        MemoryLogRecordBatch logRecords = new MemoryLogRecordBatch();
         logRecords.pointTo(memorySegment, currentPosition);
 
         currentPosition += batchSize;
