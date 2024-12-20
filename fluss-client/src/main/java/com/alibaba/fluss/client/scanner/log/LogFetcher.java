@@ -87,7 +87,6 @@ public class LogFetcher implements Closeable {
     private final LogRecordReadContext remoteReadContext;
     @Nullable private final Projection projection;
     private final RpcClient rpcClient;
-    private final Configuration conf;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final boolean isCheckCrcs;
@@ -121,7 +120,6 @@ public class LogFetcher implements Closeable {
         this.projection = projection;
         this.rpcClient = rpcClient;
         this.logScannerStatus = logScannerStatus;
-        this.conf = conf;
         this.maxFetchBytes = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
         this.maxBucketFetchBytes =
                 (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();

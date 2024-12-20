@@ -85,11 +85,10 @@ class JMXServerTest {
 
     /** Test MBean Object. */
     public static class TestObject implements TestObjectMBean {
-        private final int foo = 1;
 
         @Override
         public int getFoo() {
-            return foo;
+            return 1;
         }
     }
 }

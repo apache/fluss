@@ -290,9 +290,7 @@ public class FlinkConversions {
             option = builder.stringType().defaultValue(defaultValue);
         } else if (clazz.equals(MemorySize.class)) {
             // use string type in Flink option instead to make convert back easier
-            option =
-                    builder.stringType()
-                            .defaultValue(((MemorySize) flussOption.defaultValue()).toString());
+            option = builder.stringType().defaultValue(flussOption.defaultValue().toString());
         } else if (clazz.isEnum()) {
             //noinspection unchecked
             option =

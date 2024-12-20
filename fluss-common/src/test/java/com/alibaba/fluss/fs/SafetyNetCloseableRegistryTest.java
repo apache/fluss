@@ -254,7 +254,7 @@ public class SafetyNetCloseableRegistryTest
 
         try {
             new SafetyNetCloseableRegistry(OutOfMemoryReaperThread::new);
-        } catch (OutOfMemoryError error) {
+        } catch (OutOfMemoryError ignored) {
         }
         assertThat(SafetyNetCloseableRegistry.isReaperThreadRunning()).isFalse();
 

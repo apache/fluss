@@ -82,7 +82,7 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
                 .isEqualTo(expected.getRecordCount());
         try (LogRecordReadContext readContext = createReadContext(expected.schemaId());
                 CloseableIterator<LogRecord> actualIter = actual.records(readContext);
-                CloseableIterator<LogRecord> expectIter = expected.records(readContext); ) {
+                CloseableIterator<LogRecord> expectIter = expected.records(readContext)) {
             while (expectIter.hasNext()) {
                 assertThat(actualIter.hasNext()).isTrue();
                 assertThatLogRecord(actualIter.next())

@@ -164,12 +164,13 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 Checkpoint snapshot = Checkpoint.create(db)) {
             snapshot.createCheckpoint(outputDirectory.toString());
         } catch (Exception ex) {
+            Exception exception = ex;
             try {
                 FileUtils.deleteDirectory(outputDirectory);
             } catch (IOException cleanupEx) {
-                ex = ExceptionUtils.firstOrSuppressed(cleanupEx, ex);
+                exception = ExceptionUtils.firstOrSuppressed(cleanupEx, exception);
             }
-            throw ex;
+            throw exception;
         }
     }
 

@@ -175,7 +175,6 @@ public enum Errors {
     INVALID_CONFIG_EXCEPTION(39, "The config is invalid.", InvalidConfigException::new),
     LAKE_STORAGE_NOT_CONFIGURED_EXCEPTION(
             40, "The lake storage is not configured.", LakeStorageNotConfiguredException::new);
-    ;
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

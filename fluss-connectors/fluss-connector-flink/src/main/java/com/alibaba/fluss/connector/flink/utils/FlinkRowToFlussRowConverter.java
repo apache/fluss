@@ -142,7 +142,7 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
             case VARCHAR:
                 return (flinkField) -> {
                     StringData stringData = (StringData) flinkField;
-                    return BinaryString.fromString(stringData.toString());
+                    return BinaryString.fromBytes(stringData.toBytes());
                 };
             case DECIMAL:
                 return (flinkField) -> {

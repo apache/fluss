@@ -1,0 +1,16 @@
+{
+  "short_name": "Fluss",
+  "name": "Fluss: Streaming Storage for Real-Time Analytics",
+  "description": "Streaming Storage for Real-Time Analytics",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "img/logo.svg",
+      "sizes": "512x512"
+    }
+  ]
+}

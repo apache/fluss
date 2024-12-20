@@ -93,7 +93,7 @@ class HadoopDataInputStreamTest {
             implements Seekable, PositionedReadable {
         private final byte[] buffer;
         private int position;
-        private int count;
+        private final int count;
 
         public SeekableByteArrayInputStream(byte[] buffer) {
             this.buffer = buffer;

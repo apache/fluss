@@ -48,7 +48,7 @@ public class PaimonBucketAssigner {
         this.flussRowWrapper = new FlussRowWrapper();
     }
 
-    private static int[] getBucketKeyIndex(RowType rowType, List<String> bucketKey) {
+    private int[] getBucketKeyIndex(RowType rowType, List<String> bucketKey) {
         int[] bucketKeyIndex = new int[bucketKey.size()];
         for (int i = 0; i < bucketKey.size(); i++) {
             bucketKeyIndex[i] = rowType.getFieldIndex(bucketKey.get(i));

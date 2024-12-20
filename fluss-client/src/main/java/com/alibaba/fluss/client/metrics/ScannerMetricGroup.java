@@ -37,7 +37,8 @@ import static com.alibaba.fluss.metrics.utils.MetricGroupUtils.makeScope;
 /** The metric group for scanner, including {@link LogScanner} and {@link SnapshotScanner}. */
 @Internal
 public class ScannerMetricGroup extends AbstractMetricGroup {
-    private static final String name = "scanner";
+
+    private static final String NAME = "scanner";
     private static final int WINDOW_SIZE = 1024;
 
     private final TablePath tablePath;
@@ -57,7 +58,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     private volatile long pollStartMs;
 
     public ScannerMetricGroup(ClientMetricGroup parent, TablePath tablePath) {
-        super(parent.getMetricRegistry(), makeScope(parent, name), parent);
+        super(parent.getMetricRegistry(), makeScope(parent, NAME), parent);
         this.tablePath = tablePath;
 
         fetchRequestCount = new ThreadSafeSimpleCounter();
@@ -122,7 +123,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return NAME;
     }
 
     @Override

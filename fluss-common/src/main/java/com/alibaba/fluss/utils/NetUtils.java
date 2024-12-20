@@ -184,7 +184,7 @@ public class NetUtils {
             int dashIdx = range.indexOf('-');
             if (dashIdx == -1) {
                 // only one port in range:
-                final int port = Integer.valueOf(range);
+                final int port = Integer.parseInt(range);
                 if (!isValidHostPort(port)) {
                     throw new IllegalConfigurationException(
                             "Invalid port configuration. Port must be between 0"
@@ -195,7 +195,7 @@ public class NetUtils {
                 rangeIterator = Collections.singleton(Integer.valueOf(range)).iterator();
             } else {
                 // evaluate range
-                final int start = Integer.valueOf(range.substring(0, dashIdx));
+                final int start = Integer.parseInt(range.substring(0, dashIdx));
                 if (!isValidHostPort(start)) {
                     throw new IllegalConfigurationException(
                             "Invalid port configuration. Port must be between 0"
@@ -203,7 +203,7 @@ public class NetUtils {
                                     + start
                                     + ".");
                 }
-                final int end = Integer.valueOf(range.substring(dashIdx + 1, range.length()));
+                final int end = Integer.parseInt(range.substring(dashIdx + 1));
                 if (!isValidHostPort(end)) {
                     throw new IllegalConfigurationException(
                             "Invalid port configuration. Port must be between 0"
