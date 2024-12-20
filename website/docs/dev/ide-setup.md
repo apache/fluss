@@ -77,7 +77,7 @@ adding a Copyright profile:
 Go to "Settings" → "Plugins" and select the "Marketplace" tab. Search for the following plugins,
 install them, and restart the IDE if prompted:
 
-* [Save Actions](https://plugins.jetbrains.com/plugin/7642-save-actions)
+* [Save Actions X](https://plugins.jetbrains.com/plugin/22113-save-actions-x)
 * [Checkstyle-IDEA](https://plugins.jetbrains.com/plugin/1065-checkstyle-idea)
 
 You will also need to install the [google-java-format](https://github.com/google/google-java-format)
