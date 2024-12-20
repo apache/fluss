@@ -99,16 +99,16 @@ It is recommended to automatically format your code by applying the following se
 1. Go to "Settings" → "Other Settings" → "google-java-format Settings".
 2. Tick the checkbox to enable the plugin.
 3. Change the code style to "Android Open Source Project (AOSP) style".
-6. Go to "Settings" → "Tools" → "Actions on Save".
-7. Under "Formatting Actions", select "Optimize imports" and "Reformat code".
-8. From the "All file types list" next to "Reformat code", select Java and Scala.
+4. Go to "Settings" → "Tools" → "Actions on Save".
+5. Under "Formatting Actions", select "Optimize imports" and "Reformat code".
+6. From the "All file types list" next to "Reformat code", select Java and Scala.
 
 For earlier IntelliJ IDEA versions:
 
-1. Go to "Settings" → "Other Settings" → "Save Actions".
-2. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
-3. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
-4. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
+4. Go to "Settings" → "Other Settings" → "Save Actions".
+5. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
+6. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
+7. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
 
 You can also format the whole project via Maven by using `mvn spotless:apply`.
 
