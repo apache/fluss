@@ -164,9 +164,9 @@ public class FlinkTableSink
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
                         ? new FlinkSink.UpsertSinkWriterBuilder(
-                                tablePath, flussConfig, tableRowType, targetColumnIndexes, ignoreDelete)
-                        : new FlinkSink.AppendSinkSinkWriterBuilder(
-                                tablePath, flussConfig, tableRowType, ignoreDelete);
+                        tablePath, flussConfig, tableRowType, targetColumnIndexes, ignoreDelete)
+                        : new FlinkSink.AppendSinkWriterBuilder(
+                        tablePath, flussConfig, tableRowType, ignoreDelete);
 
         FlinkSink flinkSink = new FlinkSink(flinkSinkWriterBuilder);
 
