@@ -119,7 +119,7 @@ You can also format the whole project via Maven by using `mvn spotless:apply`.
 
 1. Go to "Settings" → "Tools" → "Checkstyle".
 2. Set "Scan Scope" to "Only Java sources (including tests)".
-3. For "Checkstyle Version" select "10.18.2".
+3. For "Checkstyle Version" select "9.6".
 4. Under "Configuration File" click the "+" icon to add a new configuration.
 5. Set "Description" to "Fluss".
 6. Select "Use a local Checkstyle file" and point it to `tools/maven/checkstyle.xml` located within
