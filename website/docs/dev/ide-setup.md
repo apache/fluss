@@ -105,10 +105,10 @@ It is recommended to automatically format your code by applying the following se
 
 For earlier IntelliJ IDEA versions:
 
-6. Go to "Settings" → "Other Settings" → "Save Actions".
-7. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
-8. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
-9. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
+1. Go to "Settings" → "Other Settings" → "Save Actions".
+2. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
+3. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
+4. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
 
 You can also format the whole project via Maven by using `mvn spotless:apply`.
 
