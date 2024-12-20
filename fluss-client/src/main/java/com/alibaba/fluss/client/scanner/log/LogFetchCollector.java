@@ -249,35 +249,39 @@ public class LogFetchCollector {
         TableBucket tb = completedFetch.tableBucket;
         long fetchOffset = completedFetch.nextFetchOffset();
 
-        if (error == Errors.NOT_LEADER_OR_FOLLOWER
-                || error == Errors.LOG_STORAGE_EXCEPTION
-                || error == Errors.KV_STORAGE_EXCEPTION
-                || error == Errors.STORAGE_EXCEPTION
-                || error == Errors.FENCED_LEADER_EPOCH_EXCEPTION) {
-            LOG.debug(
-                    "Error in fetch for bucket {}: {}:{}", tb, error.exceptionName(), errorMessage);
+        boolean updateMetadata = false;
+
+        switch (error) {
+            case NOT_LEADER_OR_FOLLOWER:
+            case LOG_STORAGE_EXCEPTION:
+            case KV_STORAGE_EXCEPTION:
+            case STORAGE_EXCEPTION:
+            case FENCED_LEADER_EPOCH_EXCEPTION:
+                LOG.debug("Error in fetch for bucket {}: {}:{}", tb, error.exceptionName(), errorMessage);
+                updateMetadata = true;
+                break;
+            case UNKNOWN_TABLE_OR_BUCKET_EXCEPTION:
+                LOG.warn("Received unknown table or bucket error in fetch for bucket {}", tb);
+                updateMetadata = true;
+                break;
+            case LOG_OFFSET_OUT_OF_RANGE_EXCEPTION:
+                throw new LogOffsetOutOfRangeException(errorMessage);
+            case UNKNOWN_SERVER_ERROR:
+                LOG.warn("Unknown server error while fetching offset {} for bucket {}: {}", fetchOffset, tb,
+                        errorMessage);
+                break;
+            case CORRUPT_MESSAGE:
+                throw new FetchException(
+                        String.format("Encountered corrupt message when fetching offset %s for bucket %s: %s",
+                                fetchOffset, tb, errorMessage));
+            default:
+                throw new FetchException(
+                        String.format("Unexpected error code %s while fetching at offset %s from bucket %s: %s",
+                                error, fetchOffset, tb, errorMessage));
+        }
+
+        if (updateMetadata) {
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
-        } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
-            LOG.warn("Received unknown table or bucket error in fetch for bucket {}", tb);
-            metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
-        } else if (error == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION) {
-            throw new LogOffsetOutOfRangeException(errorMessage);
-        } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
-            LOG.warn(
-                    "Unknown server error while fetching offset {} for bucket {}: {}",
-                    fetchOffset,
-                    tb,
-                    errorMessage);
-        } else if (error == Errors.CORRUPT_MESSAGE) {
-            throw new FetchException(
-                    String.format(
-                            "Encountered corrupt message when fetching offset %s for bucket %s: %s",
-                            fetchOffset, tb, errorMessage));
-        } else {
-            throw new FetchException(
-                    String.format(
-                            "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
-                            error, fetchOffset, tb, errorMessage));
         }
     }
 }
