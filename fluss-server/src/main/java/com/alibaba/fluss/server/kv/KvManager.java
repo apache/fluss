@@ -19,6 +19,10 @@ package com.alibaba.fluss.server.kv;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.KvStorageException;
+import com.alibaba.fluss.exception.RemoteStorageException;
+import com.alibaba.fluss.fs.FileStatus;
+import com.alibaba.fluss.fs.FileSystem;
+import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.KvFormat;
@@ -74,6 +78,10 @@ public final class KvManager extends TabletManagerBase {
     /** The memory segment pool to allocate memorySegment. */
     private final MemorySegmentPool memorySegmentPool;
 
+    private final FsPath remoteKvDir;
+
+    private FileSystem remoteFileSystem;
+
     private KvManager(
             File dataDir,
             Configuration conf,
@@ -85,6 +93,12 @@ public final class KvManager extends TabletManagerBase {
         this.arrowBufferAllocator = new RootAllocator(Long.MAX_VALUE);
         this.memorySegmentPool = LazyMemorySegmentPool.create(conf);
         this.zkClient = zkClient;
+        this.remoteKvDir = FlussPaths.remoteKvDir(conf);
+        try {
+            this.remoteFileSystem = remoteKvDir.getFileSystem();
+        } catch (Exception e) {
+            LOG.error("Can not find matched file system from dir {}", this.remoteKvDir);
+        }
     }
 
     public static KvManager create(
@@ -187,7 +201,8 @@ public final class KvManager extends TabletManagerBase {
         return Optional.ofNullable(currentKvs.get(tableBucket));
     }
 
-    public void dropKv(TableBucket tableBucket) {
+    public void dropKv(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, boolean deleteRemote) {
         KvTablet dropKvTablet =
                 inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
 
@@ -195,6 +210,9 @@ public final class KvManager extends TabletManagerBase {
             TablePath tablePath = dropKvTablet.getTablePath();
             try {
                 dropKvTablet.drop();
+                if (deleteRemote) {
+                    dropRemoteKvSnapshot(physicalTablePath, tableBucket);
+                }
                 if (dropKvTablet.getPartitionName() == null) {
                     LOG.info(
                             "Deleted kv bucket {} for table {} in file path {}.",
@@ -269,5 +287,42 @@ public final class KvManager extends TabletManagerBase {
         }
         this.currentKvs.put(tableBucket, kvTablet);
         return kvTablet;
+    }
+
+    private void dropRemoteKvSnapshot(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+            throws RemoteStorageException {
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
+        FsPath remoteKvTableRootDir =
+                FlussPaths.remoteKvTableRootDir(remoteKvDir, physicalTablePath, tableBucket);
+        try {
+            if (remoteFileSystem.exists(remoteKvTabletDir)) {
+                remoteFileSystem.delete(remoteKvTabletDir, true);
+                LOG.info("Delete remote table bucket snapshot of {} success.", tableBucket);
+            }
+        } catch (Exception e) {
+            throw new RemoteStorageException(
+                    "Failed to delete remote kv tablet path:" + remoteKvTabletDir, e);
+        }
+        deleteEmptyParentRecursively(
+                remoteKvTabletDir.getParent(), remoteKvTableRootDir.getParent());
+    }
+
+    private void deleteEmptyParentRecursively(FsPath curDir, FsPath tableRootParentDir) {
+        if (!tableRootParentDir.getPath().equalsIgnoreCase(curDir.getPath())) {
+            try {
+                FileStatus[] fileStatuses = remoteFileSystem.listStatus(curDir);
+                if (fileStatuses != null && fileStatuses.length == 0) {
+                    boolean deleted = remoteFileSystem.delete(curDir, false);
+                    if (deleted) {
+                        deleteEmptyParentRecursively(curDir.getParent(), tableRootParentDir);
+                    }
+                }
+            } catch (Exception e) {
+                LOG.warn(
+                        "Failed to delete remote kv tablet path: {}, may this paths has been deleted",
+                        curDir);
+            }
+        }
     }
 }
