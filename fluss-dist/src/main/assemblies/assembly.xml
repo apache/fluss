@@ -1,0 +1,157 @@
+<!--
+ Copyright (c) 2024 Alibaba Group Holding Ltd.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+<assembly>
+    <id>dist</id>
+    <formats>
+        <format>dir</format>
+        <format>tar.gz</format>
+    </formats>
+
+    <includeBaseDirectory>true</includeBaseDirectory>
+    <baseDirectory>fluss-${project.version}-bin</baseDirectory>
+
+    <dependencySets>
+        <dependencySet>
+            <outputDirectory>lib</outputDirectory>
+            <unpack>false</unpack>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useProjectAttachments>false</useProjectAttachments>
+            <useTransitiveDependencies>true</useTransitiveDependencies>
+            <useTransitiveFiltering>true</useTransitiveFiltering>
+
+            <includes>
+                <include>org.apache.logging.log4j:log4j-api</include>
+                <include>org.apache.logging.log4j:log4j-core</include>
+                <include>org.apache.logging.log4j:log4j-slf4j-impl</include>
+                <include>org.apache.logging.log4j:log4j-1.2-api</include>
+            </includes>
+        </dependencySet>
+    </dependencySets>
+
+    <files>
+        <!-- copy license -->
+        <file>
+            <source>../LICENSE</source>
+            <outputDirectory/>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- copy notice -->
+        <file>
+            <source>../NOTICE</source>
+            <outputDirectory/>
+            <fileMode>0644</fileMode>
+        </file>
+
+
+        <!-- lib -->
+        <file>
+            <source>../fluss-server/target/fluss-server-${project.version}.jar</source>
+            <outputDirectory>lib</outputDirectory>
+            <destName>fluss-server-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- opt -->
+        <file>
+            <source>../fluss-lakehouse/fluss-lakehouse-cli/target/fluss-lakehouse-cli-${project.version}.jar</source>
+            <outputDirectory>opt</outputDirectory>
+            <destName>fluss-lakehouse-cli-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>../fluss-lakehouse/fluss-lakehouse-paimon/target/fluss-lakehouse-paimon-${project.version}.jar
+            </source>
+            <outputDirectory>opt</outputDirectory>
+            <destName>fluss-lakehouse-paimon-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- filesystem -->
+        <!-- output directory should correspond to the file system *schema* name, i.e., plugins/<schema>/  -->
+        <file>
+            <source>
+                ../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar
+            </source>
+            <outputDirectory>plugins/hdfs/</outputDirectory>
+            <destName>fluss-fs-hadoop-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>../fluss-filesystems/fluss-fs-oss/target/fluss-fs-oss-${project.version}.jar</source>
+            <outputDirectory>plugins/oss/</outputDirectory>
+            <destName>fluss-fs-oss-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>../fluss-filesystems/fluss-fs-s3/target/fluss-fs-s3-${project.version}.jar</source>
+            <outputDirectory>plugins/s3/</outputDirectory>
+            <destName>fluss-fs-s3-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- metrics -->
+        <file>
+            <source>../fluss-metrics/fluss-metrics-prometheus/target/fluss-metrics-prometheus-${project.version}.jar
+            </source>
+            <outputDirectory>plugins/prometheus/</outputDirectory>
+            <destName>fluss-metrics-prometheus-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>../fluss-metrics/fluss-metrics-jmx/target/fluss-metrics-jmx-${project.version}.jar</source>
+            <outputDirectory>plugins/jmx/</outputDirectory>
+            <destName>fluss-metrics-jmx-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>src/main/resources/server.yaml</source>
+            <outputDirectory>conf</outputDirectory>
+            <fileMode>0644</fileMode>
+        </file>
+    </files>
+
+    <fileSets>
+        <!-- copy bin -->
+        <fileSet>
+            <directory>src/main/resources/bin</directory>
+            <outputDirectory>bin</outputDirectory>
+            <fileMode>0755</fileMode>
+        </fileSet>
+
+        <!-- copy conf -->
+        <fileSet>
+            <directory>src/main/resources/conf</directory>
+            <outputDirectory>conf</outputDirectory>
+            <fileMode>0644</fileMode>
+        </fileSet>
+
+        <!-- empty log -->
+        <fileSet>
+            <directory>src/main/resources/</directory>
+            <outputDirectory>log</outputDirectory>
+            <fileMode>0644</fileMode>
+            <excludes>
+                <exclude>**/*</exclude>
+            </excludes>
+        </fileSet>
+    </fileSets>
+</assembly>
