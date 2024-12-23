@@ -214,16 +214,11 @@ docker exec -it jobmanager ./sql-client
 2. Use the commands below to verify that the cluster works.
 
 ```sql title="Flink SQL"
-CREATE CATALOG my_fluss WITH (
+CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
-
-```sql title="Flink SQL"
-USE CATALOG my_fluss;
-```
-
 
 Congratulations! You have successfully deployed Fluss with `docker run`. 
 Check out [this section](#whats-next) for potential next steps.
@@ -539,14 +534,10 @@ docker compose exec jobmanager ./sql-client
 2. Use the commands below to verify that the cluster works.
 
 ```sql title="Flink SQL"
-CREATE CATALOG my_fluss WITH (
+CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
-```
-
-```sql title="Flink SQL"
-USE CATALOG my_fluss;
 ```
 
 Congratulations! You have successfully deployed Fluss with `docker compose`.
