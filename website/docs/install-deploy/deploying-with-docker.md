@@ -213,14 +213,14 @@ docker exec -it jobmanager ./sql-client
 
 2. Use the commands below to verify that the cluster works.
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG my_fluss WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 USE CATALOG my_fluss;
 ```
 
@@ -538,14 +538,14 @@ docker compose exec jobmanager ./sql-client
 
 2. Use the commands below to verify that the cluster works.
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG my_fluss WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 USE CATALOG my_fluss;
 ```
 
