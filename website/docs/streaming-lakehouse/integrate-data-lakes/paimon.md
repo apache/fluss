@@ -34,10 +34,12 @@ SQL shows how to do that:
 
 ```sql title="Flink SQL"
 -- assume we have a table named `orders`
-
 -- read from paimon
 SELECT COUNT(*) FROM orders$lake;
+```
 
+```sql title="Flink SQL"
+-- assume we have a table named `orders`
 -- we can also query the system tables 
 SELECT * FROM orders$lake$snapshots;
 ```
@@ -79,7 +81,9 @@ Then, you can query the `orders` table by StarRocks:
 ```sql title="StarRocks SQL"
 -- the table is in database `fluss`
 SELECT COUNT(*) FROM paimon_catalog.fluss.orders;
+```
 
+```sql title="StarRocks SQL"
 -- query the system tables, to know the snapshots of the table
 SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 ```

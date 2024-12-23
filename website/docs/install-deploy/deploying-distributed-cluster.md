@@ -128,14 +128,14 @@ You can start a Flink standalone cluster refer to [Flink Environment Preparation
 #### Add catalog
 
 In Flink SQL client, a catalog is created and named by executing the following query:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type'='fluss',
   'bootstrap.servers' = '192.168.10.1:9123'
 );
 ```
 
-#### Do more with Fluss
+#### What's next?
 
-After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting Started](/docs/engine-flink/getting-started/).
+After the catalog is created, you can use Flink and the Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
+For more details, please refer to [Getting Started with Flink Engine](/docs/engine-flink/getting-started/) (you can skip the first steps and start [here](/docs/engine-flink/getting-started/#creating-a-table)).

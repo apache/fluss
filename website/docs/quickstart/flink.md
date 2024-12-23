@@ -120,7 +120,7 @@ This command automatically starts all the containers defined in the Docker Compo
 
 Run 
 ```shell
-docker ps
+docker container ls
 ```
 to check whether all containers are running properly.
 
@@ -143,35 +143,35 @@ docker compose exec jobmanager ./sql-client
 To simplify this guide, three temporary tables have been pre-created with `faker` connector to generate data.
 You can view their schemas by running the following commands:
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 SHOW CREATE TABLE source_customer;
 ```
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 SHOW CREATE TABLE source_order;
 ```
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 SHOW CREATE TABLE source_nation;
 ```
 
 ## Create Fluss Tables
 ### Create Fluss Catalog
 Use the following SQL to create a Fluss catalog:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG my_fluss WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 USE CATALOG my_fluss;
 ```
 
 ### Create Tables
 Running the following SQL to create Fluss tables to be used in this guide:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE TABLE fluss_order (
     `order_key` BIGINT,
     `cust_key` INT NOT NULL,
@@ -184,7 +184,7 @@ CREATE TABLE fluss_order (
 );
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE TABLE fluss_customer (
     `cust_key` INT NOT NULL,
     `name` STRING,
@@ -196,7 +196,7 @@ CREATE TABLE fluss_customer (
 );
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE TABLE `fluss_nation` (
   `nation_key` INT NOT NULL,
   `name`       STRING,
@@ -204,7 +204,7 @@ CREATE TABLE `fluss_nation` (
 );
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE TABLE enriched_orders (
     `order_key` BIGINT,
     `cust_key` INT NOT NULL,
@@ -224,7 +224,7 @@ CREATE TABLE enriched_orders (
 ## Streaming into Fluss
 
 First, run the following SQL to sync data from source tables to Fluss tables:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 EXECUTE STATEMENT SET
 BEGIN
     INSERT INTO fluss_nation SELECT * FROM `default_catalog`.`default_database`.source_nation;
@@ -236,7 +236,7 @@ END;
 Fluss primary-key tables support high QPS point lookup queries on primary keys. Performing a [lookup join](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/joins/#lookup-join) is really efficient and you can use it to enrich
 the `fluss_orders` table with information from the `fluss_customer` and `fluss_nation` primary-key tables.
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 INSERT INTO enriched_orders
 SELECT o.order_key, 
        o.cust_key, 
@@ -261,17 +261,17 @@ LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
 You can now perform real-time analytics directly on Fluss tables. 
 For instance, to calculate the number of orders placed by a specific customer, you can execute the following SQL query to obtain instant, real-time results.
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- use tableau result mode
 SET 'sql-client.execution.result-mode' = 'tableau';
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- use limit to query the enriched_orders table
 SELECT * FROM enriched_orders LIMIT 2;
 ```
@@ -287,7 +287,7 @@ SELECT * FROM enriched_orders LIMIT 2;
 ```
 If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`. 
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- lookup by primary key
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
@@ -305,12 +305,12 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 
 You can use `UPDATE` and `DELETE` statements to update/delete rows on Fluss tables.
 ### Update
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- update by primary key
 UPDATE fluss_customer SET `name` = 'fluss_updated' WHERE `cust_key` = 1;
 ```
 Then you can `lookup` the specific row:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 **Sample Output**
@@ -324,11 +324,11 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 Notice that the `name` column has been updated to `fluss_updated`.
 
 ### Delete
-```sql title="Flink SQL Client
+```sql title="Flink SQL"
 DELETE FROM fluss_customer WHERE `cust_key` = 1;
 ```
 The following SQL query should return an empty result.
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
@@ -347,7 +347,7 @@ By default, tables are created with data lake integration disabled, meaning the 
 
 To enable lakehouse functionality as a tiered storage solution for a table, you must create the table with the configuration option `table.datalake.enabled = true`. 
 Return to the `SQL client` and execute the following SQL statement to create a table with data lake integration enabled:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE TABLE datalake_enriched_orders (
     `order_key` BIGINT,
     `cust_key` INT NOT NULL,
@@ -365,12 +365,12 @@ CREATE TABLE datalake_enriched_orders (
 ```
 
 Next, perform streaming data writing into the **datalake-enabled** table, `datalake_enriched_orders`:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- switch to streaming mode
 SET 'execution.runtime-mode' = 'streaming';
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- insert tuples into datalake_enriched_orders
 INSERT INTO datalake_enriched_orders
 SELECT o.order_key,
@@ -401,12 +401,12 @@ If you wish to query only the data stored in Paimon—offering high-performance 
 This approach also enables all the optimizations and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$lake$snapshots`.
 
 To query the snapshots directly from Paimon, use the following SQL:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';
 ```
 
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- query snapshots in paimon
 SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapshots;
 ```
@@ -422,7 +422,7 @@ SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapsh
 **Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
 
 Run the following SQL to do analytics on Paimon data:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- to sum prices of all orders in paimon
 SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
 ```
@@ -436,7 +436,7 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
 ```
 
 To achieve results with sub-second data freshness, you can query the table directly, which seamlessly unifies data from both Fluss and Paimon:
-```sql  title="Flink SQL Client"
+```sql title="Flink SQL"
 -- to sum prices of all orders in fluss and paimon
 SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 ```

@@ -7,12 +7,14 @@ sidebar_position: 2
 
 ## Create Catalog
 Fluss supports creating and managing tables through the Fluss Catalog.
-```sql 
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
   'bootstrap.servers' = 'fluss-server-1:9123'
 );
+```
 
+```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
 ```
 The following properties can be set if using the Fluss catalog:
@@ -29,8 +31,11 @@ The following introduced statements assuming the the current catalog is switched
 
 By default, FlussCatalog will use the `fluss` database in Flink. Using the following example to create a separate database in order to avoid creating tables under the default `fluss` database:
 
-```sql
+```sql title="Flink SQL"
 CREATE DATABASE my_db;
+```
+
+```sql title="Flink SQL"
 USE my_db;
 ```
 
@@ -38,9 +43,12 @@ USE my_db;
 
 To delete a database, this will drop all the tables in the database as well:
 
-```sql
+```sql title="Flink SQL"
 -- Flink doesn't allow drop current database, switch to Fluss default database
 USE fluss;
+```
+
+```sql title="Flink SQL"
 -- drop the database
 DROP DATABASE my_db;
 ```
@@ -50,7 +58,7 @@ DROP DATABASE my_db;
 ### PrimaryKey Table
 
 The following SQL statement will create a [PrimaryKey Table](table-design/table-types/pk-table.md) with a primary key consisting of shop_id and user_id.
-```sql 
+```sql title="Flink SQL"
 CREATE TABLE my_pk_table (
   shop_id BIGINT,
   user_id BIGINT,
@@ -66,7 +74,7 @@ CREATE TABLE my_pk_table (
 
 The following SQL statement creates a [Log Table](table-design/table-types/log-table.md) by not specifying primary key clause.
 
-```sql 
+```sql title="Flink SQL"
 CREATE TABLE my_log_table (
   order_id BIGINT,
   item_id BIGINT,
@@ -86,7 +94,7 @@ Currently, Fluss only supports one partitioned field with `STRING` type.
 Currently, partitioned table must enable auto partition and set auto partition time unit.
 :::
 
-```sql 
+```sql title="Flink SQL"
 CREATE TABLE my_part_pk_table (
   dt STRING,
   shop_id BIGINT,
@@ -103,7 +111,7 @@ CREATE TABLE my_part_pk_table (
 
 The following SQL statement creates a Partitioned Log Table in Fluss.
 
-```sql
+```sql title="Flink SQL"
 CREATE TABLE my_part_log_table (
   order_id BIGINT,
   item_id BIGINT,
@@ -131,7 +139,7 @@ The supported option in "with" parameters when creating a table are as follows:
 
 To create a table with the same schema, partitioning, and table properties as another table, use `CREATE TABLE LIKE`.
 
-```sql
+```sql title="Flink SQL"
 -- there is a temporary datagen table
 CREATE TEMPORARY TABLE datagen (
     user_id BIGINT,
@@ -143,7 +151,9 @@ CREATE TEMPORARY TABLE datagen (
     'connector' = 'datagen',
     'rows-per-second' = '10'
 );
+```
 
+```sql title="Flink SQL"
 -- creates Fluss table which derives the metadata from the temporary table excluding options
 CREATE TABLE my_table LIKE datagen (EXCLUDING OPTIONS);
 ```
@@ -154,7 +164,7 @@ For more details, refer to the [Flink CREATE TABLE](https://nightlies.apache.org
 
 To delete a table, run:
 
-```sql
+```sql title="Flink SQL"
 DROP TABLE my_table;
 ```
 
