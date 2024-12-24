@@ -8,7 +8,7 @@ sidebar_position: 1
 
 Lakehouse represents a new, open architecture that combines the best elements of data lakes and data warehouses. 
 It combines data lake scalability and cost-effectiveness with data warehouse reliability and performance. 
-The well known data lake format such like [Apache Iceberg](https://iceberg.apache.org/), [Apache Paimon](https://paimon.apache.org/), [Apache Hudi](https://hudi.apache.org/) and [Delta Lake](https://delta.io/) play key roles in the Lakehouse architecture,
+The well-known data lake format such like [Apache Iceberg](https://iceberg.apache.org/), [Apache Paimon](https://paimon.apache.org/), [Apache Hudi](https://hudi.apache.org/) and [Delta Lake](https://delta.io/) play key roles in the Lakehouse architecture,
 facilitating a harmonious balance between data storage, reliability, and analytical capabilities within a single, unified platform.
 
 Lakehouse, as a modern architecture, is effective in addressing the complex needs of data management and analytics.
@@ -17,7 +17,7 @@ With these data lake formats, you will get into a contradictory situation:
 
 1. If you require low latency, then you write and commit frequently, which means many small Parquet files. This becomes inefficient for
 reads which must now deal with masses of small files.
-2. If you require read efficiency, then you accumulate data until you can write to large Parquet files, but this introduces
+2. If you require reading efficiency, then you accumulate data until you can write to large Parquet files, but this introduces
 much higher latency.
 
 Overall, these data lake formats typically achieve data freshness at best within minute-level granularity, even under optimal usage conditions.
