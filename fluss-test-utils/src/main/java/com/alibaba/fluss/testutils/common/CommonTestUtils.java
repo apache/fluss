@@ -31,9 +31,11 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Fail.fail;
 
@@ -136,18 +138,25 @@ public class CommonTestUtils {
         final long maxWaitMs = timeout.toMillis();
         long waitMs = 1L;
         long startTime = System.currentTimeMillis();
+        Map<String, Integer> errMap = new LinkedHashMap<>();
         while (true) {
             try {
                 assertion.execute();
                 return;
             } catch (AssertionError t) {
+                errMap.merge(t.getMessage(), 1, Integer::sum);
                 if (System.currentTimeMillis() - startTime >= maxWaitMs) {
-                    throw t;
+                    throw new AssertionError(
+                            errMap.entrySet().stream()
+                                    .map(
+                                            entry ->
+                                                    String.format(
+                                                            "occurCount:%s, detail:%s",
+                                                            entry.getValue(), entry.getKey()))
+                                    .collect(Collectors.joining("\n")));
                 }
-                LOG.info(
-                        "Attempt failed, sleeping for {} ms, and then retrying. caused by: {}\n",
-                        waitMs,
-                        t.getMessage());
+
+                LOG.info("Attempt failed, sleeping for {} ms, and then retrying.", waitMs);
                 try {
                     //noinspection BusyWait
                     Thread.sleep(waitMs);
