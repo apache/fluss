@@ -27,7 +27,6 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidMetadataException;
 import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -85,8 +84,8 @@ public class LogFetcher implements Closeable {
     private final boolean isPartitioned;
     private final LogRecordReadContext readContext;
     // TODO this context can be merge with readContext. Introduce it only because log remote read
-    // currently can only do project when generate scanRecord instead of doing project while read
-    // bytes from remote file.
+    //  currently can only do project when generate scanRecord instead of doing project while read
+    //  bytes from remote file.
     private final LogRecordReadContext remoteReadContext;
     @Nullable private final Projection projection;
     private final RpcClient rpcClient;
@@ -97,7 +96,6 @@ public class LogFetcher implements Closeable {
     private final LogFetchBuffer logFetchBuffer;
     private final LogFetchCollector logFetchCollector;
     private final RemoteLogDownloader remoteLogDownloader;
-    private final LogFormat logFormat;
 
     @GuardedBy("this")
     private final Set<Integer> nodesWithPendingFetchRequests;
@@ -119,7 +117,6 @@ public class LogFetcher implements Closeable {
             RemoteFileDownloader remoteFileDownloader) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.getTableDescriptor().isPartitioned();
-        this.logFormat = tableInfo.getTableDescriptor().getLogFormat();
         this.readContext = LogRecordReadContext.createReadContext(tableInfo, false, projection);
         this.remoteReadContext =
                 LogRecordReadContext.createReadContext(tableInfo, true, projection);
@@ -317,6 +314,8 @@ public class LogFetcher implements Closeable {
                                                 fetchResultForBucket,
                                                 readContext,
                                                 logScannerStatus,
+                                                // skipping CRC check if projection push downed as
+                                                // the data is pruned
                                                 isCheckCrcs,
                                                 fetchOffset);
                                 logFetchBuffer.add(completedFetch);
@@ -423,7 +422,8 @@ public class LogFetcher implements Closeable {
                                         .setMaxBytes(maxFetchBytes);
                         PbFetchLogReqForTable reqForTable =
                                 new PbFetchLogReqForTable().setTableId(finalTableId);
-                        if (projectionPushDownEnable()) {
+                        if (readContext.isProjectionPushDowned()) {
+                            assert projection != null;
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
                                     .setProjectedFields(projection.getProjectionInOrder());
@@ -447,13 +447,6 @@ public class LogFetcher implements Closeable {
         }
 
         return logScannerStatus.fetchableBuckets(tableBucket -> !exclude.contains(tableBucket));
-    }
-
-    private boolean projectionPushDownEnable() {
-        // Currently, only ARROW log format supports projection push down to server. Other log
-        // formats will do project in client, see DefaultCompletedFetch#toScanRecord() for more
-        // details.
-        return projection != null && logFormat == LogFormat.ARROW;
     }
 
     private Integer getTableBucketLeader(TableBucket tableBucket) {

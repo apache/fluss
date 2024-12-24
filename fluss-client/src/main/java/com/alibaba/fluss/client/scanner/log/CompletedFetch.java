@@ -26,16 +26,12 @@ import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.utils.CloseableIterator;
-import com.alibaba.fluss.utils.Projection;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.annotation.Nullable;
 
 import java.io.Closeable;
 import java.util.ArrayList;
@@ -61,8 +57,7 @@ abstract class CompletedFetch {
     private final Iterator<LogRecordBatch> batches;
     private final LogScannerStatus logScannerStatus;
     protected final LogRecordReadContext readContext;
-    @Nullable protected final Projection projection;
-    protected final InternalRow.FieldGetter[] fieldGetters;
+    protected final InternalRow.FieldGetter[] selectedFieldGetters;
 
     private LogRecordBatch currentBatch;
     private LogRecord lastRecord;
@@ -92,30 +87,20 @@ abstract class CompletedFetch {
         this.readContext = readContext;
         this.isCheckCrcs = isCheckCrcs;
         this.logScannerStatus = logScannerStatus;
-        this.projection = readContext.getProjection();
         this.nextFetchOffset = fetchOffset;
-        this.fieldGetters = readContext.getProjectedFieldGetters();
+        this.selectedFieldGetters = readContext.getSelectedFieldGetters();
     }
 
     // TODO: optimize this to avoid deep copying the record.
     //  refactor #fetchRecords to return an iterator which lazily deserialize
     //  from underlying record stream and arrow buffer.
     ScanRecord toScanRecord(LogRecord record) {
-        GenericRow newRow = new GenericRow(fieldGetters.length);
+        GenericRow newRow = new GenericRow(selectedFieldGetters.length);
         InternalRow internalRow = record.getRow();
-        for (int i = 0; i < fieldGetters.length; i++) {
-            newRow.setField(i, fieldGetters[i].getFieldOrNull(internalRow));
+        for (int i = 0; i < selectedFieldGetters.length; i++) {
+            newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
         }
-        if (projection != null && projection.isReorderingNeeded()) {
-            return new ScanRecord(
-                    record.logOffset(),
-                    record.timestamp(),
-                    record.getRowKind(),
-                    ProjectedRow.from(projection.getReorderingIndexes()).replaceRow(newRow));
-        } else {
-            return new ScanRecord(
-                    record.logOffset(), record.timestamp(), record.getRowKind(), newRow);
-        }
+        return new ScanRecord(record.logOffset(), record.timestamp(), record.getRowKind(), newRow);
     }
 
     boolean isConsumed() {
@@ -243,7 +228,7 @@ abstract class CompletedFetch {
 
     private void maybeEnsureValid(LogRecordBatch batch) {
         if (isCheckCrcs) {
-            if (projection != null) {
+            if (readContext.isProjectionPushDowned()) {
                 LOG.debug("Skipping CRC check for column projected log record batch.");
                 return;
             }

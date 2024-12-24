@@ -84,10 +84,6 @@ public final class RowType extends DataType {
     }
 
     public RowType project(int[] projectFields) {
-        if (projectFields.length == 0) {
-            return this;
-        }
-
         List<DataField> projectedFields = new ArrayList<>();
         for (int projectField : projectFields) {
             projectedFields.add(this.fields.get(projectField));
