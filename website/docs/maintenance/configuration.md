@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Configuration
 
-All configuration can be set in Fluss configuration file `conf/server.yaml`
+All configurations can be set in Fluss configuration file `conf/server.yaml`
 
 The configuration is parsed and evaluated when the Fluss processes are started. 
 Changes to the configuration file require restarting the relevant processes.
