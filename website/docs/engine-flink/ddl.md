@@ -23,7 +23,7 @@ The following properties can be set if using the Fluss catalog:
 | bootstrap.servers | required | (none)  | Comma separated list of Fluss servers.                      |
 | default-database  | optional | fluss   | The default database to use when switching to this catalog. |
 
-The following introduced statements assuming the the current catalog is switched to the Fluss catalog using `USE CATALOG <catalog_name>` statement.
+The following introduced statements assuming the current catalog is switched to the Fluss catalog using `USE CATALOG <catalog_name>` statement.
 
 ## Create Database
 
