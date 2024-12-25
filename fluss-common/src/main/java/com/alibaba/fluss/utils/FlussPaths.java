@@ -587,28 +587,6 @@ public class FlussPaths {
     }
 
     /**
-     * Returns the remote directory path for storing kv snapshot files for a kv table.
-     *
-     * <p>The path contract:
-     *
-     * <pre>
-     * {remoteKvDir}/{databaseName}/{tableName}-{tableId}
-     * </pre>
-     *
-     * @param remoteKvDir the remote kv directory, usually should be "{$remote.data.dir}/kv"
-     */
-    public static FsPath remoteKvTableRootDir(
-            FsPath remoteKvDir, PhysicalTablePath physicalPath, TableBucket tableBucket) {
-        return new FsPath(
-                remoteKvDir,
-                String.format(
-                        "%s/%s-%d",
-                        physicalPath.getDatabaseName(),
-                        physicalPath.getTableName(),
-                        tableBucket.getTableId()));
-    }
-
-    /**
      * Returns the remote directory path for storing kv snapshot exclusive files (manifest and
      * CURRENT files).
      *

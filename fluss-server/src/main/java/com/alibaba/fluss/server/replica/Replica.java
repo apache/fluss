@@ -445,7 +445,7 @@ public final class Replica {
                 leaderIsrUpdateLock,
                 () -> {
                     if (isKvTable()) {
-                        dropKv(true);
+                        dropKv();
                     }
                     // drop log then
                     logManager.dropLog(tableBucket);
@@ -490,7 +490,7 @@ public final class Replica {
             // if it's become new leader, we must
             // first destroy the old kv tablet
             // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
-            dropKv(false);
+            dropKv();
             // now, we can create a new kv tablet
             createKv();
         }
@@ -499,7 +499,7 @@ public final class Replica {
     private void onBecomeNewFollower() {
         if (isKvTable()) {
             // it should be from leader to follower, we need to destroy the kv tablet
-            dropKv(false);
+            dropKv();
         }
     }
 
@@ -519,7 +519,7 @@ public final class Replica {
         startPeriodicKvSnapshot(snapshotUsed.orElse(null));
     }
 
-    private void dropKv(boolean deleteRemote) {
+    private void dropKv() {
         // close any closeable registry for kv
         if (closeableRegistry.unregisterCloseable(closeableRegistryForKv)) {
             IOUtils.closeQuietly(closeableRegistryForKv);
@@ -527,7 +527,7 @@ public final class Replica {
         if (kvTablet != null) {
             // drop the kv tablet
             checkNotNull(kvManager);
-            kvManager.dropKv(physicalPath, tableBucket, deleteRemote);
+            kvManager.dropKv(tableBucket);
             kvTablet = null;
         }
     }

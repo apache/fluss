@@ -217,8 +217,7 @@ final class KvManagerTest {
     void testDropKv(String partitionName) throws Exception {
         initTableBuckets(partitionName);
         KvTablet kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
-        kvManager.dropKv(
-                PhysicalTablePath.of(tablePath1, partitionName), kv1.getTableBucket(), true);
+        kvManager.dropKv(kv1.getTableBucket());
 
         assertThat(kv1.getKvTabletDir()).doesNotExist();
         assertThat(kvManager.getKv(tableBucket1)).isNotPresent();

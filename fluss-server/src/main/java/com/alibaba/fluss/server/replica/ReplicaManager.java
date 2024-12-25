@@ -1239,6 +1239,10 @@ public class ReplicaManager {
             }
 
             remoteLogManager.stopReplica(replicaToDelete, delete && replicaToDelete.isLeader());
+            if (delete) {
+                kvManager.dropRemoteKvSnapshot(
+                        replicaToDelete.getPhysicalTablePath(), replicaToDelete.getTableBucket());
+            }
         }
 
         // If we were the leader, we may have some operations still waiting for completion.
