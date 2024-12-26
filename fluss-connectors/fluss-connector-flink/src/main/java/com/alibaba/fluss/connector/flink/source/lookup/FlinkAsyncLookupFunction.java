@@ -24,6 +24,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.RemainingFilter;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
+import com.alibaba.fluss.connector.flink.utils.FlinkUtils;
 import com.alibaba.fluss.connector.flink.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.metadata.TablePath;
@@ -88,12 +89,17 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        FlinkLookupFunction.filterRowType(flinkRowType, pkIndexes),
+                        FlinkUtils.projectRowType(flinkRowType, pkIndexes),
                         table.getDescriptor().getKvFormat());
+
+        final RowType outputRowType;
+        if (projection == null) {
+            outputRowType = flinkRowType;
+        } else {
+            outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
+        }
         flussRowToFlinkRowConverter =
-                new FlussRowToFlinkRowConverter(
-                        FlinkConversions.toFlussRowType(
-                                FlinkLookupFunction.filterRowType(flinkRowType, projection)));
+                new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
         LOG.info("end open.");
     }
 
@@ -164,8 +170,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                             resultFuture.complete(Collections.emptyList());
                         } else {
                             RowData flinkRow =
-                                    flussRowToFlinkRowConverter.toFlinkRowData(
-                                            ProjectedRow.from(projection).replaceRow(row));
+                                    flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
                             if (remainingFilter != null && !remainingFilter.isMatch(flinkRow)) {
                                 resultFuture.complete(Collections.emptyList());
                             } else {
@@ -174,6 +179,14 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                         }
                     }
                 });
+    }
+
+    private InternalRow maybeProject(InternalRow row) {
+        if (projection == null) {
+            return row;
+        }
+        // should not reuse objects for async operations
+        return ProjectedRow.from(projection).replaceRow(row);
     }
 
     @Override

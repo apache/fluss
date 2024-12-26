@@ -279,7 +279,7 @@ public class FlinkTableSource
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
         LookupNormalizer lookupNormalizer =
                 LookupNormalizer.validateAndCreateLookupNormalizer(
-                        context.getKeys(), primaryKeyIndexes, tableOutputType, projectedFields);
+                        context.getKeys(), primaryKeyIndexes, tableOutputType);
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
                     new FlinkAsyncLookupFunction(

@@ -676,6 +676,17 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
         List<String> expected = Collections.singletonList("+I[3, name33, name3]");
         assertResultsIgnoreOrder(collected, expected, true);
+
+        // project all columns from dim table
+        String dimJoinQuery2 =
+                String.format(
+                        "SELECT a, b FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.a = h.id AND h.name = 'name3'",
+                        dim);
+
+        CloseableIterator<Row> collected2 = tEnv.executeSql(dimJoinQuery2).collect();
+        List<String> expected2 = Collections.singletonList("+I[3, name33]");
+        assertResultsIgnoreOrder(collected2, expected2, true);
     }
 
     /**

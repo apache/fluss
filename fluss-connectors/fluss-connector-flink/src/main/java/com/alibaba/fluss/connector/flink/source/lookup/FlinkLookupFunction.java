@@ -22,16 +22,15 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
+import com.alibaba.fluss.connector.flink.utils.FlinkUtils;
 import com.alibaba.fluss.connector.flink.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
 
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.utils.ProjectedRowData;
 import org.apache.flink.table.functions.FunctionContext;
 import org.apache.flink.table.functions.LookupFunction;
-import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,7 +58,7 @@ public class FlinkLookupFunction extends LookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
-    private transient ProjectedRowData projectedRowData;
+    @Nullable private transient ProjectedRow projectedRow;
 
     public FlinkLookupFunction(
             Configuration flussConfig,
@@ -78,16 +77,6 @@ public class FlinkLookupFunction extends LookupFunction {
         this.projection = projection;
     }
 
-    static RowType filterRowType(RowType rowType, int[] filterIndex) {
-        LogicalType[] types = new LogicalType[filterIndex.length];
-        String[] names = new String[filterIndex.length];
-        for (int i = 0; i < filterIndex.length; i++) {
-            types[i] = rowType.getTypeAt(filterIndex[i]);
-            names[i] = rowType.getFieldNames().get(filterIndex[i]);
-        }
-        return RowType.of(rowType.isNullable(), types, names);
-    }
-
     @Override
     public void open(FunctionContext context) {
         LOG.info("start open ...");
@@ -96,11 +85,21 @@ public class FlinkLookupFunction extends LookupFunction {
         // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        filterRowType(flinkRowType, pkIndexes),
+                        FlinkUtils.projectRowType(flinkRowType, pkIndexes),
                         table.getDescriptor().getKvFormat());
+
+        final RowType outputRowType;
+        if (projection == null) {
+            outputRowType = flinkRowType;
+            projectedRow = null;
+        } else {
+            outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
+            // reuse the projected row
+            projectedRow = ProjectedRow.from(projection);
+        }
         flussRowToFlinkRowConverter =
-                new FlussRowToFlinkRowConverter(
-                        FlinkConversions.toFlussRowType(filterRowType(flinkRowType, projection)));
+                new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
+
         LOG.info("end open.");
     }
 
@@ -125,8 +124,7 @@ public class FlinkLookupFunction extends LookupFunction {
                 InternalRow row = table.lookup(flussKeyRow).get().getRow();
                 if (row != null) {
                     RowData flinkRow =
-                            flussRowToFlinkRowConverter.toFlinkRowData(
-                                    ProjectedRow.from(projection).replaceRow(row));
+                            flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
                     if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
                         return Collections.singletonList(flinkRow);
                     } else {
@@ -151,6 +149,13 @@ public class FlinkLookupFunction extends LookupFunction {
             }
         }
         return Collections.emptyList();
+    }
+
+    private InternalRow maybeProject(InternalRow row) {
+        if (projectedRow == null) {
+            return row;
+        }
+        return projectedRow.replaceRow(row);
     }
 
     @Override

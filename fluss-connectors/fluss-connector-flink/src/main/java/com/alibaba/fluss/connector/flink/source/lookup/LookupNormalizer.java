@@ -22,7 +22,6 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.RowData.FieldGetter;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -35,6 +34,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.flink.util.Preconditions.checkArgument;
 
 /**
  * A utility class to normalize the lookup key row to match the Fluss key fields order and drop the
@@ -141,10 +141,7 @@ public class LookupNormalizer implements Serializable {
 
     /** Validate the lookup key indexes and primary keys, and create a {@link LookupNormalizer}. */
     public static LookupNormalizer validateAndCreateLookupNormalizer(
-            int[][] lookupKeyIndexes,
-            int[] primaryKeys,
-            RowType schema,
-            @Nullable int[] projectedFields) {
+            int[][] lookupKeyIndexes, int[] primaryKeys, RowType schema) {
         if (primaryKeys.length == 0) {
             throw new UnsupportedOperationException(
                     "Fluss lookup function only support lookup table with primary key.");
@@ -160,15 +157,10 @@ public class LookupNormalizer implements Serializable {
         String[] lookupKeyNames = new String[lookupKeyIndexes.length];
         for (int i = 0; i < lookupKeyNames.length; i++) {
             int[] innerKeyArr = lookupKeyIndexes[i];
-            Preconditions.checkArgument(
-                    innerKeyArr.length == 1, "Do not support nested lookup keys");
+            checkArgument(innerKeyArr.length == 1, "Do not support nested lookup keys");
             // lookupKeyIndexes passed by Flink is key indexed after projection pushdown,
-            // we need to project on client side, so restore the lookup key indexes before pushdown
-            if (projectedFields != null) {
-                lookupKeys[i] = projectedFields[innerKeyArr[0]];
-            } else {
-                lookupKeys[i] = innerKeyArr[0];
-            }
+            // we do remaining condition filter on the projected row, so no remapping needed.
+            lookupKeys[i] = innerKeyArr[0];
             lookupKeyNames[i] = columnNames[innerKeyArr[0]];
         }
 
