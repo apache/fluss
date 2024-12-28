@@ -5,36 +5,33 @@ sidebar_position: 5
 
 # Monitor Metrics
 
-Fluss has built a metrics system to measure the behaviours of cluster and table, like the active CoordinatorServer,
+Fluss has built a metrics system to measure the behaviours of cluster and table, like the active CoordinatorServer, 
 the number of table, the bytes written, the number of records written, etc.
 
 Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**, and **Meters**.
 
 - `Gauge`: Provides a value of any type at a point in time.
 - `Counter`: Used to count values by incrementing and decrementing.
-- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation
-  and percentile.
+- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile.
 - `Meter`: The gauge exports the meter's rate.
 
-Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster,
+Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster, 
 which can be bridged to Flink use Flink connector standard metrics.
 
 ## Scope
 
 Every metric is assigned an identifier and a set of key-value pairs under which the metric will be reported.
 
-The identifier is delimited by `metrics.scope.delimiter`. Currently, the `metrics.scope.delimiter` is not configurable,
-it determined by the metric reporter. Take prometheus as example, the scope will delimited by `_`, so the scope like
-`A_B_C`,
+The identifier is delimited by `metrics.scope.delimiter`. Currently, the `metrics.scope.delimiter` is not configurable, 
+it determined by the metric reporter. Take prometheus as example, the scope will delimited by `_`, so the scope like `A_B_C`, 
 while Fluss metrics will always begin with `fluss`, as `fluss_A_B_C`.
 
-The key-value pairs are called **variables** and are used to filter metrics. There are no restrictions on the
+The key-value pairs are called **variables** and are used to filter metrics. There are no restrictions on the 
 number of order of variables. Variables are case-sensitive.
 
 ## Reporter
 
-For information on how to set up Fluss's metric reporters please take a look at
-the [Metric Reporters](./metric-reporters.md) page.
+For information on how to set up Fluss's metric reporters please take a look at the [Metric Reporters](./metric-reporters.md) page.
 
 ## Metrics List
 
@@ -94,8 +91,7 @@ Thus, in order to infer the metric identifier:
 
 ### Memory
 
-The memory-related metrics require Oracle's memory management (also included in OpenJDK's Hotspot implementation) to be
-in place.
+The memory-related metrics require Oracle's memory management (also included in OpenJDK's Hotspot implementation) to be in place.
 Some metrics might not be exposed when using other JVM implementations (e.g. IBM's J9).
 
 <table class="table table-bordered">                               
@@ -193,7 +189,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
 </table>
 
 ### Threads
-
 <table class="table table-bordered">
   <thead>
     <tr>
@@ -216,7 +211,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
 </table>
 
 ### GarbageCollection
-
 <table class="table table-bordered">
   <thead>
     <tr>
@@ -603,16 +597,14 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </tbody>
 </table>
 
+
 ### Flink connector standard metrics
 
-When using Flink to read and write, Fluss has implemented some key standard Flink connector metrics
-to measure the source latency and output of sink,
-see [FLIP-33: Standardize Connector Metrics](https://cwiki.apache.org/confluence/display/FLINK/FLIP-33%3A+Standardize+Connector+Metrics).
+When using Flink to read and write, Fluss has implemented some key standard Flink connector metrics 
+to measure the source latency and output of sink, see [FLIP-33: Standardize Connector Metrics](https://cwiki.apache.org/confluence/display/FLINK/FLIP-33%3A+Standardize+Connector+Metrics). 
 Flink source / sink metrics implemented are listed here.
 
-How to use flink metrics, you can
-see [flink metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for
-more details.
+How to use flink metrics, you can see [flink metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
 
 #### Source Metrics
 
