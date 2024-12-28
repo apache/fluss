@@ -5,20 +5,24 @@ sidebar_position: 1
 
 # Real-Time Analytics With Flink
 
-This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss,
+This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of
+Fluss,
 including integrating with Paimon.
 The guide is derived from [TPC-H](https://www.tpc.org/tpch/) **Q5**.
 
 For more information on working with Flink, refer to the [Apache Flink Engine](engine-flink/getting-started.md) section.
 
 ## Environment Setup
+
 ### Prerequisites
 
-Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) are installed on your machine.
+Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/engine/install/) and
+the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) are installed on your machine.
 All commands were tested with Docker version 27.4.0 and Docker Compose version v2.30.3.
 
 :::note
-We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
+We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (
+however, Compose v1 might work with a few adaptions).
 :::
 
 ### Starting required components
@@ -36,6 +40,7 @@ cd fluss-quickstart-flink
 
 ```yaml
 services:
+  #begin Fluss
   coordinator-server:
     image: fluss/fluss:0.5.0
     command: coordinatorServer
@@ -50,6 +55,8 @@ services:
         lakehouse.storage: paimon
         paimon.catalog.metastore: filesystem
         paimon.catalog.warehouse: /tmp/paimon
+        metrics.reporters: prometheus
+        metrics.reporter.prometheus.port: 9250
   tablet-server:
     image: fluss/fluss:0.5.0
     command: tabletServer
@@ -60,16 +67,37 @@ services:
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server
+        tablet-server.id: 0
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
         lakehouse.storage: paimon
         paimon.catalog.metastore: filesystem
         paimon.catalog.warehouse: /tmp/paimon
+        metrics.reporters: prometheus
+        metrics.reporter.prometheus.port: 9250
+  #end
   zookeeper:
     restart: always
     image: zookeeper:3.8.4
-
+  #begin observability
+  prometheus:
+    image: bitnami/prometheus:2.55.1-debian-12-r0
+    ports:
+      - 9092:9090
+    volumes:
+      - observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  grafana:
+    image:
+      grafana/grafana:11.4.0
+    ports:
+      - 3002:3000
+    depends_on:
+      - prometheus
+    volumes:
+      - observability/grafana:/etc/grafana:ro
+  #end
+  #begin Flink cluster
   jobmanager:
     image: fluss/quickstart-flink:1.20-0.5
     ports:
@@ -79,6 +107,8 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9250
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
@@ -93,8 +123,11 @@ services:
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.framework.off-heap.size: 256m
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9250
     volumes:
       - shared-tmpfs:/tmp/paimon
+  #end
 
 volumes:
   shared-tmpfs:
@@ -105,36 +138,89 @@ volumes:
 ```
 
 The Docker Compose environment consists of the following containers:
+
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
+- **Observability Stack**: a `Prometheus` instance (monitoring system that collects metrics) and a `Grafana` instance to
+  visualize collected metrics.
 
-**Note:** The `fluss/quickstart-flink` image is based on [flink:1.20.0-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256-381ed7399c95b6b03a7b5ee8baca91fd84e24def9965ce9d436fb22773d66717) and
-includes the [fluss-connector-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) and
+**Note:** The `fluss/quickstart-flink` image is based
+on [flink:1.20.0-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256-381ed7399c95b6b03a7b5ee8baca91fd84e24def9965ce9d436fb22773d66717)
+and
+includes
+the [fluss-connector-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/)
+and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
-3. To start all containers, run:
+3. Download observability stack quickstart configurations.
+
+We provide a minimal configuration for Prometheus and
+Grafana (incl. dashboards) [here](/docs/assets/fluss-quickstart-observability.zip).
+Download it and extract it in the `fluss-quickstart-flink` directory.
+After extracting the ZIP archive, the contents of `fluss-quickstart-flink` should be as follows.
+
+```shell
+fluss-quickstart-flink              # created working directory
+├── docker-compose.yml              # create docker compose file
+└── fluss-quickstart-observability  # downloaded and extracted ZIP archive
+    ├── grafana
+    │   ├── grafana.ini
+    │   └── provisioning
+    │       ├── dashboards
+    │       │   ├── default.yml
+    │       │   └── fluss
+    │       │       └── ...
+    │       └── datatsources
+    │           └── default.yml
+    └── prometheus
+        └── prometheus.yml
+```
+
+:::warning
+
+The provided configurations for Prometheus and Grafana (_except_ the dashboard templates) are **NOT** intended
+for production use.
+:::
+
+4. To start all containers, run:
+
 ```shell
 docker compose up -d
 ```
+
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run 
+Run
+
 ```shell
 docker ps
 ```
-to check whether all containers are running properly.
 
-You can also visit http://localhost:8083/ to see if Flink is running normally.
+to check whether all containers are running.
 
-:::note 
-- If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
-- All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
-:::
+You can visit
+
+- the [Flink Web UI](http://localhost:8083/) to see the detailed status of the Flink cluster and Flink jobs,
+- [Grafana](http://localhost:3002) to observe the cluster status of the Fluss and Flink cluster (click
+  `Dashboards` in the left pane and select one of the provided dashboards) or
+- the [Prometheus Web UI](http://localhost:9092) to directly query Prometheus
+  with [PromQL](https://prometheus.io/docs/prometheus/2.55/getting_started/).
+
+:::note
+
+- If you want to run with your own Flink environment, remember to download
+  the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/)
+  connector jars and then put them to `FLINK_HOME/lib/`.
+- All the following commands involving `docker compose` should be executed in the created working directory that
+  contains the `docker-compose.yml` file.
+  :::
 
 Congratulations, you are all set!
 
 ## Enter into SQL-Client
+
 First, use the following command to enter the Flink SQL CLI Container:
+
 ```shell
 docker compose exec jobmanager ./sql-client
 ```
@@ -144,79 +230,93 @@ To simplify this guide, three temporary tables have been pre-created with `faker
 You can view their schemas by running the following commands:
 
 ```sql title="Flink SQL Client"
-SHOW CREATE TABLE source_customer;
+SHOW
+CREATE TABLE source_customer;
 ```
 
 ```sql title="Flink SQL Client"
-SHOW CREATE TABLE source_order;
+SHOW
+CREATE TABLE source_order;
 ```
 
 ```sql title="Flink SQL Client"
-SHOW CREATE TABLE source_nation;
+SHOW
+CREATE TABLE source_nation;
 ```
 
 ## Create Fluss Tables
+
 ### Create Fluss Catalog
+
 Use the following SQL to create a Fluss catalog:
+
 ```sql title="Flink SQL Client"
-CREATE CATALOG my_fluss WITH (
+CREATE
+CATALOG my_fluss WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
 
 ```sql title="Flink SQL Client"
-USE CATALOG my_fluss;
+USE
+CATALOG my_fluss;
 ```
 
 ### Create Tables
+
 Running the following SQL to create Fluss tables to be used in this guide:
+
 ```sql  title="Flink SQL Client"
-CREATE TABLE fluss_order (
-    `order_key` BIGINT,
-    `cust_key` INT NOT NULL,
-    `total_price` DECIMAL(15, 2),
-    `order_date` DATE,
+CREATE TABLE fluss_order
+(
+    `order_key`      BIGINT,
+    `cust_key`       INT NOT NULL,
+    `total_price`    DECIMAL(15, 2),
+    `order_date`     DATE,
     `order_priority` STRING,
-    `clerk` STRING,
+    `clerk`          STRING,
     `ptime` AS PROCTIME(),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
 
 ```sql  title="Flink SQL Client"
-CREATE TABLE fluss_customer (
-    `cust_key` INT NOT NULL,
-    `name` STRING,
-    `phone` STRING,
+CREATE TABLE fluss_customer
+(
+    `cust_key`   INT NOT NULL,
+    `name`       STRING,
+    `phone`      STRING,
     `nation_key` INT NOT NULL,
-    `acctbal` DECIMAL(15, 2),
+    `acctbal`    DECIMAL(15, 2),
     `mktsegment` STRING,
     PRIMARY KEY (`cust_key`) NOT ENFORCED
 );
 ```
 
 ```sql  title="Flink SQL Client"
-CREATE TABLE `fluss_nation` (
-  `nation_key` INT NOT NULL,
-  `name`       STRING,
-   PRIMARY KEY (`nation_key`) NOT ENFORCED
+CREATE TABLE `fluss_nation`
+(
+    `nation_key` INT NOT NULL,
+    `name`       STRING,
+    PRIMARY KEY (`nation_key`) NOT ENFORCED
 );
 ```
 
 ```sql  title="Flink SQL Client"
-CREATE TABLE enriched_orders (
-    `order_key` BIGINT,
-    `cust_key` INT NOT NULL,
-    `total_price` DECIMAL(15, 2),
-    `order_date` DATE,
-    `order_priority` STRING,
-    `clerk` STRING,
-    `cust_name` STRING,
-    `cust_phone` STRING,
-    `cust_acctbal` DECIMAL(15, 2),
+CREATE TABLE enriched_orders
+(
+    `order_key`       BIGINT,
+    `cust_key`        INT NOT NULL,
+    `total_price`     DECIMAL(15, 2),
+    `order_date`      DATE,
+    `order_priority`  STRING,
+    `clerk`           STRING,
+    `cust_name`       STRING,
+    `cust_phone`      STRING,
+    `cust_acctbal`    DECIMAL(15, 2),
     `cust_mktsegment` STRING,
-    `nation_name` STRING,
+    `nation_name`     STRING,
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
@@ -224,59 +324,73 @@ CREATE TABLE enriched_orders (
 ## Streaming into Fluss
 
 First, run the following SQL to sync data from source tables to Fluss tables:
+
 ```sql  title="Flink SQL Client"
 EXECUTE STATEMENT SET
 BEGIN
-    INSERT INTO fluss_nation SELECT * FROM `default_catalog`.`default_database`.source_nation;
-    INSERT INTO fluss_customer SELECT * FROM `default_catalog`.`default_database`.source_customer;
-    INSERT INTO fluss_order SELECT * FROM `default_catalog`.`default_database`.source_order;
+INSERT INTO fluss_nation
+SELECT *
+FROM `default_catalog`.`default_database`.source_nation;
+INSERT INTO fluss_customer
+SELECT *
+FROM `default_catalog`.`default_database`.source_customer;
+INSERT INTO fluss_order
+SELECT *
+FROM `default_catalog`.`default_database`.source_order;
 END;
 ```
 
-Fluss primary-key tables support high QPS point lookup queries on primary keys. Performing a [lookup join](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/joins/#lookup-join) is really efficient and you can use it to enrich
+Fluss primary-key tables support high QPS point lookup queries on primary keys. Performing
+a [lookup join](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/joins/#lookup-join)
+is really efficient and you can use it to enrich
 the `fluss_orders` table with information from the `fluss_customer` and `fluss_nation` primary-key tables.
 
 ```sql  title="Flink SQL Client"
 INSERT INTO enriched_orders
-SELECT o.order_key, 
-       o.cust_key, 
+SELECT o.order_key,
+       o.cust_key,
        o.total_price,
-       o.order_date, 
+       o.order_date,
        o.order_priority,
        o.clerk,
        c.name,
        c.phone,
-       c.acctbal, 
+       c.acctbal,
        c.mktsegment,
        n.name
-FROM fluss_order o 
-LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c` 
-    ON o.cust_key = c.cust_key
-LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n` 
-    ON c.nation_key = n.nation_key;
+FROM fluss_order o
+         LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
+                   ON o.cust_key = c.cust_key
+         LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
+                   ON c.nation_key = n.nation_key;
 ```
 
-
 ## Run Ad-hoc Queries on Fluss Tables
-You can now perform real-time analytics directly on Fluss tables. 
-For instance, to calculate the number of orders placed by a specific customer, you can execute the following SQL query to obtain instant, real-time results.
+
+You can now perform real-time analytics directly on Fluss tables.
+For instance, to calculate the number of orders placed by a specific customer, you can execute the following SQL query
+to obtain instant, real-time results.
 
 ```sql  title="Flink SQL Client"
 -- use tableau result mode
-SET 'sql-client.execution.result-mode' = 'tableau';
+SET
+'sql-client.execution.result-mode' = 'tableau';
 ```
 
 ```sql  title="Flink SQL Client"
 -- switch to batch mode
-SET 'execution.runtime-mode' = 'batch';
+SET
+'execution.runtime-mode' = 'batch';
 ```
 
 ```sql  title="Flink SQL Client"
 -- use limit to query the enriched_orders table
-SELECT * FROM enriched_orders LIMIT 2;
+SELECT *
+FROM enriched_orders LIMIT 2;
 ```
 
 **Sample Output**
+
 ```
 +-----------+----------+-------------+------------+----------------+--------+------------+----------------+--------------+-----------------+-------------+
 | order_key | cust_key | total_price | order_date | order_priority |  clerk |  cust_name |     cust_phone | cust_acctbal | cust_mktsegment | nation_name |
@@ -285,13 +399,18 @@ SELECT * FROM enriched_orders LIMIT 2;
 |  10715776 |        2 |      924.43 | 2024-11-04 |         medium | Clerk3 | Rita Booke | (925) 775-0717 |       172.39 |       FURNITURE |      UNITED |
 +-----------+----------+-------------+------------+----------------+--------+------------+----------------+--------------+-----------------+-------------+
 ```
-If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`. 
+
+If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`.
 
 ```sql title="Flink SQL Client"
 -- lookup by primary key
-SELECT * FROM fluss_customer WHERE `cust_key` = 1;
+SELECT *
+FROM fluss_customer
+WHERE `cust_key` = 1;
 ```
+
 **Sample Output**
+
 ```shell
 +----------+---------------+--------------+------------+---------+------------+
 | cust_key |          name |        phone | nation_key | acctbal | mktsegment |
@@ -299,21 +418,33 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 |        1 | Al K. Seltzer | 817-617-7960 |          1 |  533.41 | AUTOMOBILE |
 +----------+---------------+--------------+------------+---------+------------+
 ```
-**Note:** Overall the query results are returned really fast, as Fluss enables efficient primary key lookups for tables with defined primary keys.
+
+**Note:** Overall the query results are returned really fast, as Fluss enables efficient primary key lookups for tables
+with defined primary keys.
 
 ## Update/Delete rows on Fluss Tables
 
 You can use `UPDATE` and `DELETE` statements to update/delete rows on Fluss tables.
+
 ### Update
+
 ```sql title="Flink SQL Client"
 -- update by primary key
-UPDATE fluss_customer SET `name` = 'fluss_updated' WHERE `cust_key` = 1;
+UPDATE fluss_customer
+SET `name` = 'fluss_updated'
+WHERE `cust_key` = 1;
 ```
+
 Then you can `lookup` the specific row:
+
 ```sql title="Flink SQL Client"
-SELECT * FROM fluss_customer WHERE `cust_key` = 1;
+SELECT *
+FROM fluss_customer
+WHERE `cust_key` = 1;
 ```
+
 **Sample Output**
+
 ```shell
 +----------+---------------+--------------+------------+---------+------------+
 | cust_key |          name |        phone | nation_key | acctbal | mktsegment |
@@ -321,53 +452,72 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 |        1 | fluss_updated | 817-617-7960 |          1 |  533.41 | AUTOMOBILE |
 +----------+---------------+--------------+------------+---------+------------+
 ```
+
 Notice that the `name` column has been updated to `fluss_updated`.
 
 ### Delete
+
 ```sql title="Flink SQL Client
-DELETE FROM fluss_customer WHERE `cust_key` = 1;
+DELETE
+FROM fluss_customer
+WHERE `cust_key` = 1;
 ```
+
 The following SQL query should return an empty result.
+
 ```sql title="Flink SQL Client"
-SELECT * FROM fluss_customer WHERE `cust_key` = 1;
+SELECT *
+FROM fluss_customer
+WHERE `cust_key` = 1;
 ```
 
 ## Integrate with Paimon
+
 ### Start the Lakehouse Tiering Service
-To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
-Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
+
+To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`.
+Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this
+directory to start the service:
+
 ```shell
 docker compose exec coordinator-server ./bin/lakehouse.sh -D flink.rest.address=jobmanager -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=30s
 ```
+
 You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
 
 ### Streaming into Fluss datalake-enabled tables
 
-By default, tables are created with data lake integration disabled, meaning the Lakehouse Tiering Service will not tier the table's data to the data lake.
+By default, tables are created with data lake integration disabled, meaning the Lakehouse Tiering Service will not tier
+the table's data to the data lake.
 
-To enable lakehouse functionality as a tiered storage solution for a table, you must create the table with the configuration option `table.datalake.enabled = true`. 
+To enable lakehouse functionality as a tiered storage solution for a table, you must create the table with the
+configuration option `table.datalake.enabled = true`.
 Return to the `SQL client` and execute the following SQL statement to create a table with data lake integration enabled:
+
 ```sql  title="Flink SQL Client"
-CREATE TABLE datalake_enriched_orders (
-    `order_key` BIGINT,
-    `cust_key` INT NOT NULL,
-    `total_price` DECIMAL(15, 2),
-    `order_date` DATE,
-    `order_priority` STRING,
-    `clerk` STRING,
-    `cust_name` STRING,
-    `cust_phone` STRING,
-    `cust_acctbal` DECIMAL(15, 2),
+CREATE TABLE datalake_enriched_orders
+(
+    `order_key`       BIGINT,
+    `cust_key`        INT NOT NULL,
+    `total_price`     DECIMAL(15, 2),
+    `order_date`      DATE,
+    `order_priority`  STRING,
+    `clerk`           STRING,
+    `cust_name`       STRING,
+    `cust_phone`      STRING,
+    `cust_acctbal`    DECIMAL(15, 2),
     `cust_mktsegment` STRING,
-    `nation_name` STRING,
+    `nation_name`     STRING,
     PRIMARY KEY (`order_key`) NOT ENFORCED
 ) WITH ('table.datalake.enabled' = 'true');
 ```
 
 Next, perform streaming data writing into the **datalake-enabled** table, `datalake_enriched_orders`:
+
 ```sql  title="Flink SQL Client"
 -- switch to streaming mode
-SET 'execution.runtime-mode' = 'streaming';
+SET
+'execution.runtime-mode' = 'streaming';
 ```
 
 ```sql  title="Flink SQL Client"
@@ -385,33 +535,42 @@ SELECT o.order_key,
        c.mktsegment,
        n.name
 FROM fluss_order o
-       LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
-                 ON o.cust_key = c.cust_key
-       LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
-                 ON c.nation_key = n.nation_key;
+         LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
+                   ON o.cust_key = c.cust_key
+         LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
+                   ON c.nation_key = n.nation_key;
 ```
 
 ### Real-Time Analytics on Fluss datalake-enabled Tables
 
-The data for the `datalake_enriched_orders` table is stored in Fluss (for real-time data) and Paimon (for historical data).
+The data for the `datalake_enriched_orders` table is stored in Fluss (for real-time data) and Paimon (for historical
+data).
 
-When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and Paimon to provide a complete result set -- combines **real-time** and **historical** data.
+When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and
+Paimon to provide a complete result set -- combines **real-time** and **historical** data.
 
-If you wish to query only the data stored in Paimon—offering high-performance access without the overhead of unioning data—you can use the `datalake_enriched_orders$lake` table by appending the `$lake` suffix. 
-This approach also enables all the optimizations and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$lake$snapshots`.
+If you wish to query only the data stored in Paimon—offering high-performance access without the overhead of unioning
+data—you can use the `datalake_enriched_orders$lake` table by appending the `$lake` suffix.
+This approach also enables all the optimizations and features of a Flink Paimon table source,
+including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as
+`datalake_enriched_orders$lake$snapshots`.
 
 To query the snapshots directly from Paimon, use the following SQL:
+
 ```sql  title="Flink SQL Client"
 -- switch to batch mode
-SET 'execution.runtime-mode' = 'batch';
+SET
+'execution.runtime-mode' = 'batch';
 ```
 
 ```sql  title="Flink SQL Client"
 -- query snapshots in paimon
-SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapshots;
+SELECT snapshot_id, total_record_count
+FROM datalake_enriched_orders$lake$snapshots;
 ```
 
 **Sample Output:**
+
 ```shell
 +-------------+--------------------+
 | snapshot_id | total_record_count |
@@ -419,14 +578,20 @@ SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapsh
 |           1 |                650 |
 +-------------+--------------------+
 ```
-**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
+
+**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result
+will be empty.
 
 Run the following SQL to do analytics on Paimon data:
+
 ```sql  title="Flink SQL Client"
 -- to sum prices of all orders in paimon
-SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
+SELECT sum(total_price) as sum_price
+FROM datalake_enriched_orders$lake;
 ```
+
 **Sample Output:**
+
 ```shell
 +------------+
 |  sum_price |
@@ -435,12 +600,17 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
 +------------+
 ```
 
-To achieve results with sub-second data freshness, you can query the table directly, which seamlessly unifies data from both Fluss and Paimon:
+To achieve results with sub-second data freshness, you can query the table directly, which seamlessly unifies data from
+both Fluss and Paimon:
+
 ```sql  title="Flink SQL Client"
 -- to sum prices of all orders in fluss and paimon
-SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
+SELECT sum(total_price) as sum_price
+FROM datalake_enriched_orders;
 ```
+
 The result looks like:
+
 ```
 +------------+
 |  sum_price |
@@ -448,14 +618,18 @@ The result looks like:
 | 1777908.36 |
 +------------+
 ```
-You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
+
+You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is
+continuously written to Fluss in real-time.
 
 Finally, you can use the following command to view the files stored in Paimon:
+
 ```shell
 docker compose exec taskmanager tree /tmp/paimon/fluss.db
 ```
 
 **Sample Output:**
+
 ```shell
 /tmp/paimon/fluss.db
 └── datalake_enriched_orders
@@ -475,14 +649,21 @@ docker compose exec taskmanager tree /tmp/paimon/fluss.db
         ├── LATEST
         └── snapshot-1
 ```
-The files adhere to Paimon's standard format, enabling seamless querying with other engines such as [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/).
+
+The files adhere to Paimon's standard format, enabling seamless querying with other engines such
+as [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/).
 
 ## Clean up
-After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
+
+After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run
+
 ```shell
 docker compose down -v
 ```
+
 to stop all containers.
 
 ## Learn more
-Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink!
+
+Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md)
+docs to learn more features with Flink!
