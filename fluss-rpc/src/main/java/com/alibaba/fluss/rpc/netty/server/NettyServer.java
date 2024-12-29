@@ -41,6 +41,7 @@ import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static com.alibaba.fluss.rpc.netty.NettyUtils.isBindFailure;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownChannel;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownGroup;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -102,7 +103,7 @@ public final class NettyServer implements RpcServer {
 
         this.acceptorGroup =
                 NettyUtils.newEventLoopGroup(
-                        1, // always use single thread for accepter
+                        1, // always use single thread for acceptor
                         "fluss-netty-server-acceptor");
         this.selectorGroup =
                 NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-server-selector");
@@ -139,11 +140,12 @@ public final class NettyServer implements RpcServer {
             try {
                 bindChannel = bootstrap.bind().syncUninterruptibly().channel();
             } catch (Exception e) {
-                LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
                 // syncUninterruptibly() throws checked exceptions via Unsafe
                 // continue if the exception is due to the port being in use, fail early
                 // otherwise
-                if (!(e instanceof BindException)) {
+                if (isBindFailure(e)) {
+                    LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
+                } else {
                     throw e;
                 }
             }
