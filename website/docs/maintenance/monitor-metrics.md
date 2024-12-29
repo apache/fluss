@@ -299,7 +299,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="6"><strong>tabletServer</strong></th>
+      <th rowspan="6"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
       <td>replicationBytesInPerSecond</td>
       <td>The bytes of data write into follower replica for data sync.</td>
@@ -366,7 +366,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td>requestErrorPerSecond</td>
+      <td>errorsPerSecond</td>
       <td>The total number of error requests processed per second by the TabletServer node.</td>
       <td>Meter</td>
     </tr>
@@ -434,7 +434,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="31"><strong>tabletServer</strong></th>
+      <th rowspan="31"><strong>tabletserver</strong></th>
       <td rowspan="16">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table</td>
@@ -675,9 +675,9 @@ How to use flink metrics, you can see [flink metrics](https://nightlies.apache.o
 ## Observability (Prometheus + Grafana)
 
 We provide a minimal configuration for application observability with Prometheus and
-Grafana [here](/assets/fluss-quickstart-observability.zip) that comes with 2 dashboards.
+Grafana [here](/docs/assets/fluss-quickstart-observability.zip) that comes with 2 dashboards.
 
 - `Fluss – overview`: Selected metrics to observe overall cluster status
-- `Fluss – all metrics`: All metrics listed in [metrics list](#metrics-list)
+- `Fluss – detail`: Majority of metrics listed in [metrics list](#metrics-list)
 
 For further information how to set up the observability stack, check out the [quickstart guide](/docs/quickstart/flink).

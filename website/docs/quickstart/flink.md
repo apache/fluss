@@ -36,7 +36,7 @@ cd fluss-quickstart-flink
 
 ```yaml
 services:
-  #begin Fluss
+  #begin Fluss cluster
   coordinator-server:
     image: fluss/fluss:0.5.0
     command: coordinatorServer
@@ -72,26 +72,9 @@ services:
         paimon.catalog.warehouse: /tmp/paimon
         metrics.reporters: prometheus
         metrics.reporter.prometheus.port: 9250
-  #end
   zookeeper:
     restart: always
-    image: zookeeper:3.8.4
-  #begin observability
-  prometheus:
-    image: bitnami/prometheus:2.55.1-debian-12-r0
-    ports:
-      - 9092:9090
-    volumes:
-      - observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-  grafana:
-    image:
-      grafana/grafana:11.4.0
-    ports:
-      - 3002:3000
-    depends_on:
-      - prometheus
-    volumes:
-      - observability/grafana:/etc/grafana:ro
+    image: zookeeper:3.9.2
   #end
   #begin Flink cluster
   jobmanager:
@@ -124,7 +107,24 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   #end
-
+  #begin observability
+  prometheus:
+    image: bitnami/prometheus:2.55.1-debian-12-r0
+    ports:
+      - 9092:9090
+    volumes:
+      - ./fluss-quickstart-observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  grafana:
+    image:
+      grafana/grafana:11.4.0
+    ports:
+      - 3002:3000
+    depends_on:
+      - prometheus
+    volumes:
+      - ./fluss-quickstart-observability/grafana:/etc/grafana:ro
+  #end
+  
 volumes:
   shared-tmpfs:
     driver: local
@@ -137,7 +137,7 @@ The Docker Compose environment consists of the following containers:
 
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
-- **Observability Stack**: a `Prometheus` instance (monitoring system that collects metrics) and a `Grafana` instance to
+- **Observability Stack**: a `Prometheus` instance (monitoring system) and a `Grafana` instance to
   visualize collected metrics.
 
 **Note:** The `fluss/quickstart-flink` image is based
@@ -197,8 +197,7 @@ to check whether all containers are running.
 You can visit
 
 - the [Flink Web UI](http://localhost:8083/) to see the detailed status of the Flink cluster and Flink jobs,
-- [Grafana](http://localhost:3002) to observe the cluster status of the Fluss and Flink cluster (click
-  `Dashboards` in the left pane and select one of the provided dashboards) or
+- [Grafana](http://localhost:3002/dashboards) to observe the cluster status of the Fluss and Flink cluster with the provided dashboards, or
 - the [Prometheus Web UI](http://localhost:9092) to directly query Prometheus
   with [PromQL](https://prometheus.io/docs/prometheus/2.55/getting_started/).
 
@@ -301,6 +300,8 @@ CREATE TABLE enriched_orders (
 );
 ```
 
+When you go to the `Fluss – overview` dashboard in [Grafana](http://localhost:3002/dashboards), you should see after a few seconds that the number of tables and buckets is both 4 (if the number is still 0, wait a bit and referesh the dashboard manually).
+
 ## Streaming into Fluss
 
 First, run the following SQL to sync data from source tables to Fluss tables:
@@ -336,6 +337,8 @@ LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
     ON c.nation_key = n.nation_key;
 ```
 
+When you go to the [Flink Web UI](http://localhost:8083/#/job/running) you should see 2 running jobs. 
+In the `Fluss – overview` dashboard in [Grafana](http://localhost:3002/dashboards), you should see that the number of available task slots decreased from 10 to 8.
 
 ## Run Ad-hoc Queries on Fluss Tables
 You can now perform real-time analytics directly on Fluss tables. 
@@ -419,7 +422,7 @@ Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and exe
 ```shell
 docker compose exec coordinator-server ./bin/lakehouse.sh -D flink.rest.address=jobmanager -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=30s
 ```
-You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
+You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/#/job/running).
 
 ### Streaming into Fluss datalake-enabled tables
 
@@ -470,6 +473,10 @@ FROM fluss_order o
        LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
                  ON c.nation_key = n.nation_key;
 ```
+
+When you go to the [Flink Web UI](http://localhost:8083/#/job/running) you should see 4 running jobs. 
+In the `Fluss – overview` dashboard in [Grafana](http://localhost:3002/dashboards), you should see that the number of tables and buckets is now both 5 and the number of available task slots decreased from 8 to 6.
+
 
 ### Real-Time Analytics on Fluss datalake-enabled Tables
 
