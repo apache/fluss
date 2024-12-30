@@ -48,13 +48,13 @@ public class MetricNames {
     public static final String REPLICA_LEADER_COUNT = "leaderCount";
     public static final String REPLICA_COUNT = "replicaCount";
     public static final String WRITE_ID_COUNT = "writerIdCount";
-    public static final String DELAYED_WRITE_SIZE = "delayedWriteSize";
-    public static final String DELAYED_WRITE_EXPIRATION_RATE = "delayedWriteExpirationPerSecond";
-    public static final String DELAYED_FETCH_LOG_SIZE = "delayedFetchLogSize";
-    public static final String DELAYED_FETCH_LOG_FROM_FOLLOWER_EXPIRATION_RATE =
-            "delayedFetchLogFromFollowerExpirationPerSecond";
-    public static final String DELAYED_FETCH_LOG_FROM_CLIENT_EXPIRATION_RATE =
-            "delayedFetchLogFromClientExpirationPerSecond";
+    public static final String DELAYED_WRITE_COUNT = "delayedWriteCount";
+    public static final String DELAYED_WRITE_EXPIRES_RATE = "delayedWriteExpiresPerSecond";
+    public static final String DELAYED_FETCH_COUNT = "delayedFetchCount";
+    public static final String DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE =
+            "delayedFetchFromFollowerExpiresPerSecond";
+    public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
+            "delayedFetchFromClientExpiresPerSecond";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table

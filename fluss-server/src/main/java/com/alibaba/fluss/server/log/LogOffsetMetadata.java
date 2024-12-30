@@ -67,6 +67,10 @@ public final class LogOffsetMetadata {
         return relativePositionInSegment;
     }
 
+    /**
+     * Compute the number of bytes between this offset to the given offset, if they are on the same
+     * segment and this offset precedes the given offset.
+     */
     public int positionDiff(LogOffsetMetadata that) {
         if (messageOffsetOnly()) {
             throw new FlussRuntimeException(

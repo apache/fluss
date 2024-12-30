@@ -56,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
@@ -299,8 +300,8 @@ public class TabletServiceITCase {
 
         // third send a fetch request with minFetchSize and much bigger maxFetchWaitMs, the request
         // will return after we send a produce log request to this bucket.
-        leaderGateWay
-                .fetchLog(
+        CompletableFuture<FetchLogResponse> fetchResultFuture =
+                leaderGateWay.fetchLog(
                         newFetchLogRequest(
                                 -1,
                                 tableId,
@@ -309,19 +310,19 @@ public class TabletServiceITCase {
                                 null,
                                 1,
                                 Integer.MAX_VALUE,
-                                (int) Duration.ofMinutes(5).toMillis()))
-                .whenComplete(
-                        (res, throwable) -> assertFetchLogResponse(res, tableId, 0, 10L, DATA1));
+                                (int) Duration.ofMinutes(5).toMillis()));
 
         // send a produce log request to trigger delay fetch log finish.
         assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(
                                 newProduceLogRequest(
-                                        tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
+                                        tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                         .get(),
                 0,
                 0L);
+        // the delay fetch will be completed.
+        assertFetchLogResponse(fetchResultFuture.get(), tableId, 0, 10L, DATA1);
 
         // return immediately.
         assertFetchLogResponse(

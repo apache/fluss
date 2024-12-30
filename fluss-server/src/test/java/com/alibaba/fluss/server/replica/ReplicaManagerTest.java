@@ -173,7 +173,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         FetchLogResultForBucket resultForBucket = result.get(tb);
         assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
         assertThat(resultForBucket.getHighWatermark()).isEqualTo(0L);
-        assertThat(resultForBucket.records()).isNull();
+        assertThat(resultForBucket.records().sizeInBytes()).isEqualTo(0);
 
         // produce one batch to this bucket.
         CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();

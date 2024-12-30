@@ -57,7 +57,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
             TabletServerGateway tabletServerGateway) {
         this.followerServerId = followerServerId;
         this.remoteNode = remoteNode;
-        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
         this.maxFetchSizeForBucket =
                 (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
         this.minFetchBytes = (int) conf.get(ConfigOptions.LOG_FETCH_MIN_BYTES).getBytes();

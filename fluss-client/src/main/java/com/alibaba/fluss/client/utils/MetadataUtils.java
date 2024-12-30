@@ -47,6 +47,8 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
@@ -60,7 +62,7 @@ public class MetadataUtils {
      */
     public static Cluster sendMetadataRequestAndRebuildCluster(
             AdminReadOnlyGateway gateway, Set<TablePath> tablePaths)
-            throws ExecutionException, InterruptedException {
+            throws ExecutionException, InterruptedException, TimeoutException {
         return sendMetadataRequestAndRebuildCluster(gateway, false, null, tablePaths, null, null);
     }
 
@@ -76,7 +78,7 @@ public class MetadataUtils {
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
             @Nullable Collection<Long> tablePartitionIds)
-            throws ExecutionException, InterruptedException {
+            throws ExecutionException, InterruptedException, TimeoutException {
         AdminReadOnlyGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
                         () -> getOneAvailableTabletServerNode(cluster),
@@ -94,7 +96,7 @@ public class MetadataUtils {
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitions,
             @Nullable Collection<Long> tablePartitionIds)
-            throws ExecutionException, InterruptedException {
+            throws ExecutionException, InterruptedException, TimeoutException {
         MetadataRequest metadataRequest =
                 ClientRpcMessageUtils.makeMetadataRequest(
                         tablePaths, tablePartitions, tablePartitionIds);
@@ -151,7 +153,9 @@ public class MetadataUtils {
                                     newPartitionIdByPath,
                                     newTablePathToTableInfo);
                         })
-                .get();
+                .get(5, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
+        // RpcClient, it will let the get() block forever. So we
+        // time out here
     }
 
     private static NewTableMetadata getTableMetadataToUpdate(

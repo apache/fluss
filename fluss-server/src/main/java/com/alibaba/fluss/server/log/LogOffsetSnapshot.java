@@ -56,8 +56,8 @@ public class LogOffsetSnapshot {
 
     @Override
     public int hashCode() {
-        int result = (int) (logStartOffset ^ (logStartOffset >>> 32));
-        result = 31 * result + (int) (localLogStartOffset ^ (localLogStartOffset >>> 32));
+        int result = Long.hashCode(logStartOffset);
+        result = 31 * result + Long.hashCode(localLogStartOffset);
         result = 31 * result + logEndOffset.hashCode();
         result = 31 * result + highWatermark.hashCode();
         return result;

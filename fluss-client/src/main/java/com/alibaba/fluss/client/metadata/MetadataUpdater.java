@@ -51,6 +51,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
@@ -58,6 +59,8 @@ import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAn
 /** The updater to initialize and update client metadata. */
 public class MetadataUpdater {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataUpdater.class);
+
+    private static final int MAX_RETRY_TIMES = 5;
 
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
@@ -119,8 +122,24 @@ public class MetadataUpdater {
     public int leaderFor(TableBucket tableBucket) {
         ServerNode serverNode = cluster.leaderFor(tableBucket);
         if (serverNode == null) {
-            throw new FlussRuntimeException("Leader not found for table bucket: " + tableBucket);
+            for (int i = 0; i < MAX_RETRY_TIMES; i++) {
+                TablePath tablePath = cluster.getTablePathOrElseThrow(tableBucket.getTableId());
+                updateMetadata(Collections.singleton(tablePath), null, null);
+                serverNode = cluster.leaderFor(tableBucket);
+                if (serverNode != null) {
+                    break;
+                }
+            }
+
+            if (serverNode == null) {
+                throw new FlussRuntimeException(
+                        "Leader not found after retry  "
+                                + MAX_RETRY_TIMES
+                                + " times for table bucket: "
+                                + tableBucket);
+            }
         }
+
         return serverNode.id();
     }
 
@@ -239,7 +258,7 @@ public class MetadataUpdater {
             }
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (t instanceof RetriableException) {
+            if (t instanceof RetriableException || t instanceof TimeoutException) {
                 LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
             } else {
                 throw new FlussRuntimeException("Failed to update metadata", t);

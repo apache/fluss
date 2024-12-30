@@ -326,28 +326,28 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>delayedWriteSize</td>
-      <td>The delayed write size in this TabletServer.</td>
+      <td>delayedWriteCount</td>
+      <td>The delayed write count in this TabletServer.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>delayedFetchLogSize</td>
-      <td>The delayed fetch log operation size in this TabletServer.</td>
+      <td>delayedFetchCount</td>
+      <td>The delayed fetch log operation count in this TabletServer.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>delayedWriteExpirationPerSecond</td>
+      <td>delayedWriteExpiresPerSecond</td>
       <td>The delayed write operation expire count per second in this TabletServer.</td>
       <td>Meter</td>
     </tr>
     <tr>
-      <td>delayedFetchLogFromFollowerExpirationPerSecond</td>
+      <td>delayedFetchFromFollowerExpiresPerSecond</td>
       <td>The delayed fetch log operation from follower expire count per second in this TabletServer.</td>
       <td>Meter</td>
     </tr>
     <tr>
-      <td>delayedFetchLogFromClientExpirationPerSecond</td>
-      <td>The delayed write operation from client expire count per second in this TabletServer.</td>
+      <td>delayedFetchFromClientExpiresPerSecond</td>
+      <td>The delayed fetch log operation from client expire count per second in this TabletServer.</td>
       <td>Meter</td>
     </tr>
   </tbody>

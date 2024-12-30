@@ -59,7 +59,9 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponseWithRowKind;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newFetchLogRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -121,7 +123,7 @@ public class ReplicaFetcherITCase {
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // send one batch, which need ack.
-        RpcMessageTestUtils.assertProduceLogResponse(
+        assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(
                                 RpcMessageTestUtils.newProduceLogRequest(
@@ -134,7 +136,7 @@ public class ReplicaFetcherITCase {
                 0L);
 
         // check leader log data.
-        RpcMessageTestUtils.assertFetchLogResponse(
+        assertFetchLogResponse(
                 leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, bucketId, 0L)).get(),
                 tableId,
                 bucketId,
@@ -147,8 +149,20 @@ public class ReplicaFetcherITCase {
                 leaderAndIsr.isr().stream()
                         .filter(id -> id != leader)
                         .collect(Collectors.toList())) {
+
             ReplicaManager replicaManager =
                     FLUSS_CLUSTER_EXTENSION.getTabletServerById(followId).getReplicaManager();
+            // wait util follower highWaterMark equals leader.
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(
+                                            replicaManager
+                                                    .getReplicaOrException(tb)
+                                                    .getLogTablet()
+                                                    .getHighWatermark())
+                                    .isEqualTo(10L));
+
             CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
                     new CompletableFuture<>();
             // mock client fetch from follower.
@@ -163,17 +177,6 @@ public class ReplicaFetcherITCase {
             LogRecords records = resultForBucket.records();
             assertThat(records).isNotNull();
             assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1);
-
-            // wait util follower highWaterMark equals leader.
-            retry(
-                    Duration.ofMinutes(1),
-                    () ->
-                            assertThat(
-                                            replicaManager
-                                                    .getReplicaOrException(tb)
-                                                    .getLogTablet()
-                                                    .getHighWatermark())
-                                    .isEqualTo(10L));
         }
     }
 

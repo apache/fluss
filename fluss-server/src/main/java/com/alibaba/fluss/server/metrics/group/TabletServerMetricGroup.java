@@ -44,8 +44,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter replicationBytesIn;
     private final Counter replicationBytesOut;
     private final Counter delayedWriteExpireCount;
-    private final Counter delayedFetchLogFromFollowerExpireCount;
-    private final Counter delayedFetchLogFromClientExpireCount;
+    private final Counter delayedFetchFromFollowerExpireCount;
+    private final Counter delayedFetchFromClientExpireCount;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, int serverId) {
@@ -60,15 +60,15 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.REPLICATION_OUT_RATE, new MeterView(replicationBytesOut));
 
         delayedWriteExpireCount = new ThreadSafeSimpleCounter();
-        meter(MetricNames.DELAYED_WRITE_EXPIRATION_RATE, new MeterView(delayedWriteExpireCount));
-        delayedFetchLogFromFollowerExpireCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.DELAYED_WRITE_EXPIRES_RATE, new MeterView(delayedWriteExpireCount));
+        delayedFetchFromFollowerExpireCount = new ThreadSafeSimpleCounter();
         meter(
-                MetricNames.DELAYED_FETCH_LOG_FROM_FOLLOWER_EXPIRATION_RATE,
-                new MeterView(delayedFetchLogFromFollowerExpireCount));
-        delayedFetchLogFromClientExpireCount = new ThreadSafeSimpleCounter();
+                MetricNames.DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE,
+                new MeterView(delayedFetchFromFollowerExpireCount));
+        delayedFetchFromClientExpireCount = new ThreadSafeSimpleCounter();
         meter(
-                MetricNames.DELAYED_FETCH_LOG_FROM_CLIENT_EXPIRATION_RATE,
-                new MeterView(delayedFetchLogFromClientExpireCount));
+                MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
+                new MeterView(delayedFetchFromClientExpireCount));
     }
 
     @Override
@@ -95,12 +95,12 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         return delayedWriteExpireCount;
     }
 
-    public Counter delayedFetchLogFromFollowerExpireCount() {
-        return delayedFetchLogFromFollowerExpireCount;
+    public Counter delayedFetchFromFollowerExpireCount() {
+        return delayedFetchFromFollowerExpireCount;
     }
 
-    public Counter delayedFetchLogFromClientExpireCount() {
-        return delayedFetchLogFromClientExpireCount;
+    public Counter delayedFetchFromClientExpireCount() {
+        return delayedFetchFromClientExpireCount;
     }
 
     // ------------------------------------------------------------------------

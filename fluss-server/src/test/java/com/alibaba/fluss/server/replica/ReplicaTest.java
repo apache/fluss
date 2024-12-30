@@ -113,7 +113,11 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(appendInfo.shallowCount()).isEqualTo(1);
 
         FetchParams fetchParams =
-                new FetchParams(-1, (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes());
+                new FetchParams(
+                        -1,
+                        (int)
+                                conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES)
+                                        .getBytes());
         fetchParams.setCurrentFetch(DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, null);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);

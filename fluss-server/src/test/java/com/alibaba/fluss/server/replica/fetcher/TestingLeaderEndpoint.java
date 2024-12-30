@@ -53,7 +53,7 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
             Configuration conf, ReplicaManager replicaManager, ServerNode localNode) {
         this.replicaManager = replicaManager;
         this.localNode = localNode;
-        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
         this.maxFetchSizeForBucket =
                 (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
     }

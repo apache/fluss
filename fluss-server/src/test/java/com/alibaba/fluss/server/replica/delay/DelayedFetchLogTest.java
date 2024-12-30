@@ -54,6 +54,8 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
 
         FetchLogResultForBucket preFetchResultForBucket =
                 new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> delayedResponse =
+                new CompletableFuture<>();
         DelayedFetchLog delayedFetchLog =
                 createDelayedFetchLogRequest(
                         tb,
@@ -63,13 +65,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                                 new FetchData(150001L, 0L, Integer.MAX_VALUE),
                                 new LogOffsetMetadata(0L, 0L, 0),
                                 preFetchResultForBucket),
-                        response -> {
-                            assertThat(response.containsKey(tb)).isTrue();
-                            FetchLogResultForBucket resultForBucket = response.get(tb);
-                            assertThat(resultForBucket.getHighWatermark()).isEqualTo(10L);
-                            assertLogRecordsEquals(
-                                    DATA1_ROW_TYPE, resultForBucket.records(), DATA1);
-                        });
+                        delayedResponse::complete);
 
         DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager =
                 replicaManager.getDelayedFetchLogManager();
@@ -87,6 +83,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
         assertThat(delayedFetchLogManager.watched()).isEqualTo(1);
 
         // write data.
+        assertThat(delayedResponse.isDone()).isFalse();
         CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.appendRecordsToLog(
                 20000,
@@ -95,12 +92,14 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
-        // manual trigger the complete delayed fetch log operation. In normal case, it will be
-        // triggered by the highWatermark increment.
-        numComplete = delayedFetchLogManager.checkAndComplete(delayedTableBucketKey);
-        assertThat(numComplete).isEqualTo(1);
         assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(0);
         assertThat(delayedFetchLogManager.watched()).isEqualTo(0);
+
+        Map<TableBucket, FetchLogResultForBucket> result = delayedResponse.get();
+        assertThat(result.containsKey(tb)).isTrue();
+        FetchLogResultForBucket resultForBucket = result.get(tb);
+        assertThat(resultForBucket.getHighWatermark()).isEqualTo(10L);
+        assertLogRecordsEquals(DATA1_ROW_TYPE, resultForBucket.records(), DATA1);
     }
 
     @Test
@@ -110,6 +109,8 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
 
         FetchLogResultForBucket preFetchResultForBucket =
                 new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> delayedResponse =
+                new CompletableFuture<>();
         DelayedFetchLog delayedFetchLog =
                 createDelayedFetchLogRequest(
                         tb,
@@ -119,13 +120,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                                 new FetchData(150001L, 0L, Integer.MAX_VALUE),
                                 new LogOffsetMetadata(0L, 0L, 0),
                                 preFetchResultForBucket),
-                        response -> {
-                            assertThat(response.containsKey(tb)).isTrue();
-                            FetchLogResultForBucket resultForBucket = response.get(tb);
-                            assertThat(resultForBucket.getHighWatermark()).isEqualTo(0L);
-                            assertThat(resultForBucket.recordsOrEmpty())
-                                    .isEqualTo(MemoryLogRecords.EMPTY);
-                        });
+                        delayedResponse::complete);
 
         DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager =
                 replicaManager.getDelayedFetchLogManager();
@@ -140,6 +135,13 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                     delayedFetchLogManager.checkAndComplete(delayedTableBucketKey);
                     assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(0);
                     assertThat(delayedFetchLogManager.watched()).isEqualTo(0);
+
+                    assertThat(delayedResponse.isDone()).isTrue();
+                    Map<TableBucket, FetchLogResultForBucket> result = delayedResponse.get();
+                    assertThat(result.containsKey(tb)).isTrue();
+                    FetchLogResultForBucket resultForBucket = result.get(tb);
+                    assertThat(resultForBucket.getHighWatermark()).isEqualTo(0L);
+                    assertThat(resultForBucket.recordsOrEmpty()).isEqualTo(MemoryLogRecords.EMPTY);
                 });
     }
 

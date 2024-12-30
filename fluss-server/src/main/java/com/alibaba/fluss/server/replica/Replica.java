@@ -793,8 +793,14 @@ public final class Replica {
                     // TODO WRITE a leader epoch.
                     LogAppendInfo appendInfo = logTablet.appendAsLeader(memoryLogRecords);
 
-                    // we may need to increment high watermark.
-                    maybeIncrementLeaderHW(logTablet, System.currentTimeMillis());
+                    // we may need to increment high watermark if isr could be down to 1 or the
+                    // replica count is 1.
+                    boolean hwIncreased =
+                            maybeIncrementLeaderHW(logTablet, System.currentTimeMillis());
+
+                    if (hwIncreased) {
+                        tryCompleteDelayedOperations();
+                    }
 
                     return appendInfo;
                 });

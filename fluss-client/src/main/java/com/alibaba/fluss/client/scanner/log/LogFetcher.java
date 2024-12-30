@@ -125,11 +125,16 @@ public class LogFetcher implements Closeable {
         this.projection = projection;
         this.rpcClient = rpcClient;
         this.logScannerStatus = logScannerStatus;
-        this.maxFetchBytes = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchBytes =
+                (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
         this.maxBucketFetchBytes =
-                (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
-        this.minFetchBytes = (int) conf.get(ConfigOptions.LOG_FETCH_MIN_BYTES).getBytes();
-        this.maxFetchWaitMs = (int) conf.get(ConfigOptions.LOG_FETCH_WAIT_MAX_TIME).toMillis();
+                (int)
+                        conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)
+                                .getBytes();
+        this.minFetchBytes =
+                (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MIN_BYTES).getBytes();
+        this.maxFetchWaitMs =
+                (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME).toMillis();
 
         this.isCheckCrcs = conf.getBoolean(ConfigOptions.CLIENT_SCANNER_LOG_CHECK_CRC);
         this.logFetchBuffer = new LogFetchBuffer();

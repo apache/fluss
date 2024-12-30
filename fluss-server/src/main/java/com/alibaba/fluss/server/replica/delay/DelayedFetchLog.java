@@ -34,7 +34,7 @@ import com.alibaba.fluss.server.log.LogOffsetSnapshot;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
-import com.alibaba.fluss.server.replica.ReplicaManager.LogReadStatus;
+import com.alibaba.fluss.server.replica.ReplicaManager.LogReadResult;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,9 +91,9 @@ public class DelayedFetchLog extends DelayedOperation {
         }
 
         // re-fetch data.
-        Map<TableBucket, LogReadStatus> reFetchResult =
+        Map<TableBucket, LogReadResult> reReadResult =
                 replicaManager.readFromLog(params, reFetchBuckets);
-        reFetchResult.forEach((key, value) -> result.put(key, value.getFetchLogResultForBucket()));
+        reReadResult.forEach((key, value) -> result.put(key, value.getFetchLogResultForBucket()));
         responseCallback.accept(result);
     }
 
@@ -103,7 +103,7 @@ public class DelayedFetchLog extends DelayedOperation {
      * <ul>
      *   <li>Case A: The server is no longer the leader for some buckets it tries to fetch
      *   <li>Case B: The replica is no longer available on this server
-     *   <li>Case C: This server doesn't know of some buckets ot tries to fetch
+     *   <li>Case C: This server doesn't know of some buckets it tries to fetch
      *   <li>Case D: The fetch offset locates not on the last segment of the log
      *   <li>Case E: The accumulated bytes from all the fetching buckets exceeds the minimum bytes
      * </ul>
@@ -195,9 +195,9 @@ public class DelayedFetchLog extends DelayedOperation {
     @Override
     public void onExpiration() {
         if (params.isFromFollower()) {
-            serverMetricGroup.delayedFetchLogFromFollowerExpireCount().inc();
+            serverMetricGroup.delayedFetchFromFollowerExpireCount().inc();
         } else {
-            serverMetricGroup.delayedFetchLogFromClientExpireCount().inc();
+            serverMetricGroup.delayedFetchFromClientExpireCount().inc();
         }
     }
 
