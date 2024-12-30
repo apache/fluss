@@ -675,7 +675,7 @@ How to use flink metrics, you can see [flink metrics](https://nightlies.apache.o
 ## Observability (Prometheus + Grafana)
 
 We provide a minimal quickstart configuration for application observability with Prometheus and
-Grafana [here](/docs/assets/fluss-quickstart-observability.zip). The quickstart configuration comes with 2 dashboards.
+Grafana [here](../assets/fluss-quickstart-observability.zip). The quickstart configuration comes with 2 dashboards.
 
 - `Fluss – overview`: Selected metrics to observe the overall cluster status
 - `Fluss – detail`: Majority of metrics listed in [metrics list](#metrics-list)
@@ -685,7 +685,7 @@ Grafana [here](/docs/assets/fluss-quickstart-observability.zip). The quickstart 
 
 Based on the [Flink quickstart guide](/docs/quickstart/flink), you can add observability capabilities as follows.
 
-1. Download the [observability quickstart configuration](/docs/assets/fluss-quickstart-observability.zip) and extract the ZIP archive in your working directory.
+1. Download the [observability quickstart configuration](../assets/fluss-quickstart-observability.zip) and extract the ZIP archive in your working directory.
 After extracting the archive, the contents of the working directory should be as follows.
 
 ```
