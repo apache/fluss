@@ -370,10 +370,6 @@ public class FlussTable implements Table {
                 metadataUpdater);
     }
 
-    public MetadataUpdater getMetadataUpdater() {
-        return metadataUpdater;
-    }
-
     @Override
     public UpsertWriter getUpsertWriter() {
         return getUpsertWriter(new UpsertWrite());

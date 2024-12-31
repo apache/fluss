@@ -335,30 +335,4 @@ public final class Cluster {
             return location.getLeader();
         }
     }
-
-    @Override
-    public String toString() {
-        return "Cluster{"
-                + "coordinatorServer="
-                + coordinatorServer
-                + ", availableLocationsByPath="
-                + availableLocationsByPath
-                + ", availableLocationByBucket="
-                + availableLocationByBucket
-                + ", aliveTabletServersById="
-                + aliveTabletServersById
-                + ", aliveTabletServers="
-                + aliveTabletServers
-                + ", tableIdByPath="
-                + tableIdByPath
-                + ", pathByTableId="
-                + pathByTableId
-                + ", partitionsIdByPath="
-                + partitionsIdByPath
-                + ", partitionNameById="
-                + partitionNameById
-                + ", tableInfoByPath="
-                + tableInfoByPath
-                + '}';
-    }
 }

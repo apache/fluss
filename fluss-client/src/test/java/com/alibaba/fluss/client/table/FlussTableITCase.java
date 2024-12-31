@@ -26,7 +26,6 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -52,8 +51,6 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -81,8 +78,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link FlussTable}. */
 class FlussTableITCase extends ClientToServerITCaseBase {
-
-    private static final Logger LOG = LoggerFactory.getLogger(FlussTableITCase.class);
 
     @Test
     void testGetDescriptor() throws Exception {
@@ -343,25 +338,13 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     void verifyPutAndLookup(Table table, Schema tableSchema, Object[] fields) throws Exception {
         // put data.
         InternalRow row = compactedRow(tableSchema.toRowType(), fields);
-
         UpsertWriter upsertWriter = table.getUpsertWriter();
         // put data.
         upsertWriter.upsert(row);
         upsertWriter.flush();
-
-        Cluster cluster = ((FlussTable) table).getMetadataUpdater().getCluster();
-        try {
-            // lookup this key.
-            IndexedRow keyRow = keyRow(tableSchema, fields);
-            assertThat(lookupRow(table, keyRow)).isEqualTo(row);
-        } catch (Exception e) {
-            LOG.error("testPutAndLookup fail.", e);
-            LOG.error("old cluster: {}.", cluster);
-            LOG.error(
-                    "cluster: tostring, {}.",
-                    ((FlussTable) table).getMetadataUpdater().getCluster());
-            throw e;
-        }
+        // lookup this key.
+        IndexedRow keyRow = keyRow(tableSchema, fields);
+        assertThat(lookupRow(table, keyRow)).isEqualTo(row);
     }
 
     private InternalRow lookupRow(Table table, IndexedRow keyRow) throws Exception {
