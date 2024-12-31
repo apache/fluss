@@ -20,13 +20,14 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.BufferExhaustedException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
+import java.io.EOFException;
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -49,7 +50,7 @@ import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     private static final long PER_REQUEST_MEMORY_SIZE = 16 * 1024 * 1024;
-    private static final long DEFAULT_WAIT_TIMEOUT_MS = 1000 * 60 * 2;
+    private static final long DEFAULT_WAIT_TIMEOUT_MS = 1000 * 60 * 5;
 
     /** The lock to guard the memory pool. */
     private final ReentrantLock lock = new ReentrantLock();
@@ -106,7 +107,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     }
 
     @Override
-    public MemorySegment nextSegment(boolean waiting) {
+    public MemorySegment nextSegment(boolean waiting) throws IOException {
         return inLock(
                 lock,
                 () -> {
@@ -132,14 +133,14 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                 });
     }
 
-    private MemorySegment waitForSegment() {
+    private MemorySegment waitForSegment() throws EOFException {
         Condition moreMemory = lock.newCondition();
         waiters.addLast(moreMemory);
         try {
             while (cachePages.isEmpty()) {
                 boolean success = moreMemory.await(maxTimeToBlockMs, TimeUnit.MILLISECONDS);
                 if (!success) {
-                    throw new BufferExhaustedException(
+                    throw new EOFException(
                             "Failed to allocate new segment within the configured max blocking time "
                                     + maxTimeToBlockMs
                                     + " ms. Total memory: "
@@ -152,6 +153,8 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                 }
                 checkClosed();
             }
+
+            this.pageUsage++;
             return cachePages.remove(cachePages.size() - 1);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

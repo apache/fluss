@@ -27,7 +27,7 @@ import java.util.List;
 public class ManagedPagedOutputView extends AbstractPagedOutputView {
     private final MemorySegmentPool segmentPool;
 
-    public ManagedPagedOutputView(MemorySegmentPool segmentPool) {
+    public ManagedPagedOutputView(MemorySegmentPool segmentPool) throws IOException {
         this(segmentPool.nextSegment(true), segmentPool);
     }
 

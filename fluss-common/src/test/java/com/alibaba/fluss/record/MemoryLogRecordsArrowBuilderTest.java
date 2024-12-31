@@ -32,6 +32,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -182,7 +183,7 @@ public class MemoryLogRecordsArrowBuilderTest {
     }
 
     private MemoryLogRecordsArrowBuilder createMemoryLogRecordsArrowBuilder(
-            ArrowWriter writer, int maxPages, int pageSizeInBytes) {
+            ArrowWriter writer, int maxPages, int pageSizeInBytes) throws IOException {
         conf.set(
                 ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE,
                 new MemorySize((long) maxPages * pageSizeInBytes));

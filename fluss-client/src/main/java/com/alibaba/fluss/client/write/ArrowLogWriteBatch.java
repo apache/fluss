@@ -18,9 +18,10 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.memory.ManagedPagedOutputView;
+import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentPool;
+import com.alibaba.fluss.memory.PreAllocatedManagedPagedOutputView;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
@@ -48,19 +49,23 @@ import java.util.stream.Collectors;
 @Internal
 public class ArrowLogWriteBatch extends WriteBatch {
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
-    private final ManagedPagedOutputView outputView;
+    private final AbstractPagedOutputView outputView;
+    private final List<MemorySegment> preAllocatedMemorySegments;
 
     public ArrowLogWriteBatch(
             TableBucket tableBucket,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
-            MemorySegment initMemorySegment,
+            List<MemorySegment> preAllocatedMemorySegments,
             MemorySegmentPool memorySegmentSource) {
         super(tableBucket, physicalTablePath);
-        this.outputView = new ManagedPagedOutputView(initMemorySegment, memorySegmentSource);
+        this.outputView =
+                new PreAllocatedManagedPagedOutputView(
+                        preAllocatedMemorySegments, memorySegmentSource);
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView);
+        this.preAllocatedMemorySegments = preAllocatedMemorySegments;
     }
 
     @Override
@@ -124,9 +129,15 @@ public class ArrowLogWriteBatch extends WriteBatch {
 
     @Override
     public List<MemorySegment> memorySegments() {
-        return outputView.getSegmentBytesViewList().stream()
-                .map(MemorySegmentBytesView::getMemorySegment)
-                .collect(Collectors.toList());
+        List<MemorySegment> usedMemorySegments =
+                outputView.getSegmentBytesViewList().stream()
+                        .map(MemorySegmentBytesView::getMemorySegment)
+                        .collect(Collectors.toList());
+        if (usedMemorySegments.size() > preAllocatedMemorySegments.size()) {
+            return usedMemorySegments;
+        } else {
+            return preAllocatedMemorySegments;
+        }
     }
 
     @Override

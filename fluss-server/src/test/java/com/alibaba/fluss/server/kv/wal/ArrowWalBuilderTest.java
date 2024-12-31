@@ -36,6 +36,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -147,7 +148,8 @@ class ArrowWalBuilderTest {
     }
 
     private WalBuilder createWalBuilder(
-            TableBucket tb, int maxSizeInBytes, MemorySegmentPool memorySegmentPool) {
+            TableBucket tb, int maxSizeInBytes, MemorySegmentPool memorySegmentPool)
+            throws IOException {
         return new ArrowWalBuilder(
                 DEFAULT_SCHEMA_ID,
                 arrowWriterProvider.getOrCreateWriter(

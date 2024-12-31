@@ -18,6 +18,7 @@ package com.alibaba.fluss.memory;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -31,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class LazyMemorySegmentPoolTest {
 
     @Test
-    void testNextSegmentWaiter() throws InterruptedException {
+    void testNextSegmentWaiter() throws Exception {
         LazyMemorySegmentPool source = buildLazyMemorySegmentSource(10, 10);
         assertThat(source.pageSize()).isEqualTo(10);
         assertThat(source.freePages()).isEqualTo(10);
@@ -101,7 +102,11 @@ public class LazyMemorySegmentPoolTest {
                 new Thread(
                         () -> {
                             try {
-                                source.nextSegment(true);
+                                try {
+                                    source.nextSegment(true);
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
                             } finally {
                                 completed.countDown();
                             }

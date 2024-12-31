@@ -20,6 +20,8 @@ import com.alibaba.fluss.annotation.Internal;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
+
 /** Interface describing entities that can provide memory segments. */
 @Internal
 public interface MemorySegmentSource {
@@ -31,5 +33,5 @@ public interface MemorySegmentSource {
      * @return The next memory segment, or null, if none is available.
      */
     @Nullable
-    MemorySegment nextSegment(boolean waiting);
+    MemorySegment nextSegment(boolean waiting) throws IOException;
 }

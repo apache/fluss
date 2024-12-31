@@ -46,8 +46,7 @@ import com.alibaba.fluss.utils.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -183,7 +182,7 @@ public final class RecordAccumulator {
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
         appendsInProgress.incrementAndGet();
-        MemorySegment memorySegment = null;
+        List<MemorySegment> memorySegments = new ArrayList<>();
         WriteBatch.WriteBatchType writeBatchType = null;
         List<WriteBatch> batchesToBuild = new ArrayList<>(1);
         try {
@@ -207,7 +206,7 @@ public final class RecordAccumulator {
 
             TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
             writeBatchType = getWriteBatchType(writeRecord, tableInfo);
-            memorySegment = allocateMemorySegment(writeRecord, writeBatchType);
+            memorySegments = allocateMemorySegments(writeRecord, writeBatchType);
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
@@ -217,19 +216,19 @@ public final class RecordAccumulator {
                                 tableInfo,
                                 writeBatchType,
                                 dq,
-                                memorySegment,
+                                memorySegments,
                                 cluster,
                                 batchesToBuild);
                 if (appendResult.newBatchCreated) {
-                    memorySegment = null;
+                    memorySegments = new ArrayList<>();
                 }
                 return appendResult;
             }
         } finally {
             // Other append operations by the Sender thread may have created a new batch, causing
-            // the temporarily allocated memorySegment here to go unused, and therefore, it needs to
-            // be released.
-            deallocateMemorySegment(memorySegment, writeBatchType);
+            // the temporarily allocated memorySegments here to go unused, and therefore, it needs
+            // to be released.
+            deallocateMemorySegment(memorySegments, writeBatchType);
             appendsInProgress.decrementAndGet();
 
             // we need to serialize the batch (may allocate memory segments) out of the
@@ -400,29 +399,37 @@ public final class RecordAccumulator {
         }
     }
 
-    private MemorySegment allocateMemorySegment(
+    private List<MemorySegment> allocateMemorySegments(
             WriteRecord writeRecord, WriteBatch.WriteBatchType writeBatchType)
-            throws InterruptedException {
+            throws InterruptedException, IOException {
         if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
-            return memorySegmentPool.nextSegment(true);
+            // pre-allocate a list of memory segments to hold by the arrow batch to avoid deadlock
+            // in sender thread.
+            int pageSize = memorySegmentPool.pageSize();
+            int memorySegmentSize = batchSize / pageSize;
+            List<MemorySegment> memorySegments = new ArrayList<>(memorySegmentSize);
+            for (int i = 0; i < memorySegmentSize; i++) {
+                memorySegments.add(memorySegmentPool.nextSegment(true));
+            }
+            return memorySegments;
         } else {
             // get the new size.
             int size = Math.max(batchSize, writeRecord.getEstimatedSizeInBytes());
             // TODO check the remaining time to wait for allocating memory segment.
-            return writerMemoryBuffer.allocate(size, Long.MAX_VALUE);
+            return Collections.singletonList(writerMemoryBuffer.allocate(size, Long.MAX_VALUE));
         }
     }
 
     private void deallocateMemorySegment(
-            @Nullable MemorySegment memorySegment, WriteBatch.WriteBatchType writeBatchType) {
-        if (memorySegment == null) {
+            List<MemorySegment> memorySegmentList, WriteBatch.WriteBatchType writeBatchType) {
+        if (memorySegmentList.isEmpty()) {
             return;
         }
 
         if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
-            memorySegmentPool.returnPage(memorySegment);
+            memorySegmentPool.returnAll(memorySegmentList);
         } else {
-            writerMemoryBuffer.deallocate(memorySegment);
+            writerMemoryBuffer.deallocate(memorySegmentList.get(0));
         }
     }
 
@@ -505,7 +512,7 @@ public final class RecordAccumulator {
             TableInfo tableInfo,
             WriteBatch.WriteBatchType writeBatchType,
             Deque<WriteBatch> deque,
-            MemorySegment segment,
+            List<MemorySegment> segments,
             Cluster cluster,
             List<WriteBatch> batchesToBuild)
             throws Exception {
@@ -521,14 +528,15 @@ public final class RecordAccumulator {
         // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
         WriteBatch batch;
         if (writeBatchType == WriteBatch.WriteBatchType.KV) {
+            MemorySegment memorySegment = segments.get(0);
             batch =
                     new KvWriteBatch(
                             tb,
                             physicalTablePath,
                             DefaultKvRecordBatch.Builder.builder(
                                     tableInfo.getSchemaId(),
-                                    segment.size(),
-                                    new MemorySegmentOutputView(segment),
+                                    memorySegment.size(),
+                                    new MemorySegmentOutputView(memorySegment),
                                     tableInfo.getTableDescriptor().getKvFormat()),
                             writeRecord.getTargetColumns());
         } else if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
@@ -544,15 +552,16 @@ public final class RecordAccumulator {
                             physicalTablePath,
                             tableInfo.getSchemaId(),
                             arrowWriter,
-                            segment,
+                            segments,
                             memorySegmentPool);
         } else {
+            MemorySegment memorySegment = segments.get(0);
             batch =
                     new IndexedLogWriteBatch(
                             tb,
                             physicalTablePath,
                             MemoryLogRecordsIndexedBuilder.builder(
-                                    tableInfo.getSchemaId(), segment.size(), segment));
+                                    tableInfo.getSchemaId(), memorySegment.size(), memorySegment));
         }
 
         batch.tryAppend(writeRecord, callback);

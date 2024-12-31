@@ -17,6 +17,7 @@
 package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
+import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -55,6 +56,8 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         if (initialSegment == null) {
             throw new NullPointerException("Initial Segment may not be null");
         }
+        Preconditions.checkArgument(
+                initialSegment.size() == pageSize, "Initial segment size must match page size.");
         this.pageSize = pageSize;
         this.currentSegment = initialSegment;
         this.positionInSegment = 0;
