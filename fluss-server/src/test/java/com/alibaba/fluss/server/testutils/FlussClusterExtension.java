@@ -282,13 +282,15 @@ public final class FlussClusterExtension
     }
 
     private void setRemoteDataDir(Configuration conf) {
-        String remoteDataDir =
-                LocalFileSystem.getLocalFsURI().getScheme()
-                        + "://"
-                        + tempDir.getAbsolutePath()
-                        + File.separator
-                        + "remote-data-dir";
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+    }
+
+    public String getRemoteDataDir() {
+        return LocalFileSystem.getLocalFsURI().getScheme()
+                + "://"
+                + tempDir.getAbsolutePath()
+                + File.separator
+                + "remote-data-dir";
     }
 
     /** Stop a tablet server. */
@@ -584,6 +586,10 @@ public final class FlussClusterExtension
                         .map(n -> newTabletServerClientForNode(n.id()))
                         .collect(Collectors.toList()));
         return rpcServiceBases;
+    }
+
+    public CoordinatorServer getCoordinatorServer() {
+        return coordinatorServer;
     }
 
     // --------------------------------------------------------------------------------------------

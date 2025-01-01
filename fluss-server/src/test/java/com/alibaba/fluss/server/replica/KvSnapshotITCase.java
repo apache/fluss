@@ -18,19 +18,21 @@ package com.alibaba.fluss.server.replica;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
-import com.alibaba.fluss.server.entity.StopReplicaData;
-import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
+import com.alibaba.fluss.server.coordinator.CoordinatorService;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import com.alibaba.fluss.server.tablet.TabletServer;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.testutils.KvTestUtils;
 import com.alibaba.fluss.server.testutils.RpcMessageTestUtils;
+import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -40,14 +42,13 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
-import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecords;
 import static com.alibaba.fluss.testutils.DataTestUtils.getKeyValuePairs;
@@ -68,24 +69,31 @@ class KvSnapshotITCase {
                     .build();
 
     private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
+    private CoordinatorService coordinatorService;
+    private String remoteDataDir;
 
     @BeforeEach
     void beforeEach() {
         completedSnapshotHandleStore =
                 new ZooKeeperCompletedSnapshotHandleStore(
                         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+        this.coordinatorService =
+                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorService();
+        remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
     }
 
     @Test
-    void testKvSnapshot() throws Exception {
+    void testKvSnapshotAndDelete() throws Exception {
         // test snapshot for multiple table
         int tableNum = 3;
         List<TableBucket> tableBuckets = new ArrayList<>();
+        Map<Long, TablePath> tablePathMap = new HashMap<>();
         for (int i = 0; i < tableNum; i++) {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId =
                     RpcMessageTestUtils.createTable(
                             FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+            tablePathMap.put(tableId, tablePath);
             for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
             }
@@ -169,23 +177,32 @@ class KvSnapshotITCase {
                                 assertThat(replica.getLogTablet().getMinRetainOffset())
                                         .as("Replica %s min retain offset", replica)
                                         .isEqualTo(6));
-                CompletableFuture<List<StopReplicaResultForBucket>> future =
-                        new CompletableFuture<>();
-                server.getReplicaManager()
-                        .stopReplicas(
-                                INITIAL_COORDINATOR_EPOCH,
-                                Collections.singletonList(
-                                        new StopReplicaData(
-                                                tableBucket, true, INITIAL_COORDINATOR_EPOCH, 1)),
-                                future::complete);
             }
         }
-        checkBucketDirsDeleted(bucketKvSnapshotDirs);
+        for (TablePath tablePath : tablePathMap.values()) {
+            DropTableRequest request = new DropTableRequest();
+            request.setIgnoreIfNotExists(true)
+                    .setTablePath()
+                    .setDatabaseName(tablePath.getDatabaseName())
+                    .setTableName(tablePath.getTableName());
+            coordinatorService.dropTable(request);
+        }
+        checkDirsDeleted(bucketKvSnapshotDirs, tablePathMap);
     }
 
-    private void checkBucketDirsDeleted(Set<File> bucketDirs) {
+    private void checkDirsDeleted(Set<File> bucketDirs, Map<Long, TablePath> tablePathMap) {
         for (File bucketDir : bucketDirs) {
-            assertThat(bucketDir.exists()).isFalse();
+            retry(Duration.ofMinutes(1), () -> assertThat(bucketDir.exists()).isFalse());
+        }
+        for (Map.Entry<Long, TablePath> tablePathEntry : tablePathMap.entrySet()) {
+            FsPath fsPath =
+                    FlussPaths.remoteTableDir(
+                            FsPath.fromLocalFile(new File(remoteDataDir)),
+                            tablePathEntry.getValue(),
+                            tablePathEntry.getKey());
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(new File(fsPath.getPath()).exists()).isFalse());
         }
     }
 

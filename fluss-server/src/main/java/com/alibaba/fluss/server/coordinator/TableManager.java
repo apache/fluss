@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.coordinator.statemachine.BucketState;
@@ -41,6 +42,7 @@ public class TableManager {
     private static final Logger LOG = LoggerFactory.getLogger(TableManager.class);
 
     private final MetadataManager metadataManager;
+    private final RemoteStorageCleaner remoteStorageCleaner;
     private final CoordinatorContext coordinatorContext;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
@@ -49,8 +51,10 @@ public class TableManager {
             MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
             ReplicaStateMachine replicaStateMachine,
-            TableBucketStateMachine tableBucketStateMachine) {
+            TableBucketStateMachine tableBucketStateMachine,
+            RemoteStorageCleaner remoteStorageCleaner) {
         this.metadataManager = metadataManager;
+        this.remoteStorageCleaner = remoteStorageCleaner;
         this.coordinatorContext = coordinatorContext;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
@@ -244,6 +248,10 @@ public class TableManager {
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
         try {
             metadataManager.completeDeleteTable(tableId);
+            TablePath tablePath = coordinatorContext.getTablePathById(tableId);
+            TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+            remoteStorageCleaner.deleteTableRemoteDir(
+                    tablePath, tableInfo.getSchema().getPrimaryKey().isPresent(), tableId);
         } catch (Exception e) {
             LOG.error("Fail to complete table deletion for table {}.", tableId, e);
         }

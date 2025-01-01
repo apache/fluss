@@ -21,6 +21,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.utils.types.Tuple2;
 
@@ -584,6 +585,34 @@ public class FlussPaths {
             FsPath remoteKvDir, PhysicalTablePath physicalPath, TableBucket tableBucket) {
         FsPath remoteTableDir = remoteTabletParentDir(remoteKvDir, physicalPath, tableBucket);
         return new FsPath(remoteTableDir, String.valueOf(tableBucket.getBucket()));
+    }
+
+    /**
+     * Returns the remote directory path for storing kv snapshot files or log segments file of
+     * table.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * Remote kv table dir
+     * {$remote.data.dir}/kv/{databaseName}/{tableName}-{tableId}
+     *
+     * Remote log table dir.
+     * {$remote.data.dir}/log/{databaseName}/{tableName}-{tableId}
+     *
+     * </pre>
+     *
+     * @param remoteKvOrLogBaseDir - the remote kv snapshots or log segments root dir of table.
+     * @param tablePath - table path.
+     * @param tableId - table id.
+     */
+    public static FsPath remoteTableDir(
+            FsPath remoteKvOrLogBaseDir, TablePath tablePath, long tableId) {
+        return new FsPath(
+                remoteKvOrLogBaseDir,
+                String.format(
+                        "%s/%s-%s",
+                        tablePath.getDatabaseName(), tablePath.getTableName(), tableId));
     }
 
     /**

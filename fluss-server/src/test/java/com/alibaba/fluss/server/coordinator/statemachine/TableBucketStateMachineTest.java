@@ -29,6 +29,7 @@ import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorEventProcessor;
 import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
 import com.alibaba.fluss.server.coordinator.CoordinatorTestUtils;
+import com.alibaba.fluss.server.coordinator.RemoteStorageCleaner;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
@@ -48,6 +49,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -76,6 +78,7 @@ class TableBucketStateMachineTest {
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private AutoPartitionManager autoPartitionManager;
+    private RemoteStorageCleaner remoteStorageCleaner;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -86,9 +89,10 @@ class TableBucketStateMachineTest {
     }
 
     @BeforeEach
-    void beforeEach() {
+    void beforeEach() throws IOException {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         coordinatorRequestBatch =
@@ -101,6 +105,7 @@ class TableBucketStateMachineTest {
         completedSnapshotStoreManager = new CompletedSnapshotStoreManager(1, 1, zookeeperClient);
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
+        remoteStorageCleaner = new RemoteStorageCleaner(conf);
     }
 
     @Test
@@ -227,6 +232,7 @@ class TableBucketStateMachineTest {
         CoordinatorEventProcessor coordinatorEventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
+                        remoteStorageCleaner,
                         serverMetadataCache,
                         new CoordinatorChannelManager(
                                 RpcClient.create(

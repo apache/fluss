@@ -184,6 +184,7 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
                             zkClient,
+                            new RemoteStorageCleaner(conf),
                             metadataCache,
                             coordinatorChannelManager,
                             bucketSnapshotManager,
