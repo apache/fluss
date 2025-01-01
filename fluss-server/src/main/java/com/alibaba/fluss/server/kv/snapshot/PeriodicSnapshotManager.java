@@ -177,7 +177,7 @@ public class PeriodicSnapshotManager implements Closeable {
         // of using guardedExecutor
         guardedExecutor.execute(
                 () -> {
-                    if (started && !periodicExecutor.isShutdown()) {
+                    if (started) {
                         LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
                         long triggerTime = System.currentTimeMillis();
 

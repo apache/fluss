@@ -1239,8 +1239,8 @@ public class ReplicaManager {
             }
 
             remoteLogManager.stopReplica(replicaToDelete, delete && replicaToDelete.isLeader());
-            if (delete) {
-                kvManager.dropRemoteKvSnapshot(
+            if (delete && replicaToDelete.isLeader()) {
+                kvManager.deleteRemoteKvSnapshot(
                         replicaToDelete.getPhysicalTablePath(), replicaToDelete.getTableBucket());
             }
         }

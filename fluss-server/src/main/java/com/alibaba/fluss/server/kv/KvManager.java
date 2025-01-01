@@ -282,16 +282,20 @@ public final class KvManager extends TabletManagerBase {
         return kvTablet;
     }
 
-    public void dropRemoteKvSnapshot(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+    public void deleteRemoteKvSnapshot(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         FsPath remoteKvTabletDir =
                 FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
         try {
             if (remoteFileSystem.exists(remoteKvTabletDir)) {
                 remoteFileSystem.delete(remoteKvTabletDir, true);
-                LOG.info("Delete remote table bucket snapshot of {} success.", tableBucket);
+                LOG.info("Delete table's remote bucket snapshot dir of {} success.", tableBucket);
             }
         } catch (Exception e) {
-            LOG.error("Failed to delete remote kv tablet path {}.", remoteKvTabletDir, e);
+            LOG.error(
+                    "Delete table's remote bucket snapshot dir of {} failed.",
+                    remoteKvTabletDir,
+                    e);
         }
     }
 }
