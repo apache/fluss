@@ -91,15 +91,44 @@ class TableDescriptorTest {
 
     @Test
     void testDistribution() {
-        final TableDescriptor descriptor =
+        TableDescriptor descriptor =
                 TableDescriptor.builder().schema(SCHEMA_1).distributedBy(10, "f0", "f3").build();
-
         Optional<TableDescriptor.TableDistribution> distribution =
                 descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(10);
         assertThat(distribution.get().getBucketKeys()).hasSize(2);
         assertThat(distribution.get().getBucketKeys().get(0)).isEqualTo("f0", "f3");
+        assertThat(descriptor.isDefaultBucketKey()).isTrue();
+
+        // a subset of primary key
+        descriptor = TableDescriptor.builder().schema(SCHEMA_1).distributedBy(10, "f3").build();
+        distribution = descriptor.getTableDistribution();
+        assertThat(distribution).isPresent();
+        assertThat(distribution.get().getBucketCount()).hasValue(10);
+        assertThat(distribution.get().getBucketKeys()).isEqualTo(Collections.singletonList("f3"));
+        assertThat(descriptor.isDefaultBucketKey()).isFalse();
+
+        // default bucket key for partitioned table
+        descriptor = TableDescriptor.builder().schema(SCHEMA_1).partitionedBy("f0").build();
+        distribution = descriptor.getTableDistribution();
+        assertThat(distribution).isPresent();
+        assertThat(distribution.get().getBucketCount()).isEmpty();
+        assertThat(distribution.get().getBucketKeys()).isEqualTo(Collections.singletonList("f3"));
+        assertThat(descriptor.isDefaultBucketKey()).isTrue();
+
+        // test subset of primary key for partitioned table
+        descriptor =
+                TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .partitionedBy("f0")
+                        .distributedBy(10, "f3")
+                        .build();
+        distribution = descriptor.getTableDistribution();
+        assertThat(distribution).isPresent();
+        assertThat(distribution.get().getBucketCount()).hasValue(10);
+        assertThat(distribution.get().getBucketKeys()).isEqualTo(Collections.singletonList("f3"));
+        assertThat(descriptor.isDefaultBucketKey()).isTrue();
     }
 
     @Test
@@ -116,6 +145,7 @@ class TableDescriptorTest {
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(12);
         assertThat(distribution.get().getBucketKeys()).hasSize(0);
+        assertThat(descriptor.isDefaultBucketKey()).isTrue();
     }
 
     @Test
@@ -128,9 +158,9 @@ class TableDescriptorTest {
                                         .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Currently, bucket keys must be equal to primary keys excluding partition keys for primary-key tables. "
+                        "Bucket keys must be a subset of primary keys excluding partition keys for primary-key tables. "
                                 + "The primary keys are [f0, f3], the partition keys are [], "
-                                + "the expected bucket keys are [f0, f3], but the user-defined bucket keys are [f1].");
+                                + "but the user-defined bucket keys are [f1].");
 
         assertThatThrownBy(
                         () ->
@@ -140,25 +170,21 @@ class TableDescriptorTest {
                                         .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Currently, bucket keys must be equal to primary keys excluding partition keys for primary-key tables. "
+                        "Bucket keys must be a subset of primary keys excluding partition keys for primary-key tables. "
                                 + "The primary keys are [f0, f3], the partition keys are [], "
-                                + "the expected bucket keys are [f0, f3], but the user-defined bucket keys are [f0, f1].");
+                                + "but the user-defined bucket keys are [f0, f1].");
 
-        // bucket key is the subset of primary key. This pattern can be support for prefixLookup.
-        Schema schema0 =
-                Schema.newBuilder()
-                        .column("f0", DataTypes.STRING())
-                        .column("f1", DataTypes.BIGINT())
-                        .primaryKey("f0", "f1")
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(schema0).distributedBy(12, "f0").build();
-        assertThat(tableDescriptor.getBucketKey()).containsExactlyInAnyOrder("f0");
-        assertThat(tableDescriptor.getBucketKeyIndexes()).isEqualTo(new int[] {0});
-        assertThat(
-                        TableDescriptor.bucketKeysMatchPrefixLookupPattern(
-                                schema0, Collections.singletonList("f0")))
-                .isTrue();
+        // bucket key shouldn't include partition key
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder()
+                                        .schema(SCHEMA_1)
+                                        .partitionedBy("f0")
+                                        .distributedBy(3, "f0", "f3")
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
     }
 
     @Test

@@ -28,18 +28,11 @@ import java.util.concurrent.CompletableFuture;
 @Internal
 public class Lookup extends AbstractLookup<byte[]> {
 
-    private final TableBucket tableBucket;
     private final CompletableFuture<byte[]> future;
 
     Lookup(TableBucket tableBucket, byte[] key) {
-        super(key);
-        this.tableBucket = tableBucket;
+        super(tableBucket, key);
         this.future = new CompletableFuture<>();
-    }
-
-    @Override
-    public TableBucket tableBucket() {
-        return tableBucket;
     }
 
     @Override

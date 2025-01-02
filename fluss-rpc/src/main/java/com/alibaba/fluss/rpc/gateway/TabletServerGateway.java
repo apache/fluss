@@ -102,9 +102,9 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     CompletableFuture<LookupResponse> lookup(LookupRequest request);
 
     /**
-     * Prefix lookup to get value by index key.
+     * Prefix lookup to get value by prefix key.
      *
-     * @return Index lookup response.
+     * @return Prefix lookup response.
      */
     @RPC(api = ApiKeys.PREFIX_LOOKUP)
     CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request);

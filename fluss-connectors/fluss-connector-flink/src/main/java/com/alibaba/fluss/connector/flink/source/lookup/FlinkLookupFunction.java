@@ -53,7 +53,6 @@ public class FlinkLookupFunction extends LookupFunction {
     private final TablePath tablePath;
     private final int maxRetryTimes;
     private final RowType flinkRowType;
-    private final int[] lookupKeyIndexes;
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
     private final LookupType flussLookupType;
@@ -68,7 +67,6 @@ public class FlinkLookupFunction extends LookupFunction {
             Configuration flussConfig,
             TablePath tablePath,
             RowType flinkRowType,
-            int[] lookupKeyIndexes,
             int maxRetryTimes,
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection) {
@@ -76,10 +74,9 @@ public class FlinkLookupFunction extends LookupFunction {
         this.tablePath = tablePath;
         this.maxRetryTimes = maxRetryTimes;
         this.flinkRowType = flinkRowType;
-        this.lookupKeyIndexes = lookupKeyIndexes;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
-        this.flussLookupType = lookupNormalizer.getFlussLookupType();
+        this.flussLookupType = lookupNormalizer.getLookupType();
     }
 
     @Override
@@ -88,6 +85,7 @@ public class FlinkLookupFunction extends LookupFunction {
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
         // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
+        int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
                         FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes),

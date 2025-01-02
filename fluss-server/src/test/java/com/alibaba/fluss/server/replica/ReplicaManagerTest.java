@@ -74,7 +74,7 @@ import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -674,17 +674,16 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Arrays.asList(prefixKey1Bytes, prefixKey2Bytes),
                 Arrays.asList(key1ExpectedValues, key2ExpectedValues));
 
-        // Prefix lookup an unsupported prefixLookup table.
-        tablePath = TablePath.of("test_db_1", "test_unsupported_prefix_lookup_t1");
+        // Prefix lookup an unsupported prefixLookup table (a log table).
         tableId =
                 registerTableInZkClient(
-                        tablePath,
-                        DATA1_SCHEMA_PK,
-                        200L,
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        2001L,
                         Collections.emptyList(),
                         Collections.emptyMap());
         TableBucket tb3 = new TableBucket(tableId, 0);
-        makeKvTableAsLeader(tableId, tablePath, tb3.getBucket());
+        makeLogTableAsLeader(tb3, false);
         replicaManager.prefixLookups(
                 Collections.singletonMap(tb3, Collections.singletonList(prefixKey2Bytes)),
                 (prefixLookupResultForBuckets) -> {
@@ -692,9 +691,11 @@ class ReplicaManagerTest extends ReplicaTestBase {
                             prefixLookupResultForBuckets.get(tb3);
                     assertThat(lookupResultForBucket.failed()).isTrue();
                     ApiError apiError = lookupResultForBucket.getError();
-                    assertThat(apiError.error()).isEqualTo(Errors.KV_STORAGE_EXCEPTION);
+                    assertThat(apiError.error()).isEqualTo(Errors.NON_PRIMARY_KEY_TABLE_EXCEPTION);
                     assertThat(apiError.message())
-                            .isEqualTo("Table bucket " + tb3 + " does not support prefix lookup");
+                            .isEqualTo(
+                                    "Try to do prefix lookup on a non primary key table: "
+                                            + DATA1_TABLE_PATH);
                 });
     }
 

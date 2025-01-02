@@ -29,23 +29,23 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * A queue that buffers the pending lookup operations and provides a list of {@link Lookup} when
- * call method {@link #drain(LookupType)}.
+ * call method {@link #drain()}.
  */
 @ThreadSafe
 @Internal
 class LookupQueue {
 
     private volatile boolean closed;
-    // Buffering both the Lookup and IndexLookup.
+    // buffering both the Lookup and PrefixLookup.
     private final ArrayBlockingQueue<AbstractLookup<?>> lookupQueue;
     private final int maxBatchSize;
-    private final long batchTimeoutMs;
+    private final long batchTimeoutNanos;
 
     LookupQueue(Configuration conf) {
         this.lookupQueue =
                 new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
-        this.batchTimeoutMs = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toMillis();
+        this.batchTimeoutNanos = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
         this.closed = false;
     }
 
@@ -68,20 +68,23 @@ class LookupQueue {
 
     /** Drain a batch of {@link Lookup}s from the lookup queue. */
     List<AbstractLookup<?>> drain() throws Exception {
-        long start = System.currentTimeMillis();
+        final long startNanos = System.nanoTime();
         List<AbstractLookup<?>> lookupOperations = new ArrayList<>(maxBatchSize);
         int count = 0;
         while (true) {
-            if (System.currentTimeMillis() - start > batchTimeoutMs) {
+            long waitNanos = batchTimeoutNanos - (System.nanoTime() - startNanos);
+            if (waitNanos <= 0) {
                 break;
             }
 
-            AbstractLookup<?> lookup = lookupQueue.poll(300, TimeUnit.MILLISECONDS);
+            AbstractLookup<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
             if (lookup == null) {
                 break;
             }
-            count++;
             lookupOperations.add(lookup);
+            count++;
+            int transferred = lookupQueue.drainTo(lookupOperations, maxBatchSize - count);
+            count += transferred;
             if (count >= maxBatchSize) {
                 break;
             }

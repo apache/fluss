@@ -501,13 +501,13 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td>totalIndexLookupRequestsPerSecond</td>
-      <td>The number of index lookup requests to index lookup value by key from this table per second.</td>
+      <td>totalPrefixLookupRequestsPerSecond</td>
+      <td>The number of prefix lookup requests to lookup value by prefix key from this table per second.</td>
       <td>Meter</td>
     </tr>
     <tr>
-      <td>failedIndexLookupRequestsPerSecond</td>
-      <td>The number of failed index lookup requests to index lookup value by key from this table per second.</td>
+      <td>failedPrefixLookupRequestsPerSecond</td>
+      <td>The number of failed prefix lookup requests to lookup value by prefix key from this table per second.</td>
       <td>Meter</td>
     </tr>
     <tr>

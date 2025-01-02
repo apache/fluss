@@ -106,10 +106,6 @@ public class RocksDBKv implements AutoCloseable {
         RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
         try {
             iterator.seek(prefixKey);
-            // TODO, This is very inefficient to compare arrays byte by byte. In the future we can
-            // use JDK9 Arrays.compare(compare(byte[] a, int aFromIndex, int aToIndex, byte[] b, int
-            // bFromIndex, int bToIndex)) to instead. See issue:
-            // https://github.com/alibaba/fluss/issues/271
             while (iterator.isValid() && isPrefixEquals(prefixKey, iterator.key())) {
                 pkList.add(iterator.value());
                 iterator.next();
@@ -210,20 +206,23 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     /**
-     * Check if the given two byte arrays have the same prefix. If bytes2 is shorter than bytes1,
-     * return false. Otherwise, compare bytes1 and bytes2 from the start until the end of bytes2. If
-     * all bytes are equal, return true.
+     * Check if the given first byte array ({@code prefix}) is a prefix of the second byte array
+     * ({@code bytes}).
      *
-     * @param bytes1 The first byte array
-     * @param bytes2 The second byte array
-     * @return true if the given two byte arrays have the same prefix, false otherwise
+     * @param prefix The prefix byte array
+     * @param bytes The byte array to check if it has the prefix
+     * @return true if the given bytes has the given prefix, false otherwise
      */
-    public static boolean isPrefixEquals(byte[] bytes1, byte[] bytes2) {
-        if (bytes1.length > bytes2.length) {
+    public static boolean isPrefixEquals(byte[] prefix, byte[] bytes) {
+        // TODO, This is very inefficient to compare arrays byte by byte. In the future we can
+        // use JDK9 Arrays.compare(compare(byte[] a, int aFromIndex, int aToIndex, byte[] b, int
+        // bFromIndex, int bToIndex)) to instead. See issue:
+        // https://github.com/alibaba/fluss/issues/271
+        if (prefix.length > bytes.length) {
             return false;
         }
-        for (int i = 0; i < bytes1.length; i++) {
-            if (bytes1[i] != bytes2[i]) {
+        for (int i = 0; i < prefix.length; i++) {
+            if (prefix[i] != bytes[i]) {
                 return false;
             }
         }

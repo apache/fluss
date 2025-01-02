@@ -24,7 +24,6 @@ import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
-import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
@@ -469,25 +468,13 @@ public class ReplicaManager {
             List<List<byte[]>> resultForBucket = new ArrayList<>();
             try {
                 Replica replica = getReplicaOrException(tb);
-                if (!replica.supportPrefixLookup()) {
-                    result.put(
-                            tb,
-                            new PrefixLookupResultForBucket(
-                                    tb,
-                                    ApiError.fromThrowable(
-                                            new KvStorageException(
-                                                    "Table bucket "
-                                                            + tb
-                                                            + " does not support prefix lookup"))));
-                    continue;
-                }
-
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
                 for (byte[] prefixKey : entry.getValue()) {
-                    List<byte[]> resultForPerKey = new ArrayList<>(replica.prefixLookup(prefixKey));
+                    List<byte[]> resultForPerKey = replica.prefixLookup(prefixKey);
                     resultForBucket.add(resultForPerKey);
                 }
+                result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));
             } catch (Exception e) {
                 if (isUnexpectedException(e)) {
                     LOG.error("Error processing prefix lookup operation on replica {}", tb, e);
@@ -497,8 +484,6 @@ public class ReplicaManager {
                 }
                 result.put(tb, new PrefixLookupResultForBucket(tb, ApiError.fromThrowable(e)));
             }
-
-            result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));
         }
         responseCallback.accept(result);
     }

@@ -368,7 +368,7 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
                     MetricNames.FAILED_LIMIT_SCAN_REQUESTS_RATE,
                     new MeterView(failedLimitScanRequests));
 
-            // for index lookup request
+            // for prefix lookup request
             totalPrefixLookupRequests = new ThreadSafeSimpleCounter();
             meter(
                     MetricNames.TOTAL_PREFIX_LOOKUP_REQUESTS_RATE,

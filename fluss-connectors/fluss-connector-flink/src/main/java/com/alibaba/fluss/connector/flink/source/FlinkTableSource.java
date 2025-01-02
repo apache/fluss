@@ -88,9 +88,12 @@ public class FlinkTableSource
     private final Configuration flussConfig;
     // output type before projection pushdown
     private final org.apache.flink.table.types.logical.RowType tableOutputType;
-    // will be empty if no pk
+    // will be empty if no primary key
     private final int[] primaryKeyIndexes;
-    private final List<String> partitionKeys;
+    // will be empty if no bucket key
+    private final int[] bucketKeyIndexes;
+    // will be empty if no partition key
+    private final int[] partitionKeyIndexes;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
 
@@ -123,7 +126,8 @@ public class FlinkTableSource
             Configuration flussConfig,
             org.apache.flink.table.types.logical.RowType tableOutputType,
             int[] primaryKeyIndexes,
-            List<String> partitionKeys,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             int lookupMaxRetryTimes,
@@ -136,7 +140,8 @@ public class FlinkTableSource
         this.tableOutputType = tableOutputType;
         this.producedDataType = tableOutputType;
         this.primaryKeyIndexes = primaryKeyIndexes;
-        this.partitionKeys = partitionKeys;
+        this.bucketKeyIndexes = bucketKeyIndexes;
+        this.partitionKeyIndexes = partitionKeyIndexes;
         this.streaming = streaming;
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
 
@@ -165,6 +170,10 @@ public class FlinkTableSource
 
     private boolean hasPrimaryKey() {
         return primaryKeyIndexes.length > 0;
+    }
+
+    private boolean isPartitioned() {
+        return partitionKeyIndexes.length > 0;
     }
 
     @Override
@@ -239,7 +248,7 @@ public class FlinkTableSource
                         flussConfig,
                         tablePath,
                         hasPrimaryKey(),
-                        !partitionKeys.isEmpty(),
+                        isPartitioned(),
                         flussRowType,
                         projectedFields,
                         offsetsInitializer,
@@ -281,16 +290,16 @@ public class FlinkTableSource
                 LookupNormalizer.validateAndCreateLookupNormalizer(
                         context.getKeys(),
                         primaryKeyIndexes,
+                        bucketKeyIndexes,
+                        partitionKeyIndexes,
                         tableOutputType,
-                        tablePath,
-                        flussConfig);
+                        projectedFields);
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
                     new FlinkAsyncLookupFunction(
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            lookupNormalizer.getLookupKeyIndexes(),
                             lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
@@ -305,7 +314,6 @@ public class FlinkTableSource
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            lookupNormalizer.getLookupKeyIndexes(),
                             lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
@@ -325,7 +333,8 @@ public class FlinkTableSource
                         flussConfig,
                         tableOutputType,
                         primaryKeyIndexes,
-                        partitionKeys,
+                        bucketKeyIndexes,
+                        partitionKeyIndexes,
                         streaming,
                         startupOptions,
                         lookupMaxRetryTimes,

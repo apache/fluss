@@ -35,7 +35,7 @@ public class PrefixLookupResultForBucket extends ResultForBucket {
         this(tableBucket, null, error);
     }
 
-    public PrefixLookupResultForBucket(
+    private PrefixLookupResultForBucket(
             TableBucket tableBucket, List<List<byte[]>> values, ApiError error) {
         super(tableBucket, error);
         this.values = values;

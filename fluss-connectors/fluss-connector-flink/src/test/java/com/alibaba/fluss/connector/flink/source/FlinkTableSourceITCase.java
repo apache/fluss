@@ -647,7 +647,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     @ParameterizedTest
     @MethodSource("lookupArgs")
     void testLookup1PkTable(Caching caching, boolean async) throws Exception {
-        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null);
+        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, c, h.name FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -660,13 +660,30 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
+    void testLookupWithProjection(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(caching, async, new String[] {"name"}, null, null);
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, c, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected =
+                Arrays.asList("+I[1, 11, address5]", "+I[2, 2, address2]", "+I[10, 44, address4]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
     /**
      * lookup table with one pk, two join condition and one of the join condition is constant value.
      */
     @ParameterizedTest
     @MethodSource("lookupArgs")
     void testLookup1PkTableWith2Conditions(Caching caching, boolean async) throws Exception {
-        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null);
+        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, b, h.name FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -696,7 +713,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     @ParameterizedTest
     @MethodSource("lookupArgs")
     void testLookup1PkTableWith3Conditions(Caching caching, boolean async) throws Exception {
-        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null);
+        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, b, c, h.address FROM src LEFT JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -709,7 +726,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         "+I[1, name1, 11, null]",
                         "+I[2, name2, 2, address2]",
                         "+I[3, name33, 33, null]",
-                        "+I[10, name4, 44, null]");
+                        "+I[10, name0, 44, null]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
@@ -718,7 +735,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     @MethodSource("lookupArgs")
     void testLookup2PkTable(Caching caching, boolean async) throws Exception {
         String dim =
-                prepareDimTableAndSourceTable(caching, async, new String[] {"id", "name"}, null);
+                prepareDimTableAndSourceTable(
+                        caching, async, new String[] {"id", "name"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -739,7 +757,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     void testLookup2PkTableWithUnorderedKey(Caching caching, boolean async) throws Exception {
         // the primary key is (name, id) but the schema order is (id, name)
         String dim =
-                prepareDimTableAndSourceTable(caching, async, new String[] {"name", "id"}, null);
+                prepareDimTableAndSourceTable(
+                        caching, async, new String[] {"name", "id"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -759,7 +778,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     @MethodSource("lookupArgs")
     void testLookup2PkTableWith1KeyInCondition(Caching caching, boolean async) throws Exception {
         String dim =
-                prepareDimTableAndSourceTable(caching, async, new String[] {"id", "name"}, null);
+                prepareDimTableAndSourceTable(
+                        caching, async, new String[] {"id", "name"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -767,9 +787,9 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         dim);
         assertThatThrownBy(() -> tEnv.executeSql(dimJoinQuery))
                 .hasStackTraceContaining(
-                        "Fluss lookup function only supports lookup table with "
-                                + "lookup keys contain all primary keys or bucket keys. Can't find primary "
-                                + "key or bucket key 'name' in lookup keys [id]");
+                        "The Fluss lookup function supports lookup tables where"
+                                + " the lookup keys include all primary keys or all bucket keys."
+                                + " Can't find expected key 'name' in lookup keys [id]");
     }
 
     /**
@@ -780,7 +800,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     @MethodSource("lookupArgs")
     void testLookup2PkTableWith3Conditions(Caching caching, boolean async) throws Exception {
         String dim =
-                prepareDimTableAndSourceTable(caching, async, new String[] {"id", "name"}, null);
+                prepareDimTableAndSourceTable(
+                        caching, async, new String[] {"id", "name"}, null, null);
         String dimJoinQuery =
                 String.format(
                         "SELECT a, h.name, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
@@ -795,7 +816,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     @ParameterizedTest
     @MethodSource("lookupArgs")
     void testLookupPartitionedTable(Caching caching, boolean async) throws Exception {
-        String dim = prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, "p_date");
+        String dim =
+                prepareDimTableAndSourceTable(caching, async, new String[] {"id"}, null, "p_date");
 
         String dimJoinQuery =
                 String.format(
@@ -805,6 +827,45 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
         CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
         List<String> expected = Arrays.asList("+I[1, name1, address1]", "+I[2, name2, address2]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
+    void testPrefixLookup(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        caching, async, new String[] {"name", "id"}, new String[] {"name"}, null);
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, name1, address1]",
+                        "+I[1, name1, address5]",
+                        "+I[2, name2, address2]",
+                        "+I[10, name0, address4]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
+    void testPrefixLookupWithCondition(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        caching, async, new String[] {"name", "id"}, new String[] {"name"}, null);
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name AND h.address = 'address5'",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected = Collections.singletonList("+I[1, name1, address5]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
@@ -840,7 +901,11 @@ class FlinkTableSourceITCase extends FlinkTestBase {
      * @return the table name of the dim table
      */
     private String prepareDimTableAndSourceTable(
-            Caching caching, boolean async, String[] keys, @Nullable String partitionedKey)
+            Caching caching,
+            boolean async,
+            String[] primaryKeys,
+            @Nullable String[] bucketKeys,
+            @Nullable String partitionedKey)
             throws Exception {
         String options = async ? "'lookup.async' = 'true'" : "'lookup.async' = 'false'";
         if (caching == Caching.ENABLE_CACHE) {
@@ -849,6 +914,12 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                             + ",'lookup.partial-cache.max-rows' = '1000'"
                             + ",'lookup.partial-cache.expire-after-write' = '10min'";
         }
+        String bucketOptions =
+                bucketKeys == null
+                        ? ""
+                        : ", 'bucket.num' = '1', 'bucket.key' = '"
+                                + String.join(",", bucketKeys)
+                                + "'";
 
         // create dim table
         String tableName =
@@ -856,7 +927,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         "lookup_test_%s_%s_pk_%s_%s",
                         caching.name().toLowerCase(),
                         async ? "async" : "sync",
-                        String.join("_", keys),
+                        String.join("_", primaryKeys),
                         RandomUtils.nextInt());
         if (partitionedKey == null) {
             tEnv.executeSql(
@@ -865,8 +936,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                                     + "  id int not null,"
                                     + "  address varchar,"
                                     + "  name varchar,"
-                                    + "  primary key (%s) NOT ENFORCED) with (%s)",
-                            tableName, String.join(",", keys), options));
+                                    + "  primary key (%s) NOT ENFORCED) with (%s %s)",
+                            tableName, String.join(",", primaryKeys), options, bucketOptions));
         } else {
             tEnv.executeSql(
                     String.format(
@@ -876,13 +947,15 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                                     + "  name varchar,"
                                     + "  %s varchar , "
                                     + "  primary key (%s, %s) NOT ENFORCED) partitioned by (%s) with (%s , "
-                                    + "'table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year')",
+                                    + " 'table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year'"
+                                    + " %s)",
                             tableName,
                             partitionedKey,
-                            String.join(",", keys),
+                            String.join(",", primaryKeys),
                             partitionedKey,
                             partitionedKey,
-                            options));
+                            options,
+                            bucketOptions));
         }
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
@@ -904,8 +977,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
-                                ? new Object[] {i, "address" + i, "name" + i}
-                                : new Object[] {i, "address" + i, "name" + i, partition1};
+                                ? new Object[] {i, "address" + i, "name" + i % 4}
+                                : new Object[] {i, "address" + i, "name" + i % 4, partition1};
                 upsertWriter.upsert(compactedRow(dimTableRowType, values));
             }
             upsertWriter.flush();
@@ -918,12 +991,12 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                                 Row.of(1, "name1", 11),
                                 Row.of(2, "name2", 2),
                                 Row.of(3, "name33", 33),
-                                Row.of(10, "name4", 44))
+                                Row.of(10, "name0", 44))
                         : Arrays.asList(
                                 Row.of(1, "name1", 11, partition1),
                                 Row.of(2, "name2", 2, partition1),
                                 Row.of(3, "name33", 33, partition2),
-                                Row.of(10, "name4", 44, partition2));
+                                Row.of(10, "name0", 44, partition2));
         Schema.Builder builder =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())

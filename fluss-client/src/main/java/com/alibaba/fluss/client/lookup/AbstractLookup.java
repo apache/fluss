@@ -25,9 +25,11 @@ import java.util.concurrent.CompletableFuture;
 @Internal
 public abstract class AbstractLookup<T> {
 
+    private final TableBucket tableBucket;
     private final byte[] key;
 
-    public AbstractLookup(byte[] key) {
+    public AbstractLookup(TableBucket tableBucket, byte[] key) {
+        this.tableBucket = tableBucket;
         this.key = key;
     }
 
@@ -35,7 +37,9 @@ public abstract class AbstractLookup<T> {
         return key;
     }
 
-    public abstract TableBucket tableBucket();
+    public TableBucket tableBucket() {
+        return tableBucket;
+    }
 
     public abstract LookupType lookupType();
 

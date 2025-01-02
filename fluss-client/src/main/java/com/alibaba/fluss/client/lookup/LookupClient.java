@@ -84,7 +84,7 @@ public class LookupClient {
 
     public CompletableFuture<List<byte[]>> prefixLookup(
             long tableId, int bucketId, byte[] keyBytes) {
-        // TODO index lookup support partition table.
+        // TODO prefix lookup support partition table (#266)
         PrefixLookup prefixLookup = new PrefixLookup(new TableBucket(tableId, bucketId), keyBytes);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();

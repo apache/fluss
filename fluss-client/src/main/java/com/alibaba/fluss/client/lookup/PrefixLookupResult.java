@@ -24,7 +24,7 @@ import java.util.List;
 /**
  * The result of {@link Table#prefixLookup(InternalRow)}}.
  *
- * @since 0.1
+ * @since 0.6
  */
 public class PrefixLookupResult {
     private final List<InternalRow> rowList;

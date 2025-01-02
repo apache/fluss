@@ -78,10 +78,13 @@ public interface Table extends AutoCloseable {
      * the prefix schema would also be [a, b]. This pattern can use PrefixLookup to lookup by prefix
      * scan.
      *
-     * @param prefixKey the given prefix key to do prefix lookup.
+     * <p>TODO: currently, the interface only support bucket key as the prefix key to lookup.
+     * Generalize the prefix lookup to support any prefix key including bucket key.
+     *
+     * @param bucketKey the given bucket key to do prefix lookup.
      * @return the result of prefix lookup.
      */
-    CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow prefixKey);
+    CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow bucketKey);
 
     /**
      * Extracts limit number of rows from the given table bucket.

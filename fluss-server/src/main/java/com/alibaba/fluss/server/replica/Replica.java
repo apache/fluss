@@ -166,7 +166,6 @@ public final class Replica {
     private final KvFormat kvFormat;
     private final long logTTLMs;
     private final boolean dataLakeEnabled;
-    private final boolean supportPrefixLookup;
     private final int tieredLogLocalSegments;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
@@ -232,7 +231,6 @@ public final class Replica {
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
-        this.supportPrefixLookup = supportPrefixLookup(tableDescriptor);
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         registerMetrics();
@@ -307,10 +305,6 @@ public final class Replica {
 
     public long getLogTTLMs() {
         return logTTLMs;
-    }
-
-    public boolean supportPrefixLookup() {
-        return supportPrefixLookup;
     }
 
     public int writerIdCount() {
@@ -1733,11 +1727,6 @@ public final class Replica {
                 awaitingReplicas.stream()
                         .map(tuple -> "server-" + tuple.f0 + ":" + tuple.f1)
                         .collect(Collectors.toList()));
-    }
-
-    private boolean supportPrefixLookup(TableDescriptor tableDescriptor) {
-        return TableDescriptor.bucketKeysMatchPrefixLookupPattern(
-                tableDescriptor.getSchema(), tableDescriptor.getBucketKey());
     }
 
     @VisibleForTesting

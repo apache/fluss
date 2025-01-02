@@ -493,13 +493,12 @@ public class TabletServiceITCase {
                 Arrays.asList(key1ExpectedValues, key2ExpectedValues));
 
         // Prefix lookup an unsupported prefixLookup table.
-        TableDescriptor unsupportedDescriptor = TableDescriptor.builder().schema(schema).build();
-        long tableId2 =
+        long logTableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
-                        TablePath.of("test_db_1", "test_unsupported_prefix_lookup_t1"),
-                        unsupportedDescriptor);
-        tb = new TableBucket(tableId2, 0);
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_INFO.getTableDescriptor());
+        tb = new TableBucket(logTableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
         leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay2 =
@@ -508,15 +507,13 @@ public class TabletServiceITCase {
                 leaderGateWay2
                         .prefixLookup(
                                 newPrefixLookupRequest(
-                                        tableId2, 0, Collections.singletonList(prefixKey1Bytes)))
+                                        logTableId, 0, Collections.singletonList(prefixKey1Bytes)))
                         .get()
                         .getBucketsRespAt(0);
         verifyPrefixLookupBucketError(
                 pbPrefixLookupRespForBucket,
-                Errors.KV_STORAGE_EXCEPTION,
-                "Table bucket TableBucket{tableId="
-                        + tableId2
-                        + ", bucket=0} does not support prefix lookup");
+                Errors.NON_PRIMARY_KEY_TABLE_EXCEPTION,
+                "Try to do prefix lookup on a non primary key table: " + DATA1_TABLE_PATH);
     }
 
     @Test

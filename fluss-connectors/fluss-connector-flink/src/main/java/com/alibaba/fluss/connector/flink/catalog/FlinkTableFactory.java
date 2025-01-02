@@ -90,12 +90,16 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         ResolvedSchema resolvedSchema = context.getCatalogTable().getResolvedSchema();
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
         int[] primaryKeyIndexes = resolvedSchema.getPrimaryKeyIndexes();
+        int[] partitionKeyIndexes =
+                resolvedCatalogTable.getPartitionKeys().stream()
+                        .mapToInt(tableOutputType::getFieldIndex)
+                        .toArray();
+        int[] bucketKeyIndexes =
+                FlinkConnectorOptionsUtils.getBucketKeyIndexes(tableOptions, tableOutputType);
 
         // options for lookup
         LookupCache cache = null;
-
         LookupOptions.LookupCacheType lookupCacheType = tableOptions.get(LookupOptions.CACHE_TYPE);
-
         if (lookupCacheType.equals(LookupOptions.LookupCacheType.PARTIAL)) {
             cache = DefaultLookupCache.fromConfig(tableOptions);
         } else if (lookupCacheType.equals(LookupOptions.LookupCacheType.FULL)) {
@@ -105,24 +109,31 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             throw new UnsupportedOperationException("Full lookup caching is not supported yet.");
         }
 
+        // other option values
+        long partitionDiscoveryIntervalMs =
+                tableOptions
+                        .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
+                        .toMillis();
+        boolean isDatalakeEnabled =
+                tableOptions.get(
+                        key(ConfigOptions.TABLE_DATALAKE_ENABLED.key())
+                                .booleanType()
+                                .defaultValue(false));
+
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(helper.getOptions(), context.getConfiguration()),
                 tableOutputType,
                 primaryKeyIndexes,
-                resolvedCatalogTable.getPartitionKeys(),
+                bucketKeyIndexes,
+                partitionKeyIndexes,
                 isStreamingMode,
                 startupOptions,
                 tableOptions.get(LookupOptions.MAX_RETRIES),
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 cache,
-                tableOptions
-                        .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
-                        .toMillis(),
-                tableOptions.get(
-                        key(ConfigOptions.TABLE_DATALAKE_ENABLED.key())
-                                .booleanType()
-                                .defaultValue(false)));
+                partitionDiscoveryIntervalMs,
+                isDatalakeEnabled);
     }
 
     @Override

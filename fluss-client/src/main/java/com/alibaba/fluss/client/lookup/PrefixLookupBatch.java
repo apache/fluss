@@ -58,7 +58,7 @@ public class PrefixLookupBatch {
                     new FlussRuntimeException(
                             String.format(
                                     "The number of values return by prefix lookup request is not equal to the number of "
-                                            + "index lookups send. Got %d values, but expected %d.",
+                                            + "prefix lookups send. Got %d values, but expected %d.",
                                     values.size(), prefixLookups.size())));
         } else {
             for (int i = 0; i < values.size(); i++) {

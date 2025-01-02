@@ -187,14 +187,14 @@ public class FlussTable implements Table {
         }
         // encoding the key row using a compacted way consisted with how the key is encoded when put
         // a row
-        byte[] keyBytes = primaryKeyEncoder.encode(key);
-        byte[] lookupBucketKeyBytes = bucketKeyEncoder.encode(key);
+        byte[] pkBytes = primaryKeyEncoder.encode(key);
+        byte[] bkBytes = bucketKeyEncoder.encode(key);
         Long partitionId = keyRowPartitionGetter == null ? null : getPartitionId(key);
-        int bucketId = getBucketId(lookupBucketKeyBytes, key);
+        int bucketId = getBucketId(bkBytes, key);
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
         return lookupClientSupplier
                 .get()
-                .lookup(tableBucket, keyBytes)
+                .lookup(tableBucket, pkBytes)
                 .thenApply(
                         valueBytes -> {
                             InternalRow row =
@@ -206,14 +206,15 @@ public class FlussTable implements Table {
     }
 
     @Override
-    public CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow prefixKey) {
+    public CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow bucketKey) {
         if (!hasPrimaryKey) {
             throw new FlussRuntimeException(
                     String.format("None-pk table %s don't support prefix lookup", tablePath));
         }
+        // TODO: add checks the bucket key is prefix of primary key
 
-        byte[] prefixKeyBytes = bucketKeyEncoder.encode(prefixKey);
-        int bucketId = getBucketId(prefixKeyBytes, prefixKey);
+        byte[] prefixKeyBytes = bucketKeyEncoder.encode(bucketKey);
+        int bucketId = getBucketId(prefixKeyBytes, bucketKey);
         return lookupClientSupplier
                 .get()
                 .prefixLookup(tableId, bucketId, prefixKeyBytes)

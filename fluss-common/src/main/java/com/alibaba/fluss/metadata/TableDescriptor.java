@@ -151,12 +151,16 @@ public final class TableDescriptor implements Serializable {
         return schema;
     }
 
+    /** Returns the bucket key of the table, empty if no bucket key is set. */
     public List<String> getBucketKey() {
         return this.getTableDistribution()
                 .map(TableDescriptor.TableDistribution::getBucketKeys)
                 .orElse(Collections.emptyList());
     }
 
+    /**
+     * Returns the indexes of the bucket key fields in the schema, empty if no bucket key is set.
+     */
     public int[] getBucketKeyIndexes() {
         List<String> bucketKey = getBucketKey();
         RowType rowType = schema.toRowType();
@@ -165,6 +169,22 @@ public final class TableDescriptor implements Serializable {
             bucketKeyIndex[i] = rowType.getFieldIndex(bucketKey.get(i));
         }
         return bucketKeyIndex;
+    }
+
+    /**
+     * Check if the table is using a default bucket key. A default bucket key is:
+     *
+     * <ul>
+     *   <li>the same as the primary keys excluding the partition keys.
+     *   <li>empty if the table is not a primary key table.
+     * </ul>
+     */
+    public boolean isDefaultBucketKey() {
+        if (schema.getPrimaryKey().isPresent()) {
+            return getBucketKey().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+        } else {
+            return getBucketKey().isEmpty();
+        }
     }
 
     /**
@@ -371,27 +391,16 @@ public final class TableDescriptor implements Serializable {
                             originDistribution.getBucketCount().orElse(null),
                             defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
                 } else {
-                    // For the primary key table match prefix lookup pattern, we allow the bucket
-                    // keys different from primary keys.
-                    if (!bucketKeysMatchPrefixLookupPattern(schema, bucketKeys)) {
-                        // check the provided bucket key and expected bucket key
-                        List<String> expectedBucketKeys =
-                                defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys);
-                        List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
-
-                        if (expectedBucketKeys.size() != bucketKeys.size()
-                                || !new HashSet<>(expectedBucketKeys).containsAll(bucketKeys)) {
-                            throw new IllegalArgumentException(
-                                    String.format(
-                                            "Currently, bucket keys must be equal to primary keys excluding partition "
-                                                    + "keys for primary-key tables. The primary keys are %s, the "
-                                                    + "partition keys are %s, the expected bucket keys are %s, but "
-                                                    + "the user-defined bucket keys are %s.",
-                                            pkColumns,
-                                            partitionKeys,
-                                            expectedBucketKeys,
-                                            bucketKeys));
-                        }
+                    // check the provided bucket key
+                    List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
+                    if (!new HashSet<>(pkColumns).containsAll(bucketKeys)) {
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Bucket keys must be a subset of primary keys excluding partition "
+                                                + "keys for primary-key tables. The primary keys are %s, the "
+                                                + "partition keys are %s, but "
+                                                + "the user-defined bucket keys are %s.",
+                                        pkColumns, partitionKeys, bucketKeys));
                     }
                     return new TableDistribution(
                             originDistribution.getBucketCount().orElse(null), bucketKeys);
@@ -408,40 +417,6 @@ public final class TableDescriptor implements Serializable {
             } else {
                 return originDistribution;
             }
-        }
-    }
-
-    /**
-     * Check if the table supports prefix lookup. Currently, only pk-table are supported, and the
-     * bucket key needs to be part of the primary key and must be a prefix of the primary key. For
-     * example, if a table has fields [a,b,c,d], and the primary key is set to [a, b, c], with the
-     * bucket key set to [a, b].
-     *
-     * @return true if the table supports prefix lookup; otherwise, false
-     */
-    public static boolean bucketKeysMatchPrefixLookupPattern(
-            Schema schema, List<String> bucketKeys) {
-        if (!schema.getPrimaryKey().isPresent()) {
-            return false;
-        }
-
-        RowType rowType = schema.toRowType();
-        int[] pkIndexes = schema.getPrimaryKeyIndexes();
-        int[] bucketKeyIndexes = new int[bucketKeys.size()];
-        for (int i = 0; i < bucketKeys.size(); i++) {
-            bucketKeyIndexes[i] = rowType.getFieldIndex(bucketKeys.get(i));
-        }
-
-        if (bucketKeyIndexes.length >= pkIndexes.length) {
-            return false;
-        } else {
-            for (int i = 0; i < bucketKeyIndexes.length; i++) {
-                if (bucketKeyIndexes[i] != pkIndexes[i]) {
-                    return false;
-                }
-            }
-
-            return true;
         }
     }
 

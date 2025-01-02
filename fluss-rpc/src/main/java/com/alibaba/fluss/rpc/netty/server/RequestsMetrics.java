@@ -94,7 +94,7 @@ public class RequestsMetrics {
             case LOOKUP:
                 return "lookup";
             case PREFIX_LOOKUP:
-                return "indexLookup";
+                return "prefixLookup";
             case FETCH_LOG:
                 return isFromFollower ? "fetchLogFollower" : "fetchLogClient";
             default:

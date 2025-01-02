@@ -110,13 +110,12 @@ class LookupSender implements Runnable {
         if (lookups.isEmpty()) {
             return;
         }
-        // group by <leader, lookup batches> to lookup batches
+        // group by <leader, lookup type> to lookup batches
         Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> lookupBatches =
                 groupByLeaderAndType(lookups);
         // now, send the batches
         lookupBatches.forEach(
-                (destinationAndType, batch) ->
-                        sendLookups(destinationAndType.f0, destinationAndType.f1, batch));
+                (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch));
     }
 
     private Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> groupByLeaderAndType(
@@ -124,22 +123,21 @@ class LookupSender implements Runnable {
         // <leader, LookupType> -> lookup batches
         Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> lookupBatchesByLeader =
                 new HashMap<>();
-        for (AbstractLookup<?> abstractLookup : lookups) {
+        for (AbstractLookup<?> lookup : lookups) {
             int leader;
             // lookup the leader node
-            TableBucket tb = abstractLookup.tableBucket();
+            TableBucket tb = lookup.tableBucket();
             try {
                 // TODO this can be a re-triable operation. We should retry here instead of
                 // throwing exception.
                 leader = metadataUpdater.leaderFor(tb);
             } catch (Exception e) {
-                abstractLookup.future().completeExceptionally(e);
+                lookup.future().completeExceptionally(e);
                 continue;
             }
             lookupBatchesByLeader
-                    .computeIfAbsent(
-                            Tuple2.of(leader, abstractLookup.lookupType()), k -> new ArrayList<>())
-                    .add(abstractLookup);
+                    .computeIfAbsent(Tuple2.of(leader, lookup.lookupType()), k -> new ArrayList<>())
+                    .add(lookup);
         }
         return lookupBatchesByLeader;
     }
@@ -157,11 +155,10 @@ class LookupSender implements Runnable {
         }
     }
 
-    private void sendLookupRequest(
-            TabletServerGateway gateway, List<AbstractLookup<?>> lookupBatches) {
+    private void sendLookupRequest(TabletServerGateway gateway, List<AbstractLookup<?>> lookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
-        for (AbstractLookup<?> abstractLookup : lookupBatches) {
+        for (AbstractLookup<?> abstractLookup : lookups) {
             Lookup lookup = (Lookup) abstractLookup;
             TableBucket tb = lookup.tableBucket();
             long tableId = tb.getTableId();
@@ -181,10 +178,10 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequest(
-            TabletServerGateway gateway, List<AbstractLookup<?>> indexLookupBatches) {
+            TabletServerGateway gateway, List<AbstractLookup<?>> prefixLookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
-        for (AbstractLookup<?> abstractLookup : indexLookupBatches) {
+        for (AbstractLookup<?> abstractLookup : prefixLookups) {
             PrefixLookup prefixLookup = (PrefixLookup) abstractLookup;
             TableBucket tb = prefixLookup.tableBucket();
             long tableId = tb.getTableId();
@@ -195,12 +192,12 @@ class LookupSender implements Runnable {
         }
 
         lookupByTableId.forEach(
-                (tableId, indexLookupBatch) ->
+                (tableId, prefixLookupBatch) ->
                         sendPrefixLookupRequestAndHandleResponse(
                                 gateway,
-                                makePrefixLookupRequest(tableId, indexLookupBatch.values()),
+                                makePrefixLookupRequest(tableId, prefixLookupBatch.values()),
                                 tableId,
-                                indexLookupBatch));
+                                prefixLookupBatch));
     }
 
     private void sendLookupRequestAndHandleResponse(
@@ -307,7 +304,7 @@ class LookupSender implements Runnable {
     private void handlePrefixLookupResponse(
             long tableId,
             PrefixLookupResponse prefixLookupResponse,
-            Map<TableBucket, PrefixLookupBatch> indexLookupsByBucket) {
+            Map<TableBucket, PrefixLookupBatch> prefixLookupsByBucket) {
         for (PbPrefixLookupRespForBucket pbRespForBucket :
                 prefixLookupResponse.getBucketsRespsList()) {
             TableBucket tableBucket =
@@ -318,7 +315,7 @@ class LookupSender implements Runnable {
                                     : null,
                             pbRespForBucket.getBucketId());
 
-            PrefixLookupBatch prefixLookupBatch = indexLookupsByBucket.get(tableBucket);
+            PrefixLookupBatch prefixLookupBatch = prefixLookupsByBucket.get(tableBucket);
             if (pbRespForBucket.hasErrorCode()) {
                 // TODO for re-triable error, we should retry here instead of throwing exception.
                 ApiError error = ApiError.fromErrorMessage(pbRespForBucket);
@@ -328,10 +325,10 @@ class LookupSender implements Runnable {
                         error.formatErrMsg());
                 prefixLookupBatch.completeExceptionally(error.exception());
             } else {
-                List<List<byte[]>> result = new ArrayList<>();
+                List<List<byte[]>> result = new ArrayList<>(pbRespForBucket.getValueListsCount());
                 for (int i = 0; i < pbRespForBucket.getValueListsCount(); i++) {
                     PbValueList pbValueList = pbRespForBucket.getValueListAt(i);
-                    List<byte[]> keyResult = new ArrayList<>();
+                    List<byte[]> keyResult = new ArrayList<>(pbValueList.getValuesCount());
                     for (int j = 0; j < pbValueList.getValuesCount(); j++) {
                         keyResult.add(pbValueList.getValueAt(j));
                     }

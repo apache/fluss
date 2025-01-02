@@ -28,18 +28,11 @@ import java.util.concurrent.CompletableFuture;
  */
 @Internal
 public class PrefixLookup extends AbstractLookup<List<byte[]>> {
-    private final TableBucket tableBucket;
     private final CompletableFuture<List<byte[]>> future;
 
-    public PrefixLookup(TableBucket tableBucket, byte[] prefixKey) {
-        super(prefixKey);
-        this.tableBucket = tableBucket;
+    PrefixLookup(TableBucket tableBucket, byte[] prefixKey) {
+        super(tableBucket, prefixKey);
         this.future = new CompletableFuture<>();
-    }
-
-    @Override
-    public TableBucket tableBucket() {
-        return tableBucket;
     }
 
     @Override

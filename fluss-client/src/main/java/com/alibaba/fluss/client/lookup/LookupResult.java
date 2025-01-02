@@ -20,6 +20,10 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.row.InternalRow;
 
+import javax.annotation.Nullable;
+
+import java.util.Objects;
+
 /**
  * The result of {@link Table#lookup(InternalRow)}.
  *
@@ -27,13 +31,13 @@ import com.alibaba.fluss.row.InternalRow;
  */
 @PublicEvolving
 public final class LookupResult {
-    private final InternalRow row;
+    private final @Nullable InternalRow row;
 
-    public LookupResult(InternalRow row) {
+    public LookupResult(@Nullable InternalRow row) {
         this.row = row;
     }
 
-    public InternalRow getRow() {
+    public @Nullable InternalRow getRow() {
         return row;
     }
 
@@ -45,17 +49,18 @@ public final class LookupResult {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        LookupResult that = (LookupResult) o;
-        return row.equals(that.row);
+
+        LookupResult lookupResult = (LookupResult) o;
+        return Objects.equals(row, lookupResult.row);
     }
 
     @Override
     public int hashCode() {
-        return row.hashCode();
+        return Objects.hash(row);
     }
 
     @Override
     public String toString() {
-        return "LookupResult{" + "row=" + row + '}';
+        return "LookupResult{row=" + row + '}';
     }
 }
