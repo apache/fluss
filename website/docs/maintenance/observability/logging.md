@@ -1,6 +1,6 @@
 ---
 sidebar_label: Logging
-sidebar_position: 6
+sidebar_position: 4
 ---
 
 # Logging
@@ -21,7 +21,7 @@ Log4j periodically scans this file for changes and adjusts the logging behavior 
 
 
 ### Log4j 2 configuration
-The following [logging-related configuration options](./configuration.md) are available:
+The following [logging-related configuration options](../configuration.md) are available:
 
 | Configuration                   | Description                                                             | Default                        |
 |---------------------------------|-------------------------------------------------------------------------|--------------------------------|
@@ -55,6 +55,10 @@ To use Fluss with [logback](https://logback.qos.ch/) you must ensure that:
 For Fluss distributions this means you have to:
 * remove the `log4j-slf4j-impl` jar from the lib directory.
 * add the `logback-core`, and `logback-classic` jars to the lib directory.
+
+:::info
+Fluss currently uses SLF4J 1.7.x, which is _incompatible_ with logback 1.3.0 and higher.
+:::
 
 The Fluss distribution ships with the following logback configuration files in the conf directory, which are used automatically if logback is enabled:
 * `logback-console.xml`: used for CoordinatorServer/TabletServer if they are run in the foreground (e.g., Kubernetes).

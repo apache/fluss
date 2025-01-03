@@ -43,7 +43,7 @@ tar -xzf flink-1.20.1-bin-scala_2.12.tgz
 Download [Fluss connector jar](/downloads#fluss-connector) and copy to the lib directory of your Flink home.
 
 ```shell
-cp fluss-connector-flink-0.5.0.jar <FLINK_HOME>/lib/
+cp fluss-connector-flink-<fluss-version>.jar <FLINK_HOME>/lib/
 ```
 :::note
 If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](/docs/maintenance/tiered-storage/remote-storage), 
@@ -70,9 +70,9 @@ To quickly stop the cluster and all running components, you can use the provided
 
 ## Creating a Catalog
 You can use the following SQL statement to create a catalog.
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
-  'type'='fluss',
+  'type' = 'fluss',
   'bootstrap.servers' = 'localhost:9123'
 );
 ```
@@ -86,9 +86,11 @@ CREATE CATALOG fluss_catalog WITH (
 :::
 
 ## Creating a Table
-```sql title="Flink SQL Client"
-USE CATALOG `fluss_catalog`;
+```sql title="Flink SQL"
+USE CATALOG fluss_catalog;
+```
 
+```sql title="Flink SQL"
 CREATE TABLE pk_table (
   shop_id BIGINT,
   user_id BIGINT,
@@ -102,27 +104,33 @@ CREATE TABLE pk_table (
 
 ## Data Writing
 To append new data to a table, you can use `INSERT INTO` in batch mode or streaming mode:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- Execute the flink job in batch mode for current session context
 SET 'execution.runtime-mode' = 'batch';
+```
+
+```sql title="Flink SQL"
 -- use tableau result mode
 SET 'sql-client.execution.result-mode' = 'tableau';
+```
 
+```sql title="Flink SQL"
 INSERT INTO pk_table VALUES
   (1234, 1234, 1, 1),
   (12345, 12345, 2, 2),
   (123456, 123456, 3, 3);
 ```
+
 To update data record with the primary key (1234, 1234) in a Flink streaming job, use the UPDATE statement as follows:
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 UPDATE pk_table SET total_amount = 4 WHERE shop_id = 1234 and user_id = 1234;
 ```
 
 To delete the data record with primary key `(12345, 12345)`, use `DELETE FROM`:
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 DELETE FROM pk_table WHERE shop_id = 12345 and user_id = 12345;
 ```
@@ -130,21 +138,24 @@ DELETE FROM pk_table WHERE shop_id = 12345 and user_id = 12345;
 ## Data Reading
 
 To retrieve data with the primary key `(1234, 1234)`, you can perform a point query by applying a filter on the primary key:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 SELECT * FROM pk_table WHERE shop_id = 1234 and user_id = 1234;
 ```
 
 To preview a subset of the data in a table, you can use a `LIMIT` clause.
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 SELECT * FROM pk_table LIMIT 10;
 ```
 
 Fluss supports processing incremental data reading in flink streaming jobs:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- Submit the flink job in streaming mode for current session.
 SET 'execution.runtime-mode' = 'streaming';
+```
+
+```sql title="Flink SQL"
 -- reading changelogs from the primary-key table from beginning.
 SELECT * FROM pk_table /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 ```

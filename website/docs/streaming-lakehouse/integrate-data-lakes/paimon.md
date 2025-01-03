@@ -37,10 +37,13 @@ SQL shows how to do that:
 
 -- read from paimon
 SELECT COUNT(*) FROM orders$lake;
+```
 
+```sql title="Flink SQL"
 -- we can also query the system tables 
 SELECT * FROM orders$lake$snapshots;
 ```
+
 When specify the table with `$lake` suffix in query, it just acts like a normal Paimon table, so it inherits all ability of Paimon table.
 You can enjoy all the features that Flink's query supports/optimization on Paimon, like query system tables, time travel, etc. See more
 about Paimon's [sql-query](https://paimon.apache.org/docs/0.9/flink/sql-query/#sql-query).
@@ -79,7 +82,9 @@ Then, you can query the `orders` table by StarRocks:
 ```sql title="StarRocks SQL"
 -- the table is in database `fluss`
 SELECT COUNT(*) FROM paimon_catalog.fluss.orders;
+```
 
+```sql title="StarRocks SQL"
 -- query the system tables, to know the snapshots of the table
 SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 ```

@@ -184,7 +184,7 @@ during the Fluss cluster working.
 
 When you create a table in Fluss by Flink, you can specify the table configuration by Flink in with options, like:
 
-```sql
+```sql title="Flink SQL"
 CREATE TABLE my_table (
   id INT,
   name STRING,
@@ -240,7 +240,7 @@ Currently, we don't support alter table configuration by Flink. This will be sup
 
 1. When you create a table in Fluss by Flink, you can specify the client configuration by Flink in with options, like:
 
-```sql
+```sql title="Flink SQL"
 CREATE TABLE my_table (
   id INT,
   name STRING,
@@ -252,7 +252,7 @@ CREATE TABLE my_table (
 
 2. Also, you can change the client configuration use [Flink SQL Hints](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/hints/#dynamic-table-options) like:
 
-```sql
+```sql title="Flink SQL"
 INSERT INTO my_table /*+ OPTIONS('client.writer.acks' = '0') */
 SELECT *
 FROM my_source

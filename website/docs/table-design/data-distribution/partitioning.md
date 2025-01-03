@@ -22,7 +22,7 @@ For partitioned tables, Fluss supports auto partitioning creation. Partitions ca
 ## Auto Partitioning Options
 ### Example
 The auto-partitioning rules are configured through table options. The following example demonstrates creating a table named `site_access` that supports automatic partitioning using Flink SQL.
-```sql
+```sql title="Flink SQL"
 CREATE TABLE site_access(
   event_day STRING,
   site_id INT,

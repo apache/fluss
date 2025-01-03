@@ -13,7 +13,7 @@ Flink lookup joins are important because they enable efficient, real-time enrich
 
 ## Examples
 1. Create two tables.
-```sql 
+```sql title="Flink SQL"
 CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
   `o_orderkey` INT NOT NULL,
   `o_custkey` INT NOT NULL,
@@ -26,8 +26,9 @@ CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
   `o_comment` STRING NOT NULL,
   PRIMARY KEY (o_orderkey) NOT ENFORCED
 );
+```
 
-
+```sql title="Flink SQL"
 CREATE TABLE `fluss_catalog`.`my_db`.`customer` (
   `c_custkey` INT NOT NULL,
   `c_name` STRING NOT NULL,
@@ -42,10 +43,15 @@ CREATE TABLE `fluss_catalog`.`my_db`.`customer` (
 ```
 
 2. Perform lookup join.
-```sql 
-USE CATALOG `fluss_catalog`;
-USE my_db;
+```sql title="Flink SQL"
+USE CATALOG fluss_catalog;
+```
 
+```sql title="Flink SQL"
+USE my_db;
+```
+
+```sql title="Flink SQL"
 CREATE TEMPORARY TABLE lookup_join_sink
 (
    order_key INT NOT NULL,
@@ -53,7 +59,9 @@ CREATE TEMPORARY TABLE lookup_join_sink
    customer_name STRING NOT NULL,
    customer_address STRING NOT NULL
 ) WITH ('connector' = 'blackhole');
+```
 
+```sql title="Flink SQL"
 -- look up join in asynchronous mode.
 INSERT INTO lookup_join_sink
 SELECT `o`.`o_orderkey`, `o`.`o_totalprice`, `c`.`c_name`, `c`.`c_address`
@@ -62,8 +70,9 @@ FROM
 LEFT JOIN `customer`
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey`;
+```
 
-
+```sql title="Flink SQL"
 -- look up join in synchronous mode.
 INSERT INTO lookup_join_sink
 SELECT `o`.`o_orderkey`, `o`.`o_totalprice`, `c`.`c_name`, `c`.`c_address`
@@ -72,7 +81,6 @@ FROM
 LEFT JOIN `customer` /*+ OPTIONS('lookup.async' = 'false') */
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey`;
-
 ```
 
 ## Lookup Options

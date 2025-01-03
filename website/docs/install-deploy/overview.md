@@ -124,8 +124,8 @@ We have listed them in the table below the figure.
                 CoordinatorServer/TabletServer report internal metrics and Fluss client (e.g., connector in Flink jobs) can report additional, client specific metrics as well.
             </td>
             <td>
-               <li>[JMX](/docs/maintenance/metric-reporters#jmx)</li>
-               <li>[Prometheus](/docs/maintenance/metric-reporters#prometheus)</li>
+               <li>[JMX](/docs/maintenance/observability/metric-reporters#jmx)</li>
+               <li>[Prometheus](/docs/maintenance/observability/metric-reporters#prometheus)</li>
             </td>
         </tr>
     </tbody>
