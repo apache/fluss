@@ -89,12 +89,10 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
-        // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
         int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes),
-                        table.getDescriptor().getKvFormat());
+                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes));
 
         final RowType outputRowType;
         if (projection == null) {
@@ -116,7 +114,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     public CompletableFuture<Collection<RowData>> asyncLookup(RowData keyRow) {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
         RemainingFilter remainingFilter = lookupNormalizer.createRemainingFilter(keyRow);
-        InternalRow flussKeyRow = flinkRowToFlussRowConverter.toInternalRow(normalizedKeyRow);
+        InternalRow flussKeyRow = flinkRowToFlussRowConverter.toGenericRow(normalizedKeyRow);
         CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
         // fetch result
         fetchResult(future, 0, flussKeyRow, remainingFilter);

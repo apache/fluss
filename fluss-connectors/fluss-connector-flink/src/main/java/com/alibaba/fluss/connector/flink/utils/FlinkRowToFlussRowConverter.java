@@ -19,6 +19,7 @@ package com.alibaba.fluss.connector.flink.utils;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
@@ -87,6 +88,16 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
                     toFlussFieldConverters[i].serialize(fieldGetters[i].getFieldOrNull(rowData)));
         }
         return rowEncoder.finishRow();
+    }
+
+    public InternalRow toGenericRow(RowData rowData) {
+        GenericRow genericRow = new GenericRow(fieldLength);
+        for (int i = 0; i < fieldLength; i++) {
+            genericRow.setField(
+                    i,
+                    toFlussFieldConverters[i].serialize(fieldGetters[i].getFieldOrNull(rowData)));
+        }
+        return genericRow;
     }
 
     private FlussSerializationConverter createNullableInternalConverter(LogicalType flinkField) {

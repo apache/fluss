@@ -84,12 +84,10 @@ public class FlinkLookupFunction extends LookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
-        // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
         int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes),
-                        table.getDescriptor().getKvFormat());
+                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes));
 
         final RowType outputRowType;
         if (projection == null) {
@@ -121,7 +119,7 @@ public class FlinkLookupFunction extends LookupFunction {
         // first is converting from flink row to fluss row,
         // second is extracting key from the fluss row when calling method table.get(flussKeyRow)
         // todo: may be reduce to one data conversion when it's a bottle neck
-        InternalRow flussKeyRow = flinkRowToFlussRowConverter.toInternalRow(normalizedKeyRow);
+        InternalRow flussKeyRow = flinkRowToFlussRowConverter.toGenericRow(normalizedKeyRow);
         for (int retry = 0; retry <= maxRetryTimes; retry++) {
             try {
                 if (flussLookupType == LookupType.LOOKUP) {

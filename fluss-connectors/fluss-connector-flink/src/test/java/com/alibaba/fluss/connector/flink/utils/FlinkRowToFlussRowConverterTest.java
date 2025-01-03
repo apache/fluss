@@ -61,6 +61,14 @@ public class FlinkRowToFlussRowConverterTest {
             assertThat(internalRow.getFieldCount()).isEqualTo(19);
             assertAllTypeEquals(internalRow);
         }
+
+        // test GenericRow row converter
+        try (FlinkRowToFlussRowConverter converter =
+                FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType))) {
+            InternalRow internalRow = converter.toGenericRow(genRowDataForAllType());
+            assertThat(internalRow.getFieldCount()).isEqualTo(19);
+            assertAllTypeEquals(internalRow);
+        }
     }
 
     private static RowData genRowDataForAllType() {
