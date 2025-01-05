@@ -21,7 +21,7 @@ Fluss only supports Apache Flink's Table API.
 | Feature support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
 | [SQL create catalog](ddl.md#create-catalog)       | ✔️    |                                        |
-| [SQl create database](ddl.md#create-database)     | ✔️    |                                        |
+| [SQL create database](ddl.md#create-database)     | ✔️    |                                        |
 | [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
 | [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |

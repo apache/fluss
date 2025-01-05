@@ -309,7 +309,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext.putPartition(partition.getValue(), partition.getKey());
                     }
                     // if the table is auto partition, put the partitions info
-                    if (tableDescriptor.getAutoPartitionStrategy().isAutoPartitionEnabled()) {
+                    if (tableDescriptor.isPartitioned()
+                            && tableDescriptor
+                                    .getAutoPartitionStrategy()
+                                    .isAutoPartitionEnabled()) {
                         autoPartitionTables.put(tableInfo.getTableId(), tableInfo);
                     }
                 }
@@ -483,7 +486,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableInfo.getTablePath(),
                 tableInfo.getTableId(),
                 createTableEvent.getTableAssignment());
-        if (createTableEvent.isAutoPartitionTable()) {
+        if (tableInfo.getTableDescriptor().isPartitioned()
+                && createTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.addAutoPartitionTable(tableInfo);
         }
     }

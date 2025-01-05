@@ -83,7 +83,9 @@ The following SQL statement creates a Partitioned PrimaryKey Table in Fluss. Not
 Currently, Fluss only supports one partitioned field with `STRING` type.
 
 :::note
-Currently, partitioned table must enable auto partition and set auto partition time unit.
+1. Currently, partitioned table must enable auto partition and set auto partition time unit.
+2. When creating a non-partitioned table with `'table.auto-partition.enabled'='true'`, this config will be ignored.
+3. Partitioned column's value must be in fixed format while `table.auto-partition.time-unit` be set, infer to [partitioning](../table-design/data-distribution/partitioning.md) for more details.
 :::
 
 ```sql 
