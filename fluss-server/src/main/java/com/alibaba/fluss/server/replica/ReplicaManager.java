@@ -249,7 +249,7 @@ public class ReplicaManager {
                 new DelayedOperationManager<>(
                         "delay fetch log",
                         serverId,
-                        conf.getInt(ConfigOptions.LOG_REPLICA_FETCH_LOG_OPERATION_PURGE_NUMBER));
+                        conf.getInt(ConfigOptions.LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER));
 
         this.replicaFetcherManager = new ReplicaFetcherManager(conf, rpcClient, serverId, this);
         this.adjustIsrManager = new AdjustIsrManager(scheduler, coordinatorGateway, serverId);

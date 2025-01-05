@@ -385,8 +385,8 @@ public class ConfigOptions {
                             "The purge number (in number of requests) of the write operation manager, "
                                     + "the default value is 1000.");
 
-    public static final ConfigOption<Integer> LOG_REPLICA_FETCH_LOG_OPERATION_PURGE_NUMBER =
-            key("log.replica.fetch-log-operation-purge-number")
+    public static final ConfigOption<Integer> LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER =
+            key("log.replica.fetch-operation-purge-number")
                     .intType()
                     .defaultValue(1000)
                     .withDescription(
@@ -405,13 +405,14 @@ public class ConfigOptions {
                                     + "tablet server at the cost of higher CPU and memory utilization.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_FETCH_BACKOFF_INTERVAL =
-            key("log.replica.fetch-backoff-interval")
+            key("log.replica.fetch.backoff-interval")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(1))
-                    .withDescription("The amount of time to sleep when fetch bucket error occurs.");
+                    .withDescription("The amount of time to sleep when fetch bucket error occurs.")
+                    .withFallbackKeys("log.replica.fetch-backoff-interval");
 
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES =
-            key("log.replica.fetch-max-bytes")
+            key("log.replica.fetch.max-bytes")
                     .memoryType()
                     .defaultValue(MemorySize.parse("16mb"))
                     .withDescription(
@@ -420,19 +421,21 @@ public class ConfigOptions {
                                     + "non-empty bucket of the fetch is larger than this value, the record batch "
                                     + "will still be returned to ensure that the fetch can make progress. As such, "
                                     + "this is not a absolute maximum. Note that the fetcher performs multiple fetches "
-                                    + "in parallel.");
+                                    + "in parallel.")
+                    .withDeprecatedKeys("log.fetch.max-bytes");
 
-    public static final ConfigOption<MemorySize> LOG_FETCH_MAX_BYTES_FOR_BUCKET =
-            key("log.fetch.max-bytes-for-bucket")
+    public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET =
+            key("log.replica.fetch.max-bytes-for-bucket")
                     .memoryType()
                     .defaultValue(MemorySize.parse("1mb"))
                     .withDescription(
                             "The maximum amount of data the server should return for a table bucket in fetch request "
                                     + "from follower. Records are fetched in batches, the max bytes size is "
-                                    + "config by this option.");
+                                    + "config by this option.")
+                    .withDeprecatedKeys("log.fetch.max-bytes-for-bucket");
 
-    public static final ConfigOption<Duration> LOG_FETCH_WAIT_MAX_TIME =
-            key("log.fetch.wait-max-time")
+    public static final ConfigOption<Duration> LOG_REPLICA_FETCH_WAIT_MAX_TIME =
+            key("log.replica.fetch.wait-max-time")
                     .durationType()
                     .defaultValue(Duration.ofMillis(500))
                     .withDescription(
@@ -441,14 +444,14 @@ public class ConfigOptions {
                                     + "'log.replica.max-lag-time' at all times to prevent frequent shrinking of ISR for "
                                     + "low throughput tables");
 
-    public static final ConfigOption<MemorySize> LOG_FETCH_MIN_BYTES =
-            key("log.fetch.min-bytes")
+    public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MIN_BYTES =
+            key("log.replica.fetch.min-bytes")
                     .memoryType()
                     .defaultValue(MemorySize.parse("1b"))
                     .withDescription(
                             "The minimum bytes expected for each fetch log request from follower to response. "
                                     + "If not enough bytes, wait up to "
-                                    + LOG_FETCH_WAIT_MAX_TIME.key()
+                                    + LOG_REPLICA_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
 
     public static final ConfigOption<Integer> LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER =
@@ -743,7 +746,7 @@ public class ConfigOptions {
                                     + "them incrementally from each poll.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
-            key("client.scanner.log.fetch-max-bytes")
+            key("client.scanner.log.fetch.max-bytes")
                     .memoryType()
                     .defaultValue(MemorySize.parse("16mb"))
                     .withDescription(
@@ -754,7 +757,7 @@ public class ConfigOptions {
                                     + "this is not a absolute maximum.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET =
-            key("client.scanner.log.fetch-max-bytes-for-bucket")
+            key("client.scanner.log.fetch.max-bytes-for-bucket")
                     .memoryType()
                     .defaultValue(MemorySize.parse("1mb"))
                     .withDescription(
@@ -763,7 +766,7 @@ public class ConfigOptions {
                                     + "this option.");
 
     public static final ConfigOption<Duration> CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME =
-            key("client.scanner.log.fetch-wait-max-time")
+            key("client.scanner.log.fetch.wait-max-time")
                     .durationType()
                     .defaultValue(Duration.ofMillis(500))
                     .withDescription(
@@ -771,7 +774,7 @@ public class ConfigOptions {
                                     + "request from client to response.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MIN_BYTES =
-            key("client.scanner.log.fetch-min-bytes")
+            key("client.scanner.log.fetch.min-bytes")
                     .memoryType()
                     .defaultValue(MemorySize.parse("1b"))
                     .withDescription(
