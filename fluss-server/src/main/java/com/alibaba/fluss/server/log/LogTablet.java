@@ -690,8 +690,7 @@ public final class LogTablet {
                         "Currently, we only support DefaultLogRecordBatch.");
             }
 
-            int recordCount = batch.getRecordCount();
-            initialOffset += recordCount;
+            initialOffset = batch.nextLogOffset();
         }
 
         return new AssignResult(initialOffset - 1, commitTimestamp, baseLogOffset);

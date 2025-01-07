@@ -340,21 +340,21 @@ public final class KvTablet {
                             }
                         }
 
-                        // if appendedRecordCount is 0, it means there is no record to append, we
-                        // should not append.
-                        if (appendedRecordCount > 0) {
-                            // now, we can build the full log.
-                            return logTablet.appendAsLeader(walBuilder.build());
-                        } else {
-                            return new LogAppendInfo(
-                                    logEndOffsetOfPrevBatch - 1,
-                                    logEndOffsetOfPrevBatch - 1,
-                                    0L,
-                                    0L,
-                                    0,
-                                    0,
-                                    false);
+                        if (appendedRecordCount <= 0) {
+                            // This situation indicates that these batches of kvRecordBatch have not
+                            // generated any CDC logs, for example, when client attempts to delete
+                            // some non-existent keys or MergeEngine set to FIRST_ROW. In this case,
+                            // we cannot simply return, as doing so would cause a
+                            // OutOfOrderSequenceException problem. Therefore, here we override the
+                            // lastLogOffset to 0L as the baseLogOffset is 0L. As doing that, the
+                            // logOffsetDelta in logRecordBatch will be set to 0L instead of -1L.
+                            // So, we will put a batch into file with recordCount 0 and offset plus
+                            // 1L, it will update the batchSequence corresponding to the writerId
+                            // and also increment the CDC log offset by 1.
+                            walBuilder.overrideLastLogOffset(0L);
                         }
+
+                        return logTablet.appendAsLeader(walBuilder.build());
                     } catch (Throwable t) {
                         // While encounter error here, the CDC logs may fail writing to disk,
                         // and the client probably will resend the batch. If we do not remove the

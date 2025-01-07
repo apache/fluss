@@ -26,10 +26,13 @@ import com.alibaba.fluss.utils.CloseableIterator;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link DefaultLogRecordBatch}. */
 public class DefaultLogRecordBatchTest extends LogTestBase {
@@ -95,5 +98,76 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         }
 
         builder.close();
+    }
+
+    @Test
+    void testOverrideLastLogOffset() throws Exception {
+        List<IndexedRow> rows1 =
+                Arrays.asList(
+                        row(baseRowType, new Object[] {1, "1"}),
+                        row(baseRowType, new Object[] {2, "2"}),
+                        row(baseRowType, new Object[] {3, "3"}));
+
+        MemoryLogRecordsIndexedBuilder builder =
+                MemoryLogRecordsIndexedBuilder.builder(
+                        0L, schemaId, Integer.MAX_VALUE, magic, outputView);
+        for (IndexedRow row : rows1) {
+            builder.append(RowKind.APPEND_ONLY, row);
+        }
+
+        // override lastLogOffset smaller than record counts.
+        assertThatThrownBy(() -> builder.overrideLastLogOffset(1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "The override lastLogOffset is less than recordCount + baseLogOffset,"
+                                + " which will cause the logOffsetDelta to be negative");
+
+        // override lastLogOffset larger than record counts.
+        builder.overrideLastLogOffset(5L);
+        MemoryLogRecords memoryLogRecords = builder.build();
+        Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
+
+        assertThat(iterator.hasNext()).isTrue();
+        LogRecordBatch logRecordBatch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        logRecordBatch.ensureValid();
+        assertThat(logRecordBatch.getRecordCount()).isEqualTo(3);
+        assertThat(logRecordBatch.lastLogOffset()).isEqualTo(5);
+        assertThat(logRecordBatch.nextLogOffset()).isEqualTo(6);
+        assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+                CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
+            for (IndexedRow row : rows1) {
+                assertThat(iter.hasNext()).isTrue();
+                LogRecord record = iter.next();
+                assertThat(record.getRow()).isEqualTo(row);
+            }
+            assertThat(iter.hasNext()).isFalse();
+        }
+
+        // test empty record batch.
+        MemoryLogRecordsIndexedBuilder builder2 =
+                MemoryLogRecordsIndexedBuilder.builder(
+                        0L, schemaId, Integer.MAX_VALUE, magic, outputView);
+        builder2.overrideLastLogOffset(0);
+        memoryLogRecords = builder2.build();
+        iterator = memoryLogRecords.batches().iterator();
+
+        assertThat(iterator.hasNext()).isTrue();
+        logRecordBatch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        logRecordBatch.ensureValid();
+        assertThat(logRecordBatch.getRecordCount()).isEqualTo(0);
+        assertThat(logRecordBatch.lastLogOffset()).isEqualTo(0);
+        assertThat(logRecordBatch.nextLogOffset()).isEqualTo(1);
+        assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+                CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
+            assertThat(iter.hasNext()).isFalse();
+        }
     }
 }

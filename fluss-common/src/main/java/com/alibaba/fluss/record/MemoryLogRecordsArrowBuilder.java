@@ -24,6 +24,7 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
+import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
@@ -31,9 +32,9 @@ import java.io.IOException;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_ROWKIND_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
+import static com.alibaba.fluss.record.DefaultLogRecordBatch.LAST_OFFSET_DELTA_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.WRITE_CLIENT_ID_OFFSET;
 import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
@@ -59,6 +60,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private int sizeInBytes;
     private int recordCount;
     private boolean isClosed;
+    private long lastLogOffset;
     private boolean reCalculateSizeInBytes = false;
 
     private MemoryLogRecordsArrowBuilder(
@@ -78,6 +80,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
         this.writerId = NO_WRITER_ID;
         this.batchSequence = NO_BATCH_SEQUENCE;
+        this.lastLogOffset = -1L;
         this.isClosed = false;
 
         this.pagedOutputView = pagedOutputView;
@@ -167,6 +170,14 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         this.batchSequence = batchSequence;
     }
 
+    public void overrideLastLogOffset(long lastLogOffset) {
+        Preconditions.checkArgument(
+                lastLogOffset >= arrowWriter.getRecordsCount() + baseLogOffset,
+                "The override lastLogOffset is less than recordCount + baseLogOffset, "
+                        + "which will cause the logOffsetDelta to be negative");
+        this.lastLogOffset = lastLogOffset;
+    }
+
     public boolean isClosed() {
         return isClosed;
     }
@@ -216,7 +227,12 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
         outputView.writeShort((short) schemaId);
         // skip write attributes
-        outputView.setPosition(WRITE_CLIENT_ID_OFFSET);
+        outputView.setPosition(LAST_OFFSET_DELTA_OFFSET);
+        if (lastLogOffset < 0) {
+            outputView.writeInt(recordCount - 1);
+        } else {
+            outputView.writeInt((int) (lastLogOffset - baseLogOffset));
+        }
         outputView.writeLong(writerId);
         outputView.writeInt(batchSequence);
         outputView.writeInt(recordCount);

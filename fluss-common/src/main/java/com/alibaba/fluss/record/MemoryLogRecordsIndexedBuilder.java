@@ -31,10 +31,10 @@ import java.io.IOException;
 
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
+import static com.alibaba.fluss.record.DefaultLogRecordBatch.LAST_OFFSET_DELTA_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.WRITE_CLIENT_ID_OFFSET;
 import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
@@ -59,6 +59,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     private int currentRecordNumber;
     private int sizeInBytes;
     private boolean isClosed;
+    private long lastLogOffset;
 
     private MemoryLogRecordsIndexedBuilder(
             long baseLogOffset,
@@ -78,6 +79,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
         this.writerId = NO_WRITER_ID;
         this.batchSequence = NO_BATCH_SEQUENCE;
         this.currentRecordNumber = 0;
+        this.lastLogOffset = -1L;
         this.isClosed = false;
 
         // We don't need to write header information while the builder creating,
@@ -152,6 +154,14 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
         this.batchSequence = batchSequence;
     }
 
+    public void overrideLastLogOffset(long lastLogOffset) {
+        Preconditions.checkArgument(
+                lastLogOffset >= currentRecordNumber + baseLogOffset,
+                "The override lastLogOffset is less than recordCount + baseLogOffset, "
+                        + "which will cause the logOffsetDelta to be negative");
+        this.lastLogOffset = lastLogOffset;
+    }
+
     public long writerId() {
         return writerId;
     }
@@ -191,7 +201,12 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
 
         outputView.writeShort((short) schemaId);
         // skip write attribute byte for now.
-        outputView.setPosition(WRITE_CLIENT_ID_OFFSET);
+        outputView.setPosition(LAST_OFFSET_DELTA_OFFSET);
+        if (lastLogOffset < 0) {
+            outputView.writeInt(currentRecordNumber - 1);
+        } else {
+            outputView.writeInt((int) (lastLogOffset - baseLogOffset));
+        }
         outputView.writeLong(writerId);
         outputView.writeInt(batchSequence);
         outputView.writeInt(currentRecordNumber);

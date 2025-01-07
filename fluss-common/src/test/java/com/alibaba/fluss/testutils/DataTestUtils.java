@@ -508,6 +508,21 @@ public class DataTestUtils {
         assertThat(iterator.hasNext()).isFalse();
     }
 
+    public static void assertLogRecordBatchEqualsWithRowKind(
+            RowType rowType,
+            LogRecordBatch logRecordBatch,
+            List<Tuple2<RowKind, Object[]>> expected) {
+        try (LogRecordReadContext readContext = createArrowReadContext(rowType, DEFAULT_SCHEMA_ID);
+                CloseableIterator<LogRecord> logIterator = logRecordBatch.records(readContext)) {
+            for (Tuple2<RowKind, Object[]> expectedFieldAndRowKind : expected) {
+                assertThat(logIterator.hasNext()).isTrue();
+                assertLogRecordsEqualsWithRowKind(
+                        rowType, logIterator.next(), expectedFieldAndRowKind);
+            }
+            assertThat(logIterator.hasNext()).isFalse();
+        }
+    }
+
     public static void assertLogRecordsEquals(LogRecords actual, LogRecords expected) {
         assertLogRecordsEquals(DATA1_ROW_TYPE, actual, expected);
     }

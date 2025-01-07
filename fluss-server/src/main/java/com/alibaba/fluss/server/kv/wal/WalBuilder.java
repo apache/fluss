@@ -29,5 +29,7 @@ public interface WalBuilder {
 
     void setWriterState(long writerId, int batchSequence);
 
+    void overrideLastLogOffset(long lastLogOffset);
+
     void deallocate();
 }

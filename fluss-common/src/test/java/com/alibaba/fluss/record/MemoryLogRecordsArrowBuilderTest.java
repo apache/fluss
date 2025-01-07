@@ -26,6 +26,7 @@ import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.junit.jupiter.api.AfterEach;
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -43,6 +45,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
+import static com.alibaba.fluss.testutils.DataTestUtils.assertMemoryRecordsEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -82,7 +85,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch batch = iterator.next();
         assertThat(batch.getRecordCount()).isEqualTo(0);
-        assertThat(batch.sizeInBytes()).isEqualTo(44);
+        assertThat(batch.sizeInBytes()).isEqualTo(48);
         assertThat(iterator.hasNext()).isFalse();
     }
 
@@ -137,7 +140,7 @@ public class MemoryLogRecordsArrowBuilderTest {
                         })
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "The size of first segment of pagedOutputView is too small, need at least 44 bytes.");
+                        "The size of first segment of pagedOutputView is too small, need at least 48 bytes.");
     }
 
     @Test
@@ -177,6 +180,78 @@ public class MemoryLogRecordsArrowBuilderTest {
 
         writer.close();
         writer1.close();
+    }
+
+    @Test
+    void testOverrideLastOffset() throws Exception {
+        ArrowWriter writer =
+                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, 1024 * 10, DATA1_ROW_TYPE);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(writer, 10, 1024 * 10);
+        List<RowKind> rowKinds =
+                DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
+        List<InternalRow> rows =
+                DATA1.stream()
+                        .map(object -> row(DATA1_ROW_TYPE, object))
+                        .collect(Collectors.toList());
+        for (int i = 0; i < DATA1.size(); i++) {
+            builder.append(rowKinds.get(i), rows.get(i));
+        }
+
+        // override lastLogOffset smaller than record counts.
+        assertThatThrownBy(() -> builder.overrideLastLogOffset(3L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "The override lastLogOffset is less than recordCount + baseLogOffset,"
+                                + " which will cause the logOffsetDelta to be negative");
+
+        // override lastLogOffset larger than record counts.
+        builder.overrideLastLogOffset(15L);
+        builder.close();
+        builder.serialize();
+        MemoryLogRecords memoryLogRecords =
+                MemoryLogRecords.pointToByteBuffer(builder.build().getByteBuf().nioBuffer());
+        Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
+
+        assertThat(iterator.hasNext()).isTrue();
+        LogRecordBatch logRecordBatch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        logRecordBatch.ensureValid();
+        assertThat(logRecordBatch.getRecordCount()).isEqualTo(10);
+        assertThat(logRecordBatch.lastLogOffset()).isEqualTo(15);
+        assertThat(logRecordBatch.nextLogOffset()).isEqualTo(16);
+        assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        assertMemoryRecordsEquals(
+                DATA1_ROW_TYPE, memoryLogRecords, Collections.singletonList(DATA1));
+
+        // test empty record batch.
+        ArrowWriter writer2 =
+                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, 1024 * 10, DATA1_ROW_TYPE);
+        MemoryLogRecordsArrowBuilder builder2 =
+                createMemoryLogRecordsArrowBuilder(writer2, 10, 1024 * 10);
+        builder2.overrideLastLogOffset(0);
+        builder2.close();
+        builder2.serialize();
+        memoryLogRecords =
+                MemoryLogRecords.pointToByteBuffer(builder2.build().getByteBuf().nioBuffer());
+        iterator = memoryLogRecords.batches().iterator();
+
+        assertThat(iterator.hasNext()).isTrue();
+        logRecordBatch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        logRecordBatch.ensureValid();
+        assertThat(logRecordBatch.getRecordCount()).isEqualTo(0);
+        assertThat(logRecordBatch.lastLogOffset()).isEqualTo(0);
+        assertThat(logRecordBatch.nextLogOffset()).isEqualTo(1);
+        assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createArrowReadContext(
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
+            assertThat(iter.hasNext()).isFalse();
+        }
     }
 
     private MemoryLogRecordsArrowBuilder createMemoryLogRecordsArrowBuilder(

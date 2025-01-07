@@ -23,6 +23,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordTestUtils;
+import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.RowKind;
@@ -49,6 +50,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
@@ -273,13 +275,16 @@ final class ReplicaTest extends ReplicaTestBase {
                 .isEqualTo(expected);
         currentOffset += 3;
 
-        // delete k2 again, shouldn't produce any log records
+        // delete k2 again, will produce a batch with empty record.
         kvRecords = kvRecordBatchFactory.ofRecords(kvRecordFactory.ofRecord("k2", null));
         logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
-        assertThat(logAppendInfo.lastOffset()).isEqualTo(11);
-        assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
-                .withSchema(DATA1_ROW_TYPE)
-                .isEqualTo(MemoryLogRecords.EMPTY);
+        assertThat(logAppendInfo.lastOffset()).isEqualTo(12);
+        LogRecords logRecords = fetchRecords(kvReplica, currentOffset);
+        Iterator<LogRecordBatch> iterator = logRecords.batches().iterator();
+        assertThat(iterator.hasNext()).isTrue();
+        LogRecordBatch batch = iterator.next();
+        assertThat(batch.getRecordCount()).isEqualTo(0);
+        currentOffset += 1;
 
         // delete k1 and put k1 again, should produce -D, +I
         kvRecords =
@@ -287,7 +292,7 @@ final class ReplicaTest extends ReplicaTestBase {
                         kvRecordFactory.ofRecord("k1", null),
                         kvRecordFactory.ofRecord("k1", new Object[] {1, "aaa"}));
         logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
-        assertThat(logAppendInfo.lastOffset()).isEqualTo(13);
+        assertThat(logAppendInfo.lastOffset()).isEqualTo(14);
         expected =
                 logRecords(
                         currentOffset,

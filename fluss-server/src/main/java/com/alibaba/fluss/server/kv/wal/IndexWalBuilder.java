@@ -62,6 +62,11 @@ public class IndexWalBuilder implements WalBuilder {
     }
 
     @Override
+    public void overrideLastLogOffset(long lastLogOffset) {
+        recordsBuilder.overrideLastLogOffset(lastLogOffset);
+    }
+
+    @Override
     public void deallocate() {
         memorySegmentPool.returnAll(outputView.allocatedPooledSegments());
     }

@@ -62,6 +62,11 @@ public class ArrowWalBuilder implements WalBuilder {
     }
 
     @Override
+    public void overrideLastLogOffset(long lastLogOffset) {
+        recordsBuilder.overrideLastLogOffset(lastLogOffset);
+    }
+
+    @Override
     public void deallocate() {
         recordsBuilder.recycleArrowWriter();
         memorySegmentPool.returnAll(outputView.allocatedPooledSegments());
