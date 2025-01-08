@@ -28,6 +28,7 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -53,16 +54,19 @@ import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
@@ -930,5 +934,89 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .isEqualTo(expectedRows.get(i));
             }
         }
+    }
+
+    @ParameterizedTest
+    @MethodSource("arrowCompressionTypes")
+    void testArrowCompressionAndProject(ArrowCompressionType arrowCompressionType)
+            throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_compression_and_project");
+        createTable(tablePath, tableDescriptor, false);
+
+        Configuration conf = new Configuration(clientConf);
+        conf.set(ConfigOptions.CLIENT_WRITER_ARROW_COMPRESSION_TYPE, arrowCompressionType);
+        try (Connection conn = ConnectionFactory.createConnection(conf);
+                Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.getAppendWriter();
+            int expectedSize = 30;
+            for (int i = 0; i < expectedSize; i++) {
+                String value = i % 2 == 0 ? "hello, friend                   " + i : null;
+                InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                appendWriter.append(row);
+                if (i % 10 == 0) {
+                    // insert 3 bathes, each batch has 10 rows
+                    appendWriter.flush();
+                }
+            }
+
+            // fetch data without project.
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+            int count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                    assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(2).toString())
+                                .isEqualTo("hello, friend                   " + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+
+            // fetch data with project.
+            logScanner = createLogScanner(table, new int[] {0, 2});
+            subscribeFromBeginning(logScanner, table);
+            count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                    assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(1).toString())
+                                .isEqualTo("hello, friend                   " + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+        }
+    }
+
+    private static Stream<ArrowCompressionType> arrowCompressionTypes() {
+        return Arrays.stream(ArrowCompressionType.values());
     }
 }

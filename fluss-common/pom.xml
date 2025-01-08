@@ -60,6 +60,19 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
+        <!-- TODO: these two dependencies need to be shaded. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+            <version>1.20</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+            <version>1.4.9-1</version>
+        </dependency>
+
         <!-- RocksDB dependencies -->
         <!-- todo: currently, we package rocksdb in here directly, but in the future,
         the rocksdb should be provided as a kv plugin to used by client & server.

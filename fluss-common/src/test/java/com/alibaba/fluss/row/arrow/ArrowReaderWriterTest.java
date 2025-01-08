@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.row.arrow;
 
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
@@ -134,7 +135,8 @@ class ArrowReaderWriterTest {
                         VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
                 ArrowWriter writer =
-                        provider.getOrCreateWriter(1L, 1, Integer.MAX_VALUE, rowType)) {
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, ArrowCompressionType.NO)) {
             for (InternalRow row : TEST_DATA) {
                 writer.writeRow(row);
             }
@@ -165,7 +167,9 @@ class ArrowReaderWriterTest {
     void testWriterExceedMaxSizeInBytes() {
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
-                ArrowWriter writer = provider.getOrCreateWriter(1L, 1, 1024, DATA1_ROW_TYPE)) {
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, 1024, DATA1_ROW_TYPE, ArrowCompressionType.NO)) {
             while (!writer.isFull()) {
                 writer.writeRow(row(DATA1_ROW_TYPE, DATA1.get(0)));
             }

@@ -22,6 +22,7 @@ import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
@@ -107,6 +108,8 @@ public final class RecordAccumulator {
 
     private final IdempotenceManager idempotenceManager;
 
+    private final ArrowCompressionType arrowCompressionType;
+
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
     // TODO add nextBatchExpiryTimeMs
@@ -125,6 +128,8 @@ public final class RecordAccumulator {
                         (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT).toMillis());
         this.batchSize =
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
+
+        this.arrowCompressionType = conf.get(ConfigOptions.CLIENT_WRITER_ARROW_COMPRESSION_TYPE);
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
         this.pagesPerBatch = Math.max(1, batchSize / writerBufferPool.pageSize());
@@ -503,7 +508,8 @@ public final class RecordAccumulator {
                             tableInfo.getTableId(),
                             schemaId,
                             outputView.getPreAllocatedSize(),
-                            tableInfo.getTableDescriptor().getSchema().toRowType());
+                            tableInfo.getTableDescriptor().getSchema().toRowType(),
+                            arrowCompressionType);
             batch =
                     new ArrowLogWriteBatch(
                             tb, physicalTablePath, schemaId, arrowWriter, outputView);

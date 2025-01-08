@@ -42,6 +42,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Builder for {@link MemoryLogRecords} of log records in {@link LogFormat#ARROW} format. */
 public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
+    private static final float COMPRESSION_RATE_ESTIMATION_FACTOR = 1.05f;
     private static final int BUILDER_DEFAULT_OFFSET = 0;
 
     private final long baseLogOffset;
@@ -57,6 +58,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private long writerId;
     private int batchSequence;
     private int sizeInBytes;
+    private int sizeInBytesAfterCompression;
     private int recordCount;
     private boolean isClosed;
     private boolean reCalculateSizeInBytes = false;
@@ -89,6 +91,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                         + " bytes.");
         this.rowKindWriter = new RowKindVectorWriter(firstSegment, ARROW_ROWKIND_OFFSET);
         this.sizeInBytes = ARROW_ROWKIND_OFFSET;
+        this.sizeInBytesAfterCompression = sizeInBytes;
         this.recordCount = 0;
     }
 
@@ -115,8 +118,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         }
 
         // serialize the arrow batch to dynamically allocated memory segments
-        arrowWriter.serializeToOutputView(
-                pagedOutputView, ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes());
+        int serializeSizeInBytes =
+                arrowWriter.serializeToOutputView(
+                        pagedOutputView, ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes());
+        sizeInBytesAfterCompression += serializeSizeInBytes;
         arrowWriter.recycle(writerEpoch);
 
         writeBatchHeader();
@@ -191,6 +196,9 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             // make size in bytes up-to-date
             sizeInBytes =
                     ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
+            // Before serialize to channel, the sizeInBytesAfterCompression only contains batch
+            // header size and rowKind vector size.
+            sizeInBytesAfterCompression = ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes();
             recordCount = arrowWriter.getRecordsCount();
         }
 
@@ -206,7 +214,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         outputView.setPosition(0);
         // update header.
         outputView.writeLong(baseLogOffset);
-        outputView.writeInt(sizeInBytes - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
+        outputView.writeInt(sizeInBytesAfterCompression - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
         outputView.writeByte(magic);
 
         // write empty timestamp which will be overridden on server side

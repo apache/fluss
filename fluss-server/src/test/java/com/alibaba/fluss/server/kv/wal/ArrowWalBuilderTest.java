@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.kv.wal;
 
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -154,7 +155,11 @@ class ArrowWalBuilderTest {
         return new ArrowWalBuilder(
                 DEFAULT_SCHEMA_ID,
                 arrowWriterProvider.getOrCreateWriter(
-                        tb.getTableId(), DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE),
+                        tb.getTableId(),
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        ArrowCompressionType.NO),
                 memorySegmentPool);
     }
 }

@@ -17,6 +17,8 @@
 package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.compression.FlussArrowCompressionFactory;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.writers.ArrowFieldWriter;
@@ -26,6 +28,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthV
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
@@ -46,7 +49,6 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
  */
 @Internal
 public class ArrowWriter implements AutoCloseable {
-
     /**
      * The initial capacity of the vectors which are used to store the rows. The capacity will be
      * expanded automatically if the rows exceed the initial capacity.
@@ -63,7 +65,7 @@ public class ArrowWriter implements AutoCloseable {
      * The identifier of the writer which is used to identify the writer in the {@link
      * ArrowWriterPool}.
      */
-    final String tableSchemaId;
+    final String writerKey;
 
     /** Container that holds a set of vectors for the rows. */
     final VectorSchemaRoot root;
@@ -84,6 +86,8 @@ public class ArrowWriter implements AutoCloseable {
 
     private final RowType schema;
 
+    private final CompressionCodec compressionCodec;
+
     private int writeLimitInBytes;
 
     private int estimatedMaxRecordsCount;
@@ -93,15 +97,22 @@ public class ArrowWriter implements AutoCloseable {
     private long epoch;
 
     ArrowWriter(
-            String tableSchemaId,
+            String writerKey,
             int bufferSizeInBytes,
             RowType schema,
             BufferAllocator allocator,
-            ArrowWriterProvider provider) {
-        this.tableSchemaId = tableSchemaId;
+            ArrowWriterProvider provider,
+            ArrowCompressionType arrowCompressionType) {
+        this.writerKey = writerKey;
         this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
         this.provider = Preconditions.checkNotNull(provider);
+
+        this.compressionCodec =
+                FlussArrowCompressionFactory.INSTANCE.createCodec(
+                        FlussArrowCompressionFactory.toArrowCompressionCodecType(
+                                arrowCompressionType));
+
         this.metadataLength = ArrowUtils.estimateArrowMetadataLength(root.getSchema());
         this.writeLimitInBytes = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
         this.estimatedMaxRecordsCount = -1;
@@ -215,7 +226,8 @@ public class ArrowWriter implements AutoCloseable {
 
         // update row count only when we try to write records to the output.
         root.setRowCount(recordsCount);
-        try (ArrowRecordBatch arrowBatch = new VectorUnloader(root).getRecordBatch()) {
+        try (ArrowRecordBatch arrowBatch =
+                new VectorUnloader(root, true, compressionCodec, true).getRecordBatch()) {
             PagedMemorySegmentWritableChannel channel =
                     new PagedMemorySegmentWritableChannel(outputView);
             ArrowBlock block = MessageSerializer.serialize(new WriteChannel(channel), arrowBatch);

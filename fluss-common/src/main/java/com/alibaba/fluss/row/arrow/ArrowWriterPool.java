@@ -18,6 +18,7 @@ package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
@@ -68,7 +69,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                     } else {
                         Deque<ArrowWriter> roots =
                                 freeWriters.computeIfAbsent(
-                                        writer.tableSchemaId, k -> new ArrayDeque<>());
+                                        writer.writerKey, k -> new ArrayDeque<>());
                         writer.increaseEpoch();
                         roots.add(writer);
                     }
@@ -77,8 +78,12 @@ public class ArrowWriterPool implements ArrowWriterProvider {
 
     @Override
     public ArrowWriter getOrCreateWriter(
-            long tableId, int schemaId, int bufferSizeInBytes, RowType schema) {
-        final String tableSchemaId = tableId + "-" + schemaId;
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionType arrowCompressionType) {
+        final String writerKey = tableId + "-" + schemaId + "-" + arrowCompressionType;
         return inLock(
                 lock,
                 () -> {
@@ -86,13 +91,18 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                         throw new FlussRuntimeException(
                                 "Arrow VectorSchemaRoot pool closed while getting/creating root.");
                     }
-                    Deque<ArrowWriter> writers = freeWriters.get(tableSchemaId);
+                    Deque<ArrowWriter> writers = freeWriters.get(writerKey);
                     if (writers != null && !writers.isEmpty()) {
                         return initialize(writers.pollFirst(), bufferSizeInBytes);
                     } else {
                         return initialize(
                                 new ArrowWriter(
-                                        tableSchemaId, bufferSizeInBytes, schema, allocator, this),
+                                        writerKey,
+                                        bufferSizeInBytes,
+                                        schema,
+                                        allocator,
+                                        this,
+                                        arrowCompressionType),
                                 bufferSizeInBytes);
                     }
                 });

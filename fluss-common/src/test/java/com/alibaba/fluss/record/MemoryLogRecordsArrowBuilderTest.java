@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.record;
 
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -32,9 +33,12 @@ import org.apache.commons.lang3.RandomUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -71,7 +75,12 @@ public class MemoryLogRecordsArrowBuilderTest {
     void testAppendWithEmptyRecord() throws Exception {
         int maxSizeInBytes = 1024;
         ArrowWriter writer =
-                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE);
+                provider.getOrCreateWriter(
+                        1L,
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        ArrowCompressionType.NO);
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 100);
         assertThat(builder.isFull()).isFalse();
@@ -92,7 +101,12 @@ public class MemoryLogRecordsArrowBuilderTest {
     void testAppend() throws Exception {
         int maxSizeInBytes = 1024;
         ArrowWriter writer =
-                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE);
+                provider.getOrCreateWriter(
+                        1L,
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        ArrowCompressionType.NO);
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024);
         List<RowKind> rowKinds =
@@ -124,6 +138,63 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult);
     }
 
+    @ParameterizedTest
+    @MethodSource("compressionTypes")
+    void testCompression(ArrowCompressionType compressionType) throws Exception {
+        int maxSizeInBytes = 1024;
+        // create a compression-able data set.
+        List<Object[]> dataSet =
+                Arrays.asList(
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "},
+                        new Object[] {1, "                        "});
+
+        // first create an un-compression batch.
+        ArrowWriter writer1 =
+                provider.getOrCreateWriter(
+                        1L,
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        ArrowCompressionType.NO);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(writer1, 10, 1024);
+        for (Object[] data : dataSet) {
+            builder.append(RowKind.APPEND_ONLY, row(DATA1_ROW_TYPE, data));
+        }
+        builder.close();
+        MemoryLogRecords records1 =
+                MemoryLogRecords.pointToByteBuffer(builder.build().getByteBuf().nioBuffer());
+        int sizeInBytes1 = records1.sizeInBytes();
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records1, dataSet);
+
+        // second create a compression batch.
+        ArrowWriter writer2 =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE, compressionType);
+        MemoryLogRecordsArrowBuilder builder2 =
+                createMemoryLogRecordsArrowBuilder(writer2, 10, 1024);
+        for (Object[] data : dataSet) {
+            builder2.append(RowKind.APPEND_ONLY, row(DATA1_ROW_TYPE, data));
+        }
+        builder2.close();
+        MemoryLogRecords records2 =
+                MemoryLogRecords.pointToByteBuffer(builder2.build().getByteBuf().nioBuffer());
+
+        int sizeInBytes2 = records2.sizeInBytes();
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records2, dataSet);
+
+        // compare the size of two batches.
+        assertThat(sizeInBytes1).isGreaterThan(sizeInBytes2);
+    }
+
     @Test
     void testIllegalArgument() {
         int maxSizeInBytes = 1024;
@@ -134,7 +205,8 @@ public class MemoryLogRecordsArrowBuilderTest {
                                             1L,
                                             DEFAULT_SCHEMA_ID,
                                             maxSizeInBytes,
-                                            DATA1_ROW_TYPE)) {
+                                            DATA1_ROW_TYPE,
+                                            ArrowCompressionType.NO)) {
                                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 30);
                             }
                         })
@@ -147,7 +219,8 @@ public class MemoryLogRecordsArrowBuilderTest {
     void testClose() throws Exception {
         int maxSizeInBytes = 1024;
         ArrowWriter writer =
-                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, 1024, DATA1_ROW_TYPE);
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024, DATA1_ROW_TYPE, ArrowCompressionType.NO);
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024);
         List<RowKind> rowKinds =
@@ -162,7 +235,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         }
         assertThat(builder.isFull()).isTrue();
 
-        String tableSchemaId = 1L + "-" + 1;
+        String tableSchemaId = 1L + "-" + 1 + "-" + "NO";
         assertThat(provider.freeWriters().size()).isEqualTo(0);
         int sizeInBytesBeforeClose = builder.getSizeInBytes();
         builder.close();
@@ -173,7 +246,12 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(sizeInBytes).isEqualTo(sizeInBytesBeforeClose);
         // get writer again, writer will be initial.
         ArrowWriter writer1 =
-                provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE);
+                provider.getOrCreateWriter(
+                        1L,
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        ArrowCompressionType.NO);
         assertThat(provider.freeWriters().get(tableSchemaId).size()).isEqualTo(0);
 
         // Even if the writer has re-initialized, the sizeInBytes should be the same.
@@ -233,6 +311,10 @@ public class MemoryLogRecordsArrowBuilderTest {
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }
+    }
+
+    private static List<ArrowCompressionType> compressionTypes() {
+        return Arrays.asList(ArrowCompressionType.LZ4_FRAME, ArrowCompressionType.ZSTD);
     }
 
     private MemoryLogRecordsArrowBuilder createMemoryLogRecordsArrowBuilder(

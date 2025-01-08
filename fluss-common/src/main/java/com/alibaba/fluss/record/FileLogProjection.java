@@ -20,12 +20,14 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.BodyCompression;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.FieldNode;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.Message;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TypeLayout;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBodyCompression;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBuffer;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
@@ -54,9 +56,9 @@ import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORDS_COUNT_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
 import static com.alibaba.fluss.utils.FileUtils.readFullyOrFail;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** Column projection util on Arrow format {@link FileLogRecords}. */
 public class FileLogProjection {
@@ -125,16 +127,9 @@ public class FileLogProjection {
             bufferIndex += bufferLayoutCount[i];
         }
 
-        Schema projectedArrowSchema = ArrowUtils.toArrowSchema(schema.project(selectedFields));
-        int metadataLength = ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema);
         currentProjection =
                 new ProjectionInfo(
-                        nodesProjection,
-                        buffersProjection,
-                        bufferIndex,
-                        schema,
-                        metadataLength,
-                        selectedFields);
+                        nodesProjection, buffersProjection, bufferIndex, schema, selectedFields);
         projectionsCache.put(tableId, currentProjection);
     }
 
@@ -191,22 +186,21 @@ public class FileLogProjection {
                             currentProjection.buffersProjection,
                             currentProjection.bufferCount);
             long arrowBodyLength = projectedArrowBatch.bodyLength();
+
+            // 3. create new arrow batch metadata which already projected.
+            Tuple2<Integer, byte[]> lengthAndHeaderMetadata =
+                    serializeArrowRecordBatchMetadata(projectedArrowBatch, arrowBodyLength);
             int newBatchSizeInBytes =
                     RECORD_BATCH_HEADER_SIZE
                             + rowKindBytes
-                            + currentProjection.arrowMetadataLength
+                            + lengthAndHeaderMetadata.f0
                             + (int) arrowBodyLength; // safe to cast to int
             if (newBatchSizeInBytes > maxBytes) {
                 // the remaining bytes in the file are not enough to read a full batch
                 return new BytesViewLogRecords(builder.build());
             }
 
-            // 3. create new arrow batch metadata which already projected.
-            byte[] headerMetadata =
-                    serializeArrowRecordBatchMetadata(projectedArrowBatch, arrowBodyLength);
-            checkState(
-                    headerMetadata.length == currentProjection.arrowMetadataLength,
-                    "Invalid metadata length");
+            byte[] headerMetadata = lengthAndHeaderMetadata.f1;
 
             // 4. update and copy log batch header
             logHeaderBuffer.position(LENGTH_OFFSET);
@@ -258,7 +252,18 @@ public class FileLogProjection {
             newOffset += paddedLength;
         }
 
-        return new ProjectedArrowBatch(numRecords, newNodes, newBufferLayouts, selectedBuffers);
+        // Get compression codec and method. See ArrowRecordBatch#writeTo(FlatBufferBuilder).
+        BodyCompression compression = recordBatch.compression();
+        ArrowBodyCompression arrowBodyCompression;
+        if (compression != null) {
+            arrowBodyCompression =
+                    new ArrowBodyCompression(compression.codec(), compression.method());
+        } else {
+            arrowBodyCompression = DEFAULT_BODY_COMPRESSION;
+        }
+
+        return new ProjectedArrowBatch(
+                numRecords, newNodes, newBufferLayouts, selectedBuffers, arrowBodyCompression);
     }
 
     /**
@@ -268,12 +273,18 @@ public class FileLogProjection {
      * @see MessageSerializer#serialize(WriteChannel, ArrowRecordBatch)
      * @see ArrowRecordBatch#writeTo(FlatBufferBuilder)
      */
-    private byte[] serializeArrowRecordBatchMetadata(
+    private Tuple2<Integer, byte[]> serializeArrowRecordBatchMetadata(
             ProjectedArrowBatch batch, long arrowBodyLength) throws IOException {
         outputStream.reset();
-        ArrowUtils.serializeArrowRecordBatchMetadata(
-                writeChannel, batch.numRecords, batch.nodes, batch.buffersLayout, arrowBodyLength);
-        return outputStream.toByteArray();
+        int newMetadataLength =
+                ArrowUtils.serializeArrowRecordBatchMetadata(
+                        writeChannel,
+                        batch.numRecords,
+                        batch.nodes,
+                        batch.buffersLayout,
+                        batch.arrowBodyCompression,
+                        arrowBodyLength);
+        return Tuple2.of(newMetadataLength, outputStream.toByteArray());
     }
 
     private void resizeArrowMetadataBuffer(int metadataSize) {
@@ -345,7 +356,6 @@ public class FileLogProjection {
         final BitSet buffersProjection;
         final int bufferCount;
         final RowType schema;
-        final int arrowMetadataLength;
         final int[] selectedFields;
 
         private ProjectionInfo(
@@ -353,13 +363,11 @@ public class FileLogProjection {
                 BitSet buffersProjection,
                 int bufferCount,
                 RowType schema,
-                int arrowMetadataLength,
                 int[] selectedFields) {
             this.nodesProjection = nodesProjection;
             this.buffersProjection = buffersProjection;
             this.bufferCount = bufferCount;
             this.schema = schema;
-            this.arrowMetadataLength = arrowMetadataLength;
             this.selectedFields = selectedFields;
         }
     }
@@ -378,15 +386,20 @@ public class FileLogProjection {
         /** The projected buffer positions of {@link ArrowRecordBatch#getBuffers()}. */
         final List<ArrowBuffer> buffers;
 
+        /** The arrow body compression. */
+        final ArrowBodyCompression arrowBodyCompression;
+
         public ProjectedArrowBatch(
                 long numRecords,
                 List<ArrowFieldNode> nodes,
                 List<ArrowBuffer> buffersLayout,
-                List<ArrowBuffer> buffers) {
+                List<ArrowBuffer> buffers,
+                ArrowBodyCompression arrowBodyCompression) {
             this.numRecords = numRecords;
             this.nodes = nodes;
             this.buffersLayout = buffersLayout;
             this.buffers = buffers;
+            this.arrowBodyCompression = arrowBodyCompression;
         }
 
         public long bodyLength() {
