@@ -23,7 +23,6 @@ import com.alibaba.fluss.metrics.reporter.MetricReporter;
 import com.alibaba.fluss.metrics.util.TestHistogram;
 import com.alibaba.fluss.metrics.util.TestMeter;
 import com.alibaba.fluss.metrics.util.TestMetricGroup;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -35,7 +34,6 @@ import javax.management.ObjectName;
 import javax.management.remote.JMXConnector;
 import javax.management.remote.JMXConnectorFactory;
 import javax.management.remote.JMXServiceURL;
-
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.util.HashMap;
@@ -54,6 +52,8 @@ class JMXReporterTest {
     static {
         variables = new HashMap<>();
         variables.put("<host>", "localhost");
+        variables.put("key1", "value1");
+        variables.put("key2", "");
 
         metricGroup =
                 TestMetricGroup.newBuilder()
@@ -91,6 +91,7 @@ class JMXReporterTest {
         vars.put("key0", "value0");
         vars.put("key1", "value1");
         vars.put("\"key2,=;:?'", "\"value2 (test),=;:?'");
+        vars.put("key3", "");
 
         Hashtable<String, String> jmxTable = JMXReporter.generateJmxTable(vars);
 
@@ -98,6 +99,7 @@ class JMXReporterTest {
         assertThat(jmxTable).containsEntry("key0", "value0");
         assertThat(jmxTable).containsEntry("key1", "value1");
         assertThat(jmxTable).containsEntry("key2------", "value2_(test)------");
+        assertThat(jmxTable).containsEntry("key3", "");
     }
 
     /**
