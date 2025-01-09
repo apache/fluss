@@ -113,8 +113,8 @@ public final class TableDescriptor implements Serializable {
                                     f));
         }
 
-        if (tableDistribution != null) {
-            tableDistribution
+        if (this.tableDistribution != null) {
+            this.tableDistribution
                     .getBucketKeys()
                     .forEach(
                             f ->
@@ -187,11 +187,15 @@ public final class TableDescriptor implements Serializable {
      * Returns the indexes of the bucket key fields in the schema, empty if no bucket key is set.
      */
     public int[] getBucketKeyIndexes() {
-        List<String> bucketKey = getBucketKey();
+        return schema.getColumnIndexes(getBucketKey());
+    }
+
+    /** Returns the indexes of the key fields in the schema. */
+    public int[] getKeyIndexes(List<String> keyNames) {
         RowType rowType = schema.toRowType();
-        int[] bucketKeyIndex = new int[bucketKey.size()];
-        for (int i = 0; i < bucketKey.size(); i++) {
-            bucketKeyIndex[i] = rowType.getFieldIndex(bucketKey.get(i));
+        int[] bucketKeyIndex = new int[keyNames.size()];
+        for (int i = 0; i < keyNames.size(); i++) {
+            bucketKeyIndex[i] = rowType.getFieldIndex(keyNames.get(i));
         }
         return bucketKeyIndex;
     }

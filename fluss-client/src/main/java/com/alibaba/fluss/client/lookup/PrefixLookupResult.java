@@ -16,16 +16,17 @@
 
 package com.alibaba.fluss.client.lookup;
 
-import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.row.InternalRow;
 
 import java.util.List;
 
 /**
- * The result of {@link Table#prefixLookup(InternalRow)}}.
+ * The result of {@link PrefixLookuper#prefixLookup(InternalRow)}}.
  *
  * @since 0.6
  */
+@PublicEvolving
 public class PrefixLookupResult {
     private final List<InternalRow> rowList;
 

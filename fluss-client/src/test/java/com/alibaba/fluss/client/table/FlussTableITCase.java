@@ -19,7 +19,10 @@ package com.alibaba.fluss.client.table;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.lookup.PrefixLookup;
 import com.alibaba.fluss.client.lookup.PrefixLookupResult;
+import com.alibaba.fluss.client.lookup.PrefixLookuper;
 import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
@@ -31,6 +34,7 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.MergeEngine;
@@ -247,9 +251,12 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("a", DataTypes.INT())
                         .column("b", DataTypes.STRING())
                         .build();
+        RowType prefixKeyRowType = prefixKeySchema.toRowType();
+        PrefixLookuper prefixLookuper =
+                table.getPrefixLookuper(
+                        new PrefixLookup(prefixKeyRowType.getFieldNames().toArray(new String[0])));
         CompletableFuture<PrefixLookupResult> result =
-                table.prefixLookup(
-                        compactedRow(prefixKeySchema.toRowType(), new Object[] {1, "a"}));
+                prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {1, "a"}));
         PrefixLookupResult prefixLookupResult = result.get();
         assertThat(prefixLookupResult).isNotNull();
         List<InternalRow> rowList = prefixLookupResult.getRowList();
@@ -259,22 +266,89 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
         }
 
-        result =
-                table.prefixLookup(
-                        compactedRow(prefixKeySchema.toRowType(), new Object[] {2, "a"}));
+        result = prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {2, "a"}));
         prefixLookupResult = result.get();
         assertThat(prefixLookupResult).isNotNull();
         rowList = prefixLookupResult.getRowList();
         assertThat(rowList.size()).isEqualTo(1);
         assertRowValueEquals(rowType, rowList.get(0), new Object[] {2, "a", 4L, "value4"});
 
-        result =
-                table.prefixLookup(
-                        compactedRow(prefixKeySchema.toRowType(), new Object[] {3, "a"}));
+        result = prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {3, "a"}));
         prefixLookupResult = result.get();
         assertThat(prefixLookupResult).isNotNull();
         rowList = prefixLookupResult.getRowList();
         assertThat(rowList.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testInvalidPrefixLookup() throws Exception {
+        // First, test the bucket keys not a prefix subset of primary keys.
+        TablePath tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.BIGINT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "c").build();
+        createTable(tablePath, descriptor, false);
+        Table table = conn.getTable(tablePath);
+
+        Schema prefixKeySchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .build();
+        RowType prefixKeyRowType = prefixKeySchema.toRowType();
+        assertThatThrownBy(
+                        () ->
+                                table.getPrefixLookuper(
+                                        new PrefixLookup(
+                                                prefixKeyRowType
+                                                        .getFieldNames()
+                                                        .toArray(new String[0]))))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining(
+                        "To do prefix lookup, the bucket keys must be the prefix subset of primary keys "
+                                + "exclude partition fields (if partition table), but the bucket keys are [a, c] "
+                                + "and the primary keys are [a, b, c] and the primary key exclude partition "
+                                + "fields are [a, b, c] for table test_db_1.test_invalid_prefix_lookup_1");
+
+        // Second, test the lookup column names in PrefixLookup not a subset of primary keys.
+        tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_2");
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        descriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        createTable(tablePath, descriptor, true);
+        Table table2 = conn.getTable(tablePath);
+
+        prefixKeySchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("d", DataTypes.STRING())
+                        .build();
+        RowType prefixKeyRowType2 = prefixKeySchema.toRowType();
+        assertThatThrownBy(
+                        () ->
+                                table2.getPrefixLookuper(
+                                        new PrefixLookup(
+                                                prefixKeyRowType2
+                                                        .getFieldNames()
+                                                        .toArray(new String[0]))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "To do prefix lookup, the lookup columns must be the bucket key "
+                                + "with partition fields (if partition table), but the lookup columns are [a, d] and "
+                                + "the bucket keys are [a, b] for table test_db_1.test_invalid_prefix_lookup_2");
     }
 
     @Test
@@ -288,7 +362,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         // if you want to test the lookup for not ready table, you can comment the following line.
         waitAllReplicasReady(tableId, descriptor);
         Table table = conn.getTable(tablePath);
-        assertThat(lookupRow(table, rowKey)).isNull();
+        Lookuper lookuper = table.getLookuper();
+        assertThat(lookupRow(lookuper, rowKey)).isNull();
     }
 
     @Test
@@ -397,23 +472,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    void verifyPutAndLookup(Table table, Schema tableSchema, Object[] fields) throws Exception {
-        // put data.
-        InternalRow row = compactedRow(tableSchema.toRowType(), fields);
-        UpsertWriter upsertWriter = table.getUpsertWriter();
-        // put data.
-        upsertWriter.upsert(row);
-        upsertWriter.flush();
-        // lookup this key.
-        IndexedRow keyRow = keyRow(tableSchema, fields);
-        assertThat(lookupRow(table, keyRow)).isEqualTo(row);
-    }
-
-    private InternalRow lookupRow(Table table, IndexedRow keyRow) throws Exception {
-        // lookup this key.
-        return table.lookup(keyRow).get().getRow();
-    }
-
     @Test
     void testPartialPutAndDelete() throws Exception {
         Schema schema =
@@ -439,10 +497,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         upsertWriter
                 .upsert(compactedRow(schema.toRowType(), new Object[] {1, "aaa", null, null}))
                 .get();
+        Lookuper lookuper = table.getLookuper();
 
         // check the row
         IndexedRow rowKey = row(pkRowType, new Object[] {1});
-        assertThat(lookupRow(table, rowKey))
+        assertThat(lookupRow(lookuper, rowKey))
                 .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "aaa", 1, true}));
 
         // partial update columns columns: a,b,c
@@ -453,14 +512,14 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .get();
 
         // lookup the row
-        assertThat(lookupRow(table, rowKey))
+        assertThat(lookupRow(lookuper, rowKey))
                 .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, true}));
 
         // test partial delete, target column is a,b,c
         upsertWriter
                 .delete(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, null}))
                 .get();
-        assertThat(lookupRow(table, rowKey))
+        assertThat(lookupRow(lookuper, rowKey))
                 .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, null, null, true}));
 
         // partial delete, target column is d
@@ -471,7 +530,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .get();
 
         // the row should be deleted, shouldn't get the row again
-        assertThat(lookupRow(table, rowKey)).isNull();
+        assertThat(lookupRow(lookuper, rowKey)).isNull();
 
         table.close();
     }
@@ -524,15 +583,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
             UpsertWriter upsertWriter = table.getUpsertWriter();
             upsertWriter.upsert(row).get();
+            Lookuper lookuper = table.getLookuper();
 
             // lookup this key.
             IndexedRow keyRow = keyRow(DATA1_SCHEMA_PK, new Object[] {1, "a"});
-            assertThat(lookupRow(table, keyRow)).isEqualTo(row);
+            assertThat(lookupRow(lookuper, keyRow)).isEqualTo(row);
 
             // delete this key.
             upsertWriter.delete(row).get();
             // lookup this key again, will return null.
-            assertThat(lookupRow(table, keyRow)).isNull();
+            assertThat(lookupRow(lookuper, keyRow)).isNull();
         }
     }
 
@@ -889,6 +949,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         RowType rowType = DATA1_SCHEMA_PK.toRowType();
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, false);
+
+        Schema lookupKeySchema = Schema.newBuilder().column("a", DataTypes.INT()).build();
+        RowType lookupRowType = lookupKeySchema.toRowType();
+
         int rows = 5;
         int duplicateNum = 3;
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
@@ -903,10 +967,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             }
             upsertWriter.flush();
 
+            Lookuper lookuper = table.getLookuper();
             // now, get rows by lookup
             for (int id = 0; id < rows; id++) {
                 InternalRow gotRow =
-                        table.lookup(keyRow(DATA1_SCHEMA_PK, new Object[] {id, "dumpy"}))
+                        lookuper.lookup(keyRow(DATA1_SCHEMA_PK, new Object[] {id, "dumpy"}))
                                 .get()
                                 .getRow();
                 assertThatRow(gotRow).withSchema(rowType).isEqualTo(expectedRows.get(id));

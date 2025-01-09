@@ -18,8 +18,9 @@ package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.lookup.LookupResult;
-import com.alibaba.fluss.client.lookup.PrefixLookupResult;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.lookup.PrefixLookup;
+import com.alibaba.fluss.client.lookup.PrefixLookuper;
 import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
@@ -30,7 +31,6 @@ import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
@@ -56,35 +56,6 @@ public interface Table extends AutoCloseable {
      * reconstruct the {@link Table}.
      */
     TableDescriptor getDescriptor();
-
-    /**
-     * Lookups certain row from the given table primary keys.
-     *
-     * @param key the given table primary keys.
-     * @return the result of get.
-     */
-    CompletableFuture<LookupResult> lookup(InternalRow key);
-
-    /**
-     * Prefix lookup certain rows from the given table by prefix key.
-     *
-     * <p>Only available for Primary Key Table. Will throw exception when the table isn't a Primary
-     * Key Table.
-     *
-     * <p>Note: Currently, if you want to use prefix lookup, the table you created must both define
-     * the primary key and the bucket key, in addition, the bucket key needs to be part of the
-     * primary key and must be a prefix of the primary key. For example, if a table has fields
-     * [a,b,c,d], and the primary key is set to [a, b, c], with the bucket key set to [a, b], then
-     * the prefix schema would also be [a, b]. This pattern can use PrefixLookup to lookup by prefix
-     * scan.
-     *
-     * <p>TODO: currently, the interface only support bucket key as the prefix key to lookup.
-     * Generalize the prefix lookup to support any prefix key including bucket key.
-     *
-     * @param bucketKey the given bucket key to do prefix lookup.
-     * @return the result of prefix lookup.
-     */
-    CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow bucketKey);
 
     /**
      * Extracts limit number of rows from the given table bucket.
@@ -135,4 +106,19 @@ public interface Table extends AutoCloseable {
      * @return the {@link SnapshotScanner} to scan data from this table.
      */
     SnapshotScanner getSnapshotScanner(SnapshotScan snapshotScan);
+
+    /**
+     * Get a {@link Lookuper} to do lookup.
+     *
+     * @return the {@link Lookuper} to do lookup.
+     */
+    Lookuper getLookuper();
+
+    /**
+     * Get a {@link PrefixLookuper} to do prefix lookup.
+     *
+     * @param prefixLookup the given prefix lookup.
+     * @return the {@link PrefixLookuper} to do prefix lookup.
+     */
+    PrefixLookuper getPrefixLookuper(PrefixLookup prefixLookup);
 }

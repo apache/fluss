@@ -28,8 +28,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A queue that buffers the pending lookup operations and provides a list of {@link Lookup} when
- * call method {@link #drain()}.
+ * A queue that buffers the pending lookup operations and provides a list of {@link LookupQuery}
+ * when call method {@link #drain()}.
  */
 @ThreadSafe
 @Internal
@@ -37,7 +37,7 @@ class LookupQueue {
 
     private volatile boolean closed;
     // buffering both the Lookup and PrefixLookup.
-    private final ArrayBlockingQueue<AbstractLookup<?>> lookupQueue;
+    private final ArrayBlockingQueue<AbstractLookupQuery<?>> lookupQueue;
     private final int maxBatchSize;
     private final long batchTimeoutNanos;
 
@@ -49,7 +49,7 @@ class LookupQueue {
         this.closed = false;
     }
 
-    void appendLookup(AbstractLookup<?> lookup) {
+    void appendLookup(AbstractLookupQuery<?> lookup) {
         if (closed) {
             throw new IllegalStateException(
                     "Can not append lookup operation since the LookupQueue is closed.");
@@ -66,10 +66,10 @@ class LookupQueue {
         return !lookupQueue.isEmpty();
     }
 
-    /** Drain a batch of {@link Lookup}s from the lookup queue. */
-    List<AbstractLookup<?>> drain() throws Exception {
+    /** Drain a batch of {@link LookupQuery}s from the lookup queue. */
+    List<AbstractLookupQuery<?>> drain() throws Exception {
         final long startNanos = System.nanoTime();
-        List<AbstractLookup<?>> lookupOperations = new ArrayList<>(maxBatchSize);
+        List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(maxBatchSize);
         int count = 0;
         while (true) {
             long waitNanos = batchTimeoutNanos - (System.nanoTime() - startNanos);
@@ -77,7 +77,7 @@ class LookupQueue {
                 break;
             }
 
-            AbstractLookup<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+            AbstractLookupQuery<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
             if (lookup == null) {
                 break;
             }
@@ -92,9 +92,9 @@ class LookupQueue {
         return lookupOperations;
     }
 
-    /** Drain all the {@link Lookup}s from the lookup queue. */
-    List<AbstractLookup<?>> drainAll() {
-        List<AbstractLookup<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
+    /** Drain all the {@link LookupQuery}s from the lookup queue. */
+    List<AbstractLookupQuery<?>> drainAll() {
+        List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
         lookupQueue.drainTo(lookupOperations);
         return lookupOperations;
     }

@@ -33,18 +33,18 @@ public class PrefixLookupBatch {
     /** The table bucket that the lookup operations should fall into. */
     private final TableBucket tableBucket;
 
-    private final List<PrefixLookup> prefixLookups;
+    private final List<PrefixLookupQuery> prefixLookups;
 
     public PrefixLookupBatch(TableBucket tableBucket) {
         this.tableBucket = tableBucket;
         this.prefixLookups = new ArrayList<>();
     }
 
-    public void addLookup(PrefixLookup lookup) {
+    public void addLookup(PrefixLookupQuery lookup) {
         prefixLookups.add(lookup);
     }
 
-    public List<PrefixLookup> lookups() {
+    public List<PrefixLookupQuery> lookups() {
         return prefixLookups;
     }
 
@@ -62,7 +62,7 @@ public class PrefixLookupBatch {
                                     values.size(), prefixLookups.size())));
         } else {
             for (int i = 0; i < values.size(); i++) {
-                AbstractLookup<List<byte[]>> lookup = prefixLookups.get(i);
+                AbstractLookupQuery<List<byte[]>> lookup = prefixLookups.get(i);
                 lookup.future().complete(values.get(i));
             }
         }
@@ -70,7 +70,7 @@ public class PrefixLookupBatch {
 
     /** Complete the get operations with given exception. */
     public void completeExceptionally(Exception exception) {
-        for (PrefixLookup prefixLookup : prefixLookups) {
+        for (PrefixLookupQuery prefixLookup : prefixLookups) {
             prefixLookup.future().completeExceptionally(exception);
         }
     }

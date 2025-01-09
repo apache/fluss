@@ -17,7 +17,6 @@
 package com.alibaba.fluss.client.lookup;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
@@ -25,7 +24,7 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 
 /**
- * The result of {@link Table#lookup(InternalRow)}.
+ * The result of {@link Lookuper#lookup(InternalRow)}.
  *
  * @since 0.1
  */

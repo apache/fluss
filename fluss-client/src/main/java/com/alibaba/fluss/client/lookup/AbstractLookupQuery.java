@@ -19,40 +19,29 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.TableBucket;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
-/** An abstract lookup batch. */
+/** Abstract Class to represent a lookup operation. */
 @Internal
-public abstract class AbstractLookupBatch<T> {
+public abstract class AbstractLookupQuery<T> {
 
-    protected final List<AbstractLookupQuery<T>> lookups;
     private final TableBucket tableBucket;
+    private final byte[] key;
 
-    public AbstractLookupBatch(TableBucket tableBucket) {
-        this.lookups = new ArrayList<>();
+    public AbstractLookupQuery(TableBucket tableBucket, byte[] key) {
         this.tableBucket = tableBucket;
+        this.key = key;
     }
 
-    /** Complete the lookup operations using given values . */
-    public abstract void complete(List<T> values);
-
-    public void addLookup(AbstractLookupQuery<T> lookup) {
-        lookups.add(lookup);
-    }
-
-    public List<AbstractLookupQuery<T>> lookups() {
-        return lookups;
+    public byte[] key() {
+        return key;
     }
 
     public TableBucket tableBucket() {
         return tableBucket;
     }
 
-    /** Complete the get operations with given exception. */
-    public void completeExceptionally(Exception exception) {
-        for (AbstractLookupQuery<T> lookup : lookups) {
-            lookup.future().completeExceptionally(exception);
-        }
-    }
+    public abstract LookupType lookupType();
+
+    public abstract CompletableFuture<T> future();
 }

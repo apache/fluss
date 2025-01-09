@@ -16,32 +16,33 @@
 
 package com.alibaba.fluss.client.lookup;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.metadata.TableBucket;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.row.InternalRow;
 
 /**
- * Class to represent a prefix lookup operation, it contains the table id, bucketNums and related
- * CompletableFuture.
+ * Used to describe the operation to prefix lookup by {@link PrefixLookuper} to a kv table.
+ *
+ * @since 0.6
  */
-@Internal
-public class PrefixLookup extends AbstractLookup<List<byte[]>> {
-    private final CompletableFuture<List<byte[]>> future;
+@PublicEvolving
+public class PrefixLookup {
 
-    PrefixLookup(TableBucket tableBucket, byte[] prefixKey) {
-        super(tableBucket, prefixKey);
-        this.future = new CompletableFuture<>();
+    /**
+     * Currently, For none-partition table, the lookupColumnNames can only be the field of bucket
+     * key.
+     *
+     * <p>For partition table, the lookupColumnNames exclude partition fields should be a prefix of
+     * primary key exclude partition fields.
+     *
+     * <p>See {@link PrefixLookuper#prefixLookup(InternalRow)} for more details.
+     */
+    private final String[] lookupColumnNames;
+
+    public PrefixLookup(String[] lookupColumnNames) {
+        this.lookupColumnNames = lookupColumnNames;
     }
 
-    @Override
-    public CompletableFuture<List<byte[]>> future() {
-        return future;
-    }
-
-    @Override
-    public LookupType lookupType() {
-        return LookupType.PREFIX_LOOKUP;
+    public String[] getLookupColumnNames() {
+        return lookupColumnNames;
     }
 }

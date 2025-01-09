@@ -20,7 +20,10 @@ import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.lookup.LookupResult;
 import com.alibaba.fluss.client.lookup.LookupType;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.lookup.PrefixLookup;
 import com.alibaba.fluss.client.lookup.PrefixLookupResult;
+import com.alibaba.fluss.client.lookup.PrefixLookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.RemainingFilter;
@@ -48,6 +51,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+
 /** A flink async lookup function for fluss. */
 public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
 
@@ -67,6 +72,8 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
+    @Nullable private transient PrefixLookuper prefixLookuper;
+    @Nullable private transient Lookuper lookuper;
 
     public FlinkAsyncLookupFunction(
             Configuration flussConfig,
@@ -91,10 +98,10 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         table = connection.getTable(tablePath);
         // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
         int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
+        RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes),
-                        table.getDescriptor().getKvFormat());
+                        lookupKeyRowType, table.getDescriptor().getKvFormat());
 
         final RowType outputRowType;
         if (projection == null) {
@@ -104,6 +111,18 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         }
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
+
+        if (flussLookupType == LookupType.PREFIX_LOOKUP) {
+            prefixLookuper =
+                    table.getPrefixLookuper(
+                            new PrefixLookup(
+                                    lookupKeyRowType.getFieldNames().toArray(new String[0])));
+            lookuper = null;
+        } else if (flussLookupType == LookupType.LOOKUP) {
+            prefixLookuper = null;
+            lookuper = table.getLookuper();
+        }
+
         LOG.info("end open.");
     }
 
@@ -137,7 +156,8 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             InternalRow keyRow,
             @Nullable RemainingFilter remainingFilter) {
         if (flussLookupType == LookupType.LOOKUP) {
-            table.lookup(keyRow)
+            checkArgument(lookuper != null, "Lookuper should not be null");
+            lookuper.lookup(keyRow)
                     .whenComplete(
                             (result, throwable) -> {
                                 if (throwable != null) {
@@ -152,7 +172,9 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                                 }
                             });
         } else {
-            table.prefixLookup(keyRow)
+            checkArgument(prefixLookuper != null, "prefixLookuper should not be null");
+            prefixLookuper
+                    .prefixLookup(keyRow)
                     .whenComplete(
                             (result, throwable) -> {
                                 if (throwable != null) {

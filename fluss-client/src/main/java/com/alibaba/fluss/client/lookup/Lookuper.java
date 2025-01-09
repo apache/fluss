@@ -16,32 +16,24 @@
 
 package com.alibaba.fluss.client.lookup;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.row.InternalRow;
 
 import java.util.concurrent.CompletableFuture;
 
-/** Abstract Class to represent a lookup operation. */
-@Internal
-public abstract class AbstractLookup<T> {
+/**
+ * The lookup-er is used to lookup data of specify kv table from Fluss.
+ *
+ * @since 0.6
+ */
+@PublicEvolving
+public interface Lookuper {
 
-    private final TableBucket tableBucket;
-    private final byte[] key;
-
-    public AbstractLookup(TableBucket tableBucket, byte[] key) {
-        this.tableBucket = tableBucket;
-        this.key = key;
-    }
-
-    public byte[] key() {
-        return key;
-    }
-
-    public TableBucket tableBucket() {
-        return tableBucket;
-    }
-
-    public abstract LookupType lookupType();
-
-    public abstract CompletableFuture<T> future();
+    /**
+     * Lookups certain row from the given table primary keys.
+     *
+     * @param lookupKey the given table primary keys.
+     * @return the result of get.
+     */
+    CompletableFuture<LookupResult> lookup(InternalRow lookupKey);
 }

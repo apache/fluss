@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The default impl of {@link FlussLogScanner}.
+ * The default impl of {@link LogScanner}.
  *
  * <p>The {@link FlussLogScanner} is NOT thread-safe. It is the responsibility of the user to ensure
  * that multithreaded access is properly synchronized. Un-synchronized access will result in {@link

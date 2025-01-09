@@ -59,7 +59,7 @@ class LookupQueueTest {
 
     private static void appendLookups(LookupQueue queue, int count) {
         for (int i = 0; i < count; i++) {
-            queue.appendLookup(new Lookup(new TableBucket(1, 1), new byte[] {0}));
+            queue.appendLookup(new LookupQuery(new TableBucket(1, 1), new byte[] {0}));
         }
     }
 }

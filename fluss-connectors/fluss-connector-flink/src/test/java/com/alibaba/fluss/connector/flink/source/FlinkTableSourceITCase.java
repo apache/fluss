@@ -910,6 +910,27 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
     @ParameterizedTest
     @MethodSource("lookupArgs")
+    void testPrefixLookupPartitionedTable(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        caching,
+                        async,
+                        new String[] {"name", "id"},
+                        new String[] {"name"},
+                        "p_date");
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name AND src.p_date = h.p_date",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected = Arrays.asList("+I[1, name1, address1]", "+I[1, name1, address5]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
     void testPrefixLookupWithCondition(Caching caching, boolean async) throws Exception {
         String dim =
                 prepareDimTableAndSourceTable(
