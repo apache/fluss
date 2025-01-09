@@ -82,7 +82,7 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         if (physicalTablePath.getPartitionName() != null) {
             variables.put("partition", physicalTablePath.getPartitionName());
         } else {
-            LOG.debug("Setting variable 'partition' for non-partitioned table to empty string.");
+            // value of empty string indicates non-partitioned tables
             variables.put("partition", "");
         }
     }
