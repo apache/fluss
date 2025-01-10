@@ -45,7 +45,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Optional;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static com.alibaba.fluss.utils.IOUtils.closeQuietly;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache

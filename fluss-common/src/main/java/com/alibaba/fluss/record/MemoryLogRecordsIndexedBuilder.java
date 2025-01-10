@@ -25,15 +25,15 @@ import com.alibaba.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.WRITE_CLIENT_ID_OFFSET;
 import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.BASE_OFFSET_LENGTH;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.CRC_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LENGTH_LENGTH;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.SCHEMA_ID_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.WRITE_CLIENT_ID_OFFSET;
 
 /**
  * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#INDEXED} format.

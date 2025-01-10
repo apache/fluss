@@ -49,11 +49,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_ROWKIND_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORDS_COUNT_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.ARROW_ROWKIND_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LENGTH_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LOG_OVERHEAD;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.RECORDS_COUNT_OFFSET;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static com.alibaba.fluss.utils.FileUtils.readFullyOrFail;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;

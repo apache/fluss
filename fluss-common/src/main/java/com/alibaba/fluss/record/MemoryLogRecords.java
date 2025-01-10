@@ -70,12 +70,12 @@ public class MemoryLogRecords implements LogRecords {
     }
 
     public void ensureValid() {
-        if (sizeInBytes < DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE) {
+        if (sizeInBytes < MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE) {
             throw new RuntimeException(
                     "Record batch is corrupt (the size "
                             + sizeInBytes
                             + " is smaller than the minimum allowed overhead "
-                            + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE
+                            + MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE
                             + ")");
         }
     }

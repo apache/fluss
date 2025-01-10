@@ -23,7 +23,7 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.record.DefaultKvRecord;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
 import com.alibaba.fluss.record.DefaultLogRecord;
-import com.alibaba.fluss.record.DefaultLogRecordBatch;
+import com.alibaba.fluss.record.MemoryLogRecordBatch;
 import com.alibaba.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
@@ -79,7 +79,7 @@ public final class WriteRecord {
                         // TODO: row maybe not IndexedRow, which can't be estimated size
                         //   and the size maybe not accurate when the format is arrow.
                         : DefaultLogRecord.sizeOf(row)
-                                + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+                                + MemoryLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {

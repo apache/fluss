@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Iterator;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static com.alibaba.fluss.record.MemoryLogRecordBatch.LOG_OVERHEAD;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static org.assertj.core.api.Assertions.assertThat;
 
