@@ -177,25 +177,53 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
     // ------------------------------------------------------------------------
-    /** The external address of the network interface where the tablet server is exposed. */
+    /**
+     * The name or address of network interface the tablet server binds to and is used for internal
+     * cluster communication.
+     */
     public static final ConfigOption<String> TABLET_SERVER_HOST =
             key("tablet-server.host")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The external address of the network interface where the TabletServer is exposed."
+                            "The name or address of network interface the tablet server binds to and is used for internal cluster communication."
                                     + " Because different TabletServer need different values for this option, usually it is specified in an"
                                     + " additional non-shared TabletServer-specific config file.");
 
     /**
-     * The default network port the tablet server expects incoming IPC connections. The {@code "0"}
-     * means that the TabletServer searches for a free port.
+     * The default RPC port the tablet server binds to and is used for internal cluster
+     * communication. The {@code "0"} means that the TabletServer searches for a free port.
      */
     public static final ConfigOption<String> TABLET_SERVER_PORT =
             key("tablet-server.port")
                     .stringType()
                     .defaultValue("0")
-                    .withDescription("The external RPC port where the TabletServer is exposed.");
+                    .withDescription(
+                            "The default RPC port the tablet server binds to and is used for internal cluster communication.");
+
+    /**
+     * The host and port of the tablet server that is advertised to clients and is used to connect
+     * to the tablet server (format host:port). The host or port may be different from {@link
+     * ConfigOptions#TABLET_SERVER_HOST} and {@link ConfigOptions#TABLET_SERVER_PORT}, e.g., due to
+     * proxies. If not set, {@link ConfigOptions#TABLET_SERVER_HOST}:{@link
+     * ConfigOptions#TABLET_SERVER_PORT} is used. 0.0.0.0 cannot be advertised as a host.
+     */
+    public static final ConfigOption<String> TABLET_SERVER_ADVERTISED_ENDPOINT =
+            key("tablet-server.advertised-endpoint")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The host and port of the tablet server that is advertised to clients and is used to connect "
+                                    + "to the tablet server (format host:port). The host or port may be different from "
+                                    + TABLET_SERVER_HOST.key()
+                                    + ":"
+                                    + TABLET_SERVER_HOST.key()
+                                    + ", e.g., due to proxies. "
+                                    + "If not set, "
+                                    + TABLET_SERVER_HOST.key()
+                                    + ":"
+                                    + TABLET_SERVER_HOST.key()
+                                    + " is used. 0.0.0.0 cannot be advertised as a host.");
 
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
