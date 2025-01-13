@@ -19,8 +19,8 @@ package com.alibaba.fluss.testutils;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -39,7 +39,6 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.RowKind;
-import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.InternalRow;
@@ -425,7 +424,7 @@ public class DataTestUtils {
             List<RowKind> rowKinds,
             List<IndexedRow> rows)
             throws Exception {
-        MemorySegmentOutputView outputView = new MemorySegmentOutputView(100);
+        UnmanagedPagedOutputView outputView = new UnmanagedPagedOutputView(100);
         MemoryLogRecordsIndexedBuilder builder =
                 MemoryLogRecordsIndexedBuilder.builder(
                         baseLogOffset, schemaId, Integer.MAX_VALUE, DEFAULT_MAGIC, outputView);
@@ -433,11 +432,12 @@ public class DataTestUtils {
             builder.append(rowKinds.get(i), rows.get(i));
         }
         builder.setWriterState(writerId, batchSequence);
-        MemoryLogRecords memoryLogRecords = builder.build();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         memoryLogRecords.ensureValid();
 
         ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                 .setCommitTimestamp(maxTimestamp);
+        builder.close();
         return memoryLogRecords;
     }
 
@@ -466,10 +466,7 @@ public class DataTestUtils {
             }
             builder.setWriterState(writerId, batchSequence);
             builder.close();
-            builder.serialize();
-            MultiBytesView bytesView = builder.build();
-            MemoryLogRecords memoryLogRecords =
-                    MemoryLogRecords.pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
+            MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
 
             ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                     .setCommitTimestamp(maxTimestamp);

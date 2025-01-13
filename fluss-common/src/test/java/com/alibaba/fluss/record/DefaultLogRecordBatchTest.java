@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.record;
 
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.row.TestInternalRowGenerator;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.testutils.DataTestUtils;
@@ -50,7 +51,11 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         RowType allRowType = TestInternalRowGenerator.createAllRowType();
         MemoryLogRecordsIndexedBuilder builder =
                 MemoryLogRecordsIndexedBuilder.builder(
-                        baseLogOffset, schemaId, Integer.MAX_VALUE, magic, outputView);
+                        baseLogOffset,
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        magic,
+                        new UnmanagedPagedOutputView(100));
 
         List<IndexedRow> rows = new ArrayList<>();
         for (int i = 0; i < recordNumber; i++) {
@@ -59,7 +64,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
             rows.add(row);
         }
 
-        MemoryLogRecords memoryLogRecords = builder.build();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
 
         assertThat(iterator.hasNext()).isTrue();
@@ -88,5 +93,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
                 i++;
             }
         }
+
+        builder.close();
     }
 }

@@ -18,7 +18,7 @@ package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.OutputView;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.MemoryAwareGetters;
@@ -132,7 +132,7 @@ public class DefaultLogRecord implements LogRecord {
     }
 
     /** Write the record to input `target` and return its size. */
-    public static int writeTo(MemorySegmentOutputView outputView, RowKind rowKind, InternalRow row)
+    public static int writeTo(OutputView outputView, RowKind rowKind, InternalRow row)
             throws IOException {
         int sizeInBytes = calculateSizeInBytes(row);
 
@@ -172,8 +172,8 @@ public class DefaultLogRecord implements LogRecord {
         return size;
     }
 
-    private static void serializeInternalRow(
-            MemorySegmentOutputView outputView, InternalRow internalRow) throws IOException {
+    private static void serializeInternalRow(OutputView outputView, InternalRow internalRow)
+            throws IOException {
         if (internalRow instanceof IndexedRow) {
             IndexedRow indexedRow = (IndexedRow) internalRow;
             IndexedRowWriter.serializeIndexedRow(indexedRow, outputView);

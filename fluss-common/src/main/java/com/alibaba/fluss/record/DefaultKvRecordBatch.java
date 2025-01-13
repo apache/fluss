@@ -17,20 +17,13 @@
 package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.CorruptMessageException;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
-import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.compacted.CompactedRow;
-import com.alibaba.fluss.row.indexed.IndexedRow;
+import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.utils.CloseableIterator;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
-import javax.annotation.Nullable;
-
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.Iterator;
@@ -314,198 +307,13 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         }
     }
 
-    /** Builder for {@link DefaultKvRecordBatch}. */
-    public static class Builder implements AutoCloseable {
-
-        private final int schemaId;
-        private final byte magic;
-        // The max bytes can be appended.
-        private final int writeLimit;
-        private final MemorySegmentOutputView outputView;
-        private long writerId;
-        private int batchSequence;
-        private int currentRecordNumber;
-        private int sizeInBytes;
-        private boolean isClosed;
-        private DefaultKvRecordBatch builtRecords;
-        private final KvFormat kvFormat;
-
-        private Builder(
-                int schemaId,
-                byte magic,
-                int writeLimit,
-                MemorySegmentOutputView outputView,
-                KvFormat kvFormat)
-                throws IOException {
-            Preconditions.checkArgument(
-                    schemaId <= Short.MAX_VALUE,
-                    "schemaId shouldn't be greater than the max value of short: "
-                            + Short.MAX_VALUE);
-            this.schemaId = schemaId;
-            this.magic = magic;
-            this.writeLimit = writeLimit;
-            this.outputView = outputView;
-            this.writerId = LogRecordBatch.NO_WRITER_ID;
-            this.batchSequence = LogRecordBatch.NO_BATCH_SEQUENCE;
-            this.currentRecordNumber = 0;
-            this.isClosed = false;
-            // We don't need to write header information while the builder creating, we'll skip it
-            // first.
-            outputView.setPosition(RECORD_BATCH_HEADER_SIZE);
-            this.sizeInBytes = RECORD_BATCH_HEADER_SIZE;
-            this.kvFormat = kvFormat;
-        }
-
-        public static Builder builder(
-                int schemaId, int writeLimit, MemorySegmentOutputView outputView, KvFormat kvFormat)
-                throws IOException {
-            return new Builder(schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat);
-        }
-
-        public static Builder builder(
-                int schemaId, MemorySegmentOutputView outputView, KvFormat kvFormat)
-                throws IOException {
-            return new Builder(
-                    schemaId, CURRENT_KV_MAGIC_VALUE, Integer.MAX_VALUE, outputView, kvFormat);
-        }
-
-        /**
-         * Check if we have room for a new record containing the given row. If no records have been
-         * appended, then this returns true.
-         */
-        public boolean hasRoomFor(byte[] key, InternalRow row) {
-            return sizeInBytes + DefaultKvRecord.sizeOf(key, row) <= writeLimit;
-        }
-
-        /**
-         * Wrap a KvRecord with the given key, value and append the KvRecord to
-         * DefaultKvRecordBatch.
-         *
-         * @param key the key in the KvRecord to be appended
-         * @param row the value in the KvRecord to be appended. If the value is null, it means the
-         *     KvRecord is for delete the corresponding key.
-         */
-        public void append(byte[] key, @Nullable InternalRow row) throws IOException {
-            if (isClosed) {
-                throw new IllegalStateException(
-                        "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
-            }
-            int recordByteSizes =
-                    DefaultKvRecord.writeTo(outputView, key, toTargetKvFormatRow(row));
-            currentRecordNumber++;
-            if (currentRecordNumber == Integer.MAX_VALUE) {
-                throw new IllegalArgumentException(
-                        "Maximum number of records per batch exceeded, max records: "
-                                + Integer.MAX_VALUE);
-            }
-            sizeInBytes += recordByteSizes;
-        }
-
-        public void setWriterState(long writerId, int batchBaseSequence) {
-            this.writerId = writerId;
-            this.batchSequence = batchBaseSequence;
-        }
-
-        public void resetWriterState(long writerId, int batchSequence) {
-            // trigger to rewrite batch header
-            this.builtRecords = null;
-            this.writerId = writerId;
-            this.batchSequence = batchSequence;
-        }
-
-        public DefaultKvRecordBatch build() throws IOException {
-            if (builtRecords != null) {
-                return builtRecords;
-            }
-
-            writeBatchHeader();
-            MemorySegment segment = outputView.getMemorySegment();
-            builtRecords = DefaultKvRecordBatch.pointToMemory(segment, 0);
-            return builtRecords;
-        }
-
-        public MemorySegment getMemorySegment() {
-            return outputView.getMemorySegment();
-        }
-
-        public long writerId() {
-            return writerId;
-        }
-
-        public int batchSequence() {
-            return batchSequence;
-        }
-
-        public boolean isClosed() {
-            return isClosed;
-        }
-
-        @Override
-        public void close() throws IOException {
-            isClosed = true;
-        }
-
-        public int getSizeInBytes() {
-            return sizeInBytes;
-        }
-
-        // ----------------------- internal methods -------------------------------
-        private void writeBatchHeader() throws IOException {
-            outputView.setPosition(0);
-            // update header.
-            outputView.writeInt(sizeInBytes - LENGTH_LENGTH);
-            outputView.writeByte(magic);
-            // write empty crc first.
-            outputView.writeUnsignedInt(0);
-            outputView.writeShort((short) schemaId);
-            outputView.writeByte(computeAttributes());
-            outputView.writeLong(writerId);
-            outputView.writeInt(batchSequence);
-            outputView.writeInt(currentRecordNumber);
-            // Update crc.
-            outputView.setPosition(CRC_OFFSET);
-            long crc =
-                    Crc32C.compute(
-                            outputView.getSharedBuffer(),
-                            SCHEMA_ID_OFFSET,
-                            sizeInBytes - SCHEMA_ID_OFFSET);
-            outputView.writeUnsignedInt(crc);
-            // reset the position to origin position.
-            outputView.setPosition(sizeInBytes);
-        }
-
-        private byte computeAttributes() {
-            return 0;
-        }
-
-        // TODO: support arbitrary InternalRow, especially for the GenericRow.
-        private InternalRow toTargetKvFormatRow(InternalRow internalRow) {
-            if (internalRow == null) {
-                return null;
-            }
-            if (kvFormat == KvFormat.COMPACTED) {
-                if (internalRow instanceof CompactedRow) {
-                    return internalRow;
-                } else {
-                    // currently, we don't support to do row conversion for simplicity,
-                    // just throw exception
-                    throw new IllegalArgumentException(
-                            "The row to be appended to kv record batch with compacted format "
-                                    + "should be a compacted row, but got a "
-                                    + internalRow.getClass().getSimpleName());
-                }
-            } else if (kvFormat == KvFormat.INDEXED) {
-                if (internalRow instanceof IndexedRow) {
-                    return internalRow;
-                } else {
-                    throw new IllegalArgumentException(
-                            "The row to be appended to kv record batch "
-                                    + "with indexed format should be a indexed row, but got "
-                                    + internalRow.getClass().getSimpleName());
-                }
-            } else {
-                throw new UnsupportedOperationException("Unsupported kv format: " + kvFormat);
-            }
-        }
+    /**
+     * Make a {@link DefaultKvRecordBatch} instance from the given {@link BytesView}.
+     *
+     * <p>Note: this is a heavy operation involving copy bytes, only used for testing.
+     */
+    @VisibleForTesting
+    public static DefaultKvRecordBatch pointToBytesView(BytesView bytesView) {
+        return pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
     }
 }

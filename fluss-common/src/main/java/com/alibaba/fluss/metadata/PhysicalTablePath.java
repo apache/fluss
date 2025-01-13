@@ -41,6 +41,10 @@ public class PhysicalTablePath implements Serializable {
 
     private final @Nullable String partitionName;
 
+    // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
+    // RecordAccumulator.ready)
+    private Integer hash;
+
     private PhysicalTablePath(TablePath tablePath, @Nullable String partitionName) {
         this.tablePath = tablePath;
         this.partitionName = partitionName;
@@ -99,7 +103,14 @@ public class PhysicalTablePath implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(tablePath, partitionName);
+        Integer h = this.hash;
+        if (h == null) {
+            int result = Objects.hash(tablePath, partitionName);
+            this.hash = result;
+            return result;
+        } else {
+            return h;
+        }
     }
 
     @Override

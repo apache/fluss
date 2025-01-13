@@ -37,6 +37,7 @@ public class RowKindVectorWriter {
 
     public void writeRowKind(RowKind rowKind) {
         if (recordsCount > capacity) {
+            // TODO: support AbstractPagedOutputView to have extendable capacity
             throw new IllegalStateException("The row kind vector is full.");
         }
         segment.put(startPosition + recordsCount, rowKind.toByteValue());
@@ -45,15 +46,5 @@ public class RowKindVectorWriter {
 
     public int sizeInBytes() {
         return recordsCount;
-    }
-
-    /**
-     * Retract the last written row kind. This method is used to retract the row when the row is not
-     * valid or the serialized arrow size exceeds write limit.
-     */
-    public void retract() {
-        if (recordsCount > 0) {
-            recordsCount--;
-        }
     }
 }

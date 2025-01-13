@@ -17,7 +17,9 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.memory.MemorySegment;
+import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
@@ -35,7 +37,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
@@ -86,10 +87,8 @@ public class ArrowLogWriteBatchTest {
 
         // close this batch.
         arrowLogWriteBatch.close();
-        arrowLogWriteBatch.serialize();
         BytesView bytesView = arrowLogWriteBatch.build();
-        MemoryLogRecords records =
-                MemoryLogRecords.pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(bytesView);
         LogRecordBatch batch = records.batches().iterator().next();
         assertThat(batch.getRecordCount()).isEqualTo(count);
         try (LogRecordReadContext readContext =
@@ -111,9 +110,10 @@ public class ArrowLogWriteBatchTest {
         int bucketId = 0;
         int maxSizeInBytes = 1024;
         int pageSize = 128;
+        TestingMemorySegmentPool memoryPool = new TestingMemorySegmentPool(pageSize);
         List<MemorySegment> memorySegmentList = new ArrayList<>();
         for (int i = 0; i < maxSizeInBytes / pageSize; i++) {
-            memorySegmentList.add(MemorySegment.wrap(new byte[pageSize]));
+            memorySegmentList.add(memoryPool.nextSegment());
         }
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
@@ -127,8 +127,9 @@ public class ArrowLogWriteBatchTest {
                                 DATA1_TABLE_INFO.getSchemaId(),
                                 maxSizeInBytes,
                                 DATA1_ROW_TYPE),
-                        memorySegmentList,
-                        new TestingMemorySegmentPool(128));
+                        new PreAllocatedPagedOutputView(memorySegmentList));
+        assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
+
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
                 createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {count, "a" + count})),
@@ -145,10 +146,8 @@ public class ArrowLogWriteBatchTest {
 
         // close this batch.
         arrowLogWriteBatch.close();
-        arrowLogWriteBatch.serialize();
         BytesView bytesView = arrowLogWriteBatch.build();
-        MemoryLogRecords records =
-                MemoryLogRecords.pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(bytesView);
         LogRecordBatch batch = records.batches().iterator().next();
         assertThat(batch.getRecordCount()).isEqualTo(count);
         try (LogRecordReadContext readContext =
@@ -179,8 +178,7 @@ public class ArrowLogWriteBatchTest {
                         DATA1_TABLE_INFO.getSchemaId(),
                         maxSizeInBytes,
                         DATA1_ROW_TYPE),
-                Collections.singletonList(MemorySegment.wrap(new byte[10 * 1024])),
-                new TestingMemorySegmentPool(10 * 1024));
+                new UnmanagedPagedOutputView(128));
     }
 
     private WriteCallback newWriteCallback() {

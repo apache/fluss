@@ -16,8 +16,8 @@
 
 package com.alibaba.fluss.memory;
 
-import java.io.EOFException;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -26,28 +26,24 @@ import java.util.List;
  */
 public class ManagedPagedOutputView extends AbstractPagedOutputView {
     private final MemorySegmentPool segmentPool;
+    private final List<MemorySegment> pooledSegments;
 
     public ManagedPagedOutputView(MemorySegmentPool segmentPool) throws IOException {
-        this(segmentPool.nextSegment(true), segmentPool);
-    }
-
-    public ManagedPagedOutputView(MemorySegment initSegment, MemorySegmentPool segmentPool) {
-        super(initSegment, segmentPool.pageSize());
+        super(segmentPool.nextSegment(), segmentPool.pageSize());
         this.segmentPool = segmentPool;
+        this.pooledSegments = new ArrayList<>();
+        this.pooledSegments.add(getCurrentSegment());
     }
 
     @Override
     protected MemorySegment nextSegment() throws IOException {
-        MemorySegment segment = segmentPool.nextSegment(waitingSegment);
-        if (segment == null) {
-            throw new EOFException("No more memory segments available.");
-        } else {
-            return segment;
-        }
+        MemorySegment segment = segmentPool.nextSegment();
+        pooledSegments.add(segment);
+        return segment;
     }
 
     @Override
-    protected void deallocate(List<MemorySegment> segments) {
-        segmentPool.returnAll(segments);
+    public List<MemorySegment> allocatedPooledSegments() {
+        return pooledSegments;
     }
 }

@@ -20,7 +20,6 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.KvStorageException;
-import com.alibaba.fluss.memory.ManagedPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
@@ -383,7 +382,7 @@ public final class KvTablet {
                     throw new IllegalArgumentException(
                             "Primary Key Table with COMPACTED kv format doesn't support INDEXED cdc log format.");
                 }
-                return new IndexWalBuilder(schemaId);
+                return new IndexWalBuilder(schemaId, memorySegmentPool);
             case ARROW:
                 return new ArrowWalBuilder(
                         schemaId,
@@ -394,7 +393,7 @@ public final class KvTablet {
                                 // changelogs should be in a single batch
                                 Integer.MAX_VALUE,
                                 rowType),
-                        new ManagedPagedOutputView(memorySegmentPool));
+                        memorySegmentPool);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }

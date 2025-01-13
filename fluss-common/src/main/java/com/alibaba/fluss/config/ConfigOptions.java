@@ -235,6 +235,22 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads to use for various background processing tasks.");
 
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_MEMORY_SIZE =
+            key("server.buffer.memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("256mb"))
+                    .withDescription(
+                            "The total bytes of memory the server can use, e.g, buffer write-ahead-log rows.");
+
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_PAGE_SIZE =
+            key("server.buffer.page-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("128kb"))
+                    .withDescription(
+                            "Size of every page in memory buffers ('"
+                                    + SERVER_BUFFER_MEMORY_SIZE.key()
+                                    + "').");
+
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------

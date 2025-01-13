@@ -59,6 +59,7 @@ import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
  */
 @Internal
 @ThreadSafe
+@Deprecated
 public class WriterMemoryBuffer {
 
     /** The maximum amount of memory that this memory segment pool can allocate. */

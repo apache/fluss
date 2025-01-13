@@ -40,17 +40,13 @@ import java.util.concurrent.locks.ReentrantLock;
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
-/* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
- * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership. */
-
 /** MemorySegment pool of a MemorySegment list. */
 @Internal
 @ThreadSafe
 public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     private static final long PER_REQUEST_MEMORY_SIZE = 16 * 1024 * 1024;
-    private static final long DEFAULT_WAIT_TIMEOUT_MS = 1000 * 60 * 5;
+    private static final long DEFAULT_WAIT_TIMEOUT_MS = Long.MAX_VALUE;
 
     /** The lock to guard the memory pool. */
     private final ReentrantLock lock = new ReentrantLock();
@@ -72,8 +68,12 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     private int pageUsage;
 
     LazyMemorySegmentPool(int maxPages, int pageSize, long maxTimeToBlockMs) {
+        checkArgument(maxPages > 0, "MaxPages for LazyMemorySegmentPool should be greater than 0.");
         checkArgument(
-                maxPages > 0, "MaxPages for LazyMemorySegmentPool " + "should be greater than 0.");
+                pageSize >= 64,
+                "Page size should be greater than 64 bytes to include the record batch header, but is "
+                        + pageSize
+                        + " bytes.");
         checkArgument(
                 PER_REQUEST_MEMORY_SIZE > pageSize,
                 String.format(
@@ -91,53 +91,85 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         this.maxTimeToBlockMs = maxTimeToBlockMs;
     }
 
-    public static LazyMemorySegmentPool create(Configuration conf) {
+    public static LazyMemorySegmentPool createWriterBufferPool(Configuration conf) {
         long totalBytes = conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes();
         long batchSize = conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes();
         checkArgument(
                 totalBytes >= batchSize * 2,
                 String.format(
-                        "Buffer memory size '%s' should be at least twice of batch size '%s'.",
+                        "Buffer memory size '%s=%s' should be at least twice of batch size '%s=%s'.",
                         ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key(),
-                        ConfigOptions.CLIENT_WRITER_BATCH_SIZE.key()));
+                        totalBytes,
+                        ConfigOptions.CLIENT_WRITER_BATCH_SIZE.key(),
+                        batchSize));
 
         int pageSize = (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes();
         int segmentCount = (int) (totalBytes / pageSize);
         return new LazyMemorySegmentPool(segmentCount, pageSize, DEFAULT_WAIT_TIMEOUT_MS);
     }
 
+    public static LazyMemorySegmentPool createServerBufferPool(Configuration conf) {
+        long totalBytes = conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes();
+        int pageSize = (int) conf.get(ConfigOptions.SERVER_BUFFER_PAGE_SIZE).getBytes();
+        int segmentCount = (int) (totalBytes / pageSize);
+        return new LazyMemorySegmentPool(segmentCount, pageSize, DEFAULT_WAIT_TIMEOUT_MS);
+    }
+
     @Override
-    public MemorySegment nextSegment(boolean waiting) throws IOException {
+    public MemorySegment nextSegment() throws IOException {
         return inLock(
                 lock,
                 () -> {
                     checkClosed();
-                    int freePages = freePages();
-                    if (freePages == 0) {
-                        if (waiting) {
-                            return waitForSegment();
-                        } else {
-                            return null;
-                        }
+                    if (freePages() == 0) {
+                        waitForSegment(1);
                     }
 
-                    if (cachePages.isEmpty()) {
-                        int numPages = Math.min(freePages, perRequestPages);
-                        for (int i = 0; i < numPages; i++) {
-                            cachePages.add(MemorySegment.allocateHeapMemory(pageSize));
-                        }
-                    }
+                    lazilyAllocatePages(freePages());
 
                     this.pageUsage++;
                     return cachePages.remove(this.cachePages.size() - 1);
                 });
     }
 
-    private MemorySegment waitForSegment() throws EOFException {
+    @Override
+    public List<MemorySegment> allocatePages(int requiredPages) throws IOException {
+        return inLock(
+                lock,
+                () -> {
+                    checkClosed();
+                    if (freePages() < requiredPages) {
+                        waitForSegment(requiredPages);
+                    }
+
+                    lazilyAllocatePages(requiredPages);
+                    return drain(requiredPages);
+                });
+    }
+
+    private List<MemorySegment> drain(int numPages) {
+        List<MemorySegment> pages = new ArrayList<>(numPages);
+        for (int i = 0; i < numPages; i++) {
+            pages.add(cachePages.remove(cachePages.size() - 1));
+        }
+        pageUsage += numPages;
+        return pages;
+    }
+
+    private void lazilyAllocatePages(int required) {
+        if (cachePages.isEmpty()) {
+            int numPages = Math.min(required, perRequestPages);
+            for (int i = 0; i < numPages; i++) {
+                cachePages.add(MemorySegment.allocateHeapMemory(pageSize));
+            }
+        }
+    }
+
+    private void waitForSegment(int requiredPages) throws EOFException {
         Condition moreMemory = lock.newCondition();
         waiters.addLast(moreMemory);
         try {
-            while (cachePages.isEmpty()) {
+            while (freePages() < requiredPages) {
                 boolean success = moreMemory.await(maxTimeToBlockMs, TimeUnit.MILLISECONDS);
                 if (!success) {
                     throw new EOFException(
@@ -145,17 +177,15 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                                     + maxTimeToBlockMs
                                     + " ms. Total memory: "
                                     + totalSize()
-                                    + " bytes. Available memory: "
-                                    + freePages() * pageSize
-                                    + " bytes. page size: "
+                                    + " bytes. Page size: "
                                     + pageSize
-                                    + " bytes");
+                                    + " bytes. Available pages: "
+                                    + freePages()
+                                    + ". Request pages: "
+                                    + requiredPages);
                 }
                 checkClosed();
             }
-
-            this.pageUsage++;
-            return cachePages.remove(cachePages.size() - 1);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlussRuntimeException(e);
@@ -180,6 +210,9 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     @Override
     public void returnAll(List<MemorySegment> memory) {
+        if (memory.isEmpty()) {
+            return;
+        }
         inLock(
                 lock,
                 () -> {
@@ -196,7 +229,12 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     @Override
     public int freePages() {
-        return this.maxPages - this.pageUsage;
+        return inLock(lock, () -> this.maxPages - this.pageUsage);
+    }
+
+    @Override
+    public long availableMemory() {
+        return ((long) freePages()) * pageSize;
     }
 
     public void close() {

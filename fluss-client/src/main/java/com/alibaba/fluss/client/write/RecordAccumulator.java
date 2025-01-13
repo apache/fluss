@@ -27,20 +27,19 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.record.DefaultKvRecordBatch;
 import com.alibaba.fluss.record.LogRecordBatch;
-import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
+import com.alibaba.fluss.utils.MathUtils;
 import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
@@ -77,6 +76,7 @@ public final class RecordAccumulator {
     private final AtomicInteger flushesInProgress;
     private final AtomicInteger appendsInProgress;
     private final int batchSize;
+    private final int pagesPerBatch;
 
     /**
      * An artificial delay time to add before declaring a records instance that isn't full ready for
@@ -86,19 +86,11 @@ public final class RecordAccumulator {
      */
     private final int batchTimeoutMs;
 
-    // TODO WriterMemoryBuffer need to be unified with MemorySegmentPool.
-    /**
-     * The memory buffer to allocate/deallocate {@link MemorySegment}s for {@link
-     * IndexedLogWriteBatch} and {@link KvWriteBatch}.
-     */
-    private final WriterMemoryBuffer writerMemoryBuffer;
-
     /**
      * The memory segment pool to allocate/deallocate {@link MemorySegment}s for {@link
-     * ArrowLogWriteBatch}. In the future, all {@link WriteBatch} will be allocated/deallocated by
-     * this pool.
+     * ArrowLogWriteBatch}.
      */
-    private final LazyMemorySegmentPool memorySegmentPool;
+    private final LazyMemorySegmentPool writerBufferPool;
 
     /** The arrow buffer allocator to allocate memory for arrow log write batch. */
     private final BufferAllocator bufferAllocator;
@@ -134,9 +126,8 @@ public final class RecordAccumulator {
         this.batchSize =
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
 
-        this.writerMemoryBuffer = new WriterMemoryBuffer(conf);
-        this.memorySegmentPool = LazyMemorySegmentPool.create(conf);
-
+        this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
+        this.pagesPerBatch = Math.max(1, batchSize / writerBufferPool.pageSize());
         this.bufferAllocator = new RootAllocator(Long.MAX_VALUE);
         this.arrowWriterPool = new ArrowWriterPool(bufferAllocator);
         this.incomplete = new IncompleteBatches();
@@ -147,19 +138,12 @@ public final class RecordAccumulator {
 
     private void registerMetrics(WriterMetricGroup writerMetricGroup) {
         // memory segment pool related metrics.
+        writerMetricGroup.gauge(MetricNames.WRITER_BUFFER_TOTAL_BYTES, writerBufferPool::totalSize);
         writerMetricGroup.gauge(
-                MetricNames.WRITER_BUFFER_TOTAL_BYTES, writerMemoryBuffer::getTotalMemory);
+                MetricNames.WRITER_BUFFER_AVAILABLE_BYTES, writerBufferPool::availableMemory);
+        // The number of user threads blocked waiting for buffer memory to enqueue their records
         writerMetricGroup.gauge(
-                MetricNames.WRITER_BUFFER_AVAILABLE_BYTES, writerMemoryBuffer::getAvailableMemory);
-        writerMetricGroup.gauge(
-                MetricNames.WRITER_BUFFER_POOL_WAIT_TIME_MS, writerMemoryBuffer::getWaitTimeMs);
-        writerMetricGroup.gauge(
-                MetricNames.WRITER_MEMORY_SEGMENT_POOL_TOTAL_BYTES, memorySegmentPool::totalSize);
-        writerMetricGroup.gauge(
-                MetricNames.WRITER_MEMORY_SEGMENT_POOL_AVAILABLE_PAGE_COUNT,
-                memorySegmentPool::freePages);
-        writerMetricGroup.gauge(
-                MetricNames.WRITER_MEMORY_SEGMENT_POOL_WAITER_COUNT, memorySegmentPool::queued);
+                MetricNames.WRITER_BUFFER_WAITING_THREADS, writerBufferPool::queued);
     }
 
     /**
@@ -182,17 +166,15 @@ public final class RecordAccumulator {
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
         appendsInProgress.incrementAndGet();
-        List<MemorySegment> memorySegments = new ArrayList<>();
-        WriteBatch.WriteBatchType writeBatchType = null;
-        List<WriteBatch> batchesToBuild = new ArrayList<>(1);
+        List<MemorySegment> memorySegments = Collections.emptyList();
+        WriteBatch.WriteBatchType writeBatchType;
         try {
             // check if we have an in-progress batch
             Deque<WriteBatch> dq =
                     bucketAndWriteBatches.batches.computeIfAbsent(
                             bucketId, k -> new ArrayDeque<>());
             synchronized (dq) {
-                RecordAppendResult appendResult =
-                        tryAppend(writeRecord, callback, dq, batchesToBuild);
+                RecordAppendResult appendResult = tryAppend(writeRecord, callback, dq);
                 if (appendResult != null) {
                     return appendResult;
                 }
@@ -217,10 +199,9 @@ public final class RecordAccumulator {
                                 writeBatchType,
                                 dq,
                                 memorySegments,
-                                cluster,
-                                batchesToBuild);
+                                cluster);
                 if (appendResult.newBatchCreated) {
-                    memorySegments = new ArrayList<>();
+                    memorySegments = Collections.emptyList();
                 }
                 return appendResult;
             }
@@ -228,13 +209,8 @@ public final class RecordAccumulator {
             // Other append operations by the Sender thread may have created a new batch, causing
             // the temporarily allocated memorySegments here to go unused, and therefore, it needs
             // to be released.
-            deallocateMemorySegment(memorySegments, writeBatchType);
+            writerBufferPool.returnAll(memorySegments);
             appendsInProgress.decrementAndGet();
-
-            // we need to serialize the batch (may allocate memory segments) out of the
-            // synchronized block to avoid deadlocks. Besides, we need to serialize the batch
-            // in append() method instead of in sender thread, in order to backpressure the client.
-            batchesToBuild.forEach(WriteBatch::serialize);
         }
     }
 
@@ -294,7 +270,9 @@ public final class RecordAccumulator {
         Map<Integer, List<WriteBatch>> batches = new HashMap<>();
         for (ServerNode node : nodes) {
             List<WriteBatch> ready = drainBatchesForOneNode(cluster, node, maxSize);
-            batches.put(node.id(), ready);
+            if (!ready.isEmpty()) {
+                batches.put(node.id(), ready);
+            }
         }
         return batches;
     }
@@ -365,13 +343,7 @@ public final class RecordAccumulator {
     /** Deallocate the record batch. */
     public void deallocate(WriteBatch batch) {
         incomplete.remove(batch);
-        // Only deallocate the batch if it is not a split batch because split batch are allocated
-        // outside the memory segment pool.
-        if (batch instanceof ArrowLogWriteBatch) {
-            memorySegmentPool.returnAll(batch.memorySegments());
-        } else {
-            writerMemoryBuffer.deallocate(batch.memorySegments().get(0));
-        }
+        writerBufferPool.returnAll(batch.pooledMemorySegments());
     }
 
     @VisibleForTesting
@@ -400,36 +372,23 @@ public final class RecordAccumulator {
     }
 
     private List<MemorySegment> allocateMemorySegments(
-            WriteRecord writeRecord, WriteBatch.WriteBatchType writeBatchType)
-            throws InterruptedException, IOException {
+            WriteRecord writeRecord, WriteBatch.WriteBatchType writeBatchType) throws IOException {
         if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
-            // pre-allocate a list of memory segments to hold by the arrow batch to avoid deadlock
-            // in sender thread.
-            int pageSize = memorySegmentPool.pageSize();
-            int memorySegmentSize = batchSize / pageSize;
-            List<MemorySegment> memorySegments = new ArrayList<>(memorySegmentSize);
-            for (int i = 0; i < memorySegmentSize; i++) {
-                memorySegments.add(memorySegmentPool.nextSegment(true));
+            // pre-allocate a batch memory size for Arrow, if it is not sufficient during batching,
+            // it will allocate memory from heap
+            return writerBufferPool.allocatePages(pagesPerBatch);
+        } else {
+            int estimatedSizeInBytes = writeRecord.getEstimatedSizeInBytes();
+            if (estimatedSizeInBytes > batchSize) {
+                // for row-orient log/kv batch, the pre-allocated memory shouldn't
+                // smaller than the record size
+                int pages =
+                        MathUtils.ceilDiv(
+                                writeRecord.getEstimatedSizeInBytes(), writerBufferPool.pageSize());
+                return writerBufferPool.allocatePages(pages);
+            } else {
+                return writerBufferPool.allocatePages(pagesPerBatch);
             }
-            return memorySegments;
-        } else {
-            // get the new size.
-            int size = Math.max(batchSize, writeRecord.getEstimatedSizeInBytes());
-            // TODO check the remaining time to wait for allocating memory segment.
-            return Collections.singletonList(writerMemoryBuffer.allocate(size, Long.MAX_VALUE));
-        }
-    }
-
-    private void deallocateMemorySegment(
-            List<MemorySegment> memorySegmentList, WriteBatch.WriteBatchType writeBatchType) {
-        if (memorySegmentList.isEmpty()) {
-            return;
-        }
-
-        if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
-            memorySegmentPool.returnAll(memorySegmentList);
-        } else {
-            writerMemoryBuffer.deallocate(memorySegmentList.get(0));
         }
     }
 
@@ -443,7 +402,7 @@ public final class RecordAccumulator {
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
 
-        boolean exhausted = writerMemoryBuffer.queued() > 0 || memorySegmentPool.queued() > 0;
+        boolean exhausted = writerBufferPool.queued() > 0;
         batches.forEach(
                 (bucketId, deque) -> {
                     TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
@@ -513,10 +472,9 @@ public final class RecordAccumulator {
             WriteBatch.WriteBatchType writeBatchType,
             Deque<WriteBatch> deque,
             List<MemorySegment> segments,
-            Cluster cluster,
-            List<WriteBatch> batchesToBuild)
+            Cluster cluster)
             throws Exception {
-        RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque, batchesToBuild);
+        RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque);
         if (appendResult != null) {
             // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't
             // happen often...
@@ -525,43 +483,38 @@ public final class RecordAccumulator {
 
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
         TableBucket tb = cluster.getTableBucket(physicalTablePath, bucketId);
+        PreAllocatedPagedOutputView outputView = new PreAllocatedPagedOutputView(segments);
+        int schemaId = tableInfo.getSchemaId();
         // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
-        WriteBatch batch;
+        final WriteBatch batch;
         if (writeBatchType == WriteBatch.WriteBatchType.KV) {
-            MemorySegment memorySegment = segments.get(0);
             batch =
                     new KvWriteBatch(
                             tb,
                             physicalTablePath,
-                            DefaultKvRecordBatch.Builder.builder(
-                                    tableInfo.getSchemaId(),
-                                    memorySegment.size(),
-                                    new MemorySegmentOutputView(memorySegment),
-                                    tableInfo.getTableDescriptor().getKvFormat()),
+                            schemaId,
+                            tableInfo.getTableDescriptor().getKvFormat(),
+                            outputView.getPreAllocatedSize(),
+                            outputView,
                             writeRecord.getTargetColumns());
         } else if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
             ArrowWriter arrowWriter =
                     arrowWriterPool.getOrCreateWriter(
                             tableInfo.getTableId(),
-                            tableInfo.getSchemaId(),
-                            batchSize,
+                            schemaId,
+                            outputView.getPreAllocatedSize(),
                             tableInfo.getTableDescriptor().getSchema().toRowType());
             batch =
                     new ArrowLogWriteBatch(
-                            tb,
-                            physicalTablePath,
-                            tableInfo.getSchemaId(),
-                            arrowWriter,
-                            segments,
-                            memorySegmentPool);
+                            tb, physicalTablePath, schemaId, arrowWriter, outputView);
         } else {
-            MemorySegment memorySegment = segments.get(0);
             batch =
                     new IndexedLogWriteBatch(
                             tb,
                             physicalTablePath,
-                            MemoryLogRecordsIndexedBuilder.builder(
-                                    tableInfo.getSchemaId(), memorySegment.size(), memorySegment));
+                            schemaId,
+                            outputView.getPreAllocatedSize(),
+                            outputView);
         }
 
         batch.tryAppend(writeRecord, callback);
@@ -571,10 +524,7 @@ public final class RecordAccumulator {
     }
 
     private RecordAppendResult tryAppend(
-            WriteRecord writeRecord,
-            WriteCallback callback,
-            Deque<WriteBatch> deque,
-            List<WriteBatch> batchesToBuild)
+            WriteRecord writeRecord, WriteCallback callback, Deque<WriteBatch> deque)
             throws Exception {
         if (closed) {
             throw new FlussRuntimeException("Writer closed while send in progress");
@@ -584,7 +534,6 @@ public final class RecordAccumulator {
             boolean success = last.tryAppend(writeRecord, callback);
             if (!success) {
                 last.close();
-                batchesToBuild.add(last);
             } else {
                 return new RecordAppendResult(deque.size() > 1 || last.isClosed(), false, false);
             }
@@ -671,20 +620,10 @@ public final class RecordAccumulator {
             // the rest of the work by processing outside the lock close() is particularly expensive
             Preconditions.checkNotNull(batch, "batch should not be null");
             batch.close();
-
-            // make sure the batch is serialized and no block on memory allocation
-            if (batch.trySerialize()) {
-                size += batch.sizeInBytes();
-                ready.add(batch);
-
-                // mark the batch as drained.
-                batch.drained(System.currentTimeMillis());
-            } else {
-                // batch serialization is failed, such as no enough memory, add it back to deque
-                synchronized (deque) {
-                    deque.addFirst(batch);
-                }
-            }
+            size += batch.sizeInBytes();
+            ready.add(batch);
+            // mark the batch as drained.
+            batch.drained(System.currentTimeMillis());
         } while (start != drainIndex);
         return ready;
     }
@@ -852,9 +791,7 @@ public final class RecordAccumulator {
     public void close() {
         closed = true;
 
-        writerMemoryBuffer.close();
-        memorySegmentPool.close();
-
+        writerBufferPool.close();
         arrowWriterPool.close();
         bufferAllocator.close();
     }

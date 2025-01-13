@@ -20,14 +20,11 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentPool;
-import com.alibaba.fluss.memory.PreAllocatedManagedPagedOutputView;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
@@ -37,7 +34,6 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * A batch of log records managed in ARROW format that is or will be sent to server by {@link
@@ -50,22 +46,17 @@ import java.util.stream.Collectors;
 public class ArrowLogWriteBatch extends WriteBatch {
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
     private final AbstractPagedOutputView outputView;
-    private final List<MemorySegment> preAllocatedMemorySegments;
 
     public ArrowLogWriteBatch(
             TableBucket tableBucket,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
-            List<MemorySegment> preAllocatedMemorySegments,
-            MemorySegmentPool memorySegmentSource) {
+            AbstractPagedOutputView outputView) {
         super(tableBucket, physicalTablePath);
-        this.outputView =
-                new PreAllocatedManagedPagedOutputView(
-                        preAllocatedMemorySegments, memorySegmentSource);
+        this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView);
-        this.preAllocatedMemorySegments = preAllocatedMemorySegments;
     }
 
     @Override
@@ -86,20 +77,6 @@ public class ArrowLogWriteBatch extends WriteBatch {
             callbacks.add(callback);
             return true;
         }
-    }
-
-    @Override
-    public void serialize() {
-        try {
-            recordsBuilder.serialize();
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to serialize Arrow batch to memory buffer.", e);
-        }
-    }
-
-    @Override
-    public boolean trySerialize() {
-        return recordsBuilder.trySerialize();
     }
 
     @Override
@@ -128,16 +105,8 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public List<MemorySegment> memorySegments() {
-        List<MemorySegment> usedMemorySegments =
-                outputView.getSegmentBytesViewList().stream()
-                        .map(MemorySegmentBytesView::getMemorySegment)
-                        .collect(Collectors.toList());
-        if (usedMemorySegments.size() > preAllocatedMemorySegments.size()) {
-            return usedMemorySegments;
-        } else {
-            return preAllocatedMemorySegments;
-        }
+    public List<MemorySegment> pooledMemorySegments() {
+        return outputView.allocatedPooledSegments();
     }
 
     @Override

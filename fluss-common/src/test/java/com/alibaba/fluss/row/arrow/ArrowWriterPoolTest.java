@@ -27,6 +27,7 @@ import java.util.Deque;
 import java.util.Map;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
+import static com.alibaba.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ArrowWriterPool}. */
@@ -48,7 +49,7 @@ public class ArrowWriterPoolTest {
         ArrowWriterPool arrowWriterPool = new ArrowWriterPool(allocator);
         Map<String, Deque<ArrowWriter>> freeWritersMap = arrowWriterPool.freeWriters();
         ArrowWriter writer1 = arrowWriterPool.getOrCreateWriter(1L, 1, 1024, DATA1_ROW_TYPE);
-        assertThat(writer1.getMaxSizeInBytes()).isEqualTo(1024);
+        assertThat(writer1.getWriteLimitInBytes()).isEqualTo((int) (1024 * BUFFER_USAGE_RATIO));
         assertThat(freeWritersMap.isEmpty()).isTrue();
         long epoch = writer1.getEpoch();
         writer1.recycle(epoch);
@@ -70,7 +71,7 @@ public class ArrowWriterPoolTest {
         assertThat(arrowWriters.size()).isEqualTo(1);
         writer1 = arrowWriterPool.getOrCreateWriter(1L, 1, 1000, DATA1_ROW_TYPE);
         assertThat(arrowWriters.size()).isEqualTo(0);
-        assertThat(writer1.getMaxSizeInBytes()).isEqualTo(1000);
+        assertThat(writer1.getWriteLimitInBytes()).isEqualTo((int) (1000 * BUFFER_USAGE_RATIO));
         ArrowWriter writer3WithKey1 = arrowWriterPool.getOrCreateWriter(1L, 1, 100, DATA1_ROW_TYPE);
         writer3WithKey1.recycle(writer3WithKey1.getEpoch());
         writer1.recycle(writer1.getEpoch());

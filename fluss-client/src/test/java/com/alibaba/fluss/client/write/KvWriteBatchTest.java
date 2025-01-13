@@ -16,8 +16,12 @@
 
 package com.alibaba.fluss.client.write;
 
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.MemorySegmentPool;
+import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -32,6 +36,7 @@ import com.alibaba.fluss.types.DataType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
 import java.util.Iterator;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -49,6 +54,7 @@ public class KvWriteBatchTest {
     private InternalRow row;
     private byte[] key;
     private int estimatedSizeInBytes;
+    private MemorySegmentPool memoryPool;
 
     @BeforeEach
     void setup() {
@@ -56,6 +62,11 @@ public class KvWriteBatchTest {
         int[] pkIndex = DATA1_SCHEMA_PK.getPrimaryKeyIndexes();
         key = new KeyEncoder(DATA1_ROW_TYPE, pkIndex).encode(row);
         estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, row);
+        Configuration config = new Configuration();
+        config.setString(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key(), "5kb");
+        config.setString(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE.key(), "256b");
+        config.setString(ConfigOptions.CLIENT_WRITER_BATCH_SIZE.key(), "1kb");
+        memoryPool = LazyMemorySegmentPool.createWriterBufferPool(config);
     }
 
     @Test
@@ -89,7 +100,9 @@ public class KvWriteBatchTest {
 
         boolean appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
-        assertDefaultKvRecordBatchEquals(kvProducerBatch.records());
+        DefaultKvRecordBatch kvRecords =
+                DefaultKvRecordBatch.pointToBytesView(kvProducerBatch.build());
+        assertDefaultKvRecordBatchEquals(kvRecords);
     }
 
     @Test
@@ -139,19 +152,20 @@ public class KvWriteBatchTest {
     }
 
     private KvWriteBatch createKvWriteBatch(TableBucket tb) throws Exception {
-        return createKvWriteBatch(tb, Integer.MAX_VALUE, MemorySegment.allocateHeapMemory(1000));
+        return createKvWriteBatch(tb, Integer.MAX_VALUE, memoryPool.nextSegment());
     }
 
     private KvWriteBatch createKvWriteBatch(
             TableBucket tb, int writeLimit, MemorySegment memorySegment) throws Exception {
+        PreAllocatedPagedOutputView outputView =
+                new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment));
         return new KvWriteBatch(
                 tb,
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                DefaultKvRecordBatch.Builder.builder(
-                        DATA1_TABLE_INFO_PK.getSchemaId(),
-                        writeLimit,
-                        new MemorySegmentOutputView(memorySegment),
-                        KvFormat.COMPACTED),
+                DATA1_TABLE_INFO_PK.getSchemaId(),
+                KvFormat.COMPACTED,
+                writeLimit,
+                outputView,
                 null);
     }
 

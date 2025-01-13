@@ -19,8 +19,8 @@ package com.alibaba.fluss.record;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
+import com.alibaba.fluss.memory.TestingMemorySegmentPool;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
@@ -41,6 +41,7 @@ import java.util.stream.Collectors;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static com.alibaba.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -72,12 +73,11 @@ public class MemoryLogRecordsArrowBuilderTest {
                 provider.getOrCreateWriter(1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE);
         MemoryLogRecordsArrowBuilder builder = createMemoryLogRecordsArrowBuilder(writer, 10, 100);
         assertThat(builder.isFull()).isFalse();
-        assertThat(builder.getMaxSizeInBytes()).isEqualTo(maxSizeInBytes);
+        assertThat(builder.getWriteLimitInBytes())
+                .isEqualTo((int) (maxSizeInBytes * BUFFER_USAGE_RATIO));
         builder.close();
-        builder.serialize();
         builder.setWriterState(1L, 0);
-        MemoryLogRecords records =
-                MemoryLogRecords.pointToByteBuffer(builder.build().getByteBuf().nioBuffer());
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
         Iterator<LogRecordBatch> iterator = records.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch batch = iterator.next();
@@ -116,10 +116,8 @@ public class MemoryLogRecordsArrowBuilderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage(
                         "Tried to append a record, but MemoryLogRecordsArrowBuilder is closed for record appends");
-        builder.serialize();
         assertThat(builder.isClosed()).isTrue();
-        MemoryLogRecords records =
-                MemoryLogRecords.pointToByteBuffer(builder.build().getByteBuf().nioBuffer());
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
         assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult);
     }
 
@@ -164,9 +162,8 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(provider.freeWriters().size()).isEqualTo(0);
         int sizeInBytesBeforeClose = builder.getSizeInBytes();
         builder.close();
-        builder.serialize();
         builder.setWriterState(1L, 0);
-        MemoryLogRecords.pointToByteBuffer(builder.build().getByteBuf().nioBuffer());
+        builder.build();
         assertThat(provider.freeWriters().get(tableSchemaId).size()).isEqualTo(1);
         int sizeInBytes = builder.getSizeInBytes();
         assertThat(sizeInBytes).isEqualTo(sizeInBytesBeforeClose);
@@ -193,6 +190,6 @@ public class MemoryLogRecordsArrowBuilderTest {
                 0L,
                 DEFAULT_SCHEMA_ID,
                 writer,
-                new ManagedPagedOutputView(LazyMemorySegmentPool.create(conf)));
+                new ManagedPagedOutputView(new TestingMemorySegmentPool(pageSizeInBytes)));
     }
 }

@@ -93,7 +93,7 @@ public final class KvManager extends TabletManagerBase {
         super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
         this.logManager = logManager;
         this.arrowBufferAllocator = new RootAllocator(Long.MAX_VALUE);
-        this.memorySegmentPool = LazyMemorySegmentPool.create(conf);
+        this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();

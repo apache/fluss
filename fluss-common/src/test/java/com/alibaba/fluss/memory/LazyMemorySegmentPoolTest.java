@@ -18,6 +18,7 @@ package com.alibaba.fluss.memory;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
@@ -33,22 +34,26 @@ public class LazyMemorySegmentPoolTest {
 
     @Test
     void testNextSegmentWaiter() throws Exception {
-        LazyMemorySegmentPool source = buildLazyMemorySegmentSource(10, 10);
-        assertThat(source.pageSize()).isEqualTo(10);
+        LazyMemorySegmentPool source = buildLazyMemorySegmentSource(10, 64);
+        assertThat(source.pageSize()).isEqualTo(64);
         assertThat(source.freePages()).isEqualTo(10);
 
-        MemorySegment ms1 = source.nextSegment(true);
+        MemorySegment ms1 = source.nextSegment();
         assertThat(source.freePages()).isEqualTo(9);
 
-        MemorySegment ms2 = source.nextSegment(true);
+        MemorySegment ms2 = source.nextSegment();
         assertThat(source.freePages()).isEqualTo(8);
 
         for (int i = 0; i < 8; i++) {
-            source.nextSegment(true);
+            source.nextSegment();
         }
         assertThat(source.freePages()).isEqualTo(0);
 
-        assertThat(source.nextSegment(false)).isNull();
+        assertThatThrownBy(source::nextSegment)
+                .isInstanceOf(EOFException.class)
+                .hasMessage(
+                        "Failed to allocate new segment within the configured max blocking time 100 ms. "
+                                + "Total memory: 640 bytes. Page size: 64 bytes. Available pages: 0. Request pages: 1");
 
         CountDownLatch returnAllLatch = asyncReturnAll(source, Arrays.asList(ms1, ms2));
         CountDownLatch getNextSegmentLatch = asyncGetNextSegment(source);
@@ -59,7 +64,7 @@ public class LazyMemorySegmentPoolTest {
 
     @Test
     void testIllegalArgument() {
-        assertThatThrownBy(() -> buildLazyMemorySegmentSource(0, 10))
+        assertThatThrownBy(() -> buildLazyMemorySegmentSource(0, 64))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("MaxPages for LazyMemorySegmentPool should be greater than 0.");
         assertThatThrownBy(() -> buildLazyMemorySegmentSource(10, 32 * 1024 * 1024))
@@ -67,19 +72,23 @@ public class LazyMemorySegmentPoolTest {
                 .hasMessage(
                         "Page size should be less than PER_REQUEST_MEMORY_SIZE. "
                                 + "Page size is: 32768 KB, PER_REQUEST_MEMORY_SIZE is 16384 KB.");
+        assertThatThrownBy(() -> buildLazyMemorySegmentSource(10, 30))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Page size should be greater than 64 bytes to include the record batch header, but is 30 bytes.");
 
-        LazyMemorySegmentPool lazyMemorySegmentPool = buildLazyMemorySegmentSource(10, 10);
+        LazyMemorySegmentPool lazyMemorySegmentPool = buildLazyMemorySegmentSource(10, 100);
         assertThatThrownBy(
                         () ->
                                 lazyMemorySegmentPool.returnAll(
                                         Arrays.asList(
-                                                MemorySegment.allocateHeapMemory(10),
-                                                MemorySegment.allocateHeapMemory(10))))
+                                                MemorySegment.allocateHeapMemory(100),
+                                                MemorySegment.allocateHeapMemory(100))))
                 .hasMessage("Return too more memories.");
     }
 
     private LazyMemorySegmentPool buildLazyMemorySegmentSource(int maxPages, int pageSize) {
-        return new LazyMemorySegmentPool(maxPages, pageSize, Long.MAX_VALUE);
+        return new LazyMemorySegmentPool(maxPages, pageSize, 100);
     }
 
     private CountDownLatch asyncReturnAll(
@@ -103,7 +112,7 @@ public class LazyMemorySegmentPoolTest {
                         () -> {
                             try {
                                 try {
-                                    source.nextSegment(true);
+                                    source.nextSegment();
                                 } catch (IOException e) {
                                     throw new RuntimeException(e);
                                 }

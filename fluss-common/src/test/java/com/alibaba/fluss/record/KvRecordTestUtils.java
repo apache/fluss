@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.record;
 
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.compacted.CompactedRow;
@@ -65,16 +65,20 @@ public class KvRecordTestUtils {
         public KvRecordBatch ofRecords(
                 List<KvRecord> records, long writeClientId, int batchSequenceId)
                 throws IOException {
-            MemorySegmentOutputView outputView = new MemorySegmentOutputView(100);
-            DefaultKvRecordBatch.Builder builder =
-                    DefaultKvRecordBatch.Builder.builder(schemaId, outputView, KvFormat.COMPACTED);
+            KvRecordBatchBuilder builder =
+                    KvRecordBatchBuilder.builder(
+                            schemaId,
+                            Integer.MAX_VALUE,
+                            new UnmanagedPagedOutputView(100),
+                            KvFormat.COMPACTED);
             for (KvRecord kvRecord : records) {
                 builder.append(BytesUtils.toArray(kvRecord.getKey()), kvRecord.getRow());
             }
 
             builder.setWriterState(writeClientId, batchSequenceId);
-            KvRecordBatch kvRecords = builder.build();
+            KvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(builder.build());
             kvRecords.ensureValid();
+            builder.close();
             return kvRecords;
         }
     }

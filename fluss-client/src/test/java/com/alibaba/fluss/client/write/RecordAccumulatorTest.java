@@ -183,10 +183,7 @@ public class RecordAccumulatorTest {
         assertThat(batches.size()).isEqualTo(1);
         WriteBatch batch = batches.get(0);
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
-
-        IndexedLogWriteBatch logProducerBatch = (IndexedLogWriteBatch) batch;
-
-        MemoryLogRecords memoryLogRecords = logProducerBatch.records();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(batch.build());
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createIndexedReadContext(
@@ -203,16 +200,13 @@ public class RecordAccumulatorTest {
 
     @Test
     void testAppendLarge() throws Exception {
-        int batchSize = 10;
+        int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
-        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, 10L * 1024);
+        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, batchSize, 10L * 1024);
 
+        // a row with size > 2 * batchSize
         InternalRow row1 =
-                row(
-                        DATA1_ROW_TYPE,
-                        new Object[] {
-                            100000000, "this is very large string which large that 10 bytes"
-                        });
+                row(DATA1_ROW_TYPE, new Object[] {100000000, new String(new char[2 * 100])});
         // row size > 10;
         accum.append(createRecord(row1), writeCallback, cluster, 0, false);
         // bucket's leader should be ready for bucket0.
@@ -222,9 +216,8 @@ public class RecordAccumulatorTest {
         assertThat(writeBatches).hasSize(1);
         WriteBatch batch = writeBatches.peek();
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
-        IndexedLogWriteBatch logProducerBatch = (IndexedLogWriteBatch) batch;
-        assertThat(logProducerBatch).isNotNull();
-        MemoryLogRecords memoryLogRecords = logProducerBatch.records();
+        assertThat(batch).isNotNull();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(batch.build());
         Iterator<? extends LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch logRecordBatch = iterator.next();
@@ -247,7 +240,10 @@ public class RecordAccumulatorTest {
         StickyBucketAssigner bucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         RecordAccumulator accum =
                 createTestRecordAccumulator(
-                        (int) Duration.ofMinutes(1).toMillis(), batchSize, 10L * batchSize);
+                        (int) Duration.ofMinutes(1).toMillis(),
+                        batchSize,
+                        batchSize,
+                        10L * batchSize);
         int expectedAppends = expectedNumAppends(row, batchSize);
 
         // Create first batch.
@@ -356,9 +352,9 @@ public class RecordAccumulatorTest {
 
     @Test
     void testTableWithUnknownLeader() throws Exception {
-        int batchSize = 10;
+        int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
-        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, 10L * 1024);
+        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, batchSize, 10L * 1024);
         IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
         BucketLocation bucket1 =
@@ -477,15 +473,15 @@ public class RecordAccumulatorTest {
     }
 
     private RecordAccumulator createTestRecordAccumulator(int batchSize, long totalSize) {
-        return createTestRecordAccumulator(5000, batchSize, totalSize);
+        return createTestRecordAccumulator(5000, batchSize, 256, totalSize);
     }
 
     private RecordAccumulator createTestRecordAccumulator(
-            int batchTimeoutMs, int batchSize, long totalSize) {
+            int batchTimeoutMs, int batchSize, int pageSize, long totalSize) {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
         // TODO client writer buffer maybe removed.
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(totalSize));
-        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(batchSize));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(pageSize));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(batchSize));
         return new RecordAccumulator(
                 conf,

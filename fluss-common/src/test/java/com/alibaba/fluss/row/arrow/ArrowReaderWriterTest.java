@@ -143,15 +143,10 @@ class ArrowReaderWriterTest {
                     new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024));
 
             // skip arrow batch header.
-            int size =
-                    writer.serializeToOutputView(
-                            pagedOutputView,
-                            pagedOutputView.getCurrentSegment(),
-                            ARROW_ROWKIND_OFFSET,
-                            true);
+            int size = writer.serializeToOutputView(pagedOutputView, ARROW_ROWKIND_OFFSET);
             MemorySegment segment = MemorySegment.allocateHeapMemory(writer.sizeInBytes());
 
-            assertThat(pagedOutputView.getSegmentBytesViewList().size()).isEqualTo(1);
+            assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
             firstSegment.copyTo(ARROW_ROWKIND_OFFSET, segment, 0, size);
 

@@ -18,7 +18,6 @@ package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
-import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.writers.ArrowFieldWriter;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -55,6 +54,12 @@ public class ArrowWriter implements AutoCloseable {
     private static final int INITIAL_CAPACITY = 1024;
 
     /**
+     * The buffer usage ratio which is used to determine whether the writer is full. The writer is
+     * full if the buffer usage ratio exceeds the threshold.
+     */
+    public static final double BUFFER_USAGE_RATIO = 0.96;
+
+    /**
      * The identifier of the writer which is used to identify the writer in the {@link
      * ArrowWriterPool}.
      */
@@ -79,7 +84,7 @@ public class ArrowWriter implements AutoCloseable {
 
     private final RowType schema;
 
-    private int maxSizeInBytes;
+    private int writeLimitInBytes;
 
     private int estimatedMaxRecordsCount;
     private int recordsCount;
@@ -89,7 +94,7 @@ public class ArrowWriter implements AutoCloseable {
 
     ArrowWriter(
             String tableSchemaId,
-            int maxSizeInBytes,
+            int bufferSizeInBytes,
             RowType schema,
             BufferAllocator allocator,
             ArrowWriterProvider provider) {
@@ -98,7 +103,7 @@ public class ArrowWriter implements AutoCloseable {
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
         this.provider = Preconditions.checkNotNull(provider);
         this.metadataLength = ArrowUtils.estimateArrowMetadataLength(root.getSchema());
-        this.maxSizeInBytes = maxSizeInBytes;
+        this.writeLimitInBytes = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
         this.estimatedMaxRecordsCount = -1;
         this.recordsCount = 0;
         this.epoch = 0;
@@ -115,8 +120,8 @@ public class ArrowWriter implements AutoCloseable {
         return recordsCount;
     }
 
-    public int getMaxSizeInBytes() {
-        return maxSizeInBytes;
+    public int getWriteLimitInBytes() {
+        return writeLimitInBytes;
     }
 
     public boolean isFull() {
@@ -125,14 +130,14 @@ public class ArrowWriter implements AutoCloseable {
             int metadataLength = getMetadataLength();
             int bodyLength = getBodyLength();
             int currentSize = metadataLength + bodyLength;
-            if (currentSize >= maxSizeInBytes) {
+            if (currentSize >= writeLimitInBytes) {
                 return true;
             } else {
                 // update the estimated max records count
                 estimatedMaxRecordsCount =
                         (int)
                                 Math.ceil(
-                                        (maxSizeInBytes - metadataLength)
+                                        (writeLimitInBytes - metadataLength)
                                                 / (bodyLength / (recordsCount * 1.0)));
                 return false;
             }
@@ -143,8 +148,8 @@ public class ArrowWriter implements AutoCloseable {
         }
     }
 
-    public void reset(int maxSizeInBytes) {
-        this.maxSizeInBytes = maxSizeInBytes;
+    public void reset(int bufferSizeInBytes) {
+        this.writeLimitInBytes = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
         for (int i = 0; i < fieldWriters.length; i++) {
             FieldVector fieldVector = root.getVector(i);
             initFieldVector(fieldVector);
@@ -199,15 +204,11 @@ public class ArrowWriter implements AutoCloseable {
     }
 
     /** Serializes the current row batch to Arrow format and returns the written size in bytes. */
-    public int serializeToOutputView(
-            AbstractPagedOutputView outputView,
-            MemorySegment firstSegment,
-            int position,
-            boolean waitingSegment)
+    public int serializeToOutputView(AbstractPagedOutputView outputView, int position)
             throws IOException {
         // Whether there is any record to write, we need to advance the position to make sure the
         // batch header will be written in outputView.
-        outputView.seekOutput(firstSegment, position, waitingSegment);
+        outputView.setPosition(position);
         if (recordsCount == 0) {
             return 0;
         }

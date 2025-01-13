@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.memory;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Testing pooled memory segment source. */
@@ -28,8 +29,17 @@ public class TestingMemorySegmentPool implements MemorySegmentPool {
     }
 
     @Override
-    public MemorySegment nextSegment(boolean waiting) {
+    public MemorySegment nextSegment() {
         return MemorySegment.wrap(new byte[pageSize]);
+    }
+
+    @Override
+    public List<MemorySegment> allocatePages(int required) {
+        List<MemorySegment> segments = new ArrayList<>(required);
+        for (int i = 0; i < required; i++) {
+            segments.add(nextSegment());
+        }
+        return segments;
     }
 
     @Override
@@ -54,6 +64,11 @@ public class TestingMemorySegmentPool implements MemorySegmentPool {
 
     @Override
     public int freePages() {
+        return Integer.MAX_VALUE;
+    }
+
+    @Override
+    public long availableMemory() {
         return Integer.MAX_VALUE;
     }
 

@@ -211,13 +211,15 @@ public class Sender implements Runnable {
         // get the list of batches prepare to send.
         Map<Integer, List<WriteBatch>> batches =
                 accumulator.drain(metadataUpdater.getCluster(), readyNodes, maxRequestSize);
-        addToInflightBatches(batches);
 
-        updateWriterMetrics(batches);
+        if (!batches.isEmpty()) {
+            addToInflightBatches(batches);
+            updateWriterMetrics(batches);
 
-        // TODO add logic for batch expire.
+            // TODO add logic for batch expire.
 
-        sendWriteRequests(batches);
+            sendWriteRequests(batches);
+        }
     }
 
     private void completeBatch(WriteBatch batch) {

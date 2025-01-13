@@ -17,14 +17,14 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
+import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.DefaultKvRecordBatch;
+import com.alibaba.fluss.record.KvRecordBatchBuilder;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.utils.Preconditions;
@@ -34,7 +34,6 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -45,23 +44,30 @@ import java.util.List;
 @NotThreadSafe
 @Internal
 public class KvWriteBatch extends WriteBatch {
-    private final DefaultKvRecordBatch.Builder recordsBuilder;
+    private final AbstractPagedOutputView outputView;
+    private final KvRecordBatchBuilder recordsBuilder;
     private final @Nullable int[] targetColumns;
 
     public KvWriteBatch(
             TableBucket tableBucket,
             PhysicalTablePath physicalTablePath,
-            DefaultKvRecordBatch.Builder recordsBuilder,
-            int[] targetColumns) {
+            int schemaId,
+            KvFormat kvFormat,
+            int writeLimit,
+            AbstractPagedOutputView outputView,
+            @Nullable int[] targetColumns) {
         super(tableBucket, physicalTablePath);
-        this.recordsBuilder = recordsBuilder;
+        this.outputView = outputView;
+        this.recordsBuilder =
+                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
         this.targetColumns = targetColumns;
     }
 
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         // currently, we throw exception directly when the target columns of the write record is
-        // not the same as the current target columns in the batch
+        // not the same as the current target columns in the batch.
+        // this should be quite fast as they should be the same objects.
         if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
             throw new IllegalStateException(
                     String.format(
@@ -84,26 +90,6 @@ public class KvWriteBatch extends WriteBatch {
         }
     }
 
-    @Override
-    public void serialize() {
-        // do nothing, records are serialized into memory buffer when appending
-    }
-
-    @Override
-    public boolean trySerialize() {
-        // records have been serialized.
-        return true;
-    }
-
-    @VisibleForTesting
-    public DefaultKvRecordBatch records() {
-        try {
-            return recordsBuilder.build();
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to build record batch.", e);
-        }
-    }
-
     @Nullable
     public int[] getTargetColumns() {
         return targetColumns;
@@ -111,11 +97,11 @@ public class KvWriteBatch extends WriteBatch {
 
     @Override
     public BytesView build() {
-        DefaultKvRecordBatch recordBatch = records();
-        return new MemorySegmentBytesView(
-                recordBatch.getMemorySegment(),
-                recordBatch.getPosition(),
-                recordBatch.sizeInBytes());
+        try {
+            return recordsBuilder.build();
+        } catch (IOException e) {
+            throw new FlussRuntimeException("Failed to build kv record batch.", e);
+        }
     }
 
     @Override
@@ -135,8 +121,8 @@ public class KvWriteBatch extends WriteBatch {
     }
 
     @Override
-    public List<MemorySegment> memorySegments() {
-        return Collections.singletonList(recordsBuilder.getMemorySegment());
+    public List<MemorySegment> pooledMemorySegments() {
+        return outputView.allocatedPooledSegments();
     }
 
     @Override

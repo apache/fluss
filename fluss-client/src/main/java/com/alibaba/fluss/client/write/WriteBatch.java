@@ -72,31 +72,12 @@ public abstract class WriteBatch {
             throws Exception;
 
     /**
-     * Serialize the batch into a sequence of {@link MemorySegment}s. Should be called after {@link
-     * #close()}.
-     *
-     * <p>Note: This may involve dynamic allocating {@link MemorySegment}s and block the thread. The
-     * caller should ensure that this method is called without holding other locks, otherwise this
-     * may lead to deadlocks.
-     */
-    public abstract void serialize();
-
-    /**
-     * Try to serialize the batch into a sequence of {@link MemorySegment}s without waiting for
-     * available {@link MemorySegment}s.
-     *
-     * @return true if the serialization is successful or has been done by {@link #serialize}, false
-     *     otherwise.
-     */
-    public abstract boolean trySerialize();
-
-    /**
      * Gets the memory segment bytes view of the batch. This includes the latest updated {@link
      * #setWriterState(long, int)} in the bytes view.
      */
     public abstract BytesView build();
 
-    /** close the batch. */
+    /** close the batch to not append new records. */
     public abstract void close() throws Exception;
 
     /**
@@ -114,13 +95,13 @@ public abstract class WriteBatch {
     public abstract int sizeInBytes();
 
     /**
-     * get memory segments to de-allocate. After produceLog/PutKv acks, the {@link WriteBatch} need
-     * to de-allocate the allocated {@link MemorySegment}s back to {@link WriterMemoryBuffer} or
-     * {@link MemorySegmentPool} for reusing.
+     * get pooled memory segments to de-allocate. After produceLog/PutKv acks, the {@link
+     * WriteBatch} need to de-allocate the allocated pooled {@link MemorySegment}s back to {@link
+     * MemorySegmentPool} for reusing.
      *
-     * @return the memory segment this batch allocated
+     * @return the pooled memory segment this batch allocated
      */
-    public abstract List<MemorySegment> memorySegments();
+    public abstract List<MemorySegment> pooledMemorySegments();
 
     public abstract void setWriterState(long writerId, int batchSequence);
 

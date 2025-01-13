@@ -19,7 +19,7 @@ package com.alibaba.fluss.record;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.InvalidRecordException;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.OutputView;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.MemoryAwareGetters;
@@ -97,8 +97,7 @@ public class DefaultKvRecord implements KvRecord {
         return MurmurHashUtils.hashBytes(segment, offset, sizeInBytes);
     }
 
-    public static int writeTo(
-            MemorySegmentOutputView outputView, byte[] key, @Nullable InternalRow row)
+    public static int writeTo(OutputView outputView, byte[] key, @Nullable InternalRow row)
             throws IOException {
         // bytes for key length + bytes for key + bytes for row
         int sizeInBytes = sizeWithoutLength(key, row);
@@ -180,8 +179,8 @@ public class DefaultKvRecord implements KvRecord {
         return sizeInBytes;
     }
 
-    private static void serializeInternalRow(
-            MemorySegmentOutputView outputView, InternalRow internalRow) throws IOException {
+    private static void serializeInternalRow(OutputView outputView, InternalRow internalRow)
+            throws IOException {
         if (internalRow instanceof IndexedRow) {
             IndexedRow indexedRow = (IndexedRow) internalRow;
             IndexedRowWriter.serializeIndexedRow(indexedRow, outputView);

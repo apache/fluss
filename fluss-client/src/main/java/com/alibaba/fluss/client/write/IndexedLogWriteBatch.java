@@ -17,16 +17,14 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.utils.Preconditions;
@@ -34,7 +32,6 @@ import com.alibaba.fluss.utils.Preconditions;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -46,14 +43,19 @@ import java.util.List;
 @NotThreadSafe
 @Internal
 public final class IndexedLogWriteBatch extends WriteBatch {
+    private final AbstractPagedOutputView outputView;
     private final MemoryLogRecordsIndexedBuilder recordsBuilder;
 
     public IndexedLogWriteBatch(
             TableBucket tableBucket,
             PhysicalTablePath physicalTablePath,
-            MemoryLogRecordsIndexedBuilder recordsBuilder) {
+            int schemaId,
+            int writeLimit,
+            AbstractPagedOutputView outputView) {
         super(tableBucket, physicalTablePath);
-        this.recordsBuilder = recordsBuilder;
+        this.outputView = outputView;
+        this.recordsBuilder =
+                MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView);
     }
 
     @Override
@@ -77,32 +79,12 @@ public final class IndexedLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public void serialize() {
-        // do nothing, records are serialized into memory buffer when appending
-    }
-
-    @Override
-    public boolean trySerialize() {
-        // records have been serialized.
-        return true;
-    }
-
-    @VisibleForTesting
-    public MemoryLogRecords records() {
+    public BytesView build() {
         try {
             return recordsBuilder.build();
         } catch (IOException e) {
-            throw new FlussRuntimeException("build memory log records failed", e);
+            throw new FlussRuntimeException("Failed to build indexed log record batch.", e);
         }
-    }
-
-    @Override
-    public BytesView build() {
-        MemoryLogRecords memoryLogRecords = records();
-        return new MemorySegmentBytesView(
-                memoryLogRecords.getMemorySegment(),
-                memoryLogRecords.getPosition(),
-                memoryLogRecords.sizeInBytes());
     }
 
     @Override
@@ -117,8 +99,8 @@ public final class IndexedLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public List<MemorySegment> memorySegments() {
-        return Collections.singletonList(recordsBuilder.getMemorySegment());
+    public List<MemorySegment> pooledMemorySegments() {
+        return outputView.allocatedPooledSegments();
     }
 
     @Override

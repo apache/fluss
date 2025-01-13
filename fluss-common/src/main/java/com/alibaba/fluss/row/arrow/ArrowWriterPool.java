@@ -77,7 +77,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
 
     @Override
     public ArrowWriter getOrCreateWriter(
-            long tableId, int schemaId, int maxSizeInBytes, RowType schema) {
+            long tableId, int schemaId, int bufferSizeInBytes, RowType schema) {
         final String tableSchemaId = tableId + "-" + schemaId;
         return inLock(
                 lock,
@@ -88,18 +88,18 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                     }
                     Deque<ArrowWriter> writers = freeWriters.get(tableSchemaId);
                     if (writers != null && !writers.isEmpty()) {
-                        return initialize(writers.pollFirst(), maxSizeInBytes);
+                        return initialize(writers.pollFirst(), bufferSizeInBytes);
                     } else {
                         return initialize(
                                 new ArrowWriter(
-                                        tableSchemaId, maxSizeInBytes, schema, allocator, this),
-                                maxSizeInBytes);
+                                        tableSchemaId, bufferSizeInBytes, schema, allocator, this),
+                                bufferSizeInBytes);
                     }
                 });
     }
 
-    private ArrowWriter initialize(ArrowWriter writer, int maxSizeInBytes) {
-        writer.reset(maxSizeInBytes);
+    private ArrowWriter initialize(ArrowWriter writer, int bufferSizeInBytes) {
+        writer.reset(bufferSizeInBytes);
         return writer;
     }
 

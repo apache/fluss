@@ -22,7 +22,6 @@ import com.alibaba.fluss.utils.Preconditions;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -38,19 +37,17 @@ import java.util.stream.Collectors;
  */
 public abstract class AbstractPagedOutputView implements OutputView, MemorySegmentWritable {
 
-    /** the page size of each memory segments. */
+    /** The page size of each memory segments. */
     protected final int pageSize;
 
-    private List<MemorySegmentBytesView> segmentBytesViewList;
+    /** The list of memory segments that have been fully written and are immutable now. */
+    private List<MemorySegmentBytesView> finishedPages;
 
-    /** the current memory segment to write to. */
+    /** The current memory segment to write to. */
     private MemorySegment currentSegment;
 
     /** the offset in the current segment. */
     private int positionInSegment;
-
-    /** Flag indicating whether throw BufferExhaustedException or wait for available segment. */
-    protected boolean waitingSegment;
 
     protected AbstractPagedOutputView(MemorySegment initialSegment, int pageSize) {
         if (initialSegment == null) {
@@ -61,8 +58,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         this.pageSize = pageSize;
         this.currentSegment = initialSegment;
         this.positionInSegment = 0;
-        this.segmentBytesViewList = new ArrayList<>();
-        this.waitingSegment = true;
+        this.finishedPages = new ArrayList<>();
     }
 
     // --------------------------------------------------------------------------------------------
@@ -77,38 +73,16 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
      */
     protected abstract MemorySegment nextSegment() throws IOException;
 
-    /** Recycle the given memories. */
-    protected abstract void deallocate(List<MemorySegment> segments);
-
-    /** Recycle all memory segments in this output view. */
-    public void recycleAll() {
-        List<MemorySegment> segments =
-                getSegmentBytesViewList().stream()
-                        .map(MemorySegmentBytesView::getMemorySegment)
-                        .collect(Collectors.toList());
-        deallocate(segments);
-    }
-
-    /** Recycle allocated memory segments via {@link #nextSegment()} in this output view. */
-    public void recycleAllocated() {
-        List<MemorySegment> segments =
-                getSegmentBytesViewList().stream()
-                        .map(MemorySegmentBytesView::getMemorySegment)
-                        .collect(Collectors.toList());
-        // remove the initialSegment which is not allocated by the output view.
-        segments.remove(0);
-        if (!segments.isEmpty()) {
-            deallocate(segments);
-        }
-    }
-
     /**
-     * Gets the segment bytes view list, which including current segment.
-     *
-     * @return The segment bytes view list.
+     * Gets the list of memory segments that are used by the output view and are allocated from
+     * {@link MemorySegmentPool}.
      */
-    public List<MemorySegmentBytesView> getSegmentBytesViewList() {
-        List<MemorySegmentBytesView> views = new ArrayList<>(segmentBytesViewList);
+    public abstract List<MemorySegment> allocatedPooledSegments();
+
+    /** Gets the list of memory segments that have been written bytes. */
+    public List<MemorySegmentBytesView> getWrittenSegments() {
+        List<MemorySegmentBytesView> views = new ArrayList<>(finishedPages.size() + 1);
+        views.addAll(finishedPages);
         views.add(new MemorySegmentBytesView(currentSegment, 0, positionInSegment));
         return views;
     }
@@ -141,10 +115,25 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         return this.pageSize;
     }
 
-    public void seekOutput(MemorySegment seg, int position, boolean waitingSegment) {
-        this.currentSegment = seg;
+    /**
+     * Sets the position in the current memory segment. This method is intended for use in the
+     * context of repositioning the output view to a previous position.
+     *
+     * <p>NOTE: This method should only be used for the first memory segment.
+     */
+    public void setPosition(int position) throws IllegalStateException {
+        if (!finishedPages.isEmpty()) {
+            throw new IllegalStateException("Cannot set position for non-first memory segment.");
+        }
+        if (currentSegment.size() <= position) {
+            throw new IllegalStateException(
+                    "Position "
+                            + position
+                            + " is out of bounds for segment of size "
+                            + this.currentSegment.size());
+        }
+
         this.positionInSegment = position;
-        this.waitingSegment = waitingSegment;
     }
 
     /**
@@ -161,7 +150,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
                 new MemorySegmentBytesView(currentSegment, 0, positionInSegment);
         this.currentSegment = nextSegment();
         this.positionInSegment = 0;
-        segmentBytesViewList.add(segmentBytesView);
+        finishedPages.add(segmentBytesView);
     }
 
     /**
@@ -173,8 +162,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
     public void clear() {
         this.currentSegment = null;
         this.positionInSegment = 0;
-        this.segmentBytesViewList = new ArrayList<>();
-        this.waitingSegment = true;
+        this.finishedPages = new ArrayList<>();
     }
 
     // --------------------------------------------------------------------------------------------

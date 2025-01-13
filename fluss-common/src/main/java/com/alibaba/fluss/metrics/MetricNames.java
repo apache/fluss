@@ -126,13 +126,7 @@ public class MetricNames {
     // for writer
     public static final String WRITER_BUFFER_TOTAL_BYTES = "bufferTotalBytes";
     public static final String WRITER_BUFFER_AVAILABLE_BYTES = "bufferAvailableBytes";
-    public static final String WRITER_BUFFER_POOL_WAIT_TIME_MS = "bufferPoolWaitTimeMs";
-    public static final String WRITER_MEMORY_SEGMENT_POOL_TOTAL_BYTES =
-            "memorySegmentPoolTotalBytes";
-    public static final String WRITER_MEMORY_SEGMENT_POOL_AVAILABLE_PAGE_COUNT =
-            "memorySegmentPoolAvailablePageCount";
-    public static final String WRITER_MEMORY_SEGMENT_POOL_WAITER_COUNT =
-            "memorySegmentPoolWaiterCount";
+    public static final String WRITER_BUFFER_WAITING_THREADS = "bufferWaitingThreads";
     public static final String WRITER_BATCH_QUEUE_TIME_MS = "batchQueueTimeMs";
     public static final String WRITER_RECORDS_RETRY_RATE = "recordsRetryPerSecond";
     public static final String WRITER_RECORDS_SEND_RATE = "recordSendPerSecond";

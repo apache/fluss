@@ -18,11 +18,14 @@ package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.Internal;
 
+import javax.annotation.Nullable;
+
+import java.io.IOException;
 import java.util.List;
 
 /** MemorySegment pool to hold pages in memory. */
 @Internal
-public interface MemorySegmentPool extends MemorySegmentSource {
+public interface MemorySegmentPool {
 
     /**
      * Get the page size of each page this pool holds.
@@ -37,6 +40,16 @@ public interface MemorySegmentPool extends MemorySegmentSource {
      * @return the total size
      */
     int totalSize();
+
+    /**
+     * Gets the next memory segment. If no more segments are available, it returns null.
+     *
+     * @return The next memory segment, or null, if none is available.
+     */
+    @Nullable
+    MemorySegment nextSegment() throws IOException;
+
+    List<MemorySegment> allocatePages(int required) throws IOException;
 
     /**
      * Return one page back into this pool.
@@ -54,6 +67,9 @@ public interface MemorySegmentPool extends MemorySegmentSource {
 
     /** @return Free page number. */
     int freePages();
+
+    /** @return the available memory size in bytes. */
+    long availableMemory();
 
     void close();
 }
