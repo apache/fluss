@@ -34,10 +34,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class RequestChannelTest {
 
     @Test
-    void testRequestPriority() throws Exception {
+    void testRequestsFIFO() throws Exception {
         RequestChannel channel = new RequestChannel(100);
 
-        // 1. request with same priority score. Use FIFO.
+        // 1. Same request type, Use FIFO.
         List<RpcRequest> rpcRequests = new ArrayList<>();
         // push rpc requests
         for (int i = 0; i < 100; i++) {
@@ -59,7 +59,7 @@ public class RequestChannelTest {
             assertThat(gotRequest).isEqualTo(rpcRequests.get(i));
         }
 
-        // 2. request with different priority score. Should be ordered by priority score.
+        // 2. Different request type, Use FIFO.
         RpcRequest rpcRequest1 =
                 new RpcRequest(
                         ApiKeys.GET_TABLE.id,
@@ -81,8 +81,8 @@ public class RequestChannelTest {
         channel.putRequest(rpcRequest1);
         channel.putRequest(rpcRequest2);
         RpcRequest rpcRequest = channel.pollRequest(100);
-        assertThat(rpcRequest).isEqualTo(rpcRequest2);
-        rpcRequest = channel.pollRequest(100);
         assertThat(rpcRequest).isEqualTo(rpcRequest1);
+        rpcRequest = channel.pollRequest(100);
+        assertThat(rpcRequest).isEqualTo(rpcRequest2);
     }
 }

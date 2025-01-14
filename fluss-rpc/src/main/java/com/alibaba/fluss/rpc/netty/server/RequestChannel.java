@@ -21,8 +21,8 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /** A blocking queue channel that can receive requests and send responses. */
@@ -33,18 +33,7 @@ public final class RequestChannel {
     private final BlockingQueue<RpcRequest> requestQueue;
 
     public RequestChannel(int queueCapacity) {
-        this.requestQueue =
-                new PriorityBlockingQueue<>(
-                        queueCapacity,
-                        (req1, req2) -> {
-                            // less value will be popped first
-                            int res = Integer.compare(req2.getPriority(), req1.getPriority());
-                            // if priority is same, we want to keep FIFO
-                            if (res == 0 && req1 != req2) {
-                                res = (req1.getRequestId() < req2.getRequestId() ? -1 : 1);
-                            }
-                            return res;
-                        });
+        this.requestQueue = new ArrayBlockingQueue<>(queueCapacity);
     }
 
     /**
