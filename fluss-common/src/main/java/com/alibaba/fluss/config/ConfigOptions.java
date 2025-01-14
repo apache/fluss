@@ -253,6 +253,23 @@ public class ConfigOptions {
                                     + SERVER_BUFFER_MEMORY_SIZE.key()
                                     + "').");
 
+    // noDefaultValue() leads to NPE in some code parts, hence we default to 0b
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE =
+            key("server.buffer.per-request-memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("0b"))
+                    .withDescription(
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closest multiple of "
+                                    + SERVER_BUFFER_PAGE_SIZE.key()
+                                    + " (but at least one page). This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
+
+    public static final ConfigOption<Long> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
+            key("server.buffer.wait-timeout")
+                    .longType()
+                    .defaultValue(Long.MAX_VALUE)
+                    .withDescription(
+                            "Defines how long the buffer pool will block when waiting for segments to become available in ms.");
+
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------
@@ -621,14 +638,22 @@ public class ConfigOptions {
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
 
-    @Deprecated
-    public static final ConfigOption<MemorySize> CLIENT_WRITER_LEGACY_BATCH_SIZE =
-            key("client.writer.legacy.batch-size")
+    // noDefaultValue() leads to NPE in some code parts, hence we default to 0b
+    public static final ConfigOption<MemorySize> CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE =
+            key("client.writer.per-request-memory-size")
                     .memoryType()
-                    .defaultValue(MemorySize.parse("64kb"))
+                    .defaultValue(MemorySize.parse("0b"))
                     .withDescription(
-                            "The writer or walBuilder will attempt to batch records together into one batch for"
-                                    + " the same bucket. This helps performance on both the client and the server.");
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closes multiple of "
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + " (but at least one page). This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
+
+    public static final ConfigOption<Long> CLIENT_WRITER_WAIT_TIMEOUT =
+            key("client.writer.wait-timeout")
+                    .longType()
+                    .defaultValue(Long.MAX_VALUE)
+                    .withDescription(
+                            "Defines how long the writer will block when waiting for segments to become available in ms.");
 
     public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_TIMEOUT =
             key("client.writer.batch-timeout")

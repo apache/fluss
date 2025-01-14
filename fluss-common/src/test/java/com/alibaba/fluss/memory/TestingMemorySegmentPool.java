@@ -48,7 +48,7 @@ public class TestingMemorySegmentPool implements MemorySegmentPool {
     }
 
     @Override
-    public int totalSize() {
+    public long totalSize() {
         return pageSize;
     }
 

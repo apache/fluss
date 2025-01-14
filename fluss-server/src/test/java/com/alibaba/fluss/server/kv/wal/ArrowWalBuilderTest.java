@@ -88,7 +88,7 @@ class ArrowWalBuilderTest {
 
         // consume log records before walBuilder deallocate memory. it's safe.
         MemoryLogRecords logRecords = walBuilder.build();
-        int totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
+        long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
         assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
         // allocate multiple pages
         assertThat(totalPages - memorySegmentPool.freePages()).isGreaterThan(1);
@@ -130,7 +130,7 @@ class ArrowWalBuilderTest {
 
         // consume log records before walBuilder deallocate memory. it's safe.
         MemoryLogRecords logRecords = walBuilder.build();
-        int totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
+        long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
         assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
         // allocate one page
         assertThat(totalPages - memorySegmentPool.freePages()).isEqualTo(1);

@@ -39,7 +39,7 @@ public interface MemorySegmentPool {
      *
      * @return the total size
      */
-    int totalSize();
+    long totalSize();
 
     /**
      * Gets the next memory segment. If no more segments are available, it returns null.
