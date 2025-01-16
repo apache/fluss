@@ -267,7 +267,6 @@ public final class KvTablet {
                         ValueDecoder valueDecoder =
                                 new ValueDecoder(readContext.getRowDecoder(schemaId));
 
-                        int appendedRecordCount = 0;
                         for (KvRecord kvRecord : kvRecords.records(readContext)) {
                             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
                             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
@@ -289,13 +288,11 @@ public final class KvTablet {
                                     // if newRow is null, it means the row should be deleted
                                     if (newRow == null) {
                                         walBuilder.append(RowKind.DELETE, oldRow);
-                                        appendedRecordCount += 1;
                                         kvPreWriteBuffer.delete(key, logOffset++);
                                     } else {
                                         // otherwise, it's a partial update, should produce -U,+U
                                         walBuilder.append(RowKind.UPDATE_BEFORE, oldRow);
                                         walBuilder.append(RowKind.UPDATE_AFTER, newRow);
-                                        appendedRecordCount += 2;
                                         kvPreWriteBuffer.put(
                                                 key,
                                                 ValueEncoder.encodeValue(schemaId, newRow),
@@ -317,7 +314,6 @@ public final class KvTablet {
                                             updateRow(oldRow, kvRecord.getRow(), partialUpdater);
                                     walBuilder.append(RowKind.UPDATE_BEFORE, oldRow);
                                     walBuilder.append(RowKind.UPDATE_AFTER, newRow);
-                                    appendedRecordCount += 2;
                                     // logOffset is for -U, logOffset + 1 is for +U, we need to use
                                     // the log offset for +U
                                     kvPreWriteBuffer.put(
@@ -331,7 +327,6 @@ public final class KvTablet {
                                     //  of the input row are set to null.
                                     BinaryRow newRow = kvRecord.getRow();
                                     walBuilder.append(RowKind.INSERT, newRow);
-                                    appendedRecordCount += 1;
                                     kvPreWriteBuffer.put(
                                             key,
                                             ValueEncoder.encodeValue(schemaId, newRow),
@@ -340,20 +335,16 @@ public final class KvTablet {
                             }
                         }
 
-                        if (appendedRecordCount <= 0) {
-                            // This situation indicates that these batches of kvRecordBatch have not
-                            // generated any CDC logs, for example, when client attempts to delete
-                            // some non-existent keys or MergeEngine set to FIRST_ROW. In this case,
-                            // we cannot simply return, as doing so would cause a
-                            // OutOfOrderSequenceException problem. Therefore, here we override the
-                            // lastLogOffset to 0L as the baseLogOffset is 0L. As doing that, the
-                            // logOffsetDelta in logRecordBatch will be set to 0L instead of -1L.
-                            // So, we will put a batch into file with recordCount 0 and offset plus
-                            // 1L, it will update the batchSequence corresponding to the writerId
-                            // and also increment the CDC log offset by 1.
-                            walBuilder.overrideLastLogOffset(0L);
-                        }
-
+                        // There will be a situation that these batches of kvRecordBatch have not
+                        // generated any CDC logs, for example, when client attempts to delete
+                        // some non-existent keys or MergeEngine set to FIRST_ROW. In this case,
+                        // we cannot simply return, as doing so would cause a
+                        // OutOfOrderSequenceException problem. Therefore, here we will build an
+                        // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
+                        // that, the logOffsetDelta in logRecordBatch will be set to 0L. So, we will
+                        // put a batch into file with recordCount 0 and offset plus 1L, it will
+                        // update the batchSequence corresponding to the writerId and also increment
+                        // the CDC log offset by 1.
                         return logTablet.appendAsLeader(walBuilder.build());
                     } catch (Throwable t) {
                         // While encounter error here, the CDC logs may fail writing to disk,

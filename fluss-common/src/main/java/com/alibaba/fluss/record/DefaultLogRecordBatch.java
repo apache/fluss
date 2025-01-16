@@ -64,14 +64,14 @@ import java.util.NoSuchElementException;
  * byte. The CRC-32C (Castagnoli) polynomial is used for the computation. CommitTimestamp is also
  * located before the CRC, because it is determined in server side.
  *
- * <p>The filed 'lastOffsetDelta is used to calculate the lastOffset of the current batch as:
+ * <p>The field 'lastOffsetDelta is used to calculate the lastOffset of the current batch as:
  * [lastOffset = baseOffset + LastOffsetDelta] instead of [lastOffset = baseOffset + recordCount -
  * 1]. The reason for introducing this field is that there might be cases where the offset delta in
  * batch does not match the recordCount. For example, when generating CDC logs for a kv table and
  * sending a batch that only contains the deletion of non-existent kvs, no CDC logs would be
  * generated. However, we need to increment the batchSequence for the corresponding writerId to make
  * sure no {@link OutOfOrderSequenceException} will be thrown. In such a case, we would generate a
- * logRecordBatch with a LastOffsetDelta of 1 but a recordCount of 0.
+ * logRecordBatch with a LastOffsetDelta of 0 but a recordCount of 0.
  *
  * <p>The current attributes are given below:
  *
