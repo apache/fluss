@@ -137,7 +137,7 @@ This integration significantly improves the performance and usability of layered
 
 ### More efficient and higher throughput changelog generation
 In Apache Paimon, there are currently two commonly used methods for generating changelogs (excluding the Input Producer, which requires more stringent data source requirements and is not considered here):
-#### Lookup Change Producer
+#### Lookup Changelog Producer
    - **Advantages:** Offers high timeliness for generating changelogs. 
    - **Challenges:** Consumes significant computational resources, leading to higher operational costs. 
 #### Full Compaction Producer:
@@ -149,7 +149,7 @@ The Fluss and Paimon architecture strikes a balance between timeliness and perfo
 - **Changelog Timeliness:** Fluss generates changelogs in seconds, ensuring near real-time visibility of data changes. 
 - **Efficient Conversion:** The Fluss Tiering Service efficiently writes Fluss changelogs directly into the Paimon changelog format. This conversion process is highly optimized, avoiding resource-intensive operations such as lookups. Instead, it relies on direct read-and-write operations, significantly reducing overhead.
 
-#### Key Benefits of Fluss + Paimon Changelog Generation
+#### Key Benefits of Fluss and Paimon Changelog Generation
 1. **Improved Timeliness:** Near real-time changelog generation ensures data freshness and faster insights. 
 2. **Resource Efficiency:** By eliminating the need for computationally expensive operations, the architecture reduces resource consumption while maintaining high performance. 
 3. **Seamless Integration:** The direct compatibility between Fluss changelogs and Paimon changelog formats simplifies the process, enhancing system efficiency and reducing operational complexity.
