@@ -18,15 +18,16 @@
 package com.alibaba.fluss.compression;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.metadata.LogFormat;
 
 /**
- * Supported compression types for ARROW format.
+ * Supported compression types for ARROW {@link LogFormat}.
  *
  * @since 0.6
  */
 @PublicEvolving
 public enum ArrowCompressionType {
-    NO,
+    NONE,
     LZ4_FRAME,
-    ZSTD;
+    ZSTD
 }

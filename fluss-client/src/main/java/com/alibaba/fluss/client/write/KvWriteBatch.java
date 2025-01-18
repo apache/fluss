@@ -116,7 +116,7 @@ public class KvWriteBatch extends WriteBatch {
     }
 
     @Override
-    public int sizeInBytes() {
+    public int estimatedSizeInBytes() {
         return recordsBuilder.getSizeInBytes();
     }
 

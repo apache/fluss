@@ -17,7 +17,7 @@
 package com.alibaba.fluss.utils;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.compression.FlussArrowCompressionFactory;
+import com.alibaba.fluss.compression.ArrowCompressionFactory;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.row.InternalRow;
@@ -127,7 +127,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
 import static com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer.deserializeRecordBatch;
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
@@ -159,7 +158,7 @@ public class ArrowUtils {
                         new ReadChannel(new ByteBufferReadableChannel(arrowBatchBuffer));
                 ArrowRecordBatch batch = deserializeRecordBatch(channel, allocator)) {
             VectorLoader vectorLoader =
-                    new VectorLoader(schemaRoot, FlussArrowCompressionFactory.INSTANCE);
+                    new VectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
             vectorLoader.load(batch);
             List<ColumnVector> columnVectors = new ArrayList<>();
             List<FieldVector> fieldVectors = schemaRoot.getFieldVectors();
@@ -221,7 +220,8 @@ public class ArrowUtils {
     }
 
     /** Estimates the size of {@link ArrowRecordBatch} metadata for the given schema. */
-    public static int estimateArrowMetadataLength(Schema arrowSchema) {
+    public static int estimateArrowMetadataLength(
+            Schema arrowSchema, ArrowBodyCompression bodyCompression) {
         List<Field> fields = flattenFields(arrowSchema.getFields());
         List<ArrowFieldNode> nodes = createFieldNodes(fields);
         List<ArrowBuffer> buffersLayout = createBuffersLayout(fields);
@@ -230,7 +230,7 @@ public class ArrowUtils {
         WriteChannel writeChannel = new WriteChannel(Channels.newChannel(out));
         try {
             return ArrowUtils.serializeArrowRecordBatchMetadata(
-                    writeChannel, 1L, nodes, buffersLayout, DEFAULT_BODY_COMPRESSION, 8L);
+                    writeChannel, 1L, nodes, buffersLayout, bodyCompression, 8L);
         } catch (IOException e) {
             throw new FlussRuntimeException("Failed to estimate Arrow metadata size", e);
         }

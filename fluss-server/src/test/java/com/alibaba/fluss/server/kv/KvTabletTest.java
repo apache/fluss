@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.kv;
 
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidTargetColumnException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
@@ -146,7 +147,8 @@ class KvTabletTest {
                 new RootAllocator(Long.MAX_VALUE),
                 new TestingMemorySegmentPool(10 * 1024),
                 KvFormat.COMPACTED,
-                mergeEngine);
+                mergeEngine,
+                ArrowCompressionInfo.NO_COMPRESSION);
     }
 
     @Test

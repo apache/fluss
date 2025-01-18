@@ -28,7 +28,6 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -54,19 +53,17 @@ import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
@@ -937,9 +934,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @ParameterizedTest
-    @MethodSource("arrowCompressionTypes")
-    void testArrowCompressionAndProject(ArrowCompressionType arrowCompressionType)
-            throws Exception {
+    @CsvSource({"none,3", "lz4_frame,3", "zstd,3", "zstd,9"})
+    void testArrowCompressionAndProject(String compression, String level) throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -947,18 +943,21 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("c", DataTypes.STRING())
                         .column("d", DataTypes.BIGINT())
                         .build();
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
+                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
+                        .build();
         TablePath tablePath = TablePath.of("test_db_1", "test_arrow_compression_and_project");
         createTable(tablePath, tableDescriptor, false);
 
-        Configuration conf = new Configuration(clientConf);
-        conf.set(ConfigOptions.CLIENT_WRITER_ARROW_COMPRESSION_TYPE, arrowCompressionType);
-        try (Connection conn = ConnectionFactory.createConnection(conf);
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
                 Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.getAppendWriter();
             int expectedSize = 30;
             for (int i = 0; i < expectedSize; i++) {
-                String value = i % 2 == 0 ? "hello, friend                   " + i : null;
+                String value = i % 2 == 0 ? "hello, friend " + i : null;
                 InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
                 appendWriter.append(row);
                 if (i % 10 == 0) {
@@ -980,7 +979,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
                     if (count % 2 == 0) {
                         assertThat(scanRecord.getRow().getString(2).toString())
-                                .isEqualTo("hello, friend                   " + count);
+                                .isEqualTo("hello, friend " + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
@@ -1003,7 +1002,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                     if (count % 2 == 0) {
                         assertThat(scanRecord.getRow().getString(1).toString())
-                                .isEqualTo("hello, friend                   " + count);
+                                .isEqualTo("hello, friend " + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
@@ -1014,9 +1013,5 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(count).isEqualTo(expectedSize);
             logScanner.close();
         }
-    }
-
-    private static Stream<ArrowCompressionType> arrowCompressionTypes() {
-        return Arrays.stream(ArrowCompressionType.values());
     }
 }

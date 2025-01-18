@@ -22,7 +22,6 @@ import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
-import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
@@ -108,8 +107,6 @@ public final class RecordAccumulator {
 
     private final IdempotenceManager idempotenceManager;
 
-    private final ArrowCompressionType arrowCompressionType;
-
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
     // TODO add nextBatchExpiryTimeMs
@@ -128,8 +125,6 @@ public final class RecordAccumulator {
                         (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT).toMillis());
         this.batchSize =
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
-
-        this.arrowCompressionType = conf.get(ConfigOptions.CLIENT_WRITER_ARROW_COMPRESSION_TYPE);
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
         this.pagesPerBatch = Math.max(1, batchSize / writerBufferPool.pageSize());
@@ -509,7 +504,7 @@ public final class RecordAccumulator {
                             schemaId,
                             outputView.getPreAllocatedSize(),
                             tableInfo.getTableDescriptor().getSchema().toRowType(),
-                            arrowCompressionType);
+                            tableInfo.getTableDescriptor().getArrowCompressionInfo());
             batch =
                     new ArrowLogWriteBatch(
                             tb, physicalTablePath, schemaId, arrowWriter, outputView);
@@ -578,7 +573,7 @@ public final class RecordAccumulator {
 
                 // TODO retry back off check.
 
-                if (size + first.sizeInBytes() > maxSize && !ready.isEmpty()) {
+                if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size
                     // due to compression; in this case we will still eventually send this batch in
                     // a single request.
@@ -626,7 +621,7 @@ public final class RecordAccumulator {
             // the rest of the work by processing outside the lock close() is particularly expensive
             Preconditions.checkNotNull(batch, "batch should not be null");
             batch.close();
-            size += batch.sizeInBytes();
+            size += batch.estimatedSizeInBytes();
             ready.add(batch);
             // mark the batch as drained.
             batch.drained(System.currentTimeMillis());

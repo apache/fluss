@@ -64,6 +64,7 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.UncheckedIOException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
@@ -132,7 +133,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return FutureUtils.failedFuture(e);
         }
 
-        TableDescriptor tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
+        TableDescriptor tableDescriptor = null;
+        try {
+            tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
+        } catch (Exception e) {
+            if (e instanceof UncheckedIOException) {
+                throw new InvalidTableException(
+                        "Failed to parse table descriptor: " + e.getMessage());
+            } else {
+                // wrap the validate message to InvalidTableException
+                throw new InvalidTableException(e.getMessage());
+            }
+        }
 
         int bucketCount = defaultBucketNumber;
         // not set distribution

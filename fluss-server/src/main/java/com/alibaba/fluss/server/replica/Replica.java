@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.replica;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
@@ -168,6 +169,7 @@ public final class Replica {
     private final List<String> partitionKeys;
     private final Schema schema;
     private final LogFormat logFormat;
+    private final ArrowCompressionInfo arrowCompressionInfo;
     private final KvFormat kvFormat;
     private final @Nullable MergeEngine mergeEngine;
     private final long logTTLMs;
@@ -233,6 +235,7 @@ public final class Replica {
         this.bucketMetricGroup = bucketMetricGroup;
         this.schema = tableDescriptor.getSchema();
         this.logFormat = tableDescriptor.getLogFormat();
+        this.arrowCompressionInfo = tableDescriptor.getArrowCompressionInfo();
         this.kvFormat = tableDescriptor.getKvFormat();
         this.logTTLMs = tableDescriptor.getLogTTLMs();
         this.dataLakeEnabled = tableDescriptor.isDataLakeEnabled();
@@ -269,6 +272,10 @@ public final class Replica {
 
     public RowType getRowType() {
         return schema.toRowType();
+    }
+
+    public ArrowCompressionInfo getArrowCompressionInfo() {
+        return arrowCompressionInfo;
     }
 
     public int getLeaderEpoch() {
@@ -611,7 +618,12 @@ public final class Replica {
                 // if it exists before init kv tablet
                 kvTablet =
                         kvManager.getOrCreateKv(
-                                physicalPath, tableBucket, logTablet, kvFormat, mergeEngine);
+                                physicalPath,
+                                tableBucket,
+                                logTablet,
+                                kvFormat,
+                                mergeEngine,
+                                arrowCompressionInfo);
             }
             logTablet.updateMinRetainOffset(restoreStartOffset);
             recoverKvTablet(restoreStartOffset);

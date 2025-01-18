@@ -32,9 +32,9 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoComp
  * CommonsCompressionFactory.
  */
 @Internal
-public class FlussArrowCompressionFactory implements CompressionCodec.Factory {
+public class ArrowCompressionFactory implements CompressionCodec.Factory {
 
-    public static final FlussArrowCompressionFactory INSTANCE = new FlussArrowCompressionFactory();
+    public static final ArrowCompressionFactory INSTANCE = new ArrowCompressionFactory();
 
     @Override
     public CompressionCodec createCodec(CompressionUtil.CodecType codecType) {
@@ -67,7 +67,7 @@ public class FlussArrowCompressionFactory implements CompressionCodec.Factory {
     public static CompressionUtil.CodecType toArrowCompressionCodecType(
             ArrowCompressionType compressionType) {
         switch (compressionType) {
-            case NO:
+            case NONE:
                 return CompressionUtil.CodecType.NO_COMPRESSION;
             case LZ4_FRAME:
                 return CompressionUtil.CodecType.LZ4_FRAME;

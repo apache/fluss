@@ -21,6 +21,7 @@ import com.alibaba.fluss.record.TestData;
 
 import org.junit.jupiter.api.Test;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
 /** Tests for {@link com.alibaba.fluss.server.log.FetchParams}. */
@@ -29,22 +30,24 @@ class FetchParamsTest {
     @Test
     void testSetCurrentFetch() {
         FetchParams fetchParams = new FetchParams(1, 100);
-        fetchParams.setCurrentFetch(1L, 20L, 1024, TestData.DATA1_ROW_TYPE, null);
+        fetchParams.setCurrentFetch(1L, 20L, 1024, TestData.DATA1_ROW_TYPE, NO_COMPRESSION, null);
         assertThat(fetchParams.fetchOffset()).isEqualTo(20L);
         assertThat(fetchParams.maxFetchBytes()).isEqualTo(1024);
         assertThat(fetchParams.projection()).isNull();
 
-        fetchParams.setCurrentFetch(2L, 30L, 512, TestData.DATA2_ROW_TYPE, new int[] {0, 2});
+        fetchParams.setCurrentFetch(
+                2L, 30L, 512, TestData.DATA2_ROW_TYPE, NO_COMPRESSION, new int[] {0, 2});
         assertThat(fetchParams.fetchOffset()).isEqualTo(30L);
         assertThat(fetchParams.maxFetchBytes()).isEqualTo(512);
         assertThat(fetchParams.projection()).isNotNull();
 
         FileLogProjection prevProjection = fetchParams.projection();
 
-        fetchParams.setCurrentFetch(1L, 40L, 256, TestData.DATA1_ROW_TYPE, null);
+        fetchParams.setCurrentFetch(1L, 40L, 256, TestData.DATA1_ROW_TYPE, NO_COMPRESSION, null);
         assertThat(fetchParams.projection()).isNull();
 
-        fetchParams.setCurrentFetch(2L, 30L, 512, TestData.DATA2_ROW_TYPE, new int[] {0, 2});
+        fetchParams.setCurrentFetch(
+                2L, 30L, 512, TestData.DATA2_ROW_TYPE, NO_COMPRESSION, new int[] {0, 2});
         // the FileLogProjection should be cached
         assertThat(fetchParams.projection()).isNotNull().isSameAs(prevProjection);
     }

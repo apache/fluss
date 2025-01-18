@@ -125,11 +125,18 @@ class FlinkTableSinkITCase {
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
-    @Test
-    void testAppendLog() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAppendLog(boolean compressed) throws Exception {
+        String compressedProperties =
+                compressed
+                        ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'"
+                        : "";
         tEnv.executeSql(
                 "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3')");
+                        + "('bucket.num' = '3'"
+                        + compressedProperties
+                        + ")");
         tEnv.executeSql(
                         "INSERT INTO sink_test(a, b, c) "
                                 + "VALUES (1, 3501, 'Tim'), "

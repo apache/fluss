@@ -165,6 +165,20 @@ class FlinkCatalogITCase {
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("Currently, partitioned table must enable auto partition");
+
+        // test invalid property
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table test_arrow_compression"
+                                                + " (a int, b int) with ("
+                                                + " 'table.log.format' = 'arrow',"
+                                                + " 'table.log.arrow.compression.type' = 'zstd',"
+                                                + " 'table.log.arrow.compression.zstd.level' = '0')"))
+                .cause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Invalid ZSTD compression level: 0. Expected a value between 1 and 22.");
     }
 
     @Test

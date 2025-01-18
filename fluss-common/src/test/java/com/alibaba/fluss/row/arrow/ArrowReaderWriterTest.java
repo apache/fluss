@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.row.arrow;
 
-import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
@@ -136,7 +136,11 @@ class ArrowReaderWriterTest {
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
                 ArrowWriter writer =
                         provider.getOrCreateWriter(
-                                1L, 1, Integer.MAX_VALUE, rowType, ArrowCompressionType.NO)) {
+                                1L,
+                                1,
+                                Integer.MAX_VALUE,
+                                rowType,
+                                ArrowCompressionInfo.NO_COMPRESSION)) {
             for (InternalRow row : TEST_DATA) {
                 writer.writeRow(row);
             }
@@ -169,7 +173,7 @@ class ArrowReaderWriterTest {
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
                 ArrowWriter writer =
                         provider.getOrCreateWriter(
-                                1L, 1, 1024, DATA1_ROW_TYPE, ArrowCompressionType.NO)) {
+                                1L, 1, 1024, DATA1_ROW_TYPE, ArrowCompressionInfo.NO_COMPRESSION)) {
             while (!writer.isFull()) {
                 writer.writeRow(row(DATA1_ROW_TYPE, DATA1.get(0)));
             }

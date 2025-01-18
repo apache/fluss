@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.testutils;
 
-import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
@@ -456,7 +456,11 @@ public class DataTestUtils {
                 ArrowWriterPool provider = new ArrowWriterPool(allocator)) {
             ArrowWriter writer =
                     provider.getOrCreateWriter(
-                            1L, schemaId, Integer.MAX_VALUE, rowType, ArrowCompressionType.NO);
+                            1L,
+                            schemaId,
+                            Integer.MAX_VALUE,
+                            rowType,
+                            ArrowCompressionInfo.NO_COMPRESSION);
             MemoryLogRecordsArrowBuilder builder =
                     MemoryLogRecordsArrowBuilder.builder(
                             baseLogOffset,

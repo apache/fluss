@@ -18,6 +18,7 @@ package com.alibaba.fluss.metadata;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.annotation.PublicStable;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -143,6 +144,20 @@ public final class TableDescriptor implements Serializable {
         if (!hasPrimaryKey() && getMergeEngine() != null) {
             throw new IllegalArgumentException(
                     "Merge-engine is only supported in primary key table.");
+        }
+
+        // TODO: generalize the validation for ConfigOption
+        if (properties.containsKey(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key())) {
+            int compressionLevel =
+                    Integer.parseInt(
+                            properties.get(
+                                    ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key()));
+            if (compressionLevel < 1 || compressionLevel > 22) {
+                throw new IllegalArgumentException(
+                        "Invalid ZSTD compression level: "
+                                + compressionLevel
+                                + ". Expected a value between 1 and 22.");
+            }
         }
     }
 
@@ -287,6 +302,11 @@ public final class TableDescriptor implements Serializable {
 
     public @Nullable MergeEngine getMergeEngine() {
         return configuration().get(ConfigOptions.TABLE_MERGE_ENGINE);
+    }
+
+    /** Gets the Arrow compression type and compression level of the table. */
+    public ArrowCompressionInfo getArrowCompressionInfo() {
+        return ArrowCompressionInfo.fromConf(configuration());
     }
 
     public TableDescriptor copy(Map<String, String> newProperties) {

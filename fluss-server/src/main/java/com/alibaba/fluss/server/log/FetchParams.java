@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.log;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.record.FileLogProjection;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.types.RowType;
@@ -96,6 +97,7 @@ public final class FetchParams {
             long fetchOffset,
             int maxFetchBytes,
             RowType schema,
+            ArrowCompressionInfo compressionInfo,
             @Nullable int[] projectedFields) {
         this.fetchOffset = fetchOffset;
         this.maxFetchBytes = maxFetchBytes;
@@ -104,7 +106,8 @@ public final class FetchParams {
             if (fileLogProjection == null) {
                 fileLogProjection = new FileLogProjection();
             }
-            fileLogProjection.setCurrentProjection(tableId, schema, projectedFields);
+            fileLogProjection.setCurrentProjection(
+                    tableId, schema, compressionInfo, projectedFields);
         } else {
             projectionEnabled = false;
         }

@@ -18,7 +18,7 @@ package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
@@ -82,8 +82,8 @@ public class ArrowWriterPool implements ArrowWriterProvider {
             int schemaId,
             int bufferSizeInBytes,
             RowType schema,
-            ArrowCompressionType arrowCompressionType) {
-        final String writerKey = tableId + "-" + schemaId + "-" + arrowCompressionType;
+            ArrowCompressionInfo compressionInfo) {
+        final String writerKey = tableId + "-" + schemaId + "-" + compressionInfo.toString();
         return inLock(
                 lock,
                 () -> {
@@ -102,7 +102,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                                         schema,
                                         allocator,
                                         this,
-                                        arrowCompressionType),
+                                        compressionInfo),
                                 bufferSizeInBytes);
                     }
                 });

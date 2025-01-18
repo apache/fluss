@@ -42,7 +42,6 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Builder for {@link MemoryLogRecords} of log records in {@link LogFormat#ARROW} format. */
 public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
-    private static final float COMPRESSION_RATE_ESTIMATION_FACTOR = 1.05f;
     private static final int BUILDER_DEFAULT_OFFSET = 0;
 
     private final long baseLogOffset;
@@ -57,8 +56,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private MultiBytesView bytesView = null;
     private long writerId;
     private int batchSequence;
-    private int sizeInBytes;
-    private int sizeInBytesAfterCompression;
+    private int estimatedSizeInBytes;
     private int recordCount;
     private boolean isClosed;
     private boolean reCalculateSizeInBytes = false;
@@ -90,8 +88,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                         + ARROW_ROWKIND_OFFSET
                         + " bytes.");
         this.rowKindWriter = new RowKindVectorWriter(firstSegment, ARROW_ROWKIND_OFFSET);
-        this.sizeInBytes = ARROW_ROWKIND_OFFSET;
-        this.sizeInBytesAfterCompression = sizeInBytes;
+        this.estimatedSizeInBytes = ARROW_ROWKIND_OFFSET;
         this.recordCount = 0;
     }
 
@@ -118,17 +115,16 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         }
 
         // serialize the arrow batch to dynamically allocated memory segments
-        int serializeSizeInBytes =
-                arrowWriter.serializeToOutputView(
-                        pagedOutputView, ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes());
-        sizeInBytesAfterCompression += serializeSizeInBytes;
-        arrowWriter.recycle(writerEpoch);
-
-        writeBatchHeader();
+        arrowWriter.serializeToOutputView(
+                pagedOutputView, ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes());
+        recordCount = arrowWriter.getRecordsCount();
         bytesView =
                 MultiBytesView.builder()
                         .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
                         .build();
+        arrowWriter.recycle(writerEpoch);
+
+        writeBatchHeader();
         return bytesView;
     }
 
@@ -182,8 +178,6 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             return;
         }
 
-        // update sizeInBytes and recordCount if needed
-        getSizeInBytes();
         isClosed = true;
     }
 
@@ -191,19 +185,21 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         arrowWriter.recycle(writerEpoch);
     }
 
-    public int getSizeInBytes() {
+    public int estimatedSizeInBytes() {
+        if (bytesView != null) {
+            // accurate total size in bytes
+            return bytesView.getBytesLength();
+        }
+
         if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
-            sizeInBytes =
+            // TODO: consider the compression ratio
+            estimatedSizeInBytes =
                     ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
-            // Before serialize to channel, the sizeInBytesAfterCompression only contains batch
-            // header size and rowKind vector size.
-            sizeInBytesAfterCompression = ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes();
-            recordCount = arrowWriter.getRecordsCount();
         }
 
         reCalculateSizeInBytes = false;
-        return sizeInBytes;
+        return estimatedSizeInBytes;
     }
 
     // ----------------------- internal methods -------------------------------
@@ -214,7 +210,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         outputView.setPosition(0);
         // update header.
         outputView.writeLong(baseLogOffset);
-        outputView.writeInt(sizeInBytesAfterCompression - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
+        outputView.writeInt(bytesView.getBytesLength() - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
         outputView.writeByte(magic);
 
         // write empty timestamp which will be overridden on server side

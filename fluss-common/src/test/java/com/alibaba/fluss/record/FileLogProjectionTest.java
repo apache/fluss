@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
@@ -50,7 +51,8 @@ class FileLogProjectionTest {
     @Test
     void testSetCurrentProjection() {
         FileLogProjection projection = new FileLogProjection();
-        projection.setCurrentProjection(1L, TestData.DATA2_ROW_TYPE, new int[] {0, 2});
+        projection.setCurrentProjection(
+                1L, TestData.DATA2_ROW_TYPE, NO_COMPRESSION, new int[] {0, 2});
         FileLogProjection.ProjectionInfo info1 = projection.currentProjection;
         assertThat(info1).isNotNull();
         assertThat(info1.nodesProjection.stream().toArray()).isEqualTo(new int[] {0, 2});
@@ -59,7 +61,7 @@ class FileLogProjectionTest {
         assertThat(projection.projectionsCache).hasSize(1);
         assertThat(projection.projectionsCache.get(1L)).isSameAs(info1);
 
-        projection.setCurrentProjection(2L, TestData.DATA2_ROW_TYPE, new int[] {1});
+        projection.setCurrentProjection(2L, TestData.DATA2_ROW_TYPE, NO_COMPRESSION, new int[] {1});
         FileLogProjection.ProjectionInfo info2 = projection.currentProjection;
         assertThat(info2).isNotNull();
         assertThat(info2.nodesProjection.stream().toArray()).isEqualTo(new int[] {1});
@@ -68,13 +70,14 @@ class FileLogProjectionTest {
         assertThat(projection.projectionsCache).hasSize(2);
         assertThat(projection.projectionsCache.get(2L)).isSameAs(info2);
 
-        projection.setCurrentProjection(1L, TestData.DATA2_ROW_TYPE, new int[] {0, 2});
+        projection.setCurrentProjection(
+                1L, TestData.DATA2_ROW_TYPE, NO_COMPRESSION, new int[] {0, 2});
         assertThat(projection.currentProjection).isNotNull().isSameAs(info1);
 
         assertThatThrownBy(
                         () ->
                                 projection.setCurrentProjection(
-                                        1L, TestData.DATA1_ROW_TYPE, new int[] {1}))
+                                        1L, TestData.DATA1_ROW_TYPE, NO_COMPRESSION, new int[] {1}))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage("The schema and projection should be identical for the same table id.");
     }
@@ -86,21 +89,27 @@ class FileLogProjectionTest {
         assertThatThrownBy(
                         () ->
                                 projection.setCurrentProjection(
-                                        1L, TestData.DATA2_ROW_TYPE, new int[] {3}))
+                                        1L, TestData.DATA2_ROW_TYPE, NO_COMPRESSION, new int[] {3}))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage("Projected fields [3] is out of bound for schema with 3 fields.");
 
         assertThatThrownBy(
                         () ->
                                 projection.setCurrentProjection(
-                                        1L, TestData.DATA2_ROW_TYPE, new int[] {1, 0}))
+                                        1L,
+                                        TestData.DATA2_ROW_TYPE,
+                                        NO_COMPRESSION,
+                                        new int[] {1, 0}))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage("The projection indexes should be in field order, but is [1, 0]");
 
         assertThatThrownBy(
                         () ->
                                 projection.setCurrentProjection(
-                                        1L, TestData.DATA2_ROW_TYPE, new int[] {0, 0, 0}))
+                                        1L,
+                                        TestData.DATA2_ROW_TYPE,
+                                        NO_COMPRESSION,
+                                        new int[] {0, 0, 0}))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage(
                         "The projection indexes should not contain duplicated fields, but is [0, 0, 0]");
@@ -225,7 +234,7 @@ class FileLogProjectionTest {
             int[] projectedFields,
             int fetchMaxBytes)
             throws Exception {
-        projection.setCurrentProjection(1L, rowType, projectedFields);
+        projection.setCurrentProjection(1L, rowType, NO_COMPRESSION, projectedFields);
         RowType projectedType = rowType.project(projectedFields);
         LogRecords project =
                 projection.project(

@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.kv;
 
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.KvFormat;
@@ -260,7 +261,12 @@ final class KvManagerTest {
         LogTablet logTablet =
                 logManager.getOrCreateLog(physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
         return kvManager.getOrCreateKv(
-                physicalTablePath, tableBucket, logTablet, KvFormat.COMPACTED, null);
+                physicalTablePath,
+                tableBucket,
+                logTablet,
+                KvFormat.COMPACTED,
+                null,
+                ArrowCompressionInfo.NO_COMPRESSION);
     }
 
     private byte[] valueOf(KvRecord kvRecord) {

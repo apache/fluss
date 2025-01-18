@@ -88,11 +88,11 @@ public abstract class WriteBatch {
     public abstract boolean isClosed();
 
     /**
-     * get size in bytes.
-     *
-     * @return the size in bytes
+     * Get an estimate of the number of bytes written to the underlying buffer. The returned value
+     * is exactly correct if the record set is not compressed or if the batch has been {@link
+     * #build()}.
      */
-    public abstract int sizeInBytes();
+    public abstract int estimatedSizeInBytes();
 
     /**
      * get pooled memory segments to de-allocate. After produceLog/PutKv acks, the {@link

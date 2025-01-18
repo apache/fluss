@@ -193,7 +193,7 @@ class ArrowCompressionCodecTest {
         CompressionCodec.Factory factory =
                 codec == CompressionUtil.CodecType.NO_COMPRESSION
                         ? NoCompressionCodec.Factory.INSTANCE
-                        : FlussArrowCompressionFactory.INSTANCE;
+                        : ArrowCompressionFactory.INSTANCE;
         try (final VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator)) {
             final IntVector ints = (IntVector) root.getVector(0);
             final VarCharVector strings = (VarCharVector) root.getVector(1);

@@ -100,8 +100,8 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public int sizeInBytes() {
-        return recordsBuilder.getSizeInBytes();
+    public int estimatedSizeInBytes() {
+        return recordsBuilder.estimatedSizeInBytes();
     }
 
     @Override

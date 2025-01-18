@@ -124,7 +124,7 @@ public final class IndexedLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public int sizeInBytes() {
+    public int estimatedSizeInBytes() {
         return recordsBuilder.getSizeInBytes();
     }
 }

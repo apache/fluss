@@ -983,6 +983,7 @@ public class ReplicaManager {
                         fetchOffset,
                         adjustedMaxBytes,
                         replica.getRowType(),
+                        replica.getArrowCompressionInfo(),
                         fetchData.getProjectFields());
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 

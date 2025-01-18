@@ -17,8 +17,7 @@
 package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.compression.ArrowCompressionType;
-import com.alibaba.fluss.compression.FlussArrowCompressionFactory;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.writers.ArrowFieldWriter;
@@ -29,6 +28,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
@@ -102,18 +102,16 @@ public class ArrowWriter implements AutoCloseable {
             RowType schema,
             BufferAllocator allocator,
             ArrowWriterProvider provider,
-            ArrowCompressionType arrowCompressionType) {
+            ArrowCompressionInfo compressionInfo) {
         this.writerKey = writerKey;
         this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
         this.provider = Preconditions.checkNotNull(provider);
+        this.compressionCodec = compressionInfo.createCompressionCodec();
 
-        this.compressionCodec =
-                FlussArrowCompressionFactory.INSTANCE.createCodec(
-                        FlussArrowCompressionFactory.toArrowCompressionCodecType(
-                                arrowCompressionType));
-
-        this.metadataLength = ArrowUtils.estimateArrowMetadataLength(root.getSchema());
+        this.metadataLength =
+                ArrowUtils.estimateArrowMetadataLength(
+                        root.getSchema(), CompressionUtil.createBodyCompression(compressionCodec));
         this.writeLimitInBytes = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
         this.estimatedMaxRecordsCount = -1;
         this.recordsCount = 0;

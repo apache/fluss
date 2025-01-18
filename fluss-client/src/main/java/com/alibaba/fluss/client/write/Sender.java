@@ -214,11 +214,13 @@ public class Sender implements Runnable {
 
         if (!batches.isEmpty()) {
             addToInflightBatches(batches);
-            updateWriterMetrics(batches);
 
             // TODO add logic for batch expire.
 
             sendWriteRequests(batches);
+
+            // move metrics update to the end to make sure the batches has been built.
+            updateWriterMetrics(batches);
         }
     }
 
@@ -527,10 +529,14 @@ public class Sender implements Runnable {
                                 int recordCount = batch.getRecordCount();
                                 writerMetricGroup.recordsSendTotal().inc(recordCount);
                                 writerMetricGroup.setBatchQueueTimeMs(batch.getQueueTimeMs());
-                                writerMetricGroup.bytesSendTotal().inc(batch.sizeInBytes());
+                                writerMetricGroup
+                                        .bytesSendTotal()
+                                        .inc(batch.estimatedSizeInBytes());
 
                                 writerMetricGroup.recordPerBatch().update(recordCount);
-                                writerMetricGroup.bytesPerBatch().update(batch.sizeInBytes());
+                                writerMetricGroup
+                                        .bytesPerBatch()
+                                        .update(batch.estimatedSizeInBytes());
                             }
                         });
     }

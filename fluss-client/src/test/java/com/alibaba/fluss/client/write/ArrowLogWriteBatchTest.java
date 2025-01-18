@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.client.write;
 
-import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
@@ -128,7 +128,7 @@ public class ArrowLogWriteBatchTest {
                                 DATA1_TABLE_INFO.getSchemaId(),
                                 maxSizeInBytes,
                                 DATA1_ROW_TYPE,
-                                ArrowCompressionType.NO),
+                                ArrowCompressionInfo.NO_COMPRESSION),
                         new PreAllocatedPagedOutputView(memorySegmentList));
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
 
@@ -180,7 +180,7 @@ public class ArrowLogWriteBatchTest {
                         DATA1_TABLE_INFO.getSchemaId(),
                         maxSizeInBytes,
                         DATA1_ROW_TYPE,
-                        ArrowCompressionType.NO),
+                        ArrowCompressionInfo.NO_COMPRESSION),
                 new UnmanagedPagedOutputView(128));
     }
 

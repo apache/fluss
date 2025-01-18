@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.kv;
 
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.KvStorageException;
@@ -150,7 +151,8 @@ public final class KvManager extends TabletManagerBase {
             TableBucket tableBucket,
             LogTablet logTablet,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine)
+            @Nullable MergeEngine mergeEngine,
+            ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
         return inLock(
                 tabletCreationOrDeletionLock,
@@ -169,7 +171,8 @@ public final class KvManager extends TabletManagerBase {
                                     arrowBufferAllocator,
                                     memorySegmentPool,
                                     kvFormat,
-                                    mergeEngine);
+                                    mergeEngine,
+                                    arrowCompressionInfo);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -271,7 +274,8 @@ public final class KvManager extends TabletManagerBase {
                         arrowBufferAllocator,
                         memorySegmentPool,
                         tableDescriptor.getKvFormat(),
-                        tableDescriptor.getMergeEngine());
+                        tableDescriptor.getMergeEngine(),
+                        tableDescriptor.getArrowCompressionInfo());
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

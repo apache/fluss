@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.kv;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.KvStorageException;
@@ -104,7 +104,7 @@ public final class KvTablet {
     private final LogFormat logFormat;
     private final KvFormat kvFormat;
     private final @Nullable MergeEngine mergeEngine;
-    private final ArrowCompressionType arrowCompressionType;
+    private final ArrowCompressionInfo arrowCompressionInfo;
 
     /**
      * The kv data in pre-write buffer whose log offset is less than the flushedLogOffset has been
@@ -127,7 +127,7 @@ public final class KvTablet {
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
             @Nullable MergeEngine mergeEngine,
-            ArrowCompressionType arrowCompressionType) {
+            ArrowCompressionInfo arrowCompressionInfo) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -142,7 +142,7 @@ public final class KvTablet {
         this.partialUpdaterCache = new PartialUpdaterCache();
         this.kvFormat = kvFormat;
         this.mergeEngine = mergeEngine;
-        this.arrowCompressionType = arrowCompressionType;
+        this.arrowCompressionInfo = arrowCompressionInfo;
     }
 
     public static KvTablet create(
@@ -152,7 +152,8 @@ public final class KvTablet {
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine)
+            @Nullable MergeEngine mergeEngine,
+            ArrowCompressionInfo arrowCompressionInfo)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
                 FlussPaths.parseTabletDir(kvTabletDir);
@@ -165,7 +166,8 @@ public final class KvTablet {
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
-                mergeEngine);
+                mergeEngine,
+                arrowCompressionInfo);
     }
 
     public static KvTablet create(
@@ -177,7 +179,8 @@ public final class KvTablet {
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine)
+            @Nullable MergeEngine mergeEngine,
+            ArrowCompressionInfo arrowCompressionInfo)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(conf, kvTabletDir);
         return new KvTablet(
@@ -192,7 +195,7 @@ public final class KvTablet {
                 memorySegmentPool,
                 kvFormat,
                 mergeEngine,
-                conf.get(ConfigOptions.KV_CDC_ARROW_COMPRESSION_TYPE));
+                arrowCompressionInfo);
     }
 
     private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
@@ -389,7 +392,7 @@ public final class KvTablet {
                                 // changelogs should be in a single batch
                                 Integer.MAX_VALUE,
                                 rowType,
-                                arrowCompressionType),
+                                arrowCompressionInfo),
                         memorySegmentPool);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
