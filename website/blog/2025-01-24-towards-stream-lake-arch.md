@@ -1,7 +1,7 @@
 ---
 slug: unified-streaming-lakehouse
 title: "Towards A Unified Streaming & Lakehouse Architecture"
-authors: []
+authors: [yuxia]
 ---
 
 The unification of Lakehouse and streaming storage represents a major trend in the future development of modern data lakes and streaming storage systems. Designed specifically for real-time analytics, Fluss has embraced a unified Streaming and Lakehouse architecture from its inception, enabling seamless integration into existing Lakehouse architectures. 
@@ -84,7 +84,7 @@ By combining the strengths of Lakehouse storage for efficient historical data re
 
 Historical data is stored in the Lakehouse, and real-time data is stored in Fluss. In batch reading scenarios, computing engines (such as Flink) can perform union reading of data in Fluss and lake storage to achieve analysis of data freshness in seconds.
 
-### Apache Flink & Fluss
+### Apache Flink and Fluss
 ![Unification Solutions](assets/unified_lake_stream_arch/img5.png)
 Fluss exposes a unified API to Flink users, allowing them to choose whether to use union reads or read-only reads on the Lakehouse, using the following SQL:
 ```sql
