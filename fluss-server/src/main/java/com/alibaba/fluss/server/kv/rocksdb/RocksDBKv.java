@@ -20,6 +20,7 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.rocksdb.RocksDBOperationUtils;
 import com.alibaba.fluss.server.utils.ResourceGuard;
 import com.alibaba.fluss.utils.IOUtils;
+import com.alibaba.fluss.utils.crc.Java;
 
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
@@ -32,7 +33,9 @@ import org.rocksdb.WriteOptions;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /** A wrapper for the operation of {@link org.rocksdb.RocksDB}. */
@@ -49,6 +52,8 @@ public class RocksDBKv implements AutoCloseable {
 
     /** The write options to use in the states. We disable write ahead logging. */
     private final WriteOptions writeOptions;
+
+    private final PrefixComparer prefixComparer;
 
     /**
      * We are not using the default column family for KV ops, but we still need to remember this
@@ -74,6 +79,7 @@ public class RocksDBKv implements AutoCloseable {
         this.rocksDBResourceGuard = rocksDBResourceGuard;
         this.writeOptions = optionsContainer.getWriteOptions();
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
+        this.prefixComparer = new PrefixComparer();
     }
 
     public ResourceGuard getResourceGuard() {
@@ -106,7 +112,7 @@ public class RocksDBKv implements AutoCloseable {
         RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
         try {
             iterator.seek(prefixKey);
-            while (iterator.isValid() && isPrefixEquals(prefixKey, iterator.key())) {
+            while (iterator.isValid() && prefixComparer.isPrefixEquals(prefixKey, iterator.key())) {
                 pkList.add(iterator.value());
                 iterator.next();
             }
@@ -205,27 +211,81 @@ public class RocksDBKv implements AutoCloseable {
         return db;
     }
 
-    /**
-     * Check if the given first byte array ({@code prefix}) is a prefix of the second byte array
-     * ({@code bytes}).
-     *
-     * @param prefix The prefix byte array
-     * @param bytes The byte array to check if it has the prefix
-     * @return true if the given bytes has the given prefix, false otherwise
-     */
-    public static boolean isPrefixEquals(byte[] prefix, byte[] bytes) {
-        // TODO, This is very inefficient to compare arrays byte by byte. In the future we can
-        // use JDK9 Arrays.compare(compare(byte[] a, int aFromIndex, int aToIndex, byte[] b, int
-        // bFromIndex, int bToIndex)) to instead. See issue:
-        // https://github.com/alibaba/fluss/issues/271
-        if (prefix.length > bytes.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if (prefix[i] != bytes[i]) {
-                return false;
+    private static class PrefixComparer {
+        private static final boolean isJava9OrAbove;
+        private static Method compareMethod;
+
+        static {
+            if (Java.IS_JAVA9_COMPATIBLE) {
+                isJava9OrAbove = true;
+                try {
+                    compareMethod =
+                            Arrays.class.getMethod(
+                                    "compare",
+                                    byte[].class,
+                                    int.class,
+                                    int.class,
+                                    byte[].class,
+                                    int.class,
+                                    int.class);
+                } catch (NoSuchMethodException e) {
+                    throw new RuntimeException("Failed to get compare method for byte arrays", e);
+                }
+            } else {
+                isJava9OrAbove = false;
             }
         }
-        return true;
+
+        public boolean isPrefixEquals(byte[] prefix, byte[] bytes) {
+            if (isJava9OrAbove) {
+                return isPrefixEqualsJava9(prefix, bytes);
+            } else {
+                return isPrefixEqualsBelowJava9(prefix, bytes);
+            }
+        }
+
+        /**
+         * Check if the given first byte array ({@code prefix}) is a prefix of the second byte array
+         * ({@code bytes}) upper java9.
+         *
+         * @param prefix The prefix byte array
+         * @param bytes The byte array to check if it has the prefix
+         * @return true if the given bytes has the given prefix, false otherwise
+         */
+        private boolean isPrefixEqualsJava9(byte[] prefix, byte[] bytes) {
+            try {
+                if (prefix.length > bytes.length) {
+                    return false;
+                }
+
+                int result =
+                        (int)
+                                compareMethod.invoke(
+                                        null, prefix, 0, prefix.length, bytes, 0, prefix.length);
+                return result == 0;
+            } catch (Exception e) {
+                throw new RuntimeException("Error invoking compare method", e);
+            }
+        }
+
+        /**
+         * Check if the given first byte array ({@code prefix}) is a prefix of the second byte array
+         * ({@code bytes}) below java9.
+         *
+         * @param prefix The prefix byte array
+         * @param bytes The byte array to check if it has the prefix
+         * @return true if the given bytes has the given prefix, false otherwise
+         */
+        private static boolean isPrefixEqualsBelowJava9(byte[] prefix, byte[] bytes) {
+            if (prefix.length > bytes.length) {
+                return false;
+            }
+            for (int i = 0; i < prefix.length; i++) {
+                if (prefix[i] != bytes[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 }
