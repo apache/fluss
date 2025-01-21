@@ -193,7 +193,6 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
         if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
-            // TODO: consider the compression ratio
             estimatedSizeInBytes =
                     ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
         }

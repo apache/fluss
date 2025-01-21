@@ -19,6 +19,7 @@ package com.alibaba.fluss.row.arrow;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
+import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
@@ -51,11 +52,15 @@ public class ArrowWriterPool implements ArrowWriterProvider {
     @GuardedBy("lock")
     private boolean closed = false;
 
+    @GuardedBy("lock")
+    private final ArrowCompressionRatioEstimator compressionRatioEstimator;
+
     private final ReentrantLock lock = new ReentrantLock();
 
     public ArrowWriterPool(BufferAllocator allocator) {
         this.allocator = allocator;
         this.freeWriters = new HashMap<>();
+        this.compressionRatioEstimator = new ArrowCompressionRatioEstimator();
     }
 
     @Override
@@ -97,12 +102,14 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                     } else {
                         return initialize(
                                 new ArrowWriter(
+                                        tableId,
                                         writerKey,
                                         bufferSizeInBytes,
                                         schema,
                                         allocator,
                                         this,
-                                        compressionInfo),
+                                        compressionInfo,
+                                        compressionRatioEstimator),
                                 bufferSizeInBytes);
                     }
                 });
@@ -132,5 +139,10 @@ public class ArrowWriterPool implements ArrowWriterProvider {
     @VisibleForTesting
     public Map<String, Deque<ArrowWriter>> freeWriters() {
         return freeWriters;
+    }
+
+    @VisibleForTesting
+    public ArrowCompressionRatioEstimator compressionRatioEstimator() {
+        return compressionRatioEstimator;
     }
 }

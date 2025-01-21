@@ -17,6 +17,8 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
+import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
+import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
@@ -165,6 +167,77 @@ public class ArrowLogWriteBatchTest {
             }
             assertThat(readCount).isEqualTo(count);
         }
+    }
+
+    @Test
+    void testArrowCompressionRatioEstimated() throws Exception {
+        int bucketId = 0;
+        int maxSizeInBytes = 1024 * 10;
+        int pageSize = 512;
+        TestingMemorySegmentPool memoryPool = new TestingMemorySegmentPool(pageSize);
+        List<MemorySegment> memorySegmentList = new ArrayList<>();
+        for (int i = 0; i < maxSizeInBytes / pageSize; i++) {
+            memorySegmentList.add(memoryPool.nextSegment());
+        }
+
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
+        ArrowCompressionInfo compressionInfo =
+                new ArrowCompressionInfo(ArrowCompressionType.ZSTD, 3);
+
+        // The compression rate increases slowly, with an increment of only 0.005
+        // (COMPRESSION_RATIO_IMPROVING_STEP#COMPRESSION_RATIO_IMPROVING_STEP) each time. Therefore,
+        // the loop runs 100 times, and theoretically, the final number of input records will be
+        // much greater than at the beginning.
+        int round = 100;
+        int[] recordCounts = new int[round];
+        for (int i = 0; i < round; i++) {
+            ArrowLogWriteBatch arrowLogWriteBatch =
+                    new ArrowLogWriteBatch(
+                            tb,
+                            DATA1_PHYSICAL_TABLE_PATH,
+                            DATA1_TABLE_INFO.getSchemaId(),
+                            writerProvider.getOrCreateWriter(
+                                    tb.getTableId(),
+                                    DATA1_TABLE_INFO.getSchemaId(),
+                                    maxSizeInBytes,
+                                    DATA1_ROW_TYPE,
+                                    compressionInfo),
+                            new PreAllocatedPagedOutputView(memorySegmentList));
+
+            int recordCount = 0;
+            while (arrowLogWriteBatch.tryAppend(
+                    createWriteRecord(
+                            row(
+                                    DATA1_ROW_TYPE,
+                                    new Object[] {
+                                        recordCount,
+                                        "a                                a                  a"
+                                                + recordCount
+                                    })),
+                    newWriteCallback())) {
+                recordCount++;
+            }
+
+            recordCounts[i] = recordCount;
+            // batch full.
+            boolean appendResult =
+                    arrowLogWriteBatch.tryAppend(
+                            createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {1, "a"})),
+                            newWriteCallback());
+            assertThat(appendResult).isFalse();
+
+            // close this batch and recycle the writer.
+            arrowLogWriteBatch.close();
+            arrowLogWriteBatch.build();
+
+            ArrowCompressionRatioEstimator compressionRatioEstimator =
+                    writerProvider.compressionRatioEstimator();
+            float currentRatio =
+                    compressionRatioEstimator.estimation(tb.getTableId(), compressionInfo);
+            assertThat(currentRatio).isNotEqualTo(1.0f);
+        }
+
+        assertThat(recordCounts[round - 1]).isGreaterThan(recordCounts[0]);
     }
 
     private WriteRecord createWriteRecord(IndexedRow row) {

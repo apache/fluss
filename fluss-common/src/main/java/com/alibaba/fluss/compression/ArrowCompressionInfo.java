@@ -48,7 +48,7 @@ public class ArrowCompressionInfo {
         return compressionLevel;
     }
 
-    /** Create a Arrow compression codec based on the compression type and level. */
+    /** Create an Arrow compression codec based on the compression type and level. */
     public CompressionCodec createCompressionCodec() {
         return ArrowCompressionFactory.INSTANCE.createCodec(
                 ArrowCompressionFactory.toArrowCompressionCodecType(compressionType),
