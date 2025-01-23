@@ -6,8 +6,8 @@ sidebar_position: 1
 # Real-Time Analytics With Flink
 
 This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss,
-including integrating with Paimon.
-The guide is derived from [TPC-H](https://www.tpc.org/tpch/) **Q5**.
+including integrating with the Lakehouse, such as [Apache Paimon](https://paimon.apache.org/).
+The guide is derived from [TPC-H Q5](https://www.tpc.org/tpch/).
 
 For more information on working with Flink, refer to the [Apache Flink Engine](engine-flink/getting-started.md) section.
 
@@ -132,7 +132,7 @@ docker ps
 ```
 to check whether all containers are running properly.
 
-You can also visit http://localhost:8083/ to see if Flink is running normally.
+You can also visit the Flink Web UI here: http://localhost:8083/.
 
 :::note 
 - If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/0.8/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
@@ -141,7 +141,7 @@ You can also visit http://localhost:8083/ to see if Flink is running normally.
 
 Congratulations, you are all set!
 
-## Enter into SQL-Client
+## Enter the Flink SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
 docker compose exec jobmanager ./sql-client
@@ -190,9 +190,8 @@ CREATE TABLE fluss_order (
     `ptime` AS PROCTIME(),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
-```
 
-```sql  title="Flink SQL Client"
+
 CREATE TABLE fluss_customer (
     `cust_key` INT NOT NULL,
     `name` STRING,
@@ -202,17 +201,15 @@ CREATE TABLE fluss_customer (
     `mktsegment` STRING,
     PRIMARY KEY (`cust_key`) NOT ENFORCED
 );
-```
 
-```sql  title="Flink SQL Client"
+
 CREATE TABLE `fluss_nation` (
   `nation_key` INT NOT NULL,
   `name`       STRING,
    PRIMARY KEY (`nation_key`) NOT ENFORCED
 );
-```
 
-```sql  title="Flink SQL Client"
+
 CREATE TABLE enriched_orders (
     `order_key` BIGINT,
     `cust_key` INT NOT NULL,
@@ -406,7 +403,7 @@ The data for the `datalake_enriched_orders` table is stored in Fluss (for real-t
 When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and Paimon to provide a complete result set -- combines **real-time** and **historical** data.
 
 If you wish to query only the data stored in Paimon—offering high-performance access without the overhead of unioning data—you can use the `datalake_enriched_orders$lake` table by appending the `$lake` suffix. 
-This approach also enables all the optimizations and features of a Flink Paimon table source, including [system table](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$lake$snapshots`.
+This approach also enables all the optimizations and features of a Flink Paimon table source, including [system tables](https://paimon.apache.org/docs/master/concepts/system-tables/) such as `datalake_enriched_orders$lake$snapshots`.
 
 To query the snapshots directly from Paimon, use the following SQL:
 ```sql  title="Flink SQL Client"
@@ -486,13 +483,12 @@ docker compose exec taskmanager tree /tmp/paimon/fluss.db
 The files adhere to Paimon's standard format, enabling seamless querying with other engines such as [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/).
 
 ## Clean up
-After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
+After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run the following command to stop all containers.
 ```shell
 docker compose down -v
 ```
-to stop all containers.
 
 ## Learn more
 Now that you're up an running with Fluss and Flink, check out 
 - the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink
-- [this guide](/docs/maintenance/monitor-metrics/#observability-prometheus--grafana) to learn how to set up an observability stack for Fluss and Flink.
+- [This guide](/docs/maintenance/monitor-metrics/#observability-prometheus--grafana) to learn how to set up an observability stack for Fluss and Flink.

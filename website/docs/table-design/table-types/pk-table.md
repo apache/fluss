@@ -2,13 +2,13 @@
 sidebar_position: 2
 ---
 
-# PrimaryKey Table
+# Primary Key Table
 
 ## Basic Concept
 
-PrimaryKey Table in Fluss ensure the uniqueness of the specified primary key and supports `INSERT`, `UPDATE`, and `DELETE` operations.
+The Primary Key Table in Fluss ensure the uniqueness of the specified primary key and supports `INSERT`, `UPDATE`, and `DELETE` operations.
 
-A PrimaryKey Table is created by specifying a `PRIMARY KEY` clause in the `CREATE TABLE` statement. For example, the following Flink SQL statement creates a PrimaryKey Table with `shop_id` and `user_id` as the primary key and distributes the data into 4 buckets:
+A Primary Key Table is created by specifying a `PRIMARY KEY` clause in the `CREATE TABLE` statement. For example, the following Flink SQL statement creates a PrimaryKey Table with `shop_id` and `user_id` as the primary key and distributes the data into 4 buckets:
 
 ```sql title="Flink SQL"
 CREATE TABLE pk_table (
@@ -25,7 +25,7 @@ CREATE TABLE pk_table (
 In Fluss primary key table, each row of data has a unique primary key.
 If multiple entries with the same primary key are written to the Fluss primary key table, only the last entry will be retained.
 
-For [Partitioned PrimaryKey Table](table-design/data-distribution/partitioning.md), the primary key must contain the partition key.
+For [partitioned primary key tables](table-design/data-distribution/partitioning.md), the primary key must contain the partition key.
 
 ## Bucket Assigning
 
