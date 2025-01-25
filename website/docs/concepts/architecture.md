@@ -19,7 +19,7 @@ As the brain of the cluster, the CoordinatorServer ensures efficient cluster ope
 
 ## TabletServer
 The TabletServer is responsible for data storage, persistence, and providing I/O services directly to users. It comprises two key components: the **LogManager** and **KvManager**.
-- For **Primary Key Tables** which support updates, both the LogManager and KvManager are activated. The KvStore is used to support updates and point lookup efficiently. LogStore is used to store the changelogs of the table.
+- For **Primary Key Tables** which support updates, both the LogManager and KvManager are activated. The KvManager is used to support updates and kv lookups efficiently. The LogManager is used to store the changelogs of the table.
 - For **Log Tables** which only support `INSERT` operations, only the LogManager is activated, optimizing performance for write-heavy workloads.
 
 This architecture ensures the TabletServer delivers tailored data handling capabilities based on table types.
