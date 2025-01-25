@@ -34,7 +34,6 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.MergeEngine;
@@ -64,6 +63,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -253,8 +253,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         RowType prefixKeyRowType = prefixKeySchema.toRowType();
         PrefixLookuper prefixLookuper =
-                table.getPrefixLookuper(
-                        new PrefixLookup(prefixKeyRowType.getFieldNames().toArray(new String[0])));
+                table.getPrefixLookuper(new PrefixLookup(prefixKeyRowType.getFieldNames()));
         CompletableFuture<PrefixLookupResult> result =
                 prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {1, "a"}));
         PrefixLookupResult prefixLookupResult = result.get();
@@ -297,25 +296,12 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         createTable(tablePath, descriptor, false);
         Table table = conn.getTable(tablePath);
 
-        Schema prefixKeySchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("c", DataTypes.STRING())
-                        .build();
-        RowType prefixKeyRowType = prefixKeySchema.toRowType();
-        assertThatThrownBy(
-                        () ->
-                                table.getPrefixLookuper(
-                                        new PrefixLookup(
-                                                prefixKeyRowType
-                                                        .getFieldNames()
-                                                        .toArray(new String[0]))))
-                .isInstanceOf(FlussRuntimeException.class)
+        assertThatThrownBy(() -> table.getPrefixLookuper(new PrefixLookup(Arrays.asList("a", "c"))))
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "To do prefix lookup, the bucket keys must be the prefix subset of primary keys "
-                                + "exclude partition fields (if partition table), but the bucket keys are [a, c] "
-                                + "and the primary keys are [a, b, c] and the primary key exclude partition "
-                                + "fields are [a, b, c] for table test_db_1.test_invalid_prefix_lookup_1");
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_1', "
+                                + "because the bucket keys [a, c] is not a prefix subset of the "
+                                + "physical primary keys [a, b, c] (excluded partition fields if present).");
 
         // Second, test the lookup column names in PrefixLookup not a subset of primary keys.
         tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_2");
@@ -327,28 +313,26 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("d", DataTypes.STRING())
                         .primaryKey("a", "b", "c")
                         .build();
+
         descriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
         createTable(tablePath, descriptor, true);
         Table table2 = conn.getTable(tablePath);
 
-        prefixKeySchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("d", DataTypes.STRING())
-                        .build();
-        RowType prefixKeyRowType2 = prefixKeySchema.toRowType();
+        // not match bucket key
         assertThatThrownBy(
-                        () ->
-                                table2.getPrefixLookuper(
-                                        new PrefixLookup(
-                                                prefixKeyRowType2
-                                                        .getFieldNames()
-                                                        .toArray(new String[0]))))
+                        () -> table2.getPrefixLookuper(new PrefixLookup(Arrays.asList("a", "d"))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "To do prefix lookup, the lookup columns must be the bucket key "
-                                + "with partition fields (if partition table), but the lookup columns are [a, d] and "
-                                + "the bucket keys are [a, b] for table test_db_1.test_invalid_prefix_lookup_2");
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [a, d] must contain all bucket keys [a, b] in order.");
+
+        // wrong bucket key order
+        assertThatThrownBy(
+                        () -> table2.getPrefixLookuper(new PrefixLookup(Arrays.asList("b", "a"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
     }
 
     @Test
@@ -950,8 +934,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         RowType rowType = DATA1_SCHEMA_PK.toRowType();
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, false);
 
-        Schema lookupKeySchema = Schema.newBuilder().column("a", DataTypes.INT()).build();
-        RowType lookupRowType = lookupKeySchema.toRowType();
+        RowType lookupRowType = RowType.of(DataTypes.INT());
 
         int rows = 5;
         int duplicateNum = 3;
@@ -971,9 +954,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             // now, get rows by lookup
             for (int id = 0; id < rows; id++) {
                 InternalRow gotRow =
-                        lookuper.lookup(keyRow(DATA1_SCHEMA_PK, new Object[] {id, "dumpy"}))
-                                .get()
-                                .getRow();
+                        lookuper.lookup(row(lookupRowType, new Object[] {id})).get().getRow();
                 assertThatRow(gotRow).withSchema(rowType).isEqualTo(expectedRows.get(id));
             }
 

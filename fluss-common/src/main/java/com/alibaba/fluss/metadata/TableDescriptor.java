@@ -23,7 +23,6 @@ import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.ConfigurationUtils;
-import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
@@ -188,16 +187,6 @@ public final class TableDescriptor implements Serializable {
      */
     public int[] getBucketKeyIndexes() {
         return schema.getColumnIndexes(getBucketKey());
-    }
-
-    /** Returns the indexes of the key fields in the schema. */
-    public int[] getKeyIndexes(List<String> keyNames) {
-        RowType rowType = schema.toRowType();
-        int[] bucketKeyIndex = new int[keyNames.size()];
-        for (int i = 0; i < keyNames.size(); i++) {
-            bucketKeyIndex[i] = rowType.getFieldIndex(keyNames.get(i));
-        }
-        return bucketKeyIndex;
     }
 
     /**

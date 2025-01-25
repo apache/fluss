@@ -42,8 +42,8 @@ import java.util.concurrent.CompletableFuture;
 public class UpsertWriter extends TableWriter {
 
     private final KeyEncoder primaryKeyEncoder;
-    // null if the bucket key is the same to the primary key
-    private final @Nullable KeyEncoder bucketKeyEncoder;
+    // same to primaryKeyEncoder if the bucket key is the same to the primary key
+    private final KeyEncoder bucketKeyEncoder;
     private final @Nullable int[] targetColumns;
 
     public UpsertWriter(
@@ -66,7 +66,7 @@ public class UpsertWriter extends TableWriter {
                         tableDescriptor.getPartitionKeys());
 
         if (tableDescriptor.isDefaultBucketKey()) {
-            this.bucketKeyEncoder = null;
+            this.bucketKeyEncoder = primaryKeyEncoder;
         } else {
             int[] bucketKeyIndexes = tableDescriptor.getBucketKeyIndexes();
             this.bucketKeyEncoder = new KeyEncoder(rowType, bucketKeyIndexes);
@@ -121,7 +121,8 @@ public class UpsertWriter extends TableWriter {
      */
     public CompletableFuture<Void> upsert(InternalRow row) {
         byte[] key = primaryKeyEncoder.encode(row);
-        byte[] bucketKey = bucketKeyEncoder != null ? bucketKeyEncoder.encode(row) : key;
+        byte[] bucketKey =
+                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encode(row);
         return send(
                 new WriteRecord(
                         getPhysicalPath(row), WriteKind.PUT, key, bucketKey, row, targetColumns));
@@ -136,7 +137,8 @@ public class UpsertWriter extends TableWriter {
      */
     public CompletableFuture<Void> delete(InternalRow row) {
         byte[] key = primaryKeyEncoder.encode(row);
-        byte[] bucketKey = bucketKeyEncoder != null ? bucketKeyEncoder.encode(row) : key;
+        byte[] bucketKey =
+                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encode(row);
         return send(
                 new WriteRecord(
                         getPhysicalPath(row),

@@ -19,8 +19,10 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.row.InternalRow;
 
+import java.util.List;
+
 /**
- * Used to describe the operation to prefix lookup by {@link PrefixLookuper} to a kv table.
+ * Used to describe the operation to prefix lookup by {@link PrefixLookuper} to a primary key table.
  *
  * @since 0.6
  */
@@ -28,21 +30,21 @@ import com.alibaba.fluss.row.InternalRow;
 public class PrefixLookup {
 
     /**
-     * Currently, For none-partition table, the lookupColumnNames can only be the field of bucket
+     * Currently, For non-partitioned table, the lookupColumnNames can only be the field of bucket
      * key.
      *
-     * <p>For partition table, the lookupColumnNames exclude partition fields should be a prefix of
-     * primary key exclude partition fields.
+     * <p>For partitioned table, the lookupColumnNames exclude partition fields should be a prefix
+     * of primary key exclude partition fields.
      *
      * <p>See {@link PrefixLookuper#prefixLookup(InternalRow)} for more details.
      */
-    private final String[] lookupColumnNames;
+    private final List<String> lookupColumnNames;
 
-    public PrefixLookup(String[] lookupColumnNames) {
+    public PrefixLookup(List<String> lookupColumnNames) {
         this.lookupColumnNames = lookupColumnNames;
     }
 
-    public String[] getLookupColumnNames() {
+    public List<String> getLookupColumnNames() {
         return lookupColumnNames;
     }
 }

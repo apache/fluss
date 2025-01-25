@@ -18,12 +18,6 @@ package com.alibaba.fluss.connector.flink.source.lookup;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.lookup.LookupResult;
-import com.alibaba.fluss.client.lookup.LookupType;
-import com.alibaba.fluss.client.lookup.Lookuper;
-import com.alibaba.fluss.client.lookup.PrefixLookup;
-import com.alibaba.fluss.client.lookup.PrefixLookupResult;
-import com.alibaba.fluss.client.lookup.PrefixLookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.RemainingFilter;
@@ -51,8 +45,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
-
 /** A flink async lookup function for fluss. */
 public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
 
@@ -66,14 +58,12 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
-    private final LookupType flussLookupType;
 
     private transient FlinkRowToFlussRowConverter flinkRowToFlussRowConverter;
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
-    @Nullable private transient PrefixLookuper prefixLookuper;
-    @Nullable private transient Lookuper lookuper;
+    private transient UnifiedLookuper lookuper;
 
     public FlinkAsyncLookupFunction(
             Configuration flussConfig,
@@ -88,7 +78,6 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
-        this.flussLookupType = lookupNormalizer.getLookupType();
     }
 
     @Override
@@ -111,17 +100,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         }
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
-
-        if (flussLookupType == LookupType.PREFIX_LOOKUP) {
-            prefixLookuper =
-                    table.getPrefixLookuper(
-                            new PrefixLookup(
-                                    lookupKeyRowType.getFieldNames().toArray(new String[0])));
-            lookuper = null;
-        } else if (flussLookupType == LookupType.LOOKUP) {
-            prefixLookuper = null;
-            lookuper = table.getLookuper();
-        }
+        lookuper = UnifiedLookuper.of(lookupNormalizer.getLookupType(), lookupKeyRowType, table);
 
         LOG.info("end open.");
     }
@@ -155,41 +134,20 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             int currentRetry,
             InternalRow keyRow,
             @Nullable RemainingFilter remainingFilter) {
-        if (flussLookupType == LookupType.LOOKUP) {
-            checkArgument(lookuper != null, "Lookuper should not be null");
-            lookuper.lookup(keyRow)
-                    .whenComplete(
-                            (result, throwable) -> {
-                                if (throwable != null) {
-                                    handleLookupFailed(
-                                            resultFuture,
-                                            throwable,
-                                            currentRetry,
-                                            keyRow,
-                                            remainingFilter);
-                                } else {
-                                    handleLookupSuccess(resultFuture, result, remainingFilter);
-                                }
-                            });
-        } else {
-            checkArgument(prefixLookuper != null, "prefixLookuper should not be null");
-            prefixLookuper
-                    .prefixLookup(keyRow)
-                    .whenComplete(
-                            (result, throwable) -> {
-                                if (throwable != null) {
-                                    handleLookupFailed(
-                                            resultFuture,
-                                            throwable,
-                                            currentRetry,
-                                            keyRow,
-                                            remainingFilter);
-                                } else {
-                                    handlePrefixLookupSuccess(
-                                            resultFuture, result, remainingFilter);
-                                }
-                            });
-        }
+        lookuper.lookup(keyRow)
+                .whenComplete(
+                        (result, throwable) -> {
+                            if (throwable != null) {
+                                handleLookupFailed(
+                                        resultFuture,
+                                        throwable,
+                                        currentRetry,
+                                        keyRow,
+                                        remainingFilter);
+                            } else {
+                                handleLookupSuccess(resultFuture, result, remainingFilter);
+                            }
+                        });
     }
 
     private void handleLookupFailed(
@@ -223,27 +181,15 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
 
     private void handleLookupSuccess(
             CompletableFuture<Collection<RowData>> resultFuture,
-            LookupResult result,
+            List<InternalRow> lookupResult,
             @Nullable RemainingFilter remainingFilter) {
-        InternalRow row = result.getRow();
-        if (row == null) {
+        if (lookupResult.isEmpty()) {
             resultFuture.complete(Collections.emptyList());
-        } else {
-            RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
-            if (remainingFilter != null && !remainingFilter.isMatch(flinkRow)) {
-                resultFuture.complete(Collections.emptyList());
-            } else {
-                resultFuture.complete(Collections.singletonList(flinkRow));
-            }
+            return;
         }
-    }
 
-    private void handlePrefixLookupSuccess(
-            CompletableFuture<Collection<RowData>> resultFuture,
-            PrefixLookupResult result,
-            @Nullable RemainingFilter remainingFilter) {
         List<RowData> projectedRow = new ArrayList<>();
-        for (InternalRow row : result.getRowList()) {
+        for (InternalRow row : lookupResult) {
             if (row != null) {
                 RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
                 if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {

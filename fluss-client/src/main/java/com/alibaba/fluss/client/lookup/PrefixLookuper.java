@@ -22,7 +22,7 @@ import com.alibaba.fluss.row.InternalRow;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The prefix lookup-er is used to prefix lookup data of specify kv table from Fluss.
+ * The prefix lookup-er is used to lookup rows of a primary key table by a prefix of primary key.
  *
  * @since 0.6
  */
@@ -30,7 +30,7 @@ import java.util.concurrent.CompletableFuture;
 public interface PrefixLookuper {
 
     /**
-     * Prefix lookup certain rows from the given table by prefix key.
+     * Prefix lookup certain rows from the given table by a prefix of primary key.
      *
      * <p>Only available for Primary Key Table. Will throw exception when the table isn't a Primary
      * Key Table.
@@ -45,7 +45,7 @@ public interface PrefixLookuper {
      * <p>TODO: currently, the interface only support bucket key as the prefixKey to lookup.
      * Generalize the prefix lookup to support any prefixKey including bucket key.
      *
-     * <p>We also support prefix lookup for partition table. The schema of the prefixKey should
+     * <p>We also support prefix lookup for partitioned table. The schema of the prefixKey should
      * contain partition fields and bucket key. In addition, the schema of the prefixKey exclude
      * partition fields should be a prefix of primary key exclude partition fields.
      *

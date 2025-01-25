@@ -17,7 +17,6 @@
 package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
 import com.alibaba.fluss.client.lookup.FlussLookuper;
 import com.alibaba.fluss.client.lookup.FlussPrefixLookuper;
 import com.alibaba.fluss.client.lookup.LookupClient;
@@ -32,7 +31,6 @@ import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
 import com.alibaba.fluss.client.scanner.snapshot.SnapshotScan;
 import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
-import com.alibaba.fluss.client.table.getter.PartitionGetter;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
@@ -44,7 +42,6 @@ import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -61,7 +58,6 @@ import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.row.decode.RowDecoder;
-import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.row.encode.ValueDecoder;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -79,7 +75,6 @@ import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -87,7 +82,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * The base impl of {@link Table}.
@@ -104,14 +98,8 @@ public class FlussTable implements Table {
     private final TableInfo tableInfo;
     private final boolean hasPrimaryKey;
     private final int numBuckets;
-    private final Schema schema;
-    private final TableDescriptor tableDescriptor;
-    private final RowType rowType;
-    private final RowType primaryKeyRowType;
-    private final @Nullable RowType bucketKeyRowType;
     // decode the lookup bytes to result row
     private final ValueDecoder kvValueDecoder;
-    private final List<String> partitionKeyNames;
 
     private final Supplier<WriterClient> writerSupplier;
     private final Supplier<LookupClient> lookupClientSupplier;
@@ -121,7 +109,6 @@ public class FlussTable implements Table {
 
     private volatile RemoteFileDownloader remoteFileDownloader;
     private volatile SecurityTokenManager securityTokenManager;
-    private volatile LakeTableBucketAssigner lakeTableBucketAssigner;
 
     public FlussTable(
             Configuration conf,
@@ -142,30 +129,16 @@ public class FlussTable implements Table {
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
 
         this.tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
-        this.tableDescriptor = tableInfo.getTableDescriptor();
-        this.schema = tableDescriptor.getSchema();
-        this.rowType = schema.toRowType();
+        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
+        RowType rowType = tableDescriptor.getSchema().toRowType();
         this.hasPrimaryKey = tableDescriptor.hasPrimaryKey();
         this.numBuckets = metadataUpdater.getBucketCount(tablePath);
-        this.primaryKeyRowType = rowType.project(schema.getPrimaryKeyIndexes());
         this.closed = new AtomicBoolean(false);
         this.kvValueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
                                 tableDescriptor.getKvFormat(),
                                 rowType.getChildren().toArray(new DataType[0])));
-
-        int[] bucketKeyIndexes = tableDescriptor.getBucketKeyIndexes();
-        if (bucketKeyIndexes.length != 0) {
-            this.bucketKeyRowType = rowType.project(bucketKeyIndexes);
-        } else {
-            this.bucketKeyRowType = null;
-        }
-
-        this.partitionKeyNames =
-                tableDescriptor.isPartitioned()
-                        ? tableDescriptor.getPartitionKeys()
-                        : new ArrayList<>();
     }
 
     @Override
@@ -345,63 +318,18 @@ public class FlussTable implements Table {
 
     @Override
     public Lookuper getLookuper() {
-        // lookup keys equals with primary keys.
-        if (!hasPrimaryKey) {
-            throw new FlussRuntimeException(
-                    String.format("none-pk table %s not support lookup()", tablePath));
-        }
-        maybeCreateLakeTableBucketAssigner();
-
-        PartitionGetter partitionGetter =
-                tableDescriptor.isPartitioned() && tableDescriptor.hasPrimaryKey()
-                        ? new PartitionGetter(primaryKeyRowType, tableDescriptor.getPartitionKeys())
-                        : null;
-        KeyEncoder primaryKeyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        primaryKeyRowType,
-                        primaryKeyRowType.getFieldNames(),
-                        tableDescriptor.getPartitionKeys());
-        checkArgument(bucketKeyRowType != null, "bucketKeyRowType shouldn't be null.");
-        KeyEncoder bucketKeyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        primaryKeyRowType, bucketKeyRowType.getFieldNames(), partitionKeyNames);
         return new FlussLookuper(
-                tableInfo,
-                numBuckets,
-                metadataUpdater,
-                lookupClientSupplier.get(),
-                primaryKeyEncoder,
-                bucketKeyEncoder,
-                lakeTableBucketAssigner,
-                partitionGetter,
-                kvValueDecoder);
+                tableInfo, numBuckets, metadataUpdater, lookupClientSupplier.get(), kvValueDecoder);
     }
 
     @Override
     public PrefixLookuper getPrefixLookuper(PrefixLookup prefixLookup) {
-        validatePrefixLookup(prefixLookup);
-        maybeCreateLakeTableBucketAssigner();
-
-        RowType prefixKeyRowType =
-                rowType.project(
-                        schema.getColumnIndexes(
-                                Arrays.asList(prefixLookup.getLookupColumnNames())));
-        PartitionGetter partitionGetter =
-                partitionKeyNames.size() > 0
-                        ? new PartitionGetter(prefixKeyRowType, partitionKeyNames)
-                        : null;
-        checkArgument(bucketKeyRowType != null, "bucketKeyRowType shouldn't be null.");
-        KeyEncoder bucketKeyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        prefixKeyRowType, bucketKeyRowType.getFieldNames(), partitionKeyNames);
         return new FlussPrefixLookuper(
                 tableInfo,
                 numBuckets,
                 metadataUpdater,
                 lookupClientSupplier.get(),
-                bucketKeyEncoder,
-                lakeTableBucketAssigner,
-                partitionGetter,
+                prefixLookup.getLookupColumnNames(),
                 kvValueDecoder);
     }
 
@@ -457,75 +385,5 @@ public class FlussTable implements Table {
                 }
             }
         }
-    }
-
-    private void maybeCreateLakeTableBucketAssigner() {
-        if (lakeTableBucketAssigner == null) {
-            synchronized (this) {
-                if (lakeTableBucketAssigner == null) {
-                    lakeTableBucketAssigner =
-                            new LakeTableBucketAssigner(
-                                    primaryKeyRowType,
-                                    tableInfo.getTableDescriptor().getBucketKey(),
-                                    numBuckets);
-                }
-            }
-        }
-    }
-
-    private void validatePrefixLookup(PrefixLookup prefixLookup) {
-        // 1. verify table descriptor.
-        if (!hasPrimaryKey) {
-            throw new FlussRuntimeException(
-                    String.format("None-pk table %s don't support prefix lookup", tablePath));
-        }
-
-        checkArgument(bucketKeyRowType != null, "bucketKeyRowType shouldn't be null.");
-        List<String> pkRemovePartitionFields = primaryKeyRowType.getFieldNames();
-        pkRemovePartitionFields.removeAll(partitionKeyNames);
-        List<String> bucketKeyNames = bucketKeyRowType.getFieldNames();
-
-        for (int i = 0; i < bucketKeyNames.size(); i++) {
-            if (!bucketKeyNames.get(i).equals(pkRemovePartitionFields.get(i))) {
-                throw new FlussRuntimeException(
-                        String.format(
-                                "To do prefix lookup, the bucket keys must be the prefix subset of "
-                                        + "primary keys exclude partition fields (if partition table), but "
-                                        + "the bucket keys are %s and the primary keys are %s and the primary "
-                                        + "key exclude partition fields are %s for table %s",
-                                bucketKeyNames,
-                                primaryKeyRowType.getFieldNames(),
-                                pkRemovePartitionFields,
-                                tablePath));
-            }
-        }
-
-        // verify PrefixLookup.
-        String[] prefixLookupColumns = prefixLookup.getLookupColumnNames();
-        List<String> prefixLookupColumnList = new ArrayList<>(Arrays.asList(prefixLookupColumns));
-        if (!partitionKeyNames.isEmpty()) {
-            for (int i = 0; i < partitionKeyNames.size(); i++) {
-                if (!prefixLookupColumnList.contains(partitionKeyNames.get(i))) {
-                    throw new FlussRuntimeException(
-                            String.format(
-                                    "To do prefix lookup for partitioned primary key table, the "
-                                            + "partition keys must be in lookup columns, but the lookup "
-                                            + "columns are %s and the partition keys are %s for table %s",
-                                    prefixLookupColumnList, partitionKeyNames, tablePath));
-                }
-            }
-            prefixLookupColumnList.removeAll(partitionKeyNames);
-        }
-        checkArgument(
-                prefixLookupColumnList.size() == bucketKeyNames.size()
-                        && Arrays.equals(
-                                prefixLookupColumnList.toArray(new String[0]),
-                                bucketKeyNames.toArray(new String[0])),
-                "To do prefix lookup, the lookup columns must be the bucket key with "
-                        + "partition fields (if partition table), but the lookup columns are %s and the "
-                        + "bucket keys are %s for table %s",
-                Arrays.asList(prefixLookup.getLookupColumnNames()),
-                bucketKeyNames,
-                tablePath);
     }
 }

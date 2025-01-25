@@ -26,18 +26,17 @@ import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.annotation.Nullable;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Utils for Fluss Client. */
 public final class ClientUtils {
@@ -124,10 +123,10 @@ public final class ClientUtils {
      */
     public static Long getPartitionId(
             InternalRow row,
-            @Nullable PartitionGetter partitionGetter,
+            PartitionGetter partitionGetter,
             TablePath tablePath,
             MetadataUpdater metadataUpdater) {
-        Preconditions.checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
+        checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
         String partitionName = partitionGetter.getPartition(row);
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
         metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);

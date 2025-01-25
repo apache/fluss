@@ -78,12 +78,12 @@ final class FlussConnection implements Connection {
                 tablePath,
                 rpcClient,
                 metadataUpdater,
-                this::maybeCreateWriter,
-                this::maybeCreateLookupClient,
+                this::getOrCreateWriterClient,
+                this::getOrCreateLookupClient,
                 clientMetricGroup);
     }
 
-    private WriterClient maybeCreateWriter() {
+    public WriterClient getOrCreateWriterClient() {
         if (writerClient == null) {
             synchronized (this) {
                 if (writerClient == null) {
@@ -94,7 +94,7 @@ final class FlussConnection implements Connection {
         return writerClient;
     }
 
-    private LookupClient maybeCreateLookupClient() {
+    public LookupClient getOrCreateLookupClient() {
         if (lookupClient == null) {
             synchronized (this) {
                 if (lookupClient == null) {

@@ -29,7 +29,6 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
@@ -41,9 +40,12 @@ import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,8 +103,9 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         verifyPartitionLogs(table, schema.toRowType(), expectPutRows);
     }
 
-    @Test
-    void testPartitionedTablePrefixLookup() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPartitionedTablePrefixLookup(boolean isDataLakeEnabled) throws Exception {
         // This case partition key 'b' in both pk and bucket key (prefix key).
         TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup");
         Schema schema =
@@ -122,6 +125,8 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.YEAR)
+                        // test data lake bucket assigner for prefix lookup
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, isDataLakeEnabled)
                         .build();
         RowType rowType = schema.toRowType();
         createTable(tablePath, descriptor, false);
@@ -134,33 +139,37 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
             verifyPutAndLookup(table, schema, new Object[] {1, partition, 2L, "value2"});
         }
 
-        // test prefix lookup with partition key (a, b, c).
-        Schema prefixKeySchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.BIGINT())
-                        .build();
-        RowType prefixKeyRowType = prefixKeySchema.toRowType();
-        PrefixLookuper prefixLookuper =
-                table.getPrefixLookuper(
-                        new PrefixLookup(prefixKeyRowType.getFieldNames().toArray(new String[0])));
-        for (String partition : partitionIdByNames.keySet()) {
-            CompletableFuture<PrefixLookupResult> result =
-                    prefixLookuper.prefixLookup(
-                            compactedRow(
-                                    prefixKeySchema.toRowType(), new Object[] {1, partition, 1L}));
-            PrefixLookupResult prefixLookupResult = result.get();
-            assertThat(prefixLookupResult).isNotNull();
-            List<InternalRow> rowList = prefixLookupResult.getRowList();
-            assertThat(rowList.size()).isEqualTo(1);
-            assertRowValueEquals(
-                    rowType, rowList.get(0), new Object[] {1, partition, 1L, "value1"});
+        for (int i = 0; i < 3; i++) {
+            // test prefix lookups with partition field (b) in different
+            // position of the lookup columns
+            List<String> lookupColumns =
+                    i == 0
+                            ? Arrays.asList("b", "a", "c")
+                            : i == 1 ? Arrays.asList("a", "b", "c") : Arrays.asList("a", "c", "b");
+            RowType prefixKeyRowType = rowType.project(schema.getColumnIndexes(lookupColumns));
+            PrefixLookuper prefixLookuper =
+                    table.getPrefixLookuper(new PrefixLookup(lookupColumns));
+            for (String partition : partitionIdByNames.keySet()) {
+                Object[] lookupRow =
+                        i == 0
+                                ? new Object[] {partition, 1, 1L}
+                                : i == 1
+                                        ? new Object[] {1, partition, 1L}
+                                        : new Object[] {1, 1L, partition};
+                CompletableFuture<PrefixLookupResult> result =
+                        prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, lookupRow));
+                PrefixLookupResult prefixLookupResult = result.get();
+                assertThat(prefixLookupResult).isNotNull();
+                List<InternalRow> rowList = prefixLookupResult.getRowList();
+                assertThat(rowList.size()).isEqualTo(1);
+                assertRowValueEquals(
+                        rowType, rowList.get(0), new Object[] {1, partition, 1L, "value1"});
+            }
         }
     }
 
     @Test
-    void testPrefixLookupWithPartitionKeysNotInPrefixLookupKeys() throws Exception {
+    void testInvalidPrefixLookupForPartitionedTable() throws Exception {
         // This case partition key 'c' only in pk but not in prefix key.
         TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup2");
         Schema schema =
@@ -182,33 +191,15 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                                 AutoPartitionTimeUnit.YEAR)
                         .build();
         createTable(tablePath, descriptor, false);
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
 
         Table table = conn.getTable(tablePath);
-        for (String partition : partitionIdByNames.keySet()) {
-            verifyPutAndLookup(table, schema, new Object[] {1, 1L, partition, "value1"});
-        }
 
         // test prefix lookup with (a, b).
-        Schema prefixKeySchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.BIGINT())
-                        .build();
-        RowType prefixKeyRowType = prefixKeySchema.toRowType();
-        assertThatThrownBy(
-                        () ->
-                                table.getPrefixLookuper(
-                                        new PrefixLookup(
-                                                prefixKeyRowType
-                                                        .getFieldNames()
-                                                        .toArray(new String[0]))))
-                .isInstanceOf(FlussRuntimeException.class)
+        assertThatThrownBy(() -> table.getPrefixLookuper(new PrefixLookup(Arrays.asList("a", "b"))))
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "To do prefix lookup for partitioned primary key table, the partition keys "
-                                + "must be in lookup columns, but the lookup columns are [a, b] and the partition "
-                                + "keys are [c] for table test_db_1.test_partitioned_table_prefix_lookup2");
+                        "Can not perform prefix lookup on table 'test_db_1.test_partitioned_table_prefix_lookup2', "
+                                + "because the lookup columns [a, b] must contain all partition fields [c].");
     }
 
     @Test

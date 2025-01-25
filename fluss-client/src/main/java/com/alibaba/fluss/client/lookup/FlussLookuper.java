@@ -20,11 +20,14 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.row.encode.ValueDecoder;
+import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -32,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.client.utils.ClientUtils.getBucketId;
 import static com.alibaba.fluss.client.utils.ClientUtils.getPartitionId;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * The default impl of {@link Lookuper}.
@@ -49,7 +53,10 @@ public class FlussLookuper implements Lookuper {
 
     private final KeyEncoder primaryKeyEncoder;
 
-    /** Extract bucket key from lookup key row. */
+    /**
+     * Extract bucket key from lookup key row, use {@link #primaryKeyEncoder} if is default bucket
+     * key (bucket key = physical primary key).
+     */
     private final KeyEncoder bucketKeyEncoder;
 
     private final boolean isDataLakeEnable;
@@ -69,20 +76,39 @@ public class FlussLookuper implements Lookuper {
             int numBuckets,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
-            KeyEncoder primaryKeyEncoder,
-            KeyEncoder bucketKeyEncoder,
-            LakeTableBucketAssigner lakeTableBucketAssigner,
-            @Nullable PartitionGetter partitionGetter,
             ValueDecoder kvValueDecoder) {
+        checkArgument(
+                tableInfo.getTableDescriptor().hasPrimaryKey(),
+                "Log table %s doesn't support lookup",
+                tableInfo.getTablePath());
         this.tableInfo = tableInfo;
         this.numBuckets = numBuckets;
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
-        this.primaryKeyEncoder = primaryKeyEncoder;
-        this.bucketKeyEncoder = bucketKeyEncoder;
+
+        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
+        Schema schema = tableDescriptor.getSchema();
+        RowType primaryKeyRowType = schema.toRowType().project(schema.getPrimaryKeyIndexes());
+        this.primaryKeyEncoder =
+                KeyEncoder.createKeyEncoder(
+                        primaryKeyRowType,
+                        primaryKeyRowType.getFieldNames(),
+                        tableDescriptor.getPartitionKeys());
+        if (tableDescriptor.isDefaultBucketKey()) {
+            this.bucketKeyEncoder = primaryKeyEncoder;
+        } else {
+            // bucket key doesn't contain partition key, so no need exclude partition keys
+            this.bucketKeyEncoder =
+                    new KeyEncoder(primaryKeyRowType, tableDescriptor.getBucketKeyIndexes());
+        }
         this.isDataLakeEnable = tableInfo.getTableDescriptor().isDataLakeEnabled();
-        this.lakeTableBucketAssigner = lakeTableBucketAssigner;
-        this.partitionGetter = partitionGetter;
+        this.lakeTableBucketAssigner =
+                new LakeTableBucketAssigner(
+                        primaryKeyRowType, tableDescriptor.getBucketKey(), numBuckets);
+        this.partitionGetter =
+                tableDescriptor.isPartitioned()
+                        ? new PartitionGetter(primaryKeyRowType, tableDescriptor.getPartitionKeys())
+                        : null;
         this.kvValueDecoder = kvValueDecoder;
     }
 
@@ -91,7 +117,10 @@ public class FlussLookuper implements Lookuper {
         // encoding the key row using a compacted way consisted with how the key is encoded when put
         // a row
         byte[] pkBytes = primaryKeyEncoder.encode(lookupKey);
-        byte[] bkBytes = bucketKeyEncoder.encode(lookupKey);
+        byte[] bkBytes =
+                bucketKeyEncoder == primaryKeyEncoder
+                        ? pkBytes
+                        : bucketKeyEncoder.encode(lookupKey);
         Long partitionId =
                 partitionGetter == null
                         ? null

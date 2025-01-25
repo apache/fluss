@@ -22,7 +22,7 @@ import com.alibaba.fluss.row.InternalRow;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The lookup-er is used to lookup data of specify kv table from Fluss.
+ * The lookup-er is used to lookup row of a primary key table by primary key.
  *
  * @since 0.6
  */
@@ -33,7 +33,7 @@ public interface Lookuper {
      * Lookups certain row from the given table primary keys.
      *
      * @param lookupKey the given table primary keys.
-     * @return the result of get.
+     * @return the result of lookup.
      */
     CompletableFuture<LookupResult> lookup(InternalRow lookupKey);
 }
