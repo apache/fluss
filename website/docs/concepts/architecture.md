@@ -48,8 +48,8 @@ In upcoming releases, **ZooKeeper will be replaced** by the **KvManager** for me
 
 ## Remote Storage
 Remote Storage serves two primary purposes:
-- **Hierarchical Storage for LogStores:** By offloading LogStore data, it reduces storage costs and accelerates scaling operations.
-- **Persistent Storage for KvStores:** It ensures durable storage for KvManager data and collaborates with LogManager to enable failure recovery.
+- **Hierarchical Storage for LogTablets:** By offloading LogTablet data, it reduces storage costs and accelerates scaling operations.
+- **Persistent Storage for KvStores:** It ensures durable storage for KvTablets and collaborates with LogTablets to enable failure recovery.
 
 Additionally, remote storage allows clients to perform bulk read operations on Log and Kv data, enhancing data analysis efficiency and reduce the overhead on Fluss servers. In the future, it will also support bulk write operations, optimizing data import workflows for greater scalability and performance.
 
