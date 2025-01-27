@@ -40,6 +40,8 @@ fi
 
 if [ "$(uname)" == "Darwin" ]; then
     SHASUM="shasum -a 512"
+    #Disable the creation of ._* files on macOS.
+    export COPYFILE_DISABLE=1
 else
     SHASUM="sha512sum"
 fi
