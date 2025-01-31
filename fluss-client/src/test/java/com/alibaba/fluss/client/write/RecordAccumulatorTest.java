@@ -38,6 +38,7 @@ import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -46,6 +47,7 @@ import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.utils.CloseableIterator;
 import com.alibaba.fluss.utils.clock.ManualClock;
 
+import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -75,6 +77,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link RecordAccumulator}. */
 public class RecordAccumulatorTest {
+    private static final long ZSTD_TABLE_ID = 16001L;
+    private static final PhysicalTablePath ZSTD_PHYSICAL_TABLE_PATH =
+            PhysicalTablePath.of(TablePath.of("test_db_1", "test_zstd_table_1"));
+    private static final TableInfo ZSTD_TABLE_INFO =
+            new TableInfo(
+                    ZSTD_PHYSICAL_TABLE_PATH.getTablePath(),
+                    ZSTD_TABLE_ID,
+                    TableDescriptor.builder()
+                            .schema(DATA1_SCHEMA)
+                            .distributedBy(3)
+                            .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), "zstd")
+                            .build(),
+                    1,
+                    System.currentTimeMillis(),
+                    System.currentTimeMillis());
+
     ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER);
     ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER);
     ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER);
@@ -91,6 +109,7 @@ public class RecordAccumulatorTest {
             new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2, serverNodes);
     private final BucketLocation bucket4 =
             new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 3, node2, serverNodes);
+
     private final WriteCallback writeCallback =
             exception -> {
                 if (exception != null) {
@@ -147,6 +166,63 @@ public class RecordAccumulatorTest {
         Map<Integer, List<WriteBatch>> batches3 =
                 accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
         verifyTableBucketInBatches(batches3, tb1, tb3);
+    }
+
+    @Test
+    void testDrainCompressedBatches() throws Exception {
+        int batchSize = 10 * 1024;
+        int bucketNum = 10;
+        RecordAccumulator accum =
+                createTestRecordAccumulator(
+                        Integer.MAX_VALUE, batchSize, batchSize, Integer.MAX_VALUE);
+        List<BucketLocation> bucketLocations = new ArrayList<>();
+        for (int b = 0; b < bucketNum; b++) {
+            bucketLocations.add(
+                    new BucketLocation(
+                            ZSTD_PHYSICAL_TABLE_PATH, ZSTD_TABLE_ID, b, node1, serverNodes));
+        }
+        // all buckets are located in node1
+        cluster = updateCluster(bucketLocations);
+
+        appendUntilCompressionRatioStable(accum, batchSize);
+
+        for (int i = 0; i < bucketNum; i++) {
+            appendUntilBatchFull(accum, i);
+        }
+
+        // all 3 buckets are located in node1
+        Map<Integer, List<WriteBatch>> batches =
+                accum.drain(cluster, Collections.singleton(node1), batchSize * bucketNum);
+        // the compression ratio is smaller than 1.0,
+        // so bucketNum * batch_size should contain all compressed batches for each bucket
+        assertThat(batches.containsKey(node1.id())).isTrue();
+        assertThat(batches.get(node1.id()).size()).isEqualTo(bucketNum);
+    }
+
+    private void appendUntilCompressionRatioStable(RecordAccumulator accum, int batchSize)
+            throws Exception {
+        while (true) {
+            appendUntilBatchFull(accum, 0);
+            Map<Integer, List<WriteBatch>> batches =
+                    accum.drain(cluster, Collections.singleton(node1), Integer.MAX_VALUE);
+            WriteBatch batch = batches.get(node1.id()).get(0);
+            int actualSize = batch.build().getBytesLength();
+            if (actualSize > batchSize * ArrowWriter.BUFFER_USAGE_RATIO) {
+                return;
+            }
+        }
+    }
+
+    private void appendUntilBatchFull(RecordAccumulator accum, int bucketId) throws Exception {
+        while (true) {
+            InternalRow row = row(DATA1_ROW_TYPE, new Object[] {1, RandomStringUtils.random(10)});
+            PhysicalTablePath tablePath = PhysicalTablePath.of(ZSTD_TABLE_INFO.getTablePath());
+            WriteRecord record = new WriteRecord(tablePath, WriteKind.APPEND, row, null);
+            // append until the batch is full
+            if (accum.append(record, writeCallback, cluster, bucketId, false).batchIsFull) {
+                break;
+            }
+        }
     }
 
     @Test
@@ -465,6 +541,7 @@ public class RecordAccumulatorTest {
                         System.currentTimeMillis());
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
         tableInfoByPath.put(DATA1_TABLE_PATH, data1NonPkTableInfo);
+        tableInfoByPath.put(ZSTD_TABLE_INFO.getTablePath(), ZSTD_TABLE_INFO);
 
         return new Cluster(
                 aliveTabletServersById,

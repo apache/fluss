@@ -53,14 +53,14 @@ public class ArrowWriterPool implements ArrowWriterProvider {
     private boolean closed = false;
 
     @GuardedBy("lock")
-    private final ArrowCompressionRatioEstimator compressionRatioEstimator;
+    private final Map<String, ArrowCompressionRatioEstimator> compressionRatioEstimators;
 
     private final ReentrantLock lock = new ReentrantLock();
 
     public ArrowWriterPool(BufferAllocator allocator) {
         this.allocator = allocator;
         this.freeWriters = new HashMap<>();
-        this.compressionRatioEstimator = new ArrowCompressionRatioEstimator();
+        this.compressionRatioEstimators = new HashMap<>();
     }
 
     @Override
@@ -97,12 +97,14 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                                 "Arrow VectorSchemaRoot pool closed while getting/creating root.");
                     }
                     Deque<ArrowWriter> writers = freeWriters.get(writerKey);
+                    ArrowCompressionRatioEstimator compressionRatioEstimator =
+                            compressionRatioEstimators.computeIfAbsent(
+                                    writerKey, k -> new ArrowCompressionRatioEstimator());
                     if (writers != null && !writers.isEmpty()) {
                         return initialize(writers.pollFirst(), bufferSizeInBytes);
                     } else {
                         return initialize(
                                 new ArrowWriter(
-                                        tableId,
                                         writerKey,
                                         bufferSizeInBytes,
                                         schema,
@@ -130,6 +132,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                 }
             }
             freeWriters.clear();
+            compressionRatioEstimators.clear();
             closed = true;
         } finally {
             lock.unlock();
@@ -139,10 +142,5 @@ public class ArrowWriterPool implements ArrowWriterProvider {
     @VisibleForTesting
     public Map<String, Deque<ArrowWriter>> freeWriters() {
         return freeWriters;
-    }
-
-    @VisibleForTesting
-    public ArrowCompressionRatioEstimator compressionRatioEstimator() {
-        return compressionRatioEstimator;
     }
 }

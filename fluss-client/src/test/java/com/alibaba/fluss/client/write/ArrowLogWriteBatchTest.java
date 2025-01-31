@@ -17,7 +17,6 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
 import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
@@ -29,12 +28,14 @@ import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.bytesview.BytesView;
+import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CloseableIterator;
 
+import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -188,37 +189,38 @@ public class ArrowLogWriteBatchTest {
         // (COMPRESSION_RATIO_IMPROVING_STEP#COMPRESSION_RATIO_IMPROVING_STEP) each time. Therefore,
         // the loop runs 100 times, and theoretically, the final number of input records will be
         // much greater than at the beginning.
-        int round = 100;
-        int[] recordCounts = new int[round];
-        for (int i = 0; i < round; i++) {
+        float previousRatio = -1.0f;
+        float currentRatio = 1.0f;
+        int lastBytesInSize = 0;
+        // exit the loop until compression ratio is converged
+        while (previousRatio != currentRatio) {
+            ArrowWriter arrowWriter =
+                    writerProvider.getOrCreateWriter(
+                            tb.getTableId(),
+                            DATA1_TABLE_INFO.getSchemaId(),
+                            maxSizeInBytes,
+                            DATA1_ROW_TYPE,
+                            compressionInfo);
+
             ArrowLogWriteBatch arrowLogWriteBatch =
                     new ArrowLogWriteBatch(
                             tb,
                             DATA1_PHYSICAL_TABLE_PATH,
                             DATA1_TABLE_INFO.getSchemaId(),
-                            writerProvider.getOrCreateWriter(
-                                    tb.getTableId(),
-                                    DATA1_TABLE_INFO.getSchemaId(),
-                                    maxSizeInBytes,
-                                    DATA1_ROW_TYPE,
-                                    compressionInfo),
-                            new PreAllocatedPagedOutputView(memorySegmentList));
+                            arrowWriter,
+                            new PreAllocatedPagedOutputView(memorySegmentList),
+                            System.currentTimeMillis());
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
                     createWriteRecord(
                             row(
                                     DATA1_ROW_TYPE,
-                                    new Object[] {
-                                        recordCount,
-                                        "a                                a                  a"
-                                                + recordCount
-                                    })),
+                                    new Object[] {recordCount, RandomStringUtils.random(100)})),
                     newWriteCallback())) {
                 recordCount++;
             }
 
-            recordCounts[i] = recordCount;
             // batch full.
             boolean appendResult =
                     arrowLogWriteBatch.tryAppend(
@@ -228,16 +230,18 @@ public class ArrowLogWriteBatchTest {
 
             // close this batch and recycle the writer.
             arrowLogWriteBatch.close();
-            arrowLogWriteBatch.build();
+            BytesView built = arrowLogWriteBatch.build();
+            lastBytesInSize = built.getBytesLength();
 
-            ArrowCompressionRatioEstimator compressionRatioEstimator =
-                    writerProvider.compressionRatioEstimator();
-            float currentRatio =
-                    compressionRatioEstimator.estimation(tb.getTableId(), compressionInfo);
-            assertThat(currentRatio).isNotEqualTo(1.0f);
+            previousRatio = currentRatio;
+            currentRatio = arrowWriter.getCompressionRatioEstimator().estimation();
         }
 
-        assertThat(recordCounts[round - 1]).isGreaterThan(recordCounts[0]);
+        // when the compression ratio is converged, the memory buffer should be fully used.
+        assertThat(lastBytesInSize)
+                .isGreaterThan((int) (maxSizeInBytes * ArrowWriter.BUFFER_USAGE_RATIO))
+                .isLessThan(maxSizeInBytes);
+        assertThat(currentRatio).isLessThan(1.0f);
     }
 
     private WriteRecord createWriteRecord(IndexedRow row) {

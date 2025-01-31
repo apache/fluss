@@ -20,17 +20,7 @@ import com.alibaba.fluss.annotation.Internal;
 
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
-
-/**
- * This class help estimate the compression ratio for each table and each arrow compression type
- * combination.
- */
+/** This class helps estimate the compression ratio for a table. */
 @Internal
 @ThreadSafe
 public class ArrowCompressionRatioEstimator {
@@ -38,69 +28,41 @@ public class ArrowCompressionRatioEstimator {
      * The constant speed to increase compression ratio when a batch compresses better than
      * expected.
      */
-    public static final float COMPRESSION_RATIO_IMPROVING_STEP = 0.005f;
+    private static final float COMPRESSION_RATIO_IMPROVING_STEP = 0.005f;
 
     /**
      * The minimum speed to decrease compression ratio when a batch compresses worse than expected.
      */
-    public static final float COMPRESSION_RATIO_DETERIORATE_STEP = 0.05f;
-
-    private final Map<Long, Map<String, Float>> compressionRatio;
-    private final Map<Long, Lock> tableLocks;
-
-    public ArrowCompressionRatioEstimator() {
-        compressionRatio = new ConcurrentHashMap<>();
-        tableLocks = new ConcurrentHashMap<>();
-    }
+    private static final float COMPRESSION_RATIO_DETERIORATE_STEP = 0.05f;
 
     /**
-     * Update the compression ratio estimation for a table and related compression info with the
-     * observed compression ratio.
+     * The default compression ratio when initialize a new {@link ArrowCompressionRatioEstimator}.
      */
-    public void updateEstimation(
-            long tableId, ArrowCompressionInfo compressionInfo, float observedRatio) {
-        Lock lock = tableLocks.computeIfAbsent(tableId, k -> new ReentrantLock());
-        inLock(
-                lock,
-                () -> {
-                    Map<String, Float> compressionRatioMap =
-                            compressionRatio.computeIfAbsent(
-                                    tableId, k -> new ConcurrentHashMap<>());
-                    String compressionKey = compressionInfo.toString();
-                    float currentEstimation =
-                            compressionRatioMap.getOrDefault(compressionKey, 1.0f);
-                    if (observedRatio > currentEstimation) {
-                        compressionRatioMap.put(
-                                compressionKey,
-                                Math.max(
-                                        currentEstimation + COMPRESSION_RATIO_DETERIORATE_STEP,
-                                        observedRatio));
-                    } else if (observedRatio < currentEstimation) {
-                        compressionRatioMap.put(
-                                compressionKey,
-                                Math.max(
-                                        currentEstimation - COMPRESSION_RATIO_IMPROVING_STEP,
-                                        observedRatio));
-                    }
-                });
+    private static final float DEFAULT_COMPRESSION_RATIO = 1.0f;
+
+    /** The current compression ratio, use volatile for lock-free. */
+    private volatile float compressionRatio;
+
+    public ArrowCompressionRatioEstimator() {
+        compressionRatio = DEFAULT_COMPRESSION_RATIO;
     }
 
-    /** Get the compression ratio estimation for a table and related compression info. */
-    public float estimation(long tableId, ArrowCompressionInfo compressionInfo) {
-        Lock lock = tableLocks.computeIfAbsent(tableId, k -> new ReentrantLock());
-        return inLock(
-                lock,
-                () -> {
-                    Map<String, Float> compressionRatioMap =
-                            compressionRatio.computeIfAbsent(
-                                    tableId, k -> new ConcurrentHashMap<>());
-                    String compressionKey = compressionInfo.toString();
+    /** Update the compression ratio estimation with the observed compression ratio. */
+    public void updateEstimation(float observedRatio) {
+        float currentEstimation = compressionRatio;
+        // it is possible it can't guarantee atomic and isolation update,
+        // but it's fine as it's just an estimation
+        if (observedRatio > currentEstimation) {
+            compressionRatio =
+                    Math.max(currentEstimation + COMPRESSION_RATIO_DETERIORATE_STEP, observedRatio);
+        } else if (observedRatio < currentEstimation) {
+            compressionRatio =
+                    Math.max(currentEstimation - COMPRESSION_RATIO_IMPROVING_STEP, observedRatio);
+        }
+    }
 
-                    if (!compressionRatioMap.containsKey(compressionKey)) {
-                        compressionRatioMap.put(compressionKey, 1.0f);
-                    }
-
-                    return compressionRatioMap.get(compressionKey);
-                });
+    /** Get current compression ratio estimation. */
+    public float estimation() {
+        return compressionRatio;
     }
 }

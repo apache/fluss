@@ -56,14 +56,9 @@ public class ArrowCompressionRatioEstimatorTest {
                         new EstimationsObservedRatios(0.6f, 0.7f),
                         new EstimationsObservedRatios(0.6f, 0.4f),
                         new EstimationsObservedRatios(0.004f, 0.001f));
-        long tableId = 150001L;
-        ArrowCompressionInfo compressionInfo =
-                new ArrowCompressionInfo(ArrowCompressionType.ZSTD, 3);
         for (EstimationsObservedRatios estimationObservedRatio : estimationsObservedRatios) {
-            compressionRatioEstimator.updateEstimation(
-                    tableId, compressionInfo, estimationObservedRatio.currentEstimation);
-            float updatedCompressionRatio =
-                    compressionRatioEstimator.estimation(tableId, compressionInfo);
+            compressionRatioEstimator.updateEstimation(estimationObservedRatio.currentEstimation);
+            float updatedCompressionRatio = compressionRatioEstimator.estimation();
             assertThat(updatedCompressionRatio)
                     .isGreaterThanOrEqualTo(estimationObservedRatio.observedRatio);
         }

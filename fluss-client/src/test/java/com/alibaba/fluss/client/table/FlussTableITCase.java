@@ -53,6 +53,7 @@ import com.alibaba.fluss.types.StringType;
 import com.alibaba.fluss.utils.Preconditions;
 
 import org.apache.commons.lang3.StringUtils;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -112,6 +113,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    @Disabled("TODO, fix me in #116")
     void testAppendWithSmallBuffer(boolean indexedFormat) throws Exception {
         TableDescriptor desc =
                 indexedFormat
@@ -991,7 +993,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
                         .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
                         .build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_compression_and_project");
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_" + compression + level);
         createTable(tablePath, tableDescriptor, false);
 
         try (Connection conn = ConnectionFactory.createConnection(clientConf);

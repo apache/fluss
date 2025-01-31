@@ -187,14 +187,16 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
     public int estimatedSizeInBytes() {
         if (bytesView != null) {
-            // accurate total size in bytes
+            // accurate total size in bytes (compressed if compression is enabled)
             return bytesView.getBytesLength();
         }
 
         if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
             estimatedSizeInBytes =
-                    ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
+                    ARROW_ROWKIND_OFFSET
+                            + rowKindWriter.sizeInBytes()
+                            + arrowWriter.estimatedSizeInBytes();
         }
 
         reCalculateSizeInBytes = false;
