@@ -17,8 +17,8 @@
 package com.alibaba.fluss.client.metrics;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
@@ -34,7 +34,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
-/** The metric group for scanner, including {@link LogScanner} and {@link SnapshotScanner}. */
+/** The metric group for scanner, including {@link LogScanner} and {@link BatchScanner}. */
 @Internal
 public class ScannerMetricGroup extends AbstractMetricGroup {
 

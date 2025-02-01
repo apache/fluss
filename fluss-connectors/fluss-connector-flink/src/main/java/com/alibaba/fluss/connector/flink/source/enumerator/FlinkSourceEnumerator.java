@@ -19,10 +19,7 @@ package com.alibaba.fluss.connector.flink.source.enumerator;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.PartitionSnapshotInfo;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.lakehouse.LakeSplitGenerator;
@@ -63,12 +60,13 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * An implementation of {@link SplitEnumerator} for the data of Fluss.
@@ -181,7 +179,7 @@ public class FlinkSourceEnumerator
         flussAdmin = connection.getAdmin();
         bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
         try {
-            TableInfo tableInfo = flussAdmin.getTable(tablePath).get();
+            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
             tableId = tableInfo.getTableId();
             lakeEnabled = tableInfo.getTableDescriptor().isDataLakeEnabled();
             bucketCount =
@@ -251,16 +249,15 @@ public class FlinkSourceEnumerator
     private List<SourceSplitBase> initNonPartitionedSplits() {
         if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
             // get the table snapshot info
-            KvSnapshotInfo kvSnapshotInfo;
+            final KvSnapshots kvSnapshots;
             try {
-                kvSnapshotInfo = flussAdmin.getKvSnapshot(tablePath).get();
+                kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath).get();
             } catch (Exception e) {
                 throw new FlinkRuntimeException(
                         String.format("Failed to get table snapshot for %s", tablePath),
                         ExceptionUtils.stripCompletionException(e));
             }
-            return getSnapshotAndLogSplits(
-                    kvSnapshotInfo.getTableId(), null, null, kvSnapshotInfo.getBucketsSnapshots());
+            return getSnapshotAndLogSplits(kvSnapshots, null);
         } else {
             return getLogSplit(null, null);
         }
@@ -361,36 +358,30 @@ public class FlinkSourceEnumerator
             Collection<PartitionInfo> newPartitions) {
         List<SourceSplitBase> splits = new ArrayList<>();
         for (PartitionInfo partitionInfo : newPartitions) {
-            PartitionSnapshotInfo partitionSnapshotInfo;
             String partitionName = partitionInfo.getPartitionName();
+            // get the table snapshot info
+            final KvSnapshots kvSnapshots;
             try {
-                partitionSnapshotInfo =
-                        flussAdmin.getPartitionSnapshot(tablePath, partitionName).get();
+                kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath, partitionName).get();
             } catch (Exception e) {
                 throw new FlinkRuntimeException(
                         String.format(
-                                "Failed to get snapshot for partition '%s' of table '%s'.",
-                                partitionName, tablePath),
+                                "Failed to get table snapshot for table %s and partition %s",
+                                tablePath, partitionName),
                         ExceptionUtils.stripCompletionException(e));
             }
-            splits.addAll(
-                    getSnapshotAndLogSplits(
-                            partitionSnapshotInfo.getTableId(),
-                            partitionInfo.getPartitionId(),
-                            partitionInfo.getPartitionName(),
-                            partitionSnapshotInfo.getBucketsSnapshotInfo()));
+            splits.addAll(getSnapshotAndLogSplits(kvSnapshots, partitionName));
         }
         return splits;
     }
 
     private List<SourceSplitBase> getSnapshotAndLogSplits(
-            long tableId,
-            @Nullable Long partitionId,
-            @Nullable String partitionName,
-            BucketsSnapshotInfo bucketsSnapshotInfo) {
+            KvSnapshots snapshots, @Nullable String partitionName) {
+        long tableId = snapshots.getTableId();
+        Long partitionId = snapshots.getPartitionId();
         List<SourceSplitBase> splits = new ArrayList<>();
         List<Integer> bucketsNeedInitOffset = new ArrayList<>();
-        for (Integer bucketId : bucketsSnapshotInfo.getBucketIds()) {
+        for (Integer bucketId : snapshots.getBucketIds()) {
             TableBucket tb = new TableBucket(tableId, partitionId, bucketId);
             // the ignore logic rely on the enumerator will always send splits for same bucket
             // in one batch; if we can ignore the bucket, we can skip all the splits(snapshot +
@@ -398,18 +389,15 @@ public class FlinkSourceEnumerator
             if (ignoreTableBucket(tb)) {
                 continue;
             }
-            // if has any snapshot, then we need read snapshot split + log split;
-            Optional<BucketSnapshotInfo> optionalBucketSnapshotInfo =
-                    bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId);
-            if (optionalBucketSnapshotInfo.isPresent()) {
+            OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
+            if (snapshotId.isPresent()) {
                 // hybrid snapshot log split;
-                BucketSnapshotInfo snapshot = optionalBucketSnapshotInfo.get();
+                OptionalLong logOffset = snapshots.getLogOffset(bucketId);
+                checkState(
+                        logOffset.isPresent(), "Log offset should be present if snapshot id is.");
                 splits.add(
                         new HybridSnapshotLogSplit(
-                                tb,
-                                partitionName,
-                                snapshot.getSnapshotFiles(),
-                                snapshot.getLogOffset()));
+                                tb, partitionName, snapshotId.getAsLong(), logOffset.getAsLong()));
             } else {
                 bucketsNeedInitOffset.add(bucketId);
             }

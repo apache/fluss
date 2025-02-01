@@ -36,7 +36,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
@@ -80,7 +80,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newCreateTa
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDatabaseExistsRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropDatabaseRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
-import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newGetTableRequest;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newListTablesRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newMetadataRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newTableExistsRequest;
@@ -258,7 +258,8 @@ class TableManagerITCase {
         assertThat(gateway.tableExists(newTableExistsRequest(tablePath)).get().isExists()).isTrue();
 
         // get the table and check it
-        GetTableResponse response = gateway.getTable(newGetTableRequest(tablePath)).get();
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
         assertThat(gottenTable).isEqualTo(tableDescriptor);
 
@@ -306,7 +307,7 @@ class TableManagerITCase {
         // check assignment, just check bucket number, it should be equal to the default bucket
         // number
         // configured in cluster-level
-        response = gateway.getTable(newGetTableRequest(new TablePath(db1, tb2))).get();
+        response = gateway.getTableInfo(newGetTableInfoRequest(new TablePath(db1, tb2))).get();
         TableAssignment tableAssignment = zkClient.getTableAssignment(response.getTableId()).get();
         assertThat(tableAssignment.getBucketAssignments().size())
                 .isEqualTo(clientConf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER));
@@ -449,8 +450,9 @@ class TableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         TableDescriptor tableDescriptor = newTable();
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
-        GetTableResponse getTableResponse = gateway.getTable(newGetTableRequest(tablePath)).get();
-        long tableId = getTableResponse.getTableId();
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        long tableId = response.getTableId();
 
         // retry until all replica ready.
         int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
@@ -517,7 +519,8 @@ class TableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
-        long tableId = adminGateway.getTable(newGetTableRequest(tablePath)).get().getTableId();
+        long tableId =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get().getTableId();
         int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
 
         Map<String, Long> partitionById =

@@ -16,11 +16,9 @@
 
 package com.alibaba.fluss.connector.flink.source.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.client.write.HashBucketAssigner;
@@ -55,9 +53,10 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.connector.flink.source.testutils.RecordAndPosAssert.assertThatRecordAndPos;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
@@ -406,7 +405,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             throws Exception {
         Map<TableBucket, List<InternalRow>> rowsByBuckets = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
                 InternalRow compactedRow = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
                 upsertWriter.upsert(compactedRow);
@@ -423,7 +422,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     private List<InternalRow> appendRows(TablePath tablePath, int rows) throws Exception {
         List<InternalRow> internalRows = new ArrayList<>(rows);
         try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.getAppendWriter();
+            AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < rows; i++) {
                 InternalRow row = row(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
                 appendWriter.append(row);
@@ -440,7 +439,8 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     private static String toHybridSnapshotLogSplitId(TableBucket tableBucket) {
-        return new HybridSnapshotLogSplit(tableBucket, null, Collections.emptyList(), 0).splitId();
+        // snapshotId and logOffset doesn't affect splitId, use mocked 0 value.
+        return new HybridSnapshotLogSplit(tableBucket, null, 0, 0).splitId();
     }
 
     private static int getBucketId(InternalRow row) {
@@ -454,20 +454,16 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     private List<SourceSplitBase> getHybridSnapshotLogSplits(TablePath tablePath) throws Exception {
-        KvSnapshotInfo kvSnapshotInfo = admin.getKvSnapshot(tablePath).get();
+        KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
         List<SourceSplitBase> hybridSnapshotLogSplits = new ArrayList<>();
-        BucketsSnapshotInfo bucketsSnapshotInfo = kvSnapshotInfo.getBucketsSnapshots();
-        for (Integer bucketId : bucketsSnapshotInfo.getBucketIds()) {
-            TableBucket tableBucket = new TableBucket(kvSnapshotInfo.getTableId(), bucketId);
-            if (bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).isPresent()) {
-                BucketSnapshotInfo bucketSnapshotInfo =
-                        bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).get();
+        for (Integer bucketId : snapshots.getBucketIds()) {
+            TableBucket tableBucket = new TableBucket(snapshots.getTableId(), bucketId);
+            OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
+            OptionalLong logOffset = snapshots.getLogOffset(bucketId);
+            if (snapshotId.isPresent() && logOffset.isPresent()) {
                 hybridSnapshotLogSplits.add(
                         new HybridSnapshotLogSplit(
-                                tableBucket,
-                                null,
-                                bucketSnapshotInfo.getSnapshotFiles(),
-                                bucketSnapshotInfo.getLogOffset()));
+                                tableBucket, null, snapshotId.getAsLong(), logOffset.getAsLong()));
             }
         }
         return hybridSnapshotLogSplits;

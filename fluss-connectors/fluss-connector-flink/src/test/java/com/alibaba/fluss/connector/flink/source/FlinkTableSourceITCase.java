@@ -17,9 +17,8 @@
 package com.alibaba.fluss.connector.flink.source;
 
 import com.alibaba.fluss.client.admin.Admin;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
@@ -1049,7 +1048,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
         // prepare dim table data
         try (Table dimTable = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = dimTable.getUpsertWriter();
+            UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
             RowType dimTableRowType = dimTable.getDescriptor().getSchema().toRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
@@ -1104,10 +1103,9 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     private void waitUtilAllBucketFinishSnapshot(Admin admin, TablePath tablePath) {
         waitUtil(
                 () -> {
-                    KvSnapshotInfo kvSnapshotInfo = admin.getKvSnapshot(tablePath).get();
-                    BucketsSnapshotInfo bucketsSnapshotInfo = kvSnapshotInfo.getBucketsSnapshots();
-                    for (int bucketId : bucketsSnapshotInfo.getBucketIds()) {
-                        if (!bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).isPresent()) {
+                    KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
+                    for (int bucketId : snapshots.getBucketIds()) {
+                        if (!snapshots.getSnapshotId(bucketId).isPresent()) {
                             return false;
                         }
                     }
@@ -1122,12 +1120,10 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         waitUtil(
                 () -> {
                     for (String partition : partitions) {
-                        BucketsSnapshotInfo bucketsSnapshotInfo =
-                                admin.getPartitionSnapshot(tablePath, partition)
-                                        .get()
-                                        .getBucketsSnapshotInfo();
-                        for (int bucketId : bucketsSnapshotInfo.getBucketIds()) {
-                            if (!bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).isPresent()) {
+                        KvSnapshots snapshots =
+                                admin.getLatestKvSnapshots(tablePath, partition).get();
+                        for (int bucketId : snapshots.getBucketIds()) {
+                            if (!snapshots.getSnapshotId(bucketId).isPresent()) {
                                 return false;
                             }
                         }

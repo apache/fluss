@@ -16,13 +16,12 @@
 
 package com.alibaba.fluss.connector.flink.lakehouse.paimon.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
-import com.alibaba.fluss.connector.flink.source.reader.SplitScanner;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.utils.CloseableIterator;
@@ -49,7 +48,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /** A scanner to merge the paimon's snapshot and change log. */
-public class PaimonSnapshotAndLogSplitScanner implements SplitScanner {
+public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
 
     private final TableRead tableRead;
     private final PaimonSnapshotAndFlussLogSplit snapshotAndFlussLogSplit;
@@ -83,8 +82,7 @@ public class PaimonSnapshotAndLogSplitScanner implements SplitScanner {
         this.snapshotAndFlussLogSplit = snapshotAndFlussLogSplit;
         this.keyComparator = ((KeyValueFileStore) fileStoreTable.store()).newKeyComparator();
         this.logRows = new TreeMap<>(keyComparator);
-        this.logScanner =
-                flussTable.getLogScanner(new LogScan().withProjectedFields(newProjectedFields));
+        this.logScanner = flussTable.newScan().project(newProjectedFields).createLogScanner();
 
         TableBucket tableBucket = snapshotAndFlussLogSplit.getTableBucket();
         if (tableBucket.getPartitionId() != null) {
@@ -112,7 +110,8 @@ public class PaimonSnapshotAndLogSplitScanner implements SplitScanner {
 
     @Override
     @Nullable
-    public CloseableIterator<ScanRecord> poll(Duration poolTimeOut) throws IOException {
+    public CloseableIterator<com.alibaba.fluss.row.InternalRow> pollBatch(Duration poolTimeOut)
+            throws IOException {
         if (logScanFinished) {
             if (currentSortMergeReader == null) {
                 currentSortMergeReader = createSortMergeReader();
@@ -200,7 +199,7 @@ public class PaimonSnapshotAndLogSplitScanner implements SplitScanner {
             InternalRow keyRow = keyValueRow.keyRow();
             // upsert the key value row
             logRows.put(keyRow, keyValueRow);
-            if (scanRecord.getOffset() >= stoppingOffset - 1) {
+            if (scanRecord.logOffset() >= stoppingOffset - 1) {
                 // has reached to the end
                 logScanFinished = true;
                 break;
@@ -209,13 +208,17 @@ public class PaimonSnapshotAndLogSplitScanner implements SplitScanner {
     }
 
     @Override
-    public void close() throws Exception {
-        if (logScanner != null) {
-            logScanner.close();
-        }
-        if (snapshotRecordReader != null) {
-            snapshotRecordReader.close();
-            snapshotRecordReader = null;
+    public void close() throws IOException {
+        try {
+            if (logScanner != null) {
+                logScanner.close();
+            }
+            if (snapshotRecordReader != null) {
+                snapshotRecordReader.close();
+                snapshotRecordReader = null;
+            }
+        } catch (Exception e) {
+            throw new IOException("Failed to close resources", e);
         }
     }
 }

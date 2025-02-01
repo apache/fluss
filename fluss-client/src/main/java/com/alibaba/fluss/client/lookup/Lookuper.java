@@ -22,7 +22,7 @@ import com.alibaba.fluss.row.InternalRow;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The lookup-er is used to lookup row of a primary key table by primary key.
+ * The lookup-er is used to lookup row of a primary key table by primary key or prefix key.
  *
  * @since 0.6
  */
@@ -30,9 +30,13 @@ import java.util.concurrent.CompletableFuture;
 public interface Lookuper {
 
     /**
-     * Lookups certain row from the given table primary keys.
+     * Lookups certain row from the given lookup key.
      *
-     * @param lookupKey the given table primary keys.
+     * <p>The lookup key must be a primary key if the lookuper is a Primary Key Lookuper (created by
+     * {@code table.newLookuper().create()}), or be the prefix key if the lookuper is a Prefix Key
+     * Lookuper (created by {@code table.newLookuper().withLookupColumns(prefixKeys).create()}).
+     *
+     * @param lookupKey the lookup key.
      * @return the result of lookup.
      */
     CompletableFuture<LookupResult> lookup(InternalRow lookupKey);

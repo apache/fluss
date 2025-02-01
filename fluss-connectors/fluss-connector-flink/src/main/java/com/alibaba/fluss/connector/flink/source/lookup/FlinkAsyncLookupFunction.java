@@ -18,6 +18,9 @@ package com.alibaba.fluss.connector.flink.source.lookup;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.lookup.Lookup;
+import com.alibaba.fluss.client.lookup.LookupType;
+import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.RemainingFilter;
@@ -63,7 +66,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
-    private transient UnifiedLookuper lookuper;
+    private transient Lookuper lookuper;
 
     public FlinkAsyncLookupFunction(
             Configuration flussConfig,
@@ -100,7 +103,12 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         }
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
-        lookuper = UnifiedLookuper.of(lookupNormalizer.getLookupType(), lookupKeyRowType, table);
+
+        Lookup lookup = table.newLookup();
+        if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+            lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+        }
+        lookuper = lookup.createLookuper();
 
         LOG.info("end open.");
     }
@@ -145,7 +153,8 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                                         keyRow,
                                         remainingFilter);
                             } else {
-                                handleLookupSuccess(resultFuture, result, remainingFilter);
+                                handleLookupSuccess(
+                                        resultFuture, result.getRowList(), remainingFilter);
                             }
                         });
     }

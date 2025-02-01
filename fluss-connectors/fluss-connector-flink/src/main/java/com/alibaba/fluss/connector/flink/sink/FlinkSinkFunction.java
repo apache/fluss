@@ -131,7 +131,7 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
         }
 
         InternalRow internalRow = dataConverter.toInternalRow(value);
-        CompletableFuture<Void> writeFuture = writeRow(value.getRowKind(), internalRow);
+        CompletableFuture<?> writeFuture = writeRow(value.getRowKind(), internalRow);
         writeFuture.exceptionally(
                 exception -> {
                     if (this.asyncWriterException == null) {
@@ -160,7 +160,7 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
 
     abstract FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter();
 
-    abstract CompletableFuture<Void> writeRow(RowKind rowKind, InternalRow internalRow);
+    abstract CompletableFuture<?> writeRow(RowKind rowKind, InternalRow internalRow);
 
     @Override
     public void close() throws Exception {

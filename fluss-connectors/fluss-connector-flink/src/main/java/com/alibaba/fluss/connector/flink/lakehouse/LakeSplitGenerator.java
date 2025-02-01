@@ -17,7 +17,7 @@
 package com.alibaba.fluss.connector.flink.lakehouse;
 
 import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
+import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
 import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer;
@@ -47,7 +47,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -81,7 +81,7 @@ public class LakeSplitGenerator {
 
     public List<SourceSplitBase> generateLakeSplits() throws Exception {
         // get the file store
-        LakeTableSnapshotInfo lakeSnapshotInfo = flussAdmin.getLakeTableSnapshot(tablePath).get();
+        LakeSnapshot lakeSnapshotInfo = flussAdmin.getLatestLakeSnapshot(tablePath).get();
         FileStoreTable fileStoreTable =
                 getTable(
                         lakeSnapshotInfo.getSnapshotId(),

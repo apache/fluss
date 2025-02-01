@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.sink;
 
-import com.alibaba.fluss.client.table.writer.UpsertWrite;
+import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
@@ -31,7 +31,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
-/** A upsert sink for fluss primary key table. */
+/** An upsert sink for fluss primary key table. */
 class UpsertSinkFunction extends FlinkSinkFunction {
 
     private static final long serialVersionUID = 1L;
@@ -50,16 +50,16 @@ class UpsertSinkFunction extends FlinkSinkFunction {
     @Override
     public void open(org.apache.flink.configuration.Configuration config) {
         super.open(config);
-        UpsertWrite upsertOptions = new UpsertWrite();
+        Upsert upsert = table.newUpsert();
         if (targetColumnIndexes != null) {
-            upsertOptions = upsertOptions.withPartialUpdate(targetColumnIndexes);
+            upsert = upsert.partialUpdate(targetColumnIndexes);
         }
-        upsertWriter = table.getUpsertWriter(upsertOptions);
+        upsertWriter = upsert.createWriter();
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
 
     @Override
-    CompletableFuture<Void> writeRow(RowKind rowKind, InternalRow internalRow) {
+    CompletableFuture<?> writeRow(RowKind rowKind, InternalRow internalRow) {
         if (rowKind.equals(RowKind.INSERT) || rowKind.equals(RowKind.UPDATE_AFTER)) {
             return upsertWriter.upsert(internalRow);
         } else if ((rowKind.equals(RowKind.DELETE) || rowKind.equals(RowKind.UPDATE_BEFORE))) {

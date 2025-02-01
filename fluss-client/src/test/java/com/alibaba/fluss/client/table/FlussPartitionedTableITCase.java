@@ -17,14 +17,11 @@
 package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
+import com.alibaba.fluss.client.lookup.LookupResult;
 import com.alibaba.fluss.client.lookup.Lookuper;
-import com.alibaba.fluss.client.lookup.PrefixLookup;
-import com.alibaba.fluss.client.lookup.PrefixLookupResult;
-import com.alibaba.fluss.client.lookup.PrefixLookuper;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
@@ -69,7 +66,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH_PK);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        UpsertWriter upsertWriter = table.getUpsertWriter();
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
         int recordsPerPartition = 5;
         // now, put some data to the partitions
         Map<Long, List<InternalRow>> expectPutRows = new HashMap<>();
@@ -85,7 +82,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         }
         upsertWriter.flush();
 
-        Lookuper lookuper = table.getLookuper();
+        Lookuper lookuper = table.newLookup().createLookuper();
         // now, let's lookup the written data by look up
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
@@ -94,7 +91,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                 InternalRow lookupRow =
                         lookuper.lookup(keyRow(schema, new Object[] {i, null, partition}))
                                 .get()
-                                .getRow();
+                                .getSingletonRow();
                 assertThat(lookupRow).isEqualTo(actualRow);
             }
         }
@@ -147,8 +144,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                             ? Arrays.asList("b", "a", "c")
                             : i == 1 ? Arrays.asList("a", "b", "c") : Arrays.asList("a", "c", "b");
             RowType prefixKeyRowType = rowType.project(schema.getColumnIndexes(lookupColumns));
-            PrefixLookuper prefixLookuper =
-                    table.getPrefixLookuper(new PrefixLookup(lookupColumns));
+            Lookuper prefixLookuper = table.newLookup().lookupBy(lookupColumns).createLookuper();
             for (String partition : partitionIdByNames.keySet()) {
                 Object[] lookupRow =
                         i == 0
@@ -156,9 +152,9 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                                 : i == 1
                                         ? new Object[] {1, partition, 1L}
                                         : new Object[] {1, 1L, partition};
-                CompletableFuture<PrefixLookupResult> result =
-                        prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, lookupRow));
-                PrefixLookupResult prefixLookupResult = result.get();
+                CompletableFuture<LookupResult> result =
+                        prefixLookuper.lookup(compactedRow(prefixKeyRowType, lookupRow));
+                LookupResult prefixLookupResult = result.get();
                 assertThat(prefixLookupResult).isNotNull();
                 List<InternalRow> rowList = prefixLookupResult.getRowList();
                 assertThat(rowList.size()).isEqualTo(1);
@@ -195,7 +191,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Table table = conn.getTable(tablePath);
 
         // test prefix lookup with (a, b).
-        assertThatThrownBy(() -> table.getPrefixLookuper(new PrefixLookup(Arrays.asList("a", "b"))))
+        assertThatThrownBy(() -> table.newLookup().lookupBy("a", "b").createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
                         "Can not perform prefix lookup on table 'test_db_1.test_partitioned_table_prefix_lookup2', "
@@ -208,7 +204,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH);
         Table table = conn.getTable(DATA1_TABLE_PATH);
-        AppendWriter appendWriter = table.getAppendWriter();
+        AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
@@ -239,7 +235,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                 writeRows(table, schema, partitionIdByNames);
 
         // then, let's verify the logs
-        try (LogScanner logScanner = table.getLogScanner(new LogScan())) {
+        try (LogScanner logScanner = table.newScan().createLogScanner()) {
             for (Long partitionId : expectPartitionAppendRows.keySet()) {
                 logScanner.subscribeFromBeginning(partitionId, 0);
             }
@@ -267,7 +263,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
 
     private Map<Long, List<InternalRow>> writeRows(
             Table table, Schema schema, Map<String, Long> partitionIdByNames) {
-        AppendWriter appendWriter = table.getAppendWriter();
+        AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
@@ -306,7 +302,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
     void testOperateNotExistPartitionShouldThrowException() throws Exception {
         Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        Lookuper lookuper = table.getLookuper();
+        Lookuper lookuper = table.newLookup().createLookuper();
 
         // test get for a not exist partition
         assertThatThrownBy(
@@ -325,7 +321,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
 
         // test write to not exist partition
-        UpsertWriter upsertWriter = table.getUpsertWriter();
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
         InternalRow row = row(schema.toRowType(), new Object[] {1, "a", "notExistPartition"});
         assertThatThrownBy(() -> upsertWriter.upsert(row).get())
                 .cause()
@@ -335,12 +331,12 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
 
         // test scan a not exist partition's log
-        LogScan logScan = new LogScan();
-        LogScanner logScanner = table.getLogScanner(logScan);
+        LogScanner logScanner = table.newScan().createLogScanner();
         assertThatThrownBy(() -> logScanner.subscribe(100L, 0, 0))
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining("Partition not exist for partition ids: [100]");
+        logScanner.close();
 
         // todo: test the case that client produce to a partition to a server, but
         // the server delete the partition at the time, the client should receive the

@@ -39,18 +39,12 @@ import java.util.Optional;
 public class CompletedSnapshotHandle {
 
     private final FsPath metadataFilePath;
+    private final long logOffset;
 
-    public CompletedSnapshotHandle(FsPath metadataFilePath) {
+    public CompletedSnapshotHandle(FsPath metadataFilePath, long logOffset) {
         Preconditions.checkNotNull(metadataFilePath);
         this.metadataFilePath = metadataFilePath;
-    }
-
-    /**
-     * Creates a {@link CompletedSnapshotHandle} from a given metadata file path. The metadata file
-     * path must be a valid {@link FsPath} URI string.
-     */
-    public static CompletedSnapshotHandle fromMetadataPath(String metadataFilePath) {
-        return new CompletedSnapshotHandle(new FsPath(metadataFilePath));
+        this.logOffset = logOffset;
     }
 
     public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
@@ -76,6 +70,10 @@ public class CompletedSnapshotHandle {
 
     public FsPath getMetadataFilePath() {
         return metadataFilePath;
+    }
+
+    public long getLogOffset() {
+        return logOffset;
     }
 
     public void discard() throws Exception {

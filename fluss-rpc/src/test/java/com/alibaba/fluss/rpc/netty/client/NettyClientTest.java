@@ -24,7 +24,7 @@ import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 import com.alibaba.fluss.rpc.TestingGatewayService;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -81,16 +81,16 @@ final class NettyClientTest {
 
     @Test
     void testSendIncompleteRequest() {
-        GetTableRequest getTableRequest = new GetTableRequest();
+        GetTableInfoRequest request = new GetTableInfoRequest();
 
         // get table request without table path.
         assertThatThrownBy(
                         () ->
                                 nettyClient
-                                        .sendRequest(serverNode, ApiKeys.GET_TABLE, getTableRequest)
+                                        .sendRequest(serverNode, ApiKeys.GET_TABLE_INFO, request)
                                         .get())
                 .isInstanceOf(ExecutionException.class)
-                .hasMessageContaining("Failed to encode request for 'GET_TABLE(1007)'")
+                .hasMessageContaining("Failed to encode request for 'GET_TABLE_INFO(1007)'")
                 .hasRootCauseMessage("Some required fields are missing");
     }
 

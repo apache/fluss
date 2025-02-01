@@ -22,26 +22,41 @@ import com.alibaba.fluss.client.lookup.LookupClient;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.FlussTable;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
+import com.alibaba.fluss.client.token.DefaultSecurityTokenManager;
+import com.alibaba.fluss.client.token.DefaultSecurityTokenProvider;
+import com.alibaba.fluss.client.token.SecurityTokenManager;
+import com.alibaba.fluss.client.token.SecurityTokenProvider;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
+import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 
-final class FlussConnection implements Connection {
+import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
+
+/** A connection to Fluss cluster, and holds the client session resources. */
+public final class FlussConnection implements Connection {
     private final Configuration conf;
     private final RpcClient rpcClient;
     private final MetadataUpdater metadataUpdater;
+    private final MetricRegistry metricRegistry;
+    private final ClientMetricGroup clientMetricGroup;
 
     private volatile WriterClient writerClient;
     private volatile LookupClient lookupClient;
-    private final MetricRegistry metricRegistry;
-    private final ClientMetricGroup clientMetricGroup;
+    private volatile RemoteFileDownloader remoteFileDownloader;
+    private volatile SecurityTokenManager securityTokenManager;
 
     FlussConnection(Configuration conf) {
         this(conf, MetricRegistry.create(conf, null));
@@ -73,14 +88,21 @@ final class FlussConnection implements Connection {
 
     @Override
     public Table getTable(TablePath tablePath) {
-        return new FlussTable(
-                conf,
-                tablePath,
-                rpcClient,
-                metadataUpdater,
-                this::getOrCreateWriterClient,
-                this::getOrCreateLookupClient,
-                clientMetricGroup);
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
+        return new FlussTable(this, tablePath, tableInfo);
+    }
+
+    public RpcClient getRpcClient() {
+        return rpcClient;
+    }
+
+    public MetadataUpdater getMetadataUpdater() {
+        return metadataUpdater;
+    }
+
+    public ClientMetricGroup getClientMetricGroup() {
+        return clientMetricGroup;
     }
 
     public WriterClient getOrCreateWriterClient() {
@@ -105,13 +127,39 @@ final class FlussConnection implements Connection {
         return lookupClient;
     }
 
-    private void setupClientMetricsConfiguration() {
-        boolean enableClientMetrics = conf.getBoolean(ConfigOptions.CLIENT_METRICS_ENABLED);
-        List<String> reporters = conf.get(ConfigOptions.METRICS_REPORTERS);
-        if (enableClientMetrics && (reporters == null || reporters.isEmpty())) {
-            // Client will use JMX reporter by default if not set.
-            conf.setString(ConfigOptions.METRICS_REPORTERS.key(), "jmx");
+    public RemoteFileDownloader getOrCreateRemoteFileDownloader() {
+        if (remoteFileDownloader == null) {
+            synchronized (this) {
+                if (remoteFileDownloader == null) {
+                    remoteFileDownloader =
+                            new RemoteFileDownloader(
+                                    conf.getInt(ConfigOptions.REMOTE_FILE_DOWNLOAD_THREAD_NUM));
+                }
+                // access remote files requires setting up filesystem security token manager
+                if (securityTokenManager == null) {
+                    // prepare security token manager
+                    // create the admin read only gateway
+                    // todo: may add retry logic when no any available tablet server?
+                    AdminReadOnlyGateway gateway =
+                            GatewayClientProxy.createGatewayProxy(
+                                    () ->
+                                            getOneAvailableTabletServerNode(
+                                                    metadataUpdater.getCluster()),
+                                    rpcClient,
+                                    AdminReadOnlyGateway.class);
+                    SecurityTokenProvider securityTokenProvider =
+                            new DefaultSecurityTokenProvider(gateway);
+                    securityTokenManager =
+                            new DefaultSecurityTokenManager(conf, securityTokenProvider);
+                    try {
+                        securityTokenManager.start();
+                    } catch (Exception e) {
+                        throw new FlussRuntimeException("start security token manager failed", e);
+                    }
+                }
+            }
         }
+        return remoteFileDownloader;
     }
 
     @Override
@@ -126,8 +174,27 @@ final class FlussConnection implements Connection {
             lookupClient.close(Duration.ofMillis(Long.MAX_VALUE));
         }
 
+        if (remoteFileDownloader != null) {
+            remoteFileDownloader.close();
+        }
+
+        if (securityTokenManager != null) {
+            // todo: FLUSS-56910234 we don't have to wait until close fluss table
+            // to stop securityTokenManager
+            securityTokenManager.stop();
+        }
+
         clientMetricGroup.close();
         rpcClient.close();
         metricRegistry.closeAsync().get();
+    }
+
+    private void setupClientMetricsConfiguration() {
+        boolean enableClientMetrics = conf.getBoolean(ConfigOptions.CLIENT_METRICS_ENABLED);
+        List<String> reporters = conf.get(ConfigOptions.METRICS_REPORTERS);
+        if (enableClientMetrics && (reporters == null || reporters.isEmpty())) {
+            // Client will use JMX reporter by default if not set.
+            conf.setString(ConfigOptions.METRICS_REPORTERS.key(), "jmx");
+        }
     }
 }

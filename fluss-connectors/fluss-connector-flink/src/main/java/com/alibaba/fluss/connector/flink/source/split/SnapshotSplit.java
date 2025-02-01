@@ -16,12 +16,10 @@
 
 package com.alibaba.fluss.connector.flink.source.split;
 
-import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
-import java.util.List;
 import java.util.Objects;
 
 /** The split for snapshot. It's used to describe a snapshot of a table bucket. */
@@ -30,28 +28,25 @@ public abstract class SnapshotSplit extends SourceSplitBase {
     /** The records to skip when reading the snapshot. */
     protected final long recordsToSkip;
 
-    /** The snapshot files to read for reading the snapshot. */
-    private final List<FsPathAndFileName> snapshotFiles;
+    /** The snapshot id. It's used to identify the snapshot for a kv bucket. */
+    protected final long snapshotId;
 
     public SnapshotSplit(
             TableBucket tableBucket,
             @Nullable String partitionName,
-            List<FsPathAndFileName> snapshotFiles,
+            long snapshotId,
             long recordsToSkip) {
         super(tableBucket, partitionName);
-        this.snapshotFiles = snapshotFiles;
+        this.snapshotId = snapshotId;
         this.recordsToSkip = recordsToSkip;
     }
 
-    public SnapshotSplit(
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            List<FsPathAndFileName> snapshotFiles) {
-        this(tableBucket, partitionName, snapshotFiles, 0);
+    public SnapshotSplit(TableBucket tableBucket, @Nullable String partitionName, long snapshotId) {
+        this(tableBucket, partitionName, snapshotId, 0);
     }
 
-    public List<FsPathAndFileName> getSnapshotFiles() {
-        return snapshotFiles;
+    public long getSnapshotId() {
+        return snapshotId;
     }
 
     public long recordsToSkip() {
@@ -70,13 +65,12 @@ public abstract class SnapshotSplit extends SourceSplitBase {
             return false;
         }
         SnapshotSplit that = (SnapshotSplit) o;
-        return recordsToSkip == that.recordsToSkip
-                && Objects.equals(snapshotFiles, that.snapshotFiles);
+        return recordsToSkip == that.recordsToSkip && Objects.equals(snapshotId, that.snapshotId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), recordsToSkip, snapshotFiles);
+        return Objects.hash(super.hashCode(), recordsToSkip, snapshotId);
     }
 
     @Override
@@ -89,8 +83,8 @@ public abstract class SnapshotSplit extends SourceSplitBase {
                 + '\''
                 + ", recordsToSkip="
                 + recordsToSkip
-                + ", snapshotFiles="
-                + snapshotFiles
+                + ", snapshotId="
+                + snapshotId
                 + '}';
     }
 }

@@ -16,13 +16,11 @@
 
 package com.alibaba.fluss.lakehouse.paimon.source.split;
 
-import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -44,20 +42,20 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            List<FsPathAndFileName> snapshotFiles,
+            long snapshotId,
             long logStartingOffset) {
-        this(tablePath, tableBucket, partitionName, snapshotFiles, 0, false, logStartingOffset);
+        this(tablePath, tableBucket, partitionName, snapshotId, 0, false, logStartingOffset);
     }
 
     public HybridSnapshotLogSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            List<FsPathAndFileName> snapshotFiles,
+            long snapshotId,
             long recordsToSkip,
             boolean isSnapshotFinished,
             long logStartingOffset) {
-        super(tablePath, tableBucket, partitionName, snapshotFiles, recordsToSkip);
+        super(tablePath, tableBucket, partitionName, snapshotId, recordsToSkip);
         this.isSnapshotFinished = isSnapshotFinished;
         this.logStartingOffset = logStartingOffset;
     }

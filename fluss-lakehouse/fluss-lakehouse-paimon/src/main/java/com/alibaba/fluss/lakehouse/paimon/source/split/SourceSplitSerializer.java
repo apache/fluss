@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.lakehouse.paimon.source.split;
 
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -26,8 +24,6 @@ import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 /** A serializer for the {@link SourceSplitBase}. */
 public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSplitBase> {
@@ -66,8 +62,8 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
         serializeSourceSplitBase(out, split);
         if (split instanceof HybridSnapshotLogSplit) {
             HybridSnapshotLogSplit hybridSnapshotLogSplit = split.asHybridSnapshotLogSplit();
-            // write snapshot files
-            serializeSnapshotFiles(out, hybridSnapshotLogSplit);
+            // write snapshot id
+            out.writeLong(hybridSnapshotLogSplit.getSnapshotId());
             // write records to skip
             out.writeLong(hybridSnapshotLogSplit.recordsToSkip());
             // write is snapshot finished
@@ -104,29 +100,6 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
         out.writeInt(tableBucket.getBucket());
     }
 
-    private void serializeSnapshotFiles(DataOutputSerializer out, SnapshotSplit snapshotSplit)
-            throws IOException {
-        // write snapshot files
-        out.writeInt(snapshotSplit.getSnapshotFiles().size());
-        for (FsPathAndFileName snapshotFsPathAndFileName : snapshotSplit.getSnapshotFiles()) {
-            out.writeUTF(snapshotFsPathAndFileName.getPath().toString());
-            out.writeUTF(snapshotFsPathAndFileName.getFileName());
-        }
-    }
-
-    private List<FsPathAndFileName> deserializeSnapshotFiles(DataInputDeserializer in)
-            throws IOException {
-        // write snapshot id
-        int snapshotFileSize = in.readInt();
-        List<FsPathAndFileName> fsPathAndFIleNames = new ArrayList<>(snapshotFileSize);
-        for (int i = 0; i < snapshotFileSize; i++) {
-            String path = in.readUTF();
-            String localFileName = in.readUTF();
-            fsPathAndFIleNames.add(new FsPathAndFileName(new FsPath(path), localFileName));
-        }
-        return fsPathAndFIleNames;
-    }
-
     @Override
     public SourceSplitBase deserialize(int version, byte[] serialized) throws IOException {
         if (version != VERSION_0) {
@@ -152,7 +125,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
         if (splitKind == HYBRID_SNAPSHOT_LOG_SPLIT_FLAG) {
-            List<FsPathAndFileName> fsPathAndFIleNames = deserializeSnapshotFiles(in);
+            long snapshotId = in.readLong();
             long recordsToSkip = in.readLong();
             boolean isSnapshotFinished = in.readBoolean();
             long logStartingOffset = in.readLong();
@@ -160,7 +133,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                     tablePath,
                     tableBucket,
                     partitionName,
-                    fsPathAndFIleNames,
+                    snapshotId,
                     recordsToSkip,
                     isSnapshotFinished,
                     logStartingOffset);

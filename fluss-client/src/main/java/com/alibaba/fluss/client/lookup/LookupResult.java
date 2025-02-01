@@ -21,6 +21,8 @@ import com.alibaba.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -30,14 +32,29 @@ import java.util.Objects;
  */
 @PublicEvolving
 public final class LookupResult {
-    private final @Nullable InternalRow row;
+    private final List<InternalRow> rowList;
 
     public LookupResult(@Nullable InternalRow row) {
-        this.row = row;
+        this(row == null ? Collections.emptyList() : Collections.singletonList(row));
     }
 
-    public @Nullable InternalRow getRow() {
-        return row;
+    public LookupResult(List<InternalRow> rowList) {
+        this.rowList = rowList;
+    }
+
+    public List<InternalRow> getRowList() {
+        return rowList;
+    }
+
+    public @Nullable InternalRow getSingletonRow() {
+        if (rowList.isEmpty()) {
+            return null;
+        } else if (rowList.size() == 1) {
+            return rowList.get(0);
+        } else {
+            throw new IllegalStateException(
+                    "Expecting exactly one row, but got: " + rowList.size());
+        }
     }
 
     @Override
@@ -50,16 +67,16 @@ public final class LookupResult {
         }
 
         LookupResult lookupResult = (LookupResult) o;
-        return Objects.equals(row, lookupResult.row);
+        return Objects.equals(rowList, lookupResult.rowList);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(row);
+        return Objects.hash(rowList);
     }
 
     @Override
     public String toString() {
-        return "LookupResult{row=" + row + '}';
+        return rowList.toString();
     }
 }

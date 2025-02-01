@@ -18,6 +18,9 @@ package com.alibaba.fluss.connector.flink.source.lookup;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.lookup.Lookup;
+import com.alibaba.fluss.client.lookup.LookupType;
+import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
@@ -59,7 +62,7 @@ public class FlinkLookupFunction extends LookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
-    private transient UnifiedLookuper lookuper;
+    private transient Lookuper lookuper;
     @Nullable private transient ProjectedRow projectedRow;
 
     public FlinkLookupFunction(
@@ -100,7 +103,12 @@ public class FlinkLookupFunction extends LookupFunction {
         }
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
-        lookuper = UnifiedLookuper.of(lookupNormalizer.getLookupType(), lookupKeyRowType, table);
+
+        Lookup lookup = table.newLookup();
+        if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+            lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+        }
+        lookuper = lookup.createLookuper();
 
         LOG.info("end open.");
     }
@@ -123,7 +131,7 @@ public class FlinkLookupFunction extends LookupFunction {
         InternalRow flussKeyRow = flinkRowToFlussRowConverter.toInternalRow(normalizedKeyRow);
         for (int retry = 0; retry <= maxRetryTimes; retry++) {
             try {
-                List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get();
+                List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get().getRowList();
                 if (lookupRows.isEmpty()) {
                     return Collections.emptyList();
                 }

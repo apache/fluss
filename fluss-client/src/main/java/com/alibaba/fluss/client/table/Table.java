@@ -18,24 +18,14 @@ package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.lookup.Lookup;
 import com.alibaba.fluss.client.lookup.Lookuper;
-import com.alibaba.fluss.client.lookup.PrefixLookup;
-import com.alibaba.fluss.client.lookup.PrefixLookuper;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScan;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
+import com.alibaba.fluss.client.table.scanner.Scan;
+import com.alibaba.fluss.client.table.writer.Append;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
-import com.alibaba.fluss.client.table.writer.UpsertWrite;
+import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
-
-import javax.annotation.Nullable;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Used to communicate with a single Fluss table. Obtain an instance from a {@link Connection}.
@@ -58,67 +48,27 @@ public interface Table extends AutoCloseable {
     TableDescriptor getDescriptor();
 
     /**
-     * Extracts limit number of rows from the given table bucket.
-     *
-     * @param tableBucket the target table bucket to scan.
-     * @param limit the given limit number.
-     * @param projectedFields the projection fields.
-     * @return the result of get.
+     * Creates a new {@link Scan} for this table to configure and create a scanner to scan data for
+     * this table. The scanner can be a log scanner to continuously read streaming log data or a
+     * batch scanner to read batch data.
      */
-    CompletableFuture<List<ScanRecord>> limitScan(
-            TableBucket tableBucket, int limit, @Nullable int[] projectedFields);
+    Scan newScan();
 
     /**
-     * Get a {@link AppendWriter} to write data to the table. Only available for Log Table. Will
-     * throw exception when the table is a primary key table.
-     *
-     * @return the {@link AppendWriter} to write data to the table.
+     * Creates a new {@link Lookup} for this table to configure and create a {@link Lookuper} to
+     * lookup data for this table by primary key or a prefix of primary key.
      */
-    AppendWriter getAppendWriter();
+    Lookup newLookup();
 
     /**
-     * Get a {@link UpsertWriter} to write data to the table. Only available for Primary Key Table.
-     * Will throw exception when the table isn't a Primary Key Table.
-     *
-     * @return the {@link UpsertWriter} to write data to the table.
+     * Creates a new {@link Append} to build a {@link AppendWriter} to append data to this table
+     * (requires to be a Log Table).
      */
-    UpsertWriter getUpsertWriter(UpsertWrite upsertWrite);
+    Append newAppend();
 
     /**
-     * Get a {@link UpsertWriter} to write data to the table. Only available for Primary Key Table.
-     * Will throw exception when the table isn't a Primary Key Table.
-     *
-     * @return the {@link UpsertWriter} to write data to the table.
+     * Creates a new {@link Upsert} to build a {@link UpsertWriter} to upsert and delete data to
+     * this table (requires to be a Primary Key Table).
      */
-    UpsertWriter getUpsertWriter();
-
-    /**
-     * Get a {@link LogScanner} to scan log data from this table.
-     *
-     * @return the {@link LogScanner} to scan log data from this table.
-     */
-    LogScanner getLogScanner(LogScan logScan);
-
-    /**
-     * Get a {@link SnapshotScanner} to scan data from this table according to provided {@link
-     * SnapshotScan}.
-     *
-     * @return the {@link SnapshotScanner} to scan data from this table.
-     */
-    SnapshotScanner getSnapshotScanner(SnapshotScan snapshotScan);
-
-    /**
-     * Get a {@link Lookuper} to do lookup.
-     *
-     * @return the {@link Lookuper} to do lookup.
-     */
-    Lookuper getLookuper();
-
-    /**
-     * Get a {@link PrefixLookuper} to do prefix lookup.
-     *
-     * @param prefixLookup the given prefix lookup.
-     * @return the {@link PrefixLookuper} to do prefix lookup.
-     */
-    PrefixLookuper getPrefixLookuper(PrefixLookup prefixLookup);
+    Upsert newUpsert();
 }

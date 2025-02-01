@@ -23,7 +23,7 @@ import com.alibaba.fluss.connector.flink.lakehouse.paimon.reader.PaimonSnapshotA
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.reader.PaimonSnapshotScanner;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
-import com.alibaba.fluss.connector.flink.source.reader.SplitSkipReader;
+import com.alibaba.fluss.connector.flink.source.reader.BoundedSplitReader;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -74,7 +74,7 @@ public class LakeSplitReaderGenerator {
         }
     }
 
-    public SplitSkipReader getBoundedSplitScanner(SourceSplitBase split) {
+    public BoundedSplitReader getBoundedSplitScanner(SourceSplitBase split) {
         if (split instanceof PaimonSnapshotSplit) {
             PaimonSnapshotSplit paimonSnapshotSplit = (PaimonSnapshotSplit) split;
             FileStoreTable paimonStoreTable = getFileStoreTable();
@@ -84,7 +84,7 @@ public class LakeSplitReaderGenerator {
             PaimonSnapshotScanner paimonSnapshotScanner =
                     new PaimonSnapshotScanner(
                             readBuilder.newRead(), paimonSnapshotSplit.getFileStoreSourceSplit());
-            return new SplitSkipReader(
+            return new BoundedSplitReader(
                     paimonSnapshotScanner,
                     paimonSnapshotSplit.getFileStoreSourceSplit().recordsToSkip());
         } else if (split instanceof PaimonSnapshotAndFlussLogSplit) {
@@ -97,7 +97,7 @@ public class LakeSplitReaderGenerator {
                             paimonStoreTable,
                             paimonSnapshotAndFlussLogSplit,
                             projectedFields);
-            return new SplitSkipReader(
+            return new BoundedSplitReader(
                     paimonSnapshotAndLogSplitScanner,
                     paimonSnapshotAndFlussLogSplit.getRecordsToSkip());
         } else {

@@ -77,7 +77,8 @@ public class TestingDatabaseSyncSink extends RichSinkFunction<MultiplexCdcRecord
         TablePath tablePath = record.getTablePath();
         SinkFunction<RowData> sinkFunction = sinkByTablePath.get(tablePath);
         if (sinkFunction == null) {
-            TableDescriptor tableDescriptor = admin.getTable(tablePath).get().getTableDescriptor();
+            TableDescriptor tableDescriptor =
+                    admin.getTableInfo(tablePath).get().getTableDescriptor();
             RowType rowType = tableDescriptor.getSchema().toRowType();
 
             FlinkTableSink flinkTableSink =

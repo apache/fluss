@@ -21,18 +21,18 @@ import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
-import com.alibaba.fluss.rpc.messages.GetDatabaseRequest;
-import com.alibaba.fluss.rpc.messages.GetDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaResponse;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
@@ -66,14 +66,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     CompletableFuture<ListDatabasesResponse> listDatabases(ListDatabasesRequest request);
 
     /**
-     * Return a {@link com.alibaba.fluss.rpc.messages.GetDatabaseResponse} by the given {@link
-     * com.alibaba.fluss.rpc.messages.GetDatabaseRequest}.
+     * Return a {@link GetDatabaseInfoResponse} by the given {@link GetDatabaseInfoRequest}.
      *
      * @param request Name of the database
      * @return The response of requested database.
      */
-    @RPC(api = ApiKeys.GET_DATABASE)
-    CompletableFuture<GetDatabaseResponse> getDatabase(GetDatabaseRequest request);
+    @RPC(api = ApiKeys.GET_DATABASE_INFO)
+    CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(GetDatabaseInfoRequest request);
 
     /**
      * Check if a database exists in this catalog.
@@ -94,13 +93,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     CompletableFuture<ListTablesResponse> listTables(ListTablesRequest request);
 
     /**
-     * Return a {@link GetTableResponse} by the given {@link GetTableRequest}.
+     * Return a {@link GetTableInfoResponse} by the given {@link GetTableInfoRequest}.
      *
      * @param request Path of the table
      * @return The response of requested table
      */
-    @RPC(api = ApiKeys.GET_TABLE)
-    CompletableFuture<GetTableResponse> getTable(GetTableRequest request);
+    @RPC(api = ApiKeys.GET_TABLE_INFO)
+    CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request);
 
     /**
      * Return a {@link GetTableSchemaResponse} identified by the given {@link
@@ -140,13 +139,25 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request);
 
     /**
-     * Get the snapshot info of a table.
+     * Get the latest kv snapshots of a primary key table. A kv snapshot is a snapshot of a kv
+     * tablet, so a table can have multiple kv snapshots.
      *
-     * @param request Get table snapshot request
-     * @return a future returns table snapshot info
+     * @param request Get latest kv snapshots request
+     * @return a future returns latest kv snapshots
      */
-    @RPC(api = ApiKeys.GET_KV_SNAPSHOT)
-    CompletableFuture<GetKvSnapshotResponse> getKvSnapshot(GetKvSnapshotRequest request);
+    @RPC(api = ApiKeys.GET_LATEST_KV_SNAPSHOTS)
+    CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
+            GetLatestKvSnapshotsRequest request);
+
+    /**
+     * Get the kv snapshot metadata of a given kv snapshot.
+     *
+     * @param request request that specifies the kv bucket and snapshot id
+     * @return a future returns kv snapshot metadata (including the snapshot files and log offset)
+     */
+    @RPC(api = ApiKeys.GET_KV_SNAPSHOT_METADATA)
+    CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
+            GetKvSnapshotMetadataRequest request);
 
     /**
      * Get the security token to access the files.
@@ -169,16 +180,6 @@ public interface AdminReadOnlyGateway extends RpcGateway {
             ListPartitionInfosRequest request);
 
     /**
-     * Get the snapshot info of a table.
-     *
-     * @param request the get partition snapshot request
-     * @return a future returns snapshot info of a partition
-     */
-    @RPC(api = ApiKeys.GET_PARTITION_SNAPSHOT)
-    CompletableFuture<GetPartitionSnapshotResponse> getPartitionSnapshot(
-            GetPartitionSnapshotRequest request);
-
-    /**
      * Describe the lake storage used for Fluss.
      *
      * @return a future returns lake storage info
@@ -188,11 +189,12 @@ public interface AdminReadOnlyGateway extends RpcGateway {
             DescribeLakeStorageRequest request);
 
     /**
-     * Get the lake snapshot for the table.
+     * Get the latest lake snapshot for the given table.
      *
-     * @return a future returns lake snapshot
+     * @param request request that specifies that table path.
+     * @return a future returns the lake snapshot of the table.
      */
-    @RPC(api = ApiKeys.GET_LAKE_TABLE_SNAPSHOT)
-    CompletableFuture<GetLakeTableSnapshotResponse> getLakeTableSnapshot(
-            GetLakeTableSnapshotRequest request);
+    @RPC(api = ApiKeys.GET_LATEST_LAKE_SNAPSHOT)
+    CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
+            GetLatestLakeSnapshotRequest request);
 }

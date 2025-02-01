@@ -19,11 +19,9 @@ package com.alibaba.fluss.client.utils;
 import com.alibaba.fluss.client.admin.OffsetSpec;
 import com.alibaba.fluss.client.lookup.LookupBatch;
 import com.alibaba.fluss.client.lookup.PrefixLookupBatch;
-import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.PartitionSnapshotInfo;
+import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
+import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.write.KvWriteBatch;
 import com.alibaba.fluss.client.write.WriteBatch;
 import com.alibaba.fluss.fs.FsPath;
@@ -41,16 +39,16 @@ import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotResponse;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosResponse;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
-import com.alibaba.fluss.rpc.messages.PbBucketSnapshot;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbKeyValue;
+import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import com.alibaba.fluss.rpc.messages.PbLakeStorageInfo;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
@@ -61,7 +59,6 @@ import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
-import com.alibaba.fluss.rpc.messages.PbSnapshotForBucket;
 import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -80,6 +77,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * Utils for making rpc request/response from inner object or convert inner class to rpc
@@ -256,43 +255,38 @@ public class ClientRpcMessageUtils {
         return fetchLogResultForBucket;
     }
 
-    public static KvSnapshotInfo toKvSnapshotInfo(GetKvSnapshotResponse getKvSnapshotResponse) {
-        long tableId = getKvSnapshotResponse.getTableId();
-        Map<Integer, BucketSnapshotInfo> snapshots =
-                toBucketsSnapshot(getKvSnapshotResponse.getBucketSnapshotsList());
-        return new KvSnapshotInfo(tableId, snapshots);
-    }
-
-    private static Map<Integer, BucketSnapshotInfo> toBucketsSnapshot(
-            List<PbSnapshotForBucket> pbSnapshotForBuckets) {
-        Map<Integer, BucketSnapshotInfo> snapshots = new HashMap<>(pbSnapshotForBuckets.size());
-        for (PbSnapshotForBucket bucketSnapshotForTable : pbSnapshotForBuckets) {
-            int bucketId = bucketSnapshotForTable.getBucketId();
-            // if has snapshot
-            BucketSnapshotInfo bucketSnapshotInfo = null;
-            if (bucketSnapshotForTable.hasSnapshot()) {
-                // get the files for the snapshot and the log offset for the snapshot
-                PbBucketSnapshot pbBucketSnapshot = bucketSnapshotForTable.getSnapshot();
-                bucketSnapshotInfo =
-                        new BucketSnapshotInfo(
-                                toFsPathAndFileName(pbBucketSnapshot.getSnapshotFilesList()),
-                                pbBucketSnapshot.getLogOffset());
-            }
-            snapshots.put(bucketId, bucketSnapshotInfo);
+    public static KvSnapshots toKvSnapshots(GetLatestKvSnapshotsResponse response) {
+        long tableId = response.getTableId();
+        Long partitionId = response.hasPartitionId() ? response.getPartitionId() : null;
+        Map<Integer, Long> snapshotIds = new HashMap<>();
+        Map<Integer, Long> logOffsets = new HashMap<>();
+        for (PbKvSnapshot pbKvSnapshot : response.getLatestSnapshotsList()) {
+            int bucketId = pbKvSnapshot.getBucketId();
+            Long snapshotId = pbKvSnapshot.hasSnapshotId() ? pbKvSnapshot.getSnapshotId() : null;
+            snapshotIds.put(bucketId, snapshotId);
+            Long logOffset = pbKvSnapshot.hasLogOffset() ? pbKvSnapshot.getLogOffset() : null;
+            logOffsets.put(bucketId, logOffset);
+            boolean bothNull = snapshotId == null && logOffset == null;
+            boolean bothNotNull = snapshotId != null && logOffset != null;
+            checkState(
+                    bothNull || bothNotNull,
+                    "snapshotId and logOffset should be both null or not null");
         }
-        return snapshots;
+        return new KvSnapshots(tableId, partitionId, snapshotIds, logOffsets);
     }
 
-    public static LakeTableSnapshotInfo toLakeTableSnapshotInfo(
-            GetLakeTableSnapshotResponse getLakeTableSnapshotResponse) {
-        LakeStorageInfo lakeStorageInfo =
-                toLakeStorageInfo(getLakeTableSnapshotResponse.getLakehouseStorageInfo());
-        long tableId = getLakeTableSnapshotResponse.getTableId();
-        long snapshotId = getLakeTableSnapshotResponse.getSnapshotId();
+    public static KvSnapshotMetadata toKvSnapshotMetadata(GetKvSnapshotMetadataResponse response) {
+        return new KvSnapshotMetadata(
+                toFsPathAndFileName(response.getSnapshotFilesList()), response.getLogOffset());
+    }
+
+    public static LakeSnapshot toLakeTableSnapshotInfo(GetLatestLakeSnapshotResponse response) {
+        LakeStorageInfo lakeStorageInfo = toLakeStorageInfo(response.getLakehouseStorageInfo());
+        long tableId = response.getTableId();
+        long snapshotId = response.getSnapshotId();
         Map<TableBucket, Long> tableBucketsOffset =
-                new HashMap<>(getLakeTableSnapshotResponse.getBucketSnapshotsCount());
-        for (PbLakeSnapshotForBucket pbLakeSnapshotForBucket :
-                getLakeTableSnapshotResponse.getBucketSnapshotsList()) {
+                new HashMap<>(response.getBucketSnapshotsCount());
+        for (PbLakeSnapshotForBucket pbLakeSnapshotForBucket : response.getBucketSnapshotsList()) {
             Long partitionId =
                     pbLakeSnapshotForBucket.hasPartitionId()
                             ? pbLakeSnapshotForBucket.getPartitionId()
@@ -301,16 +295,7 @@ public class ClientRpcMessageUtils {
                     new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
             tableBucketsOffset.put(tableBucket, pbLakeSnapshotForBucket.getLogOffset());
         }
-        return new LakeTableSnapshotInfo(lakeStorageInfo, snapshotId, tableBucketsOffset);
-    }
-
-    public static PartitionSnapshotInfo toPartitionSnapshotInfo(
-            GetPartitionSnapshotResponse response) {
-        long tableId = response.getTableId();
-        long partitionId = response.getPartitionId();
-        BucketsSnapshotInfo bucketsSnapshotInfo =
-                new BucketsSnapshotInfo(toBucketsSnapshot(response.getBucketSnapshotsList()));
-        return new PartitionSnapshotInfo(tableId, partitionId, bucketsSnapshotInfo);
+        return new LakeSnapshot(lakeStorageInfo, snapshotId, tableBucketsOffset);
     }
 
     public static List<FsPathAndFileName> toFsPathAndFileName(

@@ -16,10 +16,9 @@
 
 package com.alibaba.fluss.client.admin;
 
+import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
@@ -58,6 +57,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -102,8 +103,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         Admin admin2 = conn.getAdmin();
         assertThat(admin1).isNotSameAs(admin2);
 
-        TableInfo t1 = admin1.getTable(DEFAULT_TABLE_PATH).get();
-        TableInfo t2 = admin2.getTable(DEFAULT_TABLE_PATH).get();
+        TableInfo t1 = admin1.getTableInfo(DEFAULT_TABLE_PATH).get();
+        TableInfo t2 = admin2.getTableInfo(DEFAULT_TABLE_PATH).get();
         assertThat(t1).isEqualTo(t2);
 
         admin1.close();
@@ -111,7 +112,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testGetDatabase() throws Exception {
+    void testGetDatabaseInfo() throws Exception {
         long timestampBeforeCreate = System.currentTimeMillis();
         admin.createDatabase(
                 "test_db_2",
@@ -120,7 +121,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .customProperty("key1", "value1")
                         .build(),
                 false);
-        DatabaseInfo databaseInfo = admin.getDatabase("test_db_2").get();
+        DatabaseInfo databaseInfo = admin.getDatabaseInfo("test_db_2").get();
         long timestampAfterCreate = System.currentTimeMillis();
         assertThat(databaseInfo.getDatabaseName()).isEqualTo("test_db_2");
         assertThat(databaseInfo.getDatabaseDescriptor().getComment().get())
@@ -133,7 +134,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testGetTableAndSchema() throws Exception {
+    void testGetTableInfoAndSchema() throws Exception {
         SchemaInfo schemaInfo = admin.getTableSchema(DEFAULT_TABLE_PATH).get();
         assertThat(schemaInfo.getSchema()).isEqualTo(DEFAULT_SCHEMA);
         assertThat(schemaInfo.getSchemaId()).isEqualTo(1);
@@ -141,14 +142,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // get default table.
         long timestampAfterCreate = System.currentTimeMillis();
-        TableInfo tableInfo = admin.getTable(DEFAULT_TABLE_PATH).get();
+        TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
         assertThat(tableInfo.getTableDescriptor()).isEqualTo(DEFAULT_TABLE_DESCRIPTOR);
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         assertThat(tableInfo.getCreatedTime()).isLessThan(timestampAfterCreate);
 
         // unknown table
-        assertThatThrownBy(() -> admin.getTable(TablePath.of("test_db", "unknown_table")).get())
+        assertThatThrownBy(() -> admin.getTableInfo(TablePath.of("test_db", "unknown_table")).get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class);
         assertThatThrownBy(
@@ -160,7 +161,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         long timestampBeforeCreate = System.currentTimeMillis();
         TablePath tablePath = TablePath.of("test_db", "table_2");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false);
-        tableInfo = admin.getTable(tablePath).get();
+        tableInfo = admin.getTableInfo(tablePath).get();
         timestampAfterCreate = System.currentTimeMillis();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
         assertThat(tableInfo.getTableDescriptor()).isEqualTo(DEFAULT_TABLE_DESCRIPTOR);
@@ -336,7 +337,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // we can create the table now
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
-        TableInfo tableInfo = admin.getTable(DEFAULT_TABLE_PATH).get();
+        TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
         assertThat(tableInfo.getTableDescriptor()).isEqualTo(DEFAULT_TABLE_DESCRIPTOR);
     }
 
@@ -471,14 +472,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.createTable(tablePath1, tableDescriptor, true).get();
 
         // no any data, should no any bucket snapshot
-        KvSnapshotInfo kvSnapshotInfo = admin.getKvSnapshot(tablePath1).get();
-        assertNoBucketSnapshot(kvSnapshotInfo, bucketNum);
+        KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath1).get();
+        assertNoBucketSnapshot(snapshots, bucketNum);
 
-        long tableId = kvSnapshotInfo.getTableId();
+        long tableId = snapshots.getTableId();
 
         // write data
         try (Table table = conn.getTable(tablePath1)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < 10; i++) {
                 upsertWriter.upsert(
                         compactedRow(DEFAULT_SCHEMA.toRowType(), new Object[] {i, "v" + i, i + 1}));
@@ -494,23 +495,23 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             }
 
             // now, get the table snapshot info
-            kvSnapshotInfo = admin.getKvSnapshot(tablePath1).get();
+            snapshots = admin.getLatestKvSnapshots(tablePath1).get();
             // check table snapshot info
-            assertTableSnapshot(kvSnapshotInfo, bucketNum, expectedSnapshots);
+            assertTableSnapshot(snapshots, bucketNum, expectedSnapshots);
 
             // write data again, should fall into bucket 2
             upsertWriter.upsert(
                     compactedRow(DEFAULT_SCHEMA.toRowType(), new Object[] {0, "v000", 1}));
             upsertWriter.flush();
 
-            TableBucket tb = new TableBucket(kvSnapshotInfo.getTableId(), 2);
+            TableBucket tb = new TableBucket(snapshots.getTableId(), 2);
             // wait util the snapshot finish
             expectedSnapshots.put(
                     tb.getBucket(), FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tb, 1));
 
             // check snapshot
-            kvSnapshotInfo = admin.getKvSnapshot(tablePath1).get();
-            assertTableSnapshot(kvSnapshotInfo, bucketNum, expectedSnapshots);
+            snapshots = admin.getLatestKvSnapshots(tablePath1).get();
+            assertTableSnapshot(snapshots, bucketNum, expectedSnapshots);
         }
     }
 
@@ -538,38 +539,44 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 });
     }
 
-    private void assertNoBucketSnapshot(KvSnapshotInfo kvSnapshotInfo, int expectBucketNum) {
-        BucketsSnapshotInfo bucketsSnapshotInfo = kvSnapshotInfo.getBucketsSnapshots();
-        assertThat(bucketsSnapshotInfo.getBucketIds()).hasSize(expectBucketNum);
+    private void assertNoBucketSnapshot(KvSnapshots snapshots, int expectBucketNum) {
+        assertThat(snapshots.getBucketIds()).hasSize(expectBucketNum);
         for (int i = 0; i < expectBucketNum; i++) {
-            assertThat(bucketsSnapshotInfo.getBucketSnapshotInfo(i)).isEmpty();
+            assertThat(snapshots.getSnapshotId(i)).isEmpty();
         }
     }
 
     private void assertTableSnapshot(
-            KvSnapshotInfo kvSnapshotInfo,
+            KvSnapshots snapshots,
             int expectBucketNum,
-            Map<Integer, CompletedSnapshot> expectedSnapshots) {
+            Map<Integer, CompletedSnapshot> expectedSnapshots)
+            throws ExecutionException, InterruptedException {
         // check bucket numbers
-        BucketsSnapshotInfo bucketsSnapshotInfo = kvSnapshotInfo.getBucketsSnapshots();
-        assertThat(bucketsSnapshotInfo.getBucketIds()).hasSize(expectBucketNum);
-        for (Map.Entry<Integer, CompletedSnapshot> snapshotEntry : expectedSnapshots.entrySet()) {
+        assertThat(snapshots.getBucketIds()).hasSize(expectBucketNum);
+        for (Map.Entry<Integer, CompletedSnapshot> expectedSnapshot :
+                expectedSnapshots.entrySet()) {
+            int bucketId = expectedSnapshot.getKey();
+            OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
+            assertThat(snapshotId).isPresent();
+
+            TableBucket tableBucket =
+                    new TableBucket(snapshots.getTableId(), snapshots.getPartitionId(), bucketId);
+            KvSnapshotMetadata snapshotMetadata =
+                    admin.getKvSnapshotMetadata(tableBucket, snapshotId.getAsLong()).get();
             // check bucket snapshot
-            BucketSnapshotInfo bucketSnapshotInfo =
-                    bucketsSnapshotInfo.getBucketSnapshotInfo(snapshotEntry.getKey()).get();
-            assertBucketSnapshot(bucketSnapshotInfo, snapshotEntry.getValue());
+            assertBucketSnapshot(snapshotMetadata, expectedSnapshot.getValue());
         }
     }
 
     private void assertBucketSnapshot(
-            BucketSnapshotInfo bucketSnapshotInfo, CompletedSnapshot expectedSnapshot) {
+            KvSnapshotMetadata snapshotMetadata, CompletedSnapshot expectedSnapshot) {
         // check snapshot files
-        assertThat(bucketSnapshotInfo.getSnapshotFiles())
+        assertThat(snapshotMetadata.getSnapshotFiles())
                 .containsExactlyInAnyOrderElementsOf(
                         toFsPathAndFileNames(expectedSnapshot.getKvSnapshotHandle()));
 
         // check offset
-        assertThat(bucketSnapshotInfo.getLogOffset()).isEqualTo(expectedSnapshot.getLogOffset());
+        assertThat(snapshotMetadata.getLogOffset()).isEqualTo(expectedSnapshot.getLogOffset());
     }
 
     private List<FsPathAndFileName> toFsPathAndFileNames(KvSnapshotHandle kvSnapshotHandle) {

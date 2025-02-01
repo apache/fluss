@@ -56,11 +56,11 @@ message CreateDatabaseResponse {
 }
 
 // get table request and response
-message GetDatabaseRequest {
+message GetDatabaseInfoRequest {
   required string database_name = 1;
 }
 
-message GetDatabaseResponse {
+message GetDatabaseInfoResponse {
   required bytes database_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
@@ -101,11 +101,11 @@ message CreateTableResponse {
 }
 
 // get table request and response
-message GetTableRequest {
+message GetTableInfoRequest {
   required PbTablePath table_path = 1;
 }
 
-message GetTableResponse {
+message GetTableInfoResponse {
   required int64 table_id = 1;
   required int32 schema_id = 2;
   required bytes table_json = 3;
@@ -314,36 +314,39 @@ message NotifyKvSnapshotOffsetRequest {
 message NotifyKvSnapshotOffsetResponse {
 }
 
-// get table kv snapshot request and response
-message GetKvSnapshotRequest {
+message GetLatestKvSnapshotsRequest {
   required PbTablePath table_path = 1;
+  optional string partition_name = 2;
 }
 
-message GetKvSnapshotResponse {
+message GetLatestKvSnapshotsResponse {
   required int64 table_id = 1;
-  repeated PbSnapshotForBucket bucket_snapshots = 2;
+  // null if it is a non-partitioned table, otherwise, it must be not null
+  optional int64 partition_id = 2;
+  repeated PbKvSnapshot latest_snapshots = 3;
 }
 
-message GetLakeTableSnapshotRequest {
+message GetKvSnapshotMetadataRequest {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+  required int64 snapshot_id = 4;
+}
+
+message GetKvSnapshotMetadataResponse {
+  required int64 log_offset = 1;
+  repeated PbRemotePathAndLocalFile snapshot_files = 2;
+}
+
+message GetLatestLakeSnapshotRequest {
   required PbTablePath table_path = 1;
 }
 
-message GetLakeTableSnapshotResponse {
+message GetLatestLakeSnapshotResponse {
   required PbLakeStorageInfo lakehouse_storage_info = 1;
   required int64 table_id = 2;
   required int64 snapshotId = 3;
   repeated PbLakeSnapshotForBucket bucket_snapshots = 4;
-}
-
-message GetPartitionSnapshotRequest {
-  required PbTablePath table_path = 1;
-  required string partition_name = 2;
-}
-
-message GetPartitionSnapshotResponse {
-  required int64 table_id = 1;
-  required int64 partition_id = 2;
-  repeated PbSnapshotForBucket bucket_snapshots = 3;
 }
 
 message GetFileSystemSecurityTokenRequest {
@@ -672,21 +675,18 @@ message PbStopReplicaRespForBucket {
   optional string error_message = 3;
 }
 
-message PbSnapshotForBucket {
+message PbKvSnapshot {
   required int32 bucket_id = 1;
-  // empty if no any snapshot for the bucket
-  optional PbBucketSnapshot snapshot = 2;
+  // null if there is no snapshot for this bucket
+  optional int64 snapshot_id = 2;
+  // null if there is no snapshot for this bucket, then read from EARLIEST
+  optional int64 log_offset = 3;
 }
 
 message PbLakeSnapshotForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_offset = 3;
-}
-
-message PbBucketSnapshot {
-  required int64 log_offset = 1;
-  repeated PbRemotePathAndLocalFile snapshot_files = 2;
 }
 
 message PbRemotePathAndLocalFile {

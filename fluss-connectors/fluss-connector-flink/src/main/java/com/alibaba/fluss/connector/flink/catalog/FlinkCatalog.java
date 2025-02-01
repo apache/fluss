@@ -147,7 +147,7 @@ public class FlinkCatalog implements Catalog {
         }
         try {
             DatabaseDescriptor databaseDescriptor =
-                    admin.getDatabase(databaseName).get().getDatabaseDescriptor();
+                    admin.getDatabaseInfo(databaseName).get().getDatabaseDescriptor();
             return new CatalogDatabaseImpl(
                     databaseDescriptor.getCustomProperties(),
                     databaseDescriptor.getComment().orElse(null));
@@ -248,7 +248,7 @@ public class FlinkCatalog implements Catalog {
             // table name contains $lake, means to read from datalake
             if (tableName.contains(LAKE_TABLE_SPLITTER)) {
                 tableInfo =
-                        admin.getTable(
+                        admin.getTableInfo(
                                         TablePath.of(
                                                 objectPath.getDatabaseName(),
                                                 tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
@@ -264,7 +264,7 @@ public class FlinkCatalog implements Catalog {
                 }
                 return getLakeTable(objectPath.getDatabaseName(), tableName);
             } else {
-                tableInfo = admin.getTable(tablePath).get();
+                tableInfo = admin.getTableInfo(tablePath).get();
             }
 
             // should be as a fluss table

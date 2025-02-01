@@ -22,11 +22,12 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.KvSnapshotNotExistException;
 import com.alibaba.fluss.exception.LakeStorageNotConfiguredException;
 import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
+import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SecurityTokenException;
-import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
@@ -46,18 +47,18 @@ import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
-import com.alibaba.fluss.rpc.messages.GetDatabaseRequest;
-import com.alibaba.fluss.rpc.messages.GetDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaResponse;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
@@ -79,6 +80,7 @@ import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.server.coordinator.CoordinatorService;
 import com.alibaba.fluss.server.coordinator.MetaDataManager;
+import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
 import com.alibaba.fluss.server.metadata.PartitionMetadataInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
@@ -102,7 +104,6 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -110,7 +111,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeGetLatestKvSnapshotsResponse;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeKvSnapshotMetadataResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * An RPC service basic implementation that implements the common RPC methods of {@link
@@ -181,8 +185,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetDatabaseResponse> getDatabase(GetDatabaseRequest request) {
-        GetDatabaseResponse response = new GetDatabaseResponse();
+    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
+            GetDatabaseInfoRequest request) {
+        GetDatabaseInfoResponse response = new GetDatabaseInfoResponse();
         DatabaseInfo databaseInfo = metadataManager.getDatabase(request.getDatabaseName());
         response.setDatabaseJson(databaseInfo.getDatabaseDescriptor().toJsonBytes())
                 .setCreatedTime(databaseInfo.getCreatedTime())
@@ -207,8 +212,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetTableResponse> getTable(GetTableRequest request) {
-        GetTableResponse response = new GetTableResponse();
+    public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
+        GetTableInfoResponse response = new GetTableInfoResponse();
         TablePath tablePath = toTablePath(request.getTablePath());
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         response.setTableJson(tableInfo.getTableDescriptor().toJsonBytes())
@@ -287,30 +292,96 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetKvSnapshotResponse> getKvSnapshot(GetKvSnapshotRequest request) {
+    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
+            GetLatestKvSnapshotsRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
 
-        // get table id
-        long tableId = tableInfo.getTableId();
+        boolean hasPrimaryKey = tableInfo.getTableDescriptor().hasPrimaryKey();
+        boolean hasPartitionName = request.hasPartitionName();
+        boolean isPartitioned = tableInfo.getTableDescriptor().isPartitioned();
+        if (!hasPrimaryKey) {
+            throw new NonPrimaryKeyTableException(
+                    "Table '"
+                            + tablePath
+                            + "' is not a primary key table, so it doesn't have any kv snapshots.");
+        } else if (hasPartitionName && !isPartitioned) {
+            throw new TableNotPartitionedException(
+                    "Table '" + tablePath + "' is not a partitioned table.");
+        } else if (!hasPartitionName && isPartitioned) {
+            throw new PartitionNotExistException(
+                    "Table '"
+                            + tablePath
+                            + "' is a partitioned table, but partition name is not provided.");
+        }
+
         try {
-            // get latest snapshots
-            Optional<Map<Integer, Optional<BucketSnapshot>>> optBucketSnapshots =
-                    zkClient.getTableLatestBucketSnapshot(tableId);
-            if (!optBucketSnapshots.isPresent()) {
-                // if bucket snapshot info is not present, it should be the table assignment has
-                // been deleted from zk, throw TableNotExistException
-                throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
+            // get table id
+            long tableId = tableInfo.getTableId();
+            int numBuckets =
+                    tableInfo
+                            .getTableDescriptor()
+                            .getTableDistribution()
+                            .get()
+                            .getBucketCount()
+                            .get();
+            Long partitionId =
+                    hasPartitionName ? getPartitionId(tablePath, request.getPartitionName()) : null;
+            Map<Integer, Optional<BucketSnapshot>> snapshots;
+            if (partitionId != null) {
+                snapshots = zkClient.getPartitionLatestBucketSnapshot(partitionId);
+            } else {
+                snapshots = zkClient.getTableLatestBucketSnapshot(tableId);
             }
             return CompletableFuture.completedFuture(
-                    RpcMessageUtils.makeGetKvSnapshotResponse(tableId, optBucketSnapshots.get()));
-        } catch (TableNotExistException e) {
-            throw e;
+                    makeGetLatestKvSnapshotsResponse(tableId, partitionId, snapshots, numBuckets));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private long getPartitionId(TablePath tablePath, String partitionName) {
+        Optional<TablePartition> optTablePartition;
+        try {
+            optTablePartition = zkClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format("Failed to get table snapshot for table id %s", tableId), e);
+                    String.format("Failed to get latest kv snapshots for table '%s'", tablePath),
+                    e);
+        }
+        if (!optTablePartition.isPresent()) {
+            throw new PartitionNotExistException(
+                    String.format(
+                            "The partition '%s' of table '%s' does not exist.",
+                            partitionName, tablePath));
+        }
+        return optTablePartition.get().getPartitionId();
+    }
+
+    @Override
+    public CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
+            GetKvSnapshotMetadataRequest request) {
+        TableBucket tableBucket =
+                new TableBucket(
+                        request.getTableId(),
+                        request.hasPartitionId() ? request.getPartitionId() : null,
+                        request.getBucketId());
+        long snapshotId = request.getSnapshotId();
+
+        Optional<BucketSnapshot> snapshot;
+        try {
+            snapshot = zkClient.getTableBucketSnapshot(tableBucket, snapshotId);
+            checkState(snapshot.isPresent(), "Kv snapshot not found");
+            CompletedSnapshot completedSnapshot =
+                    snapshot.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
+            return CompletableFuture.completedFuture(
+                    makeKvSnapshotMetadataResponse(completedSnapshot));
+        } catch (Exception e) {
+            throw new KvSnapshotNotExistException(
+                    String.format(
+                            "Failed to get kv snapshot metadata for table bucket %s and snapshot id %s. Error: %s",
+                            tableBucket, snapshotId, e.getMessage()));
         }
     }
 
@@ -345,58 +416,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetPartitionSnapshotResponse> getPartitionSnapshot(
-            GetPartitionSnapshotRequest request) {
-        TablePath tablePath = toTablePath(request.getTablePath());
-
-        // get table info
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        if (!tableInfo.getTableDescriptor().isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Table '" + tablePath + "' is not a partitioned table.");
-        }
-        long tableId = tableInfo.getTableId();
-        String partitionName = request.getPartitionName();
-        Map<Long, Map<Integer, Optional<BucketSnapshot>>> partitionBucketsSnapshots =
-                new HashMap<>();
-        try {
-            Optional<TablePartition> optTablePartition =
-                    zkClient.getPartition(tablePath, partitionName);
-            if (!optTablePartition.isPresent()) {
-                // if bucket snapshot info is not present, it should be the partition assignment
-                // has been deleted from zk, throw PartitionNotExistException
-                throw new PartitionNotExistException(
-                        String.format(
-                                "The partition '%s' of table %s does not exist.",
-                                partitionName, tablePath));
-            }
-
-            long partitionId = optTablePartition.get().getPartitionId();
-            Optional<Map<Integer, Optional<BucketSnapshot>>> optBucketSnapshots =
-                    zkClient.getPartitionLatestBucketSnapshot(partitionId);
-            if (!optBucketSnapshots.isPresent()) {
-                // if bucket snapshot info is not present, it should be the partition assignment
-                // has been deleted from zk, throw PartitionNotExistException
-                throw new PartitionNotExistException(
-                        String.format(
-                                "The partition '%s' of table %s does not exist. Can't find assignment for the partition id %d in zk.",
-                                partitionName, tablePath, partitionId));
-            }
-            return CompletableFuture.completedFuture(
-                    RpcMessageUtils.makeGetTablePartitionSnapshotResponse(
-                            tableId, partitionId, optBucketSnapshots.get()));
-        } catch (PartitionNotExistException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format(
-                            "Failed to get table partition snapshot for partition %s of table %s",
-                            partitionName, tablePath),
-                    e);
-        }
-    }
-
-    @Override
     public CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
             DescribeLakeStorageRequest request) {
         if (lakeStorageInfo == null) {
@@ -408,8 +427,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetLakeTableSnapshotResponse> getLakeTableSnapshot(
-            GetLakeTableSnapshotRequest request) {
+    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
+            GetLatestLakeSnapshotRequest request) {
         if (lakeStorageInfo == null) {
             throw new LakeStorageNotConfiguredException("Lake storage is not configured.");
         }
@@ -440,7 +459,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
         LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.makeGetLakeTableSnapshotResponse(
+                RpcMessageUtils.makeGetLatestLakeSnapshotResponse(
                         tableId, lakeStorageInfo, lakeTableSnapshot));
     }
 

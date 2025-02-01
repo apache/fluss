@@ -32,8 +32,8 @@ import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanRequest;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
@@ -82,13 +82,12 @@ public class RpcMessageTestUtils {
         return dropTableRequest;
     }
 
-    public static GetTableRequest newGetTableRequest(TablePath tablePath) {
-        GetTableRequest getTableRequest = new GetTableRequest();
-        getTableRequest
-                .setTablePath()
+    public static GetTableInfoRequest newGetTableInfoRequest(TablePath tablePath) {
+        GetTableInfoRequest request = new GetTableInfoRequest();
+        request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return getTableRequest;
+        return request;
     }
 
     public static DatabaseExistsRequest newDatabaseExistsRequest(String db) {
@@ -275,9 +274,9 @@ public class RpcMessageTestUtils {
         coordinatorGateway
                 .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
                 .get();
-        GetTableResponse getTableResponse =
-                coordinatorGateway.getTable(newGetTableRequest(tablePath)).get();
-        return getTableResponse.getTableId();
+        GetTableInfoResponse response =
+                coordinatorGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        return response.getTableId();
     }
 
     public static void assertProduceLogResponse(

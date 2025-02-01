@@ -71,8 +71,10 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
         try {
             client.registerTableBucketSnapshot(
                     tableBucket,
-                    snapshotId,
-                    new BucketSnapshot(snapshotHandle.getMetadataFilePath().toString()));
+                    new BucketSnapshot(
+                            snapshotId,
+                            snapshotHandle.getLogOffset(),
+                            snapshotHandle.getMetadataFilePath().toString()));
             success = true;
         } finally {
             if (!success) {
@@ -95,8 +97,7 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     public Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId)
             throws Exception {
         return client.getTableBucketSnapshot(tableBucket, snapshotId)
-                .map(BucketSnapshot::getPath)
-                .map(CompletedSnapshotHandle::fromMetadataPath);
+                .map(BucketSnapshot::toCompletedSnapshotHandle);
     }
 
     @Override
@@ -106,8 +107,7 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
                 .map(
                         bucketSnapshotAndSnapshotId ->
                                 Tuple2.of(
-                                        CompletedSnapshotHandle.fromMetadataPath(
-                                                bucketSnapshotAndSnapshotId.f0.getPath()),
+                                        bucketSnapshotAndSnapshotId.f0.toCompletedSnapshotHandle(),
                                         bucketSnapshotAndSnapshotId.f1))
                 .sorted(Comparator.comparing(o -> o.f1))
                 .map(t -> t.f0)
@@ -118,7 +118,6 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     public Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(
             TableBucket tableBucket) throws Exception {
         return client.getTableBucketLatestSnapshot(tableBucket)
-                .map(BucketSnapshot::getPath)
-                .map(CompletedSnapshotHandle::fromMetadataPath);
+                .map(BucketSnapshot::toCompletedSnapshotHandle);
     }
 }

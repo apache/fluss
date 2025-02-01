@@ -271,17 +271,17 @@ class ZooKeeperClientTest {
                 TableAssignment.builder()
                         .add(table1Bucket2.getBucket(), BucketAssignment.of(0, 1, 2))
                         .build());
-        BucketSnapshot snapshot1 = new BucketSnapshot("oss://test/cp1");
-        BucketSnapshot snapshot2 = new BucketSnapshot("oss://test/cp2");
-        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, 1, snapshot1);
-        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, 2, snapshot2);
+        BucketSnapshot snapshot1 = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot snapshot2 = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, snapshot1);
+        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, snapshot2);
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 1).get())
                 .isEqualTo(snapshot1);
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 2).get())
                 .isEqualTo(snapshot2);
         TableBucket table2Bucket2 = new TableBucket(2, 2);
-        BucketSnapshot snapshot21 = new BucketSnapshot("oss://test/cp21");
-        zookeeperClient.registerTableBucketSnapshot(table2Bucket2, 1, snapshot21);
+        BucketSnapshot snapshot21 = new BucketSnapshot(1L, 11L, "oss://test/cp21");
+        zookeeperClient.registerTableBucketSnapshot(table2Bucket2, snapshot21);
         final List<Tuple2<BucketSnapshot, Long>> table1Bucket2AllSnapshotAndIds =
                 zookeeperClient.getTableBucketAllSnapshotAndIds(table1Bucket2);
         assertThat(table1Bucket2AllSnapshotAndIds)
@@ -297,7 +297,7 @@ class ZooKeeperClientTest {
 
         // check all table buckets' snapshots for table 1;
         Map<Integer, Optional<BucketSnapshot>> tableBucketsLatestSnapshot =
-                zookeeperClient.getTableLatestBucketSnapshot(table1Bucket2.getTableId()).get();
+                zookeeperClient.getTableLatestBucketSnapshot(table1Bucket2.getTableId());
         Map<Integer, Optional<BucketSnapshot>> expectedTableBucketsLatestSnapshot =
                 Collections.singletonMap(table1Bucket2.getBucket(), Optional.of(snapshot2));
         assertThat(tableBucketsLatestSnapshot).isEqualTo(expectedTableBucketsLatestSnapshot);

@@ -78,6 +78,7 @@ import static com.alibaba.fluss.server.zk.ZooKeeperTestUtils.createZooKeeperClie
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static com.alibaba.fluss.utils.NetUtils.getAvailablePort;
+import static com.alibaba.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -503,13 +504,11 @@ public final class FlussClusterExtension
                 () -> {
                     Optional<BucketSnapshot> optSnapshot =
                             zkClient.getTableBucketSnapshot(tableBucket, snapshotId);
-                    if (optSnapshot.isPresent()) {
-                        return Optional.of(
-                                CompletedSnapshotHandle.fromMetadataPath(
-                                                optSnapshot.get().getPath())
-                                        .retrieveCompleteSnapshot());
-                    }
-                    return Optional.empty();
+                    return optSnapshot
+                            .map(BucketSnapshot::toCompletedSnapshotHandle)
+                            .map(
+                                    uncheckedFunction(
+                                            CompletedSnapshotHandle::retrieveCompleteSnapshot));
                 },
                 Duration.ofMinutes(2),
                 String.format(

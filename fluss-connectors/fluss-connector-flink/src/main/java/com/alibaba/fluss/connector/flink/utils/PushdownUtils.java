@@ -20,8 +20,10 @@ import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.admin.OffsetSpec;
-import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.Scan;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanUtils;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.lookup.FlinkLookupFunction;
@@ -35,6 +37,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.GenericRow;
+import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 
@@ -72,7 +75,7 @@ import static com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.c
 
 /** Utilities for pushdown abilities. */
 public class PushdownUtils {
-    private static final int LIMIT_PUSH_DOWN_CEIL = 1024;
+    private static final int MAX_LIMIT_PUSHDOWN = 2048;
 
     /** Extract field equality information from expressions. */
     public static List<FieldEqual> extractFieldEquals(
@@ -280,7 +283,7 @@ public class PushdownUtils {
             GenericRow deleteRow, TablePath tablePath, Configuration flussConfig) {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Table table = connection.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             upsertWriter.delete(deleteRow).get();
         } catch (Exception e) {
             throw new TableException("Failed execute DELETE statement on Fluss table.", e);
@@ -292,17 +295,17 @@ public class PushdownUtils {
             Configuration flussConfig,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
-            long limit) {
-        if (limit > LIMIT_PUSH_DOWN_CEIL) {
+            long limitRowNum) {
+        if (limitRowNum > MAX_LIMIT_PUSHDOWN) {
             throw new UnsupportedOperationException(
                     String.format(
-                            "LIMIT statement doesn't support greater than %s",
-                            LIMIT_PUSH_DOWN_CEIL));
+                            "LIMIT statement doesn't support greater than %s", MAX_LIMIT_PUSHDOWN));
         }
+        int limit = (int) limitRowNum;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Table table = connection.getTable(tablePath);
                 Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTable(tablePath).get();
+            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
             int bucketCount =
                     tableInfo
                             .getTableDescriptor()
@@ -340,34 +343,30 @@ public class PushdownUtils {
                                 .collect(Collectors.toList());
             }
 
-            // get Limit scan result for each bucket
-            List<CompletableFuture<List<ScanRecord>>> responseList =
+            Scan scan = table.newScan().limit(limit).project(projectedFields);
+            List<BatchScanner> scanners =
                     tableBuckets.stream()
-                            .map(
-                                    tableBucket ->
-                                            table.limitScan(
-                                                    tableBucket, (int) limit, projectedFields))
+                            .map(scan::createBatchScanner)
                             .collect(Collectors.toList());
-            // wait for all the response
-            CompletableFuture.allOf(responseList.toArray(new CompletableFuture[0])).join();
+            List<InternalRow> scannedRows = BatchScanUtils.collectLimitedRows(scanners, limit);
 
-            // get Data from all the bucket.
-            List<RowData> rowDataList = new ArrayList<>();
+            // convert fluss row into flink row
+            List<RowData> flinkRows = new ArrayList<>();
             FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =
                     new FlussRowToFlinkRowConverter(
                             projectedFields != null
                                     ? FlinkConversions.toFlussRowType(sourceOutputType)
                                             .project(projectedFields)
                                     : FlinkConversions.toFlussRowType(sourceOutputType));
-            for (CompletableFuture<List<ScanRecord>> response : responseList) {
-                List<ScanRecord> scanRecords = response.get();
-                rowDataList.addAll(
-                        scanRecords.stream()
-                                .map(flussRowToFlinkRowConverter::toFlinkRowData)
-                                .collect(Collectors.toList()));
+            int count = 0;
+            for (InternalRow row : scannedRows) {
+                flinkRows.add(flussRowToFlinkRowConverter.toFlinkRowData(row));
+                if (++count >= limit) {
+                    break;
+                }
             }
 
-            return limit < rowDataList.size() ? rowDataList.subList(0, (int) limit) : rowDataList;
+            return flinkRows;
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
@@ -376,7 +375,7 @@ public class PushdownUtils {
     public static long countLogTable(TablePath tablePath, Configuration flussConfig) {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTable(tablePath).get();
+            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
             int bucketCount =
                     tableInfo
                             .getTableDescriptor()

@@ -34,6 +34,7 @@ import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.InvalidTargetColumnException;
 import com.alibaba.fluss.exception.InvalidTimestampException;
 import com.alibaba.fluss.exception.InvalidUpdateVersionException;
+import com.alibaba.fluss.exception.KvSnapshotNotExistException;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LakeStorageNotConfiguredException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
@@ -174,7 +175,8 @@ public enum Errors {
     INVALID_TIMESTAMP_EXCEPTION(38, "The timestamp is invalid.", InvalidTimestampException::new),
     INVALID_CONFIG_EXCEPTION(39, "The config is invalid.", InvalidConfigException::new),
     LAKE_STORAGE_NOT_CONFIGURED_EXCEPTION(
-            40, "The lake storage is not configured.", LakeStorageNotConfiguredException::new);
+            40, "The lake storage is not configured.", LakeStorageNotConfiguredException::new),
+    KV_SNAPSHOT_NOT_EXIST(41, "The kv snapshot is not exist.", KvSnapshotNotExistException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

@@ -140,7 +140,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
 
         // first write some data to the table
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
                 upsertWriter.upsert(compactedRow(rowType, new Object[] {i, "name" + i}));
             }

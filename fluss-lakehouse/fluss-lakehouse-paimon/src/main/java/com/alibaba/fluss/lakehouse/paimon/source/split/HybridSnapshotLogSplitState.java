@@ -39,7 +39,7 @@ public class HybridSnapshotLogSplitState extends SourceSplitState {
                 hybridSnapshotLogSplit.tablePath,
                 hybridSnapshotLogSplit.tableBucket,
                 hybridSnapshotLogSplit.getPartitionName(),
-                hybridSnapshotLogSplit.getSnapshotFiles(),
+                hybridSnapshotLogSplit.getSnapshotId(),
                 recordsToSkip,
                 snapshotFinished,
                 offset);

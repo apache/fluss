@@ -162,7 +162,7 @@ public class FlinkTestBase {
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     public static void assertResultsIgnoreOrder(
@@ -290,9 +290,9 @@ public class FlinkTestBase {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
-                tableWriter = table.getAppendWriter();
+                tableWriter = table.newAppend().createWriter();
             } else {
-                tableWriter = table.getUpsertWriter();
+                tableWriter = table.newUpsert().createWriter();
             }
             for (InternalRow row : rows) {
                 if (tableWriter instanceof AppendWriter) {

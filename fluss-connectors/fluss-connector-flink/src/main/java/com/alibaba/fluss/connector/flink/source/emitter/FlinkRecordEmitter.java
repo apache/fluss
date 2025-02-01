@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.source.emitter;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.connector.flink.lakehouse.LakeRecordRecordEmitter;
 import com.alibaba.fluss.connector.flink.source.reader.FlinkSourceReader;
 import com.alibaba.fluss.connector.flink.source.reader.RecordAndPos;
@@ -64,10 +64,10 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
                     splitState.asHybridSnapshotLogSplitState();
 
             ScanRecord scanRecord = recordAndPosition.record();
-            if (scanRecord.getOffset() >= 0) {
+            if (scanRecord.logOffset() >= 0) {
                 // record is with a valid offset, means it's in incremental phase,
                 // update the log offset
-                hybridSnapshotLogSplitState.setOffset(scanRecord.getOffset() + 1);
+                hybridSnapshotLogSplitState.setOffset(scanRecord.logOffset() + 1);
             } else {
                 // record is with an invalid offset, means it's in snapshot phase,
                 // update the records number to skip
@@ -75,7 +75,7 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
             }
             emitRecord(scanRecord, sourceOutput);
         } else if (splitState.isLogSplitState()) {
-            splitState.asLogSplitState().setOffset(recordAndPosition.record().getOffset() + 1);
+            splitState.asLogSplitState().setOffset(recordAndPosition.record().logOffset() + 1);
             emitRecord(recordAndPosition.record(), sourceOutput);
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {
@@ -88,7 +88,7 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
     }
 
     private void emitRecord(ScanRecord scanRecord, SourceOutput<RowData> sourceOutput) {
-        long timestamp = scanRecord.getTimestamp();
+        long timestamp = scanRecord.timestamp();
         if (timestamp > 0) {
             sourceOutput.collect(converter.toFlinkRowData(scanRecord), timestamp);
         } else {

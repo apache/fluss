@@ -123,7 +123,7 @@ public class FlinkPaimonTestBase {
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
@@ -138,9 +138,9 @@ public class FlinkPaimonTestBase {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
-                tableWriter = table.getAppendWriter();
+                tableWriter = table.newAppend().createWriter();
             } else {
-                tableWriter = table.getUpsertWriter();
+                tableWriter = table.newUpsert().createWriter();
             }
             for (InternalRow row : rows) {
                 if (tableWriter instanceof AppendWriter) {

@@ -222,7 +222,7 @@ public class CompletedSnapshotStore {
             try (FSDataOutputStream outStream =
                     fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
                 outStream.write(jsonBytes);
-                return new CompletedSnapshotHandle(filePath);
+                return new CompletedSnapshotHandle(filePath, snapshot.getLogOffset());
             } catch (Exception e) {
                 latestException = e;
             }

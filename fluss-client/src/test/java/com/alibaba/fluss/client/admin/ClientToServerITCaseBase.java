@@ -21,11 +21,10 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.OffsetSpec.LatestSpec;
 import com.alibaba.fluss.client.admin.OffsetSpec.TimestampSpec;
 import com.alibaba.fluss.client.lookup.Lookuper;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -99,7 +98,7 @@ public abstract class ClientToServerITCaseBase {
             throws Exception {
         admin.createDatabase(tablePath.getDatabaseName(), ignoreIfExists).get();
         admin.createTable(tablePath, tableDescriptor, ignoreIfExists).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     private static Configuration initConfig() {
@@ -116,11 +115,11 @@ public abstract class ClientToServerITCaseBase {
     }
 
     protected static LogScanner createLogScanner(Table table) {
-        return table.getLogScanner(new LogScan());
+        return table.newScan().createLogScanner();
     }
 
     protected static LogScanner createLogScanner(Table table, int[] projectFields) {
-        return table.getLogScanner(new LogScan().withProjectedFields(projectFields));
+        return table.newScan().project(projectFields).createLogScanner();
     }
 
     protected static void subscribeFromBeginning(LogScanner logScanner, Table table) {
@@ -195,7 +194,7 @@ public abstract class ClientToServerITCaseBase {
                 expectPartitionsRows.values().stream().map(List::size).reduce(0, Integer::sum);
         int scanRecordCount = 0;
         Map<Long, List<InternalRow>> actualRows = new HashMap<>();
-        try (LogScanner logScanner = table.getLogScanner(new LogScan())) {
+        try (LogScanner logScanner = table.newScan().createLogScanner()) {
             for (Long partitionId : expectPartitionsRows.keySet()) {
                 logScanner.subscribeFromBeginning(partitionId, 0);
             }
@@ -248,18 +247,18 @@ public abstract class ClientToServerITCaseBase {
             throws Exception {
         // put data.
         InternalRow row = compactedRow(tableSchema.toRowType(), fields);
-        UpsertWriter upsertWriter = table.getUpsertWriter();
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
         // put data.
         upsertWriter.upsert(row);
         upsertWriter.flush();
         // lookup this key.
-        Lookuper lookuper = table.getLookuper();
+        Lookuper lookuper = table.newLookup().createLookuper();
         IndexedRow keyRow = keyRow(tableSchema, fields);
         assertThat(lookupRow(lookuper, keyRow)).isEqualTo(row);
     }
 
     protected static InternalRow lookupRow(Lookuper lookuper, IndexedRow keyRow) throws Exception {
         // lookup this key.
-        return lookuper.lookup(keyRow).get().getRow();
+        return lookuper.lookup(keyRow).get().getSingletonRow();
     }
 }

@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.connector.flink.lakehouse.paimon.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.paimon.data.InternalRow;
@@ -67,7 +66,8 @@ public class SortMergeReader {
     }
 
     @Nullable
-    public com.alibaba.fluss.utils.CloseableIterator<ScanRecord> readBatch() throws IOException {
+    public com.alibaba.fluss.utils.CloseableIterator<com.alibaba.fluss.row.InternalRow> readBatch()
+            throws IOException {
         RecordReader.RecordIterator<InternalRow> nextBatch = paimonReader.readBatch();
         // no any snapshot record, now, read log
         if (nextBatch == null) {
@@ -87,7 +87,8 @@ public class SortMergeReader {
      * The IteratorWrapper to wrap Paimon's RecordReader.RecordIterator which emit the merged rows
      * with paimon snapshot and fluss change log.
      */
-    private class SnapshotMergedRowIteratorWrapper implements CloseableIterator<ScanRecord> {
+    private class SnapshotMergedRowIteratorWrapper
+            implements CloseableIterator<com.alibaba.fluss.row.InternalRow> {
         private RecordReader.RecordIterator<SortMergeRows> currentBatch;
 
         // the merged row after advance currentBatch once
@@ -135,7 +136,7 @@ public class SortMergeReader {
         }
 
         @Override
-        public ScanRecord next() {
+        public com.alibaba.fluss.row.InternalRow next() {
             InternalRow returnedRow =
                     projectedRow == null
                             ? this.returnedRow
@@ -147,11 +148,12 @@ public class SortMergeReader {
             if (currentMergedRows != null && !currentMergedRows.hasNext()) {
                 currentMergedRows = null;
             }
-            return new ScanRecord(new PaimonRowWrapper(returnedRow));
+            return new PaimonRowWrapper(returnedRow);
         }
     }
 
-    private class ChangeLogIteratorWrapper implements CloseableIterator<ScanRecord> {
+    private class ChangeLogIteratorWrapper
+            implements CloseableIterator<com.alibaba.fluss.row.InternalRow> {
         private CloseableIterator<KeyValueRow> changeLogRecordIterator;
 
         public ChangeLogIteratorWrapper() {}
@@ -175,12 +177,12 @@ public class SortMergeReader {
         }
 
         @Override
-        public ScanRecord next() {
+        public com.alibaba.fluss.row.InternalRow next() {
             InternalRow returnedRow = changeLogRecordIterator.next().valueRow();
             if (projectedRow != null) {
                 returnedRow = projectedRow.replaceRow(returnedRow);
             }
-            return new ScanRecord(new PaimonRowWrapper(returnedRow));
+            return new PaimonRowWrapper(returnedRow);
         }
     }
 

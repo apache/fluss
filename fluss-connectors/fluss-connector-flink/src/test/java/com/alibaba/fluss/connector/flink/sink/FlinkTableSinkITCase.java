@@ -18,11 +18,10 @@ package com.alibaba.fluss.connector.flink.sink;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
@@ -232,10 +231,9 @@ class FlinkTableSinkITCase {
 
         Map<Integer, List<String>> rows = new HashMap<>();
         Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        Connection conn = ConnectionFactory.createConnection(clientConf);
-        try (Table table = conn.getTable(TablePath.of(DEFAULT_DB, "sink_test"))) {
-            LogScanner logScanner = table.getLogScanner(new LogScan());
-
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
+                Table table = conn.getTable(TablePath.of(DEFAULT_DB, "sink_test"));
+                LogScanner logScanner = table.newScan().createLogScanner()) {
             logScanner.subscribeFromBeginning(0);
             logScanner.subscribeFromBeginning(1);
             logScanner.subscribeFromBeginning(2);

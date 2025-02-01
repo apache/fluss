@@ -18,13 +18,11 @@ package com.alibaba.fluss.lakehouse.paimon.source.reader;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScan;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lakehouse.paimon.record.CdcRecord;
 import com.alibaba.fluss.lakehouse.paimon.source.metrics.FlinkMetricRegistry;
@@ -34,7 +32,6 @@ import com.alibaba.fluss.lakehouse.paimon.source.split.LogSplit;
 import com.alibaba.fluss.lakehouse.paimon.source.split.SnapshotSplit;
 import com.alibaba.fluss.lakehouse.paimon.source.split.SourceSplitBase;
 import com.alibaba.fluss.lakehouse.paimon.source.utils.FlussRowToFlinkRowConverter;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.CloseableIterator;
@@ -162,7 +159,7 @@ public class FlinkSourceSplitReader
         TablePath tablePath = split.getTablePath();
         LogScanner logScanner = logScannersByTableId.get(tableId);
         if (logScanner == null) {
-            logScanner = connection.getTable(tablePath).getLogScanner(new LogScan());
+            logScanner = connection.getTable(tablePath).newScan().createLogScanner();
             logScannersByTableId.put(tableId, logScanner);
             resetCurrentLogScannerIterator();
         }
@@ -239,15 +236,10 @@ public class FlinkSourceSplitReader
                 Table table = tablesByTableId.get(tableId);
                 // start to read next snapshot split
                 currentSnapshotSplit = nextSplit;
-                Schema tableSchema = table.getDescriptor().getSchema();
-                SnapshotScan snapshotScan =
-                        new SnapshotScan(
-                                nextSplit.getTableBucket(),
-                                nextSplit.getSnapshotFiles(),
-                                tableSchema,
-                                // never projection currently
-                                null);
-                SnapshotScanner snapshotScanner = table.getSnapshotScanner(snapshotScan);
+                BatchScanner snapshotScanner =
+                        table.newScan()
+                                .createBatchScanner(
+                                        nextSplit.getTableBucket(), nextSplit.getSnapshotId());
                 currentSnapshotReader =
                         new SnapshotReader(
                                 currentSnapshotSplit.getTablePath(),
@@ -284,7 +276,7 @@ public class FlinkSourceSplitReader
                 final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
                 // We keep the maximum message timestamp in the fetch for calculating lags
                 maxConsumerRecordTimestampInFetch =
-                        Math.max(maxConsumerRecordTimestampInFetch, lastRecord.getTimestamp());
+                        Math.max(maxConsumerRecordTimestampInFetch, lastRecord.timestamp());
             }
 
             splitRecords.put(
@@ -528,6 +520,6 @@ public class FlinkSourceSplitReader
         return new MultiplexCdcRecordAndPos(
                 tablePath,
                 tableBucket,
-                new CdcRecord(scanRecord.getOffset(), scanRecord.getTimestamp(), rowData));
+                new CdcRecord(scanRecord.logOffset(), scanRecord.timestamp(), rowData));
     }
 }
