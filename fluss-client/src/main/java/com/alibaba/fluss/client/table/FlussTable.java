@@ -26,7 +26,6 @@ import com.alibaba.fluss.client.table.writer.Append;
 import com.alibaba.fluss.client.table.writer.TableAppend;
 import com.alibaba.fluss.client.table.writer.TableUpsert;
 import com.alibaba.fluss.client.table.writer.Upsert;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -49,12 +48,12 @@ public class FlussTable implements Table {
         this.conn = conn;
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
-        this.hasPrimaryKey = tableInfo.getTableDescriptor().hasPrimaryKey();
+        this.hasPrimaryKey = tableInfo.hasPrimaryKey();
     }
 
     @Override
-    public TableDescriptor getDescriptor() {
-        return tableInfo.getTableDescriptor();
+    public TableInfo getTableInfo() {
+        return tableInfo;
     }
 
     @Override
@@ -75,10 +74,7 @@ public class FlussTable implements Table {
                 "Table %s is not a Log Table and doesn't support AppendWriter.",
                 tablePath);
         return new TableAppend(
-                tablePath,
-                tableInfo.getTableDescriptor(),
-                conn.getMetadataUpdater(),
-                conn.getOrCreateWriterClient());
+                tablePath, tableInfo, conn.getMetadataUpdater(), conn.getOrCreateWriterClient());
     }
 
     @Override
@@ -88,10 +84,7 @@ public class FlussTable implements Table {
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
         return new TableUpsert(
-                tablePath,
-                tableInfo.getTableDescriptor(),
-                conn.getMetadataUpdater(),
-                conn.getOrCreateWriterClient());
+                tablePath, tableInfo, conn.getMetadataUpdater(), conn.getOrCreateWriterClient());
     }
 
     @Override

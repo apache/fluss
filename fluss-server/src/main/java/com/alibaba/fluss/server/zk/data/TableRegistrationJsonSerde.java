@@ -65,24 +65,25 @@ public class TableRegistrationJsonSerde
         }
 
         // serialize partition key.
-        generator.writeArrayFieldStart(PARTITION_KEY_NAME);
-        for (String partitionKey : tableReg.partitionKeys) {
-            generator.writeString(partitionKey);
+        if (!tableReg.partitionKeys.isEmpty()) {
+            generator.writeArrayFieldStart(PARTITION_KEY_NAME);
+            for (String partitionKey : tableReg.partitionKeys) {
+                generator.writeString(partitionKey);
+            }
+            generator.writeEndArray();
         }
-        generator.writeEndArray();
 
-        // serialize tableDistribution.
-        TableDistribution distribution = tableReg.tableDistribution;
-        if (distribution != null) {
+        // serialize bucket key.
+        if (!tableReg.bucketKeys.isEmpty()) {
             generator.writeArrayFieldStart(BUCKET_KEY_NAME);
-            for (String bucketKey : distribution.getBucketKeys()) {
+            for (String bucketKey : tableReg.bucketKeys) {
                 generator.writeString(bucketKey);
             }
             generator.writeEndArray();
-            if (distribution.getBucketCount().isPresent()) {
-                generator.writeNumberField(BUCKET_COUNT_NAME, distribution.getBucketCount().get());
-            }
         }
+
+        // serialize bucket count.
+        generator.writeNumberField(BUCKET_COUNT_NAME, tableReg.bucketCount);
 
         // serialize properties.
         generator.writeObjectFieldStart(PROPERTIES_NAME);
@@ -117,27 +118,23 @@ public class TableRegistrationJsonSerde
             comment = commentNode.asText();
         }
 
-        Iterator<JsonNode> partitionJsons = node.get(PARTITION_KEY_NAME).elements();
         List<String> partitionKeys = new ArrayList<>();
-        while (partitionJsons.hasNext()) {
-            partitionKeys.add(partitionJsons.next().asText());
+        if (node.has(PARTITION_KEY_NAME)) {
+            Iterator<JsonNode> partitionJsons = node.get(PARTITION_KEY_NAME).elements();
+            while (partitionJsons.hasNext()) {
+                partitionKeys.add(partitionJsons.next().asText());
+            }
         }
 
-        TableDistribution distribution = null;
-        if (node.has(BUCKET_KEY_NAME) || node.has(BUCKET_COUNT_NAME)) {
+        List<String> bucketKeys = new ArrayList<>();
+        if (node.has(BUCKET_KEY_NAME)) {
             Iterator<JsonNode> bucketJsons = node.get(BUCKET_KEY_NAME).elements();
-            List<String> bucketKeys = new ArrayList<>();
             while (bucketJsons.hasNext()) {
                 bucketKeys.add(bucketJsons.next().asText());
             }
-
-            JsonNode bucketCountNode = node.get(BUCKET_COUNT_NAME);
-            if (bucketCountNode != null) {
-                distribution = new TableDistribution(bucketCountNode.asInt(), bucketKeys);
-            } else {
-                distribution = new TableDistribution(null, bucketKeys);
-            }
         }
+        int bucketCount = node.get(BUCKET_COUNT_NAME).asInt();
+        TableDistribution distribution = new TableDistribution(bucketCount, bucketKeys);
 
         Map<String, String> properties = deserializeProperties(node.get(PROPERTIES_NAME));
         Map<String, String> customProperties =

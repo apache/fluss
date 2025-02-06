@@ -126,7 +126,7 @@ class VersionedRowMergerTest {
                         .column("a", type)
                         .column("b", DataTypes.STRING())
                         .build()
-                        .toRowType();
+                        .getRowType();
         VersionedRowMerger merger = new VersionedRowMerger(schema, "a");
 
         for (TestSpec testSpec : testSpecs) {
@@ -150,7 +150,7 @@ class VersionedRowMergerTest {
                         .column("a", DataTypes.INT())
                         .column("b", DataTypes.STRING())
                         .build()
-                        .toRowType();
+                        .getRowType();
         VersionedRowMerger merger = new VersionedRowMerger(schema, "a");
 
         assertThat(merger.supportsDelete()).isFalse();

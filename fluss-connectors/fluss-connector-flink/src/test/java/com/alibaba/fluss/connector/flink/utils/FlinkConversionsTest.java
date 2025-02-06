@@ -45,6 +45,9 @@ import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
+import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.addOptions;
+import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.flink.table.api.DataTypes.VARBINARY;
 import static org.apache.flink.table.api.DataTypes.VARCHAR;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -161,11 +164,12 @@ class FlinkConversionsTest {
         options.put("k1", "v1");
         options.put("k2", "v2");
         CatalogTable flinkTable =
-                CatalogTable.of(
-                        Schema.newBuilder().fromResolvedSchema(schema).build(),
-                        "test comment",
-                        Collections.emptyList(),
-                        options);
+                CatalogTable.newBuilder()
+                        .schema(Schema.newBuilder().fromResolvedSchema(schema).build())
+                        .comment("test comment")
+                        .partitionKeys(Collections.emptyList())
+                        .options(options)
+                        .build();
 
         // check the converted table
         TableDescriptor flussTable =
@@ -189,11 +193,11 @@ class FlinkConversionsTest {
         // test convert fluss table to flink table
         TablePath tablePath = TablePath.of("db", "table");
         TableInfo tableInfo =
-                new TableInfo(
+                TableInfo.of(
                         tablePath,
                         1L,
-                        flussTable,
                         1,
+                        flussTable.withBucketCount(1),
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         // get the converted flink table
@@ -207,10 +211,11 @@ class FlinkConversionsTest {
         assertThat(resolver.resolve(convertedFlinkTable.getUnresolvedSchema())).isEqualTo(schema);
         // check the converted flink table is equal to the origin flink table
         // need to put bucket key option
-        CatalogTable expectedTable =
-                CatalogTableTestUtils.addOptions(
-                        flinkTable, Collections.singletonMap(BUCKET_KEY.key(), "order_id"));
-        CatalogTableTestUtils.checkEqualsIgnoreSchema(convertedFlinkTable, expectedTable);
+        Map<String, String> bucketKeyOption = new HashMap<>();
+        bucketKeyOption.put(BUCKET_KEY.key(), "order_id");
+        bucketKeyOption.put(BUCKET_NUMBER.key(), "1");
+        CatalogTable expectedTable = addOptions(flinkTable, bucketKeyOption);
+        checkEqualsIgnoreSchema(convertedFlinkTable, expectedTable);
     }
 
     @Test

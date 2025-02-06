@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.kv;
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
@@ -28,7 +29,7 @@ import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.TabletManagerBase;
 import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
@@ -151,7 +152,7 @@ public final class KvManager extends TabletManagerBase {
             LogTablet logTablet,
             KvFormat kvFormat,
             Schema schema,
-            Configuration tableConfig,
+            TableConfig tableConfig,
             ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
         return inLock(
@@ -264,13 +265,12 @@ public final class KvManager extends TabletManagerBase {
 
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
-        TableDescriptor tableDescriptor =
-                getTableDescriptor(zkClient, tablePath, tableBucket, tabletDir);
+        TableInfo tableInfo = getTableInfo(zkClient, tablePath);
         RowMerger rowMerger =
                 RowMerger.create(
-                        Configuration.fromMap(tableDescriptor.getProperties()),
-                        tableDescriptor.getSchema(),
-                        tableDescriptor.getKvFormat());
+                        tableInfo.getTableConfig(),
+                        tableInfo.getSchema(),
+                        tableInfo.getTableConfig().getKvFormat());
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,
@@ -280,10 +280,10 @@ public final class KvManager extends TabletManagerBase {
                         conf,
                         arrowBufferAllocator,
                         memorySegmentPool,
-                        tableDescriptor.getKvFormat(),
-                        tableDescriptor.getSchema(),
+                        tableInfo.getTableConfig().getKvFormat(),
+                        tableInfo.getSchema(),
                         rowMerger,
-                        tableDescriptor.getArrowCompressionInfo());
+                        tableInfo.getTableConfig().getArrowCompressionInfo());
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

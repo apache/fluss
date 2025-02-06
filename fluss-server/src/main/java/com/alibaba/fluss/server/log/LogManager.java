@@ -24,7 +24,7 @@ import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.TabletManagerBase;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
@@ -306,8 +306,7 @@ public final class LogManager extends TabletManagerBase {
 
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
-        TableDescriptor tableDescriptor =
-                getTableDescriptor(zkClient, tablePath, tableBucket, tabletDir);
+        TableInfo tableInfo = getTableInfo(zkClient, tablePath);
         LogTablet logTablet =
                 LogTablet.create(
                         physicalTablePath,
@@ -315,9 +314,9 @@ public final class LogManager extends TabletManagerBase {
                         conf,
                         logRecoveryPoint,
                         scheduler,
-                        tableDescriptor.getLogFormat(),
-                        tableDescriptor.getTieredLogLocalSegments(),
-                        tableDescriptor.hasPrimaryKey(),
+                        tableInfo.getTableConfig().getLogFormat(),
+                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
+                        tableInfo.hasPrimaryKey(),
                         clock);
 
         if (currentLogs.containsKey(tableBucket)) {

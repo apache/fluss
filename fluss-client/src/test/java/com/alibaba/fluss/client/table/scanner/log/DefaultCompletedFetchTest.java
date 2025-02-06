@@ -140,11 +140,15 @@ public class DefaultCompletedFetchTest {
                         .withComment("c is adding column")
                         .build();
         tableInfo =
-                new TableInfo(
+                TableInfo.of(
                         DATA2_TABLE_PATH,
                         DATA2_TABLE_ID,
-                        TableDescriptor.builder().schema(schema).logFormat(logFormat).build(),
-                        1,
+                        DEFAULT_SCHEMA_ID,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(3)
+                                .logFormat(logFormat)
+                                .build(),
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         long fetchOffset = 0L;

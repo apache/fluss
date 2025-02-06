@@ -21,7 +21,6 @@ import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.utils.TableAssignmentUtils;
@@ -76,7 +75,6 @@ public class AutoPartitionManager implements AutoCloseable {
     private final Clock clock;
 
     private final long periodicInterval;
-    private final int defaultReplicaFactor;
     private final AtomicBoolean isClosed = new AtomicBoolean(false);
 
     @GuardedBy("lock")
@@ -110,7 +108,6 @@ public class AutoPartitionManager implements AutoCloseable {
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
-        this.defaultReplicaFactor = conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
     }
 
     public void initAutoPartitionTables(Map<Long, TableInfo> tableInfos) {
@@ -163,7 +160,7 @@ public class AutoPartitionManager implements AutoCloseable {
             dropPartitions(
                     tableInfo.getTablePath(),
                     now,
-                    tableInfo.getTableDescriptor().getAutoPartitionStrategy(),
+                    tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
             createPartitions(tableInfo, now, currentPartitions);
         }
@@ -175,7 +172,7 @@ public class AutoPartitionManager implements AutoCloseable {
         List<String> partitionsToPreCreate =
                 partitionNamesToPreCreate(
                         currentInstant,
-                        tableInfo.getTableDescriptor().getAutoPartitionStrategy(),
+                        tableInfo.getTableConfig().getAutoPartitionStrategy(),
                         currentPartitions);
         if (partitionsToPreCreate.isEmpty()) {
             return;
@@ -187,7 +184,7 @@ public class AutoPartitionManager implements AutoCloseable {
                 long tableId = tableInfo.getTableId();
                 long partitionId = zooKeeperClient.getPartitionIdAndIncrement();
                 // register partition assignments to zk first
-                registerPartitionAssignment(tableId, partitionId, tableInfo.getTableDescriptor());
+                registerPartitionAssignment(tableId, partitionId, tableInfo);
                 // then register the partition metadata to zk
                 zooKeeperClient.registerPartition(tablePath, tableId, partitionName, partitionId);
                 currentPartitions.add(partitionName);
@@ -205,12 +202,12 @@ public class AutoPartitionManager implements AutoCloseable {
         }
     }
 
-    private void registerPartitionAssignment(
-            long tableId, long partitionId, TableDescriptor tableDescriptor) throws Exception {
-        int replicaFactor = tableDescriptor.getReplicationFactor(defaultReplicaFactor);
+    private void registerPartitionAssignment(long tableId, long partitionId, TableInfo tableInfo)
+            throws Exception {
+        int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
         int[] servers = metadataCache.getLiveServerIds();
         // bucket count must exist for table has been created
-        int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        int bucketCount = tableInfo.getNumBuckets();
         Map<Integer, BucketAssignment> bucketAssignments =
                 TableAssignmentUtils.generateAssignment(bucketCount, replicaFactor, servers)
                         .getBucketAssignments();

@@ -20,8 +20,7 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriteKind;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
@@ -30,6 +29,7 @@ import com.alibaba.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.util.BitSet;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the primary key table. */
@@ -44,32 +44,27 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
     UpsertWriterImpl(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             @Nullable int[] partialUpdateColumns,
             WriterClient writerClient,
             MetadataUpdater metadataUpdater) {
-        super(tablePath, tableDescriptor, metadataUpdater, writerClient);
-        Schema schema = tableDescriptor.getSchema();
-        sanityCheck(schema, partialUpdateColumns);
+        super(tablePath, tableInfo, metadataUpdater, writerClient);
+        RowType rowType = tableInfo.getRowType();
+        sanityCheck(rowType, tableInfo.getPrimaryKeys(), partialUpdateColumns);
 
-        RowType rowType = schema.toRowType();
         this.targetColumns = partialUpdateColumns;
-
+        // encode primary key using physical primary key
         this.primaryKeyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        rowType,
-                        schema.getPrimaryKey().get().getColumnNames(),
-                        tableDescriptor.getPartitionKeys());
-
-        if (tableDescriptor.isDefaultBucketKey()) {
+                KeyEncoder.createKeyEncoder(rowType, tableInfo.getPhysicalPrimaryKeys());
+        if (tableInfo.isDefaultBucketKey()) {
             this.bucketKeyEncoder = primaryKeyEncoder;
         } else {
-            int[] bucketKeyIndexes = tableDescriptor.getBucketKeyIndexes();
-            this.bucketKeyEncoder = new KeyEncoder(rowType, bucketKeyIndexes);
+            this.bucketKeyEncoder = KeyEncoder.createKeyEncoder(rowType, tableInfo.getBucketKeys());
         }
     }
 
-    private static void sanityCheck(Schema schema, @Nullable int[] targetColumns) {
+    private static void sanityCheck(
+            RowType rowType, List<String> primaryKeys, @Nullable int[] targetColumns) {
         // skip check when target columns is null
         if (targetColumns == null) {
             return;
@@ -79,21 +74,19 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             targetColumnsSet.set(targetColumnIndex);
         }
 
-        int[] pkIndexes = schema.getPrimaryKeyIndexes();
         BitSet pkColumnSet = new BitSet();
         // check the target columns contains the primary key
-        for (int pkIndex : pkIndexes) {
+        for (String key : primaryKeys) {
+            int pkIndex = rowType.getFieldIndex(key);
             if (!targetColumnsSet.get(pkIndex)) {
                 throw new IllegalArgumentException(
                         String.format(
                                 "The target write columns %s must contain the primary key columns %s.",
-                                schema.getColumnNames(targetColumns),
-                                schema.getColumnNames(pkIndexes)));
+                                rowType.project(targetColumns).getFieldNames(), primaryKeys));
             }
             pkColumnSet.set(pkIndex);
         }
 
-        RowType rowType = schema.toRowType();
         // check the columns not in targetColumns should be nullable
         for (int i = 0; i < rowType.getFieldCount(); i++) {
             // column not in primary key
@@ -103,7 +96,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                     throw new IllegalArgumentException(
                             String.format(
                                     "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
-                                    schema.getColumnNames().get(i)));
+                                    rowType.getFieldNames().get(i)));
                 }
             }
         }

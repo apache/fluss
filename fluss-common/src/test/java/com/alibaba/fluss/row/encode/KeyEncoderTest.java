@@ -32,7 +32,6 @@ import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -60,17 +59,16 @@ class KeyEncoderTest {
     }
 
     @Test
-    void testEncodeWithPartitionedKey() {
+    void testEncodeWithKeyNames() {
         final DataType[] dataTypes =
                 new DataType[] {DataTypes.STRING(), DataTypes.BIGINT(), DataTypes.STRING()};
         final String[] fieldNames = new String[] {"partition", "f1", "f2"};
         final RowType rowType = RowType.of(dataTypes, fieldNames);
 
         InternalRow row = DataTestUtils.row(rowType, new Object[] {"p1", 1L, "a2"});
-        List<String> pk = Arrays.asList("partition", "f2");
-        List<String> partitionKeys = Collections.singletonList("partition");
+        List<String> pk = Collections.singletonList("f2");
 
-        KeyEncoder keyEncoder = KeyEncoder.createKeyEncoder(rowType, pk, partitionKeys);
+        KeyEncoder keyEncoder = KeyEncoder.createKeyEncoder(rowType, pk);
         byte[] encodedBytes = keyEncoder.encode(row);
 
         // decode it, should only get "a2"

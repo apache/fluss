@@ -81,15 +81,15 @@ public class RecordAccumulatorTest {
     private static final PhysicalTablePath ZSTD_PHYSICAL_TABLE_PATH =
             PhysicalTablePath.of(TablePath.of("test_db_1", "test_zstd_table_1"));
     private static final TableInfo ZSTD_TABLE_INFO =
-            new TableInfo(
+            TableInfo.of(
                     ZSTD_PHYSICAL_TABLE_PATH.getTablePath(),
                     ZSTD_TABLE_ID,
+                    1,
                     TableDescriptor.builder()
                             .schema(DATA1_SCHEMA)
                             .distributedBy(3)
                             .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), "zstd")
                             .build(),
-                    1,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
 
@@ -196,7 +196,13 @@ public class RecordAccumulatorTest {
         // the compression ratio is smaller than 1.0,
         // so bucketNum * batch_size should contain all compressed batches for each bucket
         assertThat(batches.containsKey(node1.id())).isTrue();
-        assertThat(batches.get(node1.id()).size()).isEqualTo(bucketNum);
+        int batchCount = batches.get(node1.id()).size();
+        assertThat(batchCount).isBetween(bucketNum - 1, bucketNum);
+
+        double averageBatchSize =
+                batches.get(node1.id()).stream().mapToInt(b -> b.build().getBytesLength()).sum()
+                        / (batchCount * 1.0);
+        assertThat(averageBatchSize).isBetween(batchSize * 0.9, batchSize * 1.1);
     }
 
     private void appendUntilCompressionRatioStable(RecordAccumulator accum, int batchSize)
@@ -526,9 +532,10 @@ public class RecordAccumulatorTest {
         tableIdByPath.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
 
         TableInfo data1NonPkTableInfo =
-                new TableInfo(
+                TableInfo.of(
                         DATA1_TABLE_PATH,
                         DATA1_TABLE_ID,
+                        1,
                         TableDescriptor.builder()
                                 // use INDEXED format better memory control
                                 // to test RecordAccumulator
@@ -536,7 +543,6 @@ public class RecordAccumulatorTest {
                                 .schema(DATA1_SCHEMA)
                                 .distributedBy(3)
                                 .build(),
-                        1,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();

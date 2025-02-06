@@ -36,6 +36,7 @@ import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.BinaryString;
@@ -68,8 +69,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA3_SCHEMA_PK;
@@ -87,16 +87,19 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testGetDescriptor() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
         // get table descriptor.
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        TableDescriptor tableDescriptor = table.getDescriptor();
-        assertThat(tableDescriptor).isEqualTo(DATA1_TABLE_INFO_PK.getTableDescriptor());
+        TableInfo tableInfo = table.getTableInfo();
+
+        // the created table info will be applied with additional replica factor property
+        TableDescriptor expected = DATA1_TABLE_DESCRIPTOR_PK.withReplicationFactor(3);
+        assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }
 
     @Test
     void testAppendOnly() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         // append data.
         InternalRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
@@ -195,7 +198,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testPutAndLookup() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_put_and_lookup_table");
-        createTable(tablePath, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
+        createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
 
         Table table = conn.getTable(tablePath);
         verifyPutAndLookup(table, DATA1_SCHEMA_PK, new Object[] {1, "a"});
@@ -240,7 +243,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         verifyPutAndLookup(table, schema, new Object[] {1, "a", 2L, "value2"});
         verifyPutAndLookup(table, schema, new Object[] {1, "a", 3L, "value3"});
         verifyPutAndLookup(table, schema, new Object[] {2, "a", 4L, "value4"});
-        RowType rowType = schema.toRowType();
+        RowType rowType = schema.getRowType();
 
         // test prefix lookup.
         Schema prefixKeySchema =
@@ -248,7 +251,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("a", DataTypes.INT())
                         .column("b", DataTypes.STRING())
                         .build();
-        RowType prefixKeyRowType = prefixKeySchema.toRowType();
+        RowType prefixKeyRowType = prefixKeySchema.getRowType();
         Lookuper prefixLookuper =
                 table.newLookup().lookupBy(prefixKeyRowType.getFieldNames()).createLookuper();
         CompletableFuture<LookupResult> result =
@@ -339,7 +342,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         IndexedRow rowKey = keyRow(DATA1_SCHEMA_PK, new Object[] {1, "a"});
         // retry until all replica ready. Otherwise, the lookup maybe fail. To avoid test unstable,
         // if you want to test the lookup for not ready table, you can comment the following line.
-        waitAllReplicasReady(tableId, descriptor);
+        waitAllReplicasReady(tableId, 10);
         Table table = conn.getTable(tablePath);
         Lookuper lookuper = table.newLookup().createLookuper();
         assertThat(lookupRow(lookuper, rowKey)).isNull();
@@ -373,7 +376,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType(), actualRows.get(i), expectedRows.get(i));
+                        DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
             }
 
             // test projection scan
@@ -390,7 +393,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType().project(projectedFields),
+                        DATA1_SCHEMA.getRowType().project(projectedFields),
                         actualRows.get(i),
                         expectedRows.get(i));
             }
@@ -427,7 +430,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType(), actualRows.get(i), expectedRows.get(i));
+                        DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
             }
 
             // test projection scan
@@ -444,7 +447,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType().project(projectedFields),
+                        DATA1_SCHEMA.getRowType().project(projectedFields),
                         actualRows.get(i),
                         expectedRows.get(i));
             }
@@ -474,36 +477,36 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         UpsertWriter upsertWriter =
                 table.newUpsert().partialUpdate(new int[] {0, 1}).createWriter();
         upsertWriter
-                .upsert(compactedRow(schema.toRowType(), new Object[] {1, "aaa", null, null}))
+                .upsert(compactedRow(schema.getRowType(), new Object[] {1, "aaa", null, null}))
                 .get();
         Lookuper lookuper = table.newLookup().createLookuper();
 
         // check the row
         IndexedRow rowKey = row(pkRowType, new Object[] {1});
         assertThat(lookupRow(lookuper, rowKey))
-                .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "aaa", 1, true}));
+                .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "aaa", 1, true}));
 
         // partial update columns columns: a,b,c
         upsertWriter = table.newUpsert().partialUpdate("a", "b", "c").createWriter();
         upsertWriter
-                .upsert(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, null}))
+                .upsert(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 222, null}))
                 .get();
 
         // lookup the row
         assertThat(lookupRow(lookuper, rowKey))
-                .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, true}));
+                .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 222, true}));
 
         // test partial delete, target column is a,b,c
         upsertWriter
-                .delete(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, null}))
+                .delete(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 222, null}))
                 .get();
         assertThat(lookupRow(lookuper, rowKey))
-                .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, null, null, true}));
+                .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, null, null, true}));
 
         // partial delete, target column is d
         upsertWriter = table.newUpsert().partialUpdate("a", "d").createWriter();
         upsertWriter
-                .delete(compactedRow(schema.toRowType(), new Object[] {1, null, null, true}))
+                .delete(compactedRow(schema.getRowType(), new Object[] {1, null, null, true}))
                 .get();
 
         // the row should be deleted, shouldn't get the row again
@@ -551,7 +554,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testDelete() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
 
         // put key.
         InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
@@ -652,16 +655,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 String value = i % 2 == 0 ? "hello, friend" + i : null;
                 InternalRow row;
                 if (append) {
-                    row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                    row = row(schema.getRowType(), new Object[] {i, 100, value, i * 10L});
                 } else {
                     Preconditions.checkNotNull(kvFormat);
                     KvFormat format = KvFormat.fromString(kvFormat);
                     if (format == KvFormat.COMPACTED) {
                         row =
                                 compactedRow(
-                                        schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                                        schema.getRowType(), new Object[] {i, 100, value, i * 10L});
                     } else {
-                        row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                        row = row(schema.getRowType(), new Object[] {i, 100, value, i * 10L});
                     }
                 }
                 if (tableWriter instanceof AppendWriter) {
@@ -730,7 +733,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             int expectedSize = 30;
             for (int i = 0; i < expectedSize; i++) {
                 String value = i % 2 == 0 ? "hello, friend" + i : null;
-                InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                InternalRow row = row(schema.getRowType(), new Object[] {i, 100, value, i * 10L});
                 appendWriter.append(row);
                 if (i % 10 == 0) {
                     // insert 3 bathes, each batch has 10 rows
@@ -810,7 +813,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 for (int i = keyId; i < keyId + 10; i++) {
                     InternalRow row =
                             compactedRow(
-                                    schema.toRowType(),
+                                    schema.getRowType(),
                                     new Object[] {i, 100, "hello, friend" + i, i * 10L});
                     upsertWriter.upsert(row);
                     expectedSize += 1;
@@ -819,7 +822,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 for (int i = keyId; i < keyId + 5; i++) {
                     InternalRow row =
                             compactedRow(
-                                    schema.toRowType(),
+                                    schema.getRowType(),
                                     new Object[] {i, 200, "HELLO, FRIEND" + i, i * 10L});
                     upsertWriter.upsert(row);
                     expectedSize += 2;
@@ -828,7 +831,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 int deleteKey = keyId + 5;
                 InternalRow row =
                         compactedRow(
-                                schema.toRowType(),
+                                schema.getRowType(),
                                 new Object[] {
                                     deleteKey, 100, "hello, friend" + deleteKey, deleteKey * 10L
                                 });
@@ -922,7 +925,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .schema(DATA1_SCHEMA_PK)
                         .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.FIRST_ROW)
                         .build();
-        RowType rowType = DATA1_SCHEMA_PK.toRowType();
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, false);
 
         RowType lookupRowType = RowType.of(DataTypes.INT());
@@ -994,7 +997,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             int expectedSize = 30;
             for (int i = 0; i < expectedSize; i++) {
                 String value = i % 2 == 0 ? "hello, friend " + i : null;
-                InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                InternalRow row = row(schema.getRowType(), new Object[] {i, 100, value, i * 10L});
                 appendWriter.append(row);
                 if (i % 10 == 0) {
                     // insert 3 bathes, each batch has 10 rows
@@ -1060,7 +1063,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.VERSIONED)
                         .property(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, "b")
                         .build();
-        RowType rowType = DATA3_SCHEMA_PK.toRowType();
+        RowType rowType = DATA3_SCHEMA_PK.getRowType();
         createTable(DATA3_TABLE_PATH_PK, tableDescriptor, false);
 
         int rows = 3;

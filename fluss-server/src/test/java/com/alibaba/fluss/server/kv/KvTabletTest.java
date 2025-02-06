@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.kv;
 
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.exception.InvalidTargetColumnException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
@@ -145,7 +146,10 @@ class KvTabletTest {
             Map<String, String> tableConfig)
             throws Exception {
         RowMerger rowMerger =
-                RowMerger.create(Configuration.fromMap(tableConfig), schema, KvFormat.COMPACTED);
+                RowMerger.create(
+                        new TableConfig(Configuration.fromMap(tableConfig)),
+                        schema,
+                        KvFormat.COMPACTED);
         return KvTablet.create(
                 tablePath,
                 tableBucket,
@@ -165,7 +169,7 @@ class KvTabletTest {
         final Schema schema1 = DATA2_SCHEMA;
         initLogTabletAndKvTablet(schema1, new HashMap<>());
         KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(schema1.toRowType());
+                KvRecordTestUtils.KvRecordFactory.of(schema1.getRowType());
         KvRecordBatch kvRecordBatch =
                 kvRecordBatchFactory.ofRecords(
                         Collections.singletonList(
@@ -190,7 +194,7 @@ class KvTabletTest {
                         .build();
         initLogTabletAndKvTablet(schema2, new HashMap<>());
         KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(schema2.toRowType());
+                KvRecordTestUtils.KvRecordFactory.of(schema2.getRowType());
         KvRecordBatch kvRecordBatch =
                 kvRecordBatchFactory.ofRecords(
                         Collections.singletonList(
@@ -209,7 +213,7 @@ class KvTabletTest {
     @Test
     void testPartialUpdateAndDelete() throws Exception {
         initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
-        RowType rowType = DATA2_SCHEMA.toRowType();
+        RowType rowType = DATA2_SCHEMA.getRowType();
         KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(rowType);
 
@@ -593,7 +597,7 @@ class KvTabletTest {
         List<MemoryLogRecords> expectedLogs =
                 Collections.singletonList(
                         logRecords(
-                                DATA1_SCHEMA_PK.toRowType(),
+                                DATA1_SCHEMA_PK.getRowType(),
                                 0,
                                 Arrays.asList(RowKind.INSERT, RowKind.INSERT),
                                 Arrays.asList(new Object[] {1, "v11"}, new Object[] {2, "v21"})));
@@ -611,7 +615,7 @@ class KvTabletTest {
         expectedLogs =
                 Collections.singletonList(
                         logRecords(
-                                DATA1_SCHEMA_PK.toRowType(),
+                                DATA1_SCHEMA_PK.getRowType(),
                                 endOffset,
                                 Collections.singletonList(RowKind.INSERT),
                                 Collections.singletonList(new Object[] {3, "v31"})));
@@ -626,7 +630,7 @@ class KvTabletTest {
         config.put("table.merge-engine.versioned.ver-column", "b");
         initLogTabletAndKvTablet(DATA3_SCHEMA_PK, config);
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(DATA3_SCHEMA_PK.toRowType());
+                KvRecordTestUtils.KvRecordFactory.of(DATA3_SCHEMA_PK.getRowType());
 
         List<KvRecord> kvData1 =
                 Arrays.asList(
@@ -641,7 +645,7 @@ class KvTabletTest {
         List<MemoryLogRecords> expectedLogs =
                 Collections.singletonList(
                         logRecords(
-                                DATA3_SCHEMA_PK.toRowType(),
+                                DATA3_SCHEMA_PK.getRowType(),
                                 0,
                                 Arrays.asList(
                                         RowKind.INSERT,
@@ -653,7 +657,7 @@ class KvTabletTest {
                                         new Object[] {2, 1000L},
                                         new Object[] {2, 1000L},
                                         new Object[] {2, 1001L})));
-        checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.toRowType());
+        checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.getRowType());
 
         List<KvRecord> kvData2 =
                 Arrays.asList(
@@ -669,7 +673,7 @@ class KvTabletTest {
         expectedLogs =
                 Collections.singletonList(
                         logRecords(
-                                DATA3_SCHEMA_PK.toRowType(),
+                                DATA3_SCHEMA_PK.getRowType(),
                                 endOffset,
                                 Arrays.asList(
                                         RowKind.UPDATE_BEFORE,
@@ -680,7 +684,7 @@ class KvTabletTest {
                                         new Object[] {1, 1001L},
                                         new Object[] {3, 1000L})));
         actualLogRecords = readLogRecords(logTablet, endOffset);
-        checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.toRowType());
+        checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.getRowType());
     }
 
     private LogRecords readLogRecords() throws Exception {

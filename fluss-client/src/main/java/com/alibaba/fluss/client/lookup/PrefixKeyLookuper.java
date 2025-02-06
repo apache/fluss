@@ -19,9 +19,7 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.decode.RowDecoder;
@@ -79,38 +77,30 @@ class PrefixKeyLookuper implements Lookuper {
         validatePrefixLookup(tableInfo, lookupColumnNames);
         // initialization
         this.tableInfo = tableInfo;
-        this.numBuckets =
-                tableInfo.getTableDescriptor().getTableDistribution().get().getBucketCount().get();
+        this.numBuckets = tableInfo.getNumBuckets();
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
-        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        Schema schema = tableDescriptor.getSchema();
-        RowType prefixKeyRowType =
-                schema.toRowType().project(schema.getColumnIndexes(lookupColumnNames));
+        // the row type of the input lookup row
+        RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
         this.bucketKeyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        prefixKeyRowType,
-                        tableDescriptor.getBucketKey(),
-                        tableDescriptor.getPartitionKeys());
-        this.isDataLakeEnable = tableInfo.getTableDescriptor().isDataLakeEnabled();
+                KeyEncoder.createKeyEncoder(lookupRowType, tableInfo.getBucketKeys());
+        this.isDataLakeEnable = tableInfo.getTableConfig().isDataLakeEnabled();
         this.lakeTableBucketAssigner =
-                new LakeTableBucketAssigner(
-                        prefixKeyRowType, tableDescriptor.getBucketKey(), numBuckets);
+                new LakeTableBucketAssigner(lookupRowType, tableInfo.getBucketKeys(), numBuckets);
         this.partitionGetter =
-                tableDescriptor.isPartitioned()
-                        ? new PartitionGetter(prefixKeyRowType, tableDescriptor.getPartitionKeys())
+                tableInfo.isPartitioned()
+                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
                         : null;
         this.kvValueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
-                                tableDescriptor.getKvFormat(),
-                                schema.toRowType().getChildren().toArray(new DataType[0])));
+                                tableInfo.getTableConfig().getKvFormat(),
+                                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
     }
 
     private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
         // verify is primary key table
-        Schema schema = tableInfo.getTableDescriptor().getSchema();
-        if (!schema.getPrimaryKey().isPresent()) {
+        if (!tableInfo.hasPrimaryKey()) {
             throw new IllegalArgumentException(
                     String.format(
                             "Log table %s doesn't support prefix lookup",
@@ -118,9 +108,8 @@ class PrefixKeyLookuper implements Lookuper {
         }
 
         // verify the bucket keys are the prefix subset of physical primary keys
-        List<String> physicalPrimaryKeys = schema.getPrimaryKey().get().getColumnNames();
-        physicalPrimaryKeys.removeAll(tableInfo.getTableDescriptor().getPartitionKeys());
-        List<String> bucketKeys = tableInfo.getTableDescriptor().getBucketKey();
+        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
+        List<String> bucketKeys = tableInfo.getBucketKeys();
         for (int i = 0; i < bucketKeys.size(); i++) {
             if (!bucketKeys.get(i).equals(physicalPrimaryKeys.get(i))) {
                 throw new IllegalArgumentException(
@@ -133,8 +122,8 @@ class PrefixKeyLookuper implements Lookuper {
         }
 
         // verify the lookup columns must contain all partition fields if this is partitioned table
-        if (tableInfo.getTableDescriptor().isPartitioned()) {
-            List<String> partitionKeys = tableInfo.getTableDescriptor().getPartitionKeys();
+        if (tableInfo.isPartitioned()) {
+            List<String> partitionKeys = tableInfo.getPartitionKeys();
             Set<String> lookupColumnsSet = new HashSet<>(lookupColumns);
             if (!lookupColumnsSet.containsAll(partitionKeys)) {
                 throw new IllegalArgumentException(
@@ -147,7 +136,7 @@ class PrefixKeyLookuper implements Lookuper {
 
         // verify the lookup columns must contain all bucket keys **in order**
         List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
-        physicalLookupColumns.removeAll(tableInfo.getTableDescriptor().getPartitionKeys());
+        physicalLookupColumns.removeAll(tableInfo.getPartitionKeys());
         if (!physicalLookupColumns.equals(bucketKeys)) {
             throw new IllegalArgumentException(
                     String.format(

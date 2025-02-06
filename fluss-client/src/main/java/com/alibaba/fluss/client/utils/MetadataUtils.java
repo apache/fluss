@@ -183,11 +183,11 @@ public class MetadataUtils {
                             TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson());
                     newTablePathToTableInfo.put(
                             tablePath,
-                            new TableInfo(
+                            TableInfo.of(
                                     tablePath,
                                     pbTableMetadata.getTableId(),
-                                    tableDescriptor,
                                     pbTableMetadata.getSchemaId(),
+                                    tableDescriptor,
                                     pbTableMetadata.getCreatedTime(),
                                     pbTableMetadata.getModifiedTime()));
 

@@ -254,7 +254,7 @@ public class FlinkCatalog implements Catalog {
                                                 tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
                                 .get();
                 // we need to make sure the table enable datalake
-                if (!tableInfo.getTableDescriptor().isDataLakeEnabled()) {
+                if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
                     throw new UnsupportedOperationException(
                             String.format(
                                     "Table %s is not datalake enabled.",

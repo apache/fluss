@@ -34,7 +34,7 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -95,7 +95,6 @@ import com.alibaba.fluss.server.replica.fetcher.ReplicaFetcherManager;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
-import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.Preconditions;
@@ -127,6 +126,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.server.TabletManagerBase.getTableInfo;
 import static com.alibaba.fluss.utils.FileUtils.isDirectoryEmpty;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -1431,8 +1431,8 @@ public class ReplicaManager {
             if (hostedReplica instanceof NoneReplica) {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
                 TablePath tablePath = physicalTablePath.getTablePath();
-                Schema schema = getSchemaFromZk(tablePath);
-                boolean isKvTable = schema.getPrimaryKey().isPresent();
+                TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+                boolean isKvTable = tableInfo.hasPrimaryKey();
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addPhysicalTableBucketMetricGroup(
                                 physicalTablePath, tb.getBucket(), isKvTable);
@@ -1454,7 +1454,7 @@ public class ReplicaManager {
                                 metadataCache,
                                 fatalErrorHandler,
                                 bucketMetricGroup,
-                                getTableDescriptor(tablePath, zkClient, schema),
+                                tableInfo,
                                 clock);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
@@ -1499,21 +1499,6 @@ public class ReplicaManager {
                                                 "The schema of table %s not found in zookeeper.",
                                                 tablePath)));
         return schemaInfo.getSchema();
-    }
-
-    // TODO: [FLUSS-58283612] store table descriptor and schema in local disk
-    //  to avoid heavy zookeeper operation.
-    public static TableDescriptor getTableDescriptor(
-            TablePath tablePath, ZooKeeperClient zkClient, Schema schema) throws Exception {
-        TableRegistration tableRegistration =
-                zkClient.getTable(tablePath)
-                        .orElseThrow(
-                                () ->
-                                        new FlussRuntimeException(
-                                                String.format(
-                                                        "The table info of table %s not found in zookeeper.",
-                                                        tablePath)));
-        return tableRegistration.toTableDescriptor(schema);
     }
 
     @VisibleForTesting

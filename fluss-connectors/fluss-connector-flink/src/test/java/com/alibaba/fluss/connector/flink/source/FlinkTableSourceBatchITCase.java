@@ -366,7 +366,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // prepare table data
         try (Table dimTable = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
-            RowType dimTableRowType = dimTable.getDescriptor().getSchema().toRowType();
+            RowType dimTableRowType = dimTable.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
@@ -399,7 +399,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // prepare table data
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
-            RowType rowType = table.getDescriptor().getSchema().toRowType();
+            RowType rowType = table.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values = new Object[] {i, "address" + i, "name" + i};
                 appendWriter.append(compactedRow(rowType, values));
@@ -435,7 +435,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // prepare table data
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
-            RowType rowType = table.getDescriptor().getSchema().toRowType();
+            RowType rowType = table.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 for (String partition : partitions) {
                     Object[] values = new Object[] {i, "address" + i, "name" + i, partition};

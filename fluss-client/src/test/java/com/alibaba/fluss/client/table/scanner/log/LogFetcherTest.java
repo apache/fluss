@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
@@ -59,7 +60,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         super.setup();
 
         // We create table data1NonPkTablePath previously.
-        tableId = createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
+        tableId = createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
 
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();

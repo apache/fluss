@@ -42,10 +42,10 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_INFO;
+import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
@@ -57,7 +57,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPoll() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
 
         // append a batch of data.
         int recordSize = 10;
@@ -125,7 +125,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLogScannerMultiThreadAccess() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
 
         // append a batch of data.
         int recordSize = 10;
@@ -186,7 +186,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         // Besides, we inject a force flush every 100 records to have non-full batches.
         // This can reproduce the corner case bug.
         long recordSize = 1_000;
-        RowType rowType = descriptor.getSchema().toRowType();
+        RowType rowType = descriptor.getSchema().getRowType();
         try (Table table = conn.getTable(TablePath.of(db, tbl))) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (long i = 0; i < recordSize; i++) {
@@ -242,7 +242,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         // Besides, we inject a force flush every 100 records to have non-full batches.
         // This can reproduce the corner case bug.
         long recordSize = 1_000;
-        RowType rowType = descriptor.getSchema().toRowType();
+        RowType rowType = descriptor.getSchema().getRowType();
         try (Table table = conn.getTable(TablePath.of(db, tbl))) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (long i = 0; i < recordSize; i++) {
@@ -285,9 +285,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         long tableId =
                 createTable(
                         tablePath,
-                        isPartitioned
-                                ? DATA1_PARTITIONED_TABLE_INFO.getTableDescriptor()
-                                : DATA1_TABLE_INFO.getTableDescriptor(),
+                        isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR,
                         false);
 
         String partitionName = null;
@@ -388,9 +386,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         long tableId =
                 createTable(
                         tablePath,
-                        isPartitioned
-                                ? DATA1_PARTITIONED_TABLE_INFO.getTableDescriptor()
-                                : DATA1_TABLE_INFO.getTableDescriptor(),
+                        isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR,
                         false);
         String partitionName = null;
         Long partitionId = null;

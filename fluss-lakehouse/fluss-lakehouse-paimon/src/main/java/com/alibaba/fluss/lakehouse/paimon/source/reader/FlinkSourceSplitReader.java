@@ -126,9 +126,7 @@ public class FlinkSourceSplitReader
                     tablesByTableId.computeIfAbsent(tableId, id -> connection.getTable(tablePath));
             rowConvertByTableId.computeIfAbsent(
                     tableId,
-                    id ->
-                            new FlussRowToFlinkRowConverter(
-                                    table.getDescriptor().getSchema().toRowType()));
+                    id -> new FlussRowToFlinkRowConverter(table.getTableInfo().getRowType()));
 
             if (sourceSplitBase instanceof HybridSnapshotLogSplit) {
                 // snapshot part

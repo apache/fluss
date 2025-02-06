@@ -28,7 +28,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
 import com.alibaba.fluss.exception.RecordTooLargeException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
@@ -322,13 +321,13 @@ public class WriterClient {
     private BucketAssigner createBucketAssigner(
             PhysicalTablePath physicalTablePath, Configuration conf, Cluster cluster) {
         TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
-        int bucketNumber = cluster.getBucketCount(physicalTablePath.getTablePath());
-        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        List<String> bucketKeys = tableInfo.getTableDescriptor().getBucketKey();
+        int bucketNumber = tableInfo.getNumBuckets();
+        List<String> bucketKeys = tableInfo.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
-            if (tableDescriptor.isDataLakeEnabled()) {
+            if (tableInfo.getTableConfig().isDataLakeEnabled()) {
                 // if lake is enabled, use lake table bucket assigner
-                return new LakeTableBucketAssigner(tableDescriptor, bucketNumber);
+                return new LakeTableBucketAssigner(
+                        tableInfo.getRowType(), bucketKeys, bucketNumber);
             } else {
                 return new HashBucketAssigner(bucketNumber);
             }

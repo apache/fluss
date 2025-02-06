@@ -644,7 +644,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             throws Exception {
         KeyEncoder keyEncoder =
                 new KeyEncoder(
-                        DEFAULT_PK_TABLE_SCHEMA.toRowType(),
+                        DEFAULT_PK_TABLE_SCHEMA.getRowType(),
                         DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
         Map<Integer, Integer> bucketRows = new HashMap<>();

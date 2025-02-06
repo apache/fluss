@@ -306,19 +306,9 @@ public class PushdownUtils {
                 Table table = connection.getTable(tablePath);
                 Admin flussAdmin = connection.getAdmin()) {
             TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount =
-                    tableInfo
-                            .getTableDescriptor()
-                            .getTableDistribution()
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "Table distribution is not set."))
-                            .getBucketCount()
-                            .orElseThrow(
-                                    () -> new IllegalStateException("Bucket count is not set."));
+            int bucketCount = tableInfo.getNumBuckets();
             List<TableBucket> tableBuckets;
-            if (tableInfo.getTableDescriptor().isPartitioned()) {
+            if (tableInfo.isPartitioned()) {
                 List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
                 tableBuckets =
                         partitionInfos.stream()
@@ -376,21 +366,11 @@ public class PushdownUtils {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Admin flussAdmin = connection.getAdmin()) {
             TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount =
-                    tableInfo
-                            .getTableDescriptor()
-                            .getTableDistribution()
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "Table distribution is not set."))
-                            .getBucketCount()
-                            .orElseThrow(
-                                    () -> new IllegalStateException("Bucket count is not set."));
+            int bucketCount = tableInfo.getNumBuckets();
             Collection<Integer> buckets =
                     IntStream.range(0, bucketCount).boxed().collect(Collectors.toList());
             List<PartitionInfo> partitionInfos;
-            if (tableInfo.getTableDescriptor().isPartitioned()) {
+            if (tableInfo.isPartitioned()) {
                 partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
             } else {
                 partitionInfos = Collections.singletonList(null);

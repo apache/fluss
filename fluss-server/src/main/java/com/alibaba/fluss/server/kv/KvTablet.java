@@ -251,7 +251,7 @@ public final class KvTablet {
                     rocksDBKv.checkIfRocksDBClosed();
                     short schemaId = kvRecords.schemaId();
                     RowMerger currentMerger = rowMerger.configureTargetColumns(targetColumns);
-                    RowType rowType = schema.toRowType();
+                    RowType rowType = schema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(schemaId, rowType);
                     walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
                     // get offset to track the offset corresponded to the kv record

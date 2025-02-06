@@ -24,6 +24,7 @@ import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -94,11 +95,11 @@ public class LogScannerBenchmark {
                                         .build())
                         .distributedBy(1) // 1 bucket for benchmark
                         .build();
-        admin.createDatabase("benchmark_db", false).get();
+        admin.createDatabase("benchmark_db", DatabaseDescriptor.EMPTY, false).get();
         admin.createTable(TablePath.of("benchmark_db", "benchmark_table"), descriptor, false).get();
 
         // produce logs
-        RowType rowType = descriptor.getSchema().toRowType();
+        RowType rowType = descriptor.getSchema().getRowType();
         this.table = conn.getTable(TablePath.of("benchmark_db", "benchmark_table"));
         AppendWriter appendWriter = table.newAppend().createWriter();
         for (long i = 0; i < RECORDS_SIZE; i++) {

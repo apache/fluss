@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
@@ -93,21 +94,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link CoordinatorEventProcessor}. */
 class CoordinatorEventProcessorTest {
 
+    private static final int N_BUCKETS = 3;
+    private static final int REPLICATION_FACTOR = 3;
+
     private static final TableDescriptor TEST_TABLE =
             TableDescriptor.builder()
                     .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
                     .distributedBy(3, "a")
-                    .build();
-
-    private static final int N_BUCKETS = 3;
-    private static final int REPLICATION_FACTOR = 3;
+                    .build()
+                    .withReplicationFactor(REPLICATION_FACTOR);
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
-    private static MetaDataManager metaDataManager;
+    private static MetadataManager metadataManager;
 
     private CoordinatorEventProcessor eventProcessor;
     private final String defaultDatabase = "db";
@@ -122,7 +124,7 @@ class CoordinatorEventProcessorTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metaDataManager = new MetaDataManager(zookeeperClient);
+        metadataManager = new MetadataManager(zookeeperClient);
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(
@@ -147,14 +149,14 @@ class CoordinatorEventProcessorTest {
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         eventProcessor.startup();
-        metaDataManager.createDatabase(
+        metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
     }
 
     @AfterEach
     void afterEach() {
         eventProcessor.shutdown();
-        metaDataManager.dropDatabase(defaultDatabase, false, true);
+        metadataManager.dropDatabase(defaultDatabase, false, true);
         // clear the assignment info for all tables;
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(TableIdsZNode.path());
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(PartitionIdsZNode.path());
@@ -174,15 +176,15 @@ class CoordinatorEventProcessorTest {
         TableAssignment tableAssignment =
                 TableAssignmentUtils.generateAssignment(
                         nBuckets, replicationFactor, new int[] {0, 1, 2});
-        long t1Id = metaDataManager.createTable(t1, tableDescriptor, tableAssignment, false);
+        long t1Id = metadataManager.createTable(t1, tableDescriptor, tableAssignment, false);
 
         TablePath t2 = TablePath.of(defaultDatabase, "create_drop_t2");
-        long t2Id = metaDataManager.createTable(t2, tableDescriptor, tableAssignment, false);
+        long t2Id = metadataManager.createTable(t2, tableDescriptor, tableAssignment, false);
 
         verifyTableCreated(coordinatorContext, t2Id, tableAssignment, nBuckets, replicationFactor);
 
         // drop the table;
-        metaDataManager.dropTable(t1, false);
+        metadataManager.dropTable(t1, false);
 
         verifyTableDropped(coordinatorContext, t1Id);
 
@@ -195,7 +197,7 @@ class CoordinatorEventProcessorTest {
         // to mock the case that the table hasn't been deleted completely
         // , but the coordinator shut down
         eventProcessor.shutdown();
-        metaDataManager.dropTable(t2, false);
+        metadataManager.dropTable(t2, false);
 
         // start the coordinator
         eventProcessor =
@@ -250,7 +252,7 @@ class CoordinatorEventProcessorTest {
                 "Fail to wait for coordinator handling create table event for table " + t1Id);
 
         // drop the table;
-        metaDataManager.dropTable(t1, false);
+        metadataManager.dropTable(t1, false);
 
         // retry until the assignment has been deleted from zk, then it means
         // the table has been deleted successfully
@@ -290,7 +292,7 @@ class CoordinatorEventProcessorTest {
         // we try to assign a replica to this newly server, every thing will
         // be fine
         // t1: {bucket0: [0, 3, 2], bucket1: [3, 2, 0]}, t2: {bucket0: [3]}
-        MetaDataManager metaDataManager = new MetaDataManager(zookeeperClient);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient);
         TableAssignment table1Assignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 3, 2))
@@ -299,13 +301,13 @@ class CoordinatorEventProcessorTest {
 
         TablePath table1Path = TablePath.of(defaultDatabase, "t1");
         long table1Id =
-                metaDataManager.createTable(table1Path, TEST_TABLE, table1Assignment, false);
+                metadataManager.createTable(table1Path, TEST_TABLE, table1Assignment, false);
 
         TableAssignment table2Assignment =
                 TableAssignment.builder().add(0, BucketAssignment.of(3)).build();
         TablePath table2Path = TablePath.of(defaultDatabase, "t2");
         long table2Id =
-                metaDataManager.createTable(table2Path, TEST_TABLE, table2Assignment, false);
+                metadataManager.createTable(table2Path, TEST_TABLE, table2Assignment, false);
 
         // retry until the table2 been created
         retry(
@@ -423,14 +425,14 @@ class CoordinatorEventProcessorTest {
     void testRestartTriggerReplicaToOffline() throws Exception {
         // case1: coordinator server restart, and first set the replica to online
         // but the request to the replica server fail which will then cause it offline
-        MetaDataManager metaDataManager = new MetaDataManager(zookeeperClient);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient);
         TableAssignment tableAssignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 1, 2))
                         .add(1, BucketAssignment.of(1, 2, 0))
                         .build();
         TablePath tablePath = TablePath.of(defaultDatabase, "t_restart");
-        long table1Id = metaDataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+        long table1Id = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
 
         // let's restart
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
@@ -567,7 +569,7 @@ class CoordinatorEventProcessorTest {
         TablePath tablePath = TablePath.of(defaultDatabase, "partition_table");
         TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
         long tableId =
-                metaDataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
+                metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
 
         retry(
                 Duration.ofMinutes(1),
@@ -619,7 +621,7 @@ class CoordinatorEventProcessorTest {
         // now, drop the table and restart the coordinator event processor,
         // the partition2 should be dropped
         eventProcessor.shutdown();
-        metaDataManager.dropTable(tablePath, false);
+        metadataManager.dropTable(tablePath, false);
 
         // start the coordinator
         eventProcessor =
@@ -834,7 +836,7 @@ class CoordinatorEventProcessorTest {
     private long createTable(TablePath tablePath, int[] servers) {
         TableAssignment tableAssignment =
                 TableAssignmentUtils.generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
-        return metaDataManager.createTable(
+        return metadataManager.createTable(
                 tablePath, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
     }
 
@@ -846,7 +848,10 @@ class CoordinatorEventProcessorTest {
                                 .column("b", DataTypes.STRING())
                                 .build())
                 .distributedBy(3)
-                .partitionedBy("a")
-                .build();
+                .partitionedBy("b")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
+                .build()
+                .withReplicationFactor(REPLICATION_FACTOR);
     }
 }

@@ -73,7 +73,7 @@ public class LimitBatchScanner implements BatchScanner {
         this.projectedFields = projectedFields;
         this.limit = limit;
 
-        RowType rowType = tableInfo.getTableDescriptor().getSchema().toRowType();
+        RowType rowType = tableInfo.getRowType();
         this.fieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
         for (int i = 0; i < rowType.getFieldCount(); i++) {
             this.fieldGetters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(i), i);
@@ -99,7 +99,7 @@ public class LimitBatchScanner implements BatchScanner {
         this.kvValueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
-                                tableInfo.getTableDescriptor().getKvFormat(),
+                                tableInfo.getTableConfig().getKvFormat(),
                                 rowType.getChildren().toArray(new DataType[0])));
         this.endOfInput = false;
     }
@@ -129,7 +129,7 @@ public class LimitBatchScanner implements BatchScanner {
         }
         List<InternalRow> scanRows = new ArrayList<>();
         ByteBuffer recordsBuffer = ByteBuffer.wrap(limitScanResponse.getRecords());
-        if (tableInfo.getTableDescriptor().hasPrimaryKey()) {
+        if (tableInfo.hasPrimaryKey()) {
             DefaultValueRecordBatch valueRecords =
                     DefaultValueRecordBatch.pointToByteBuffer(recordsBuffer);
             ValueRecordReadContext readContext =

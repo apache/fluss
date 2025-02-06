@@ -63,8 +63,8 @@ import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
@@ -98,10 +98,7 @@ public class TabletServiceITCase {
     @Test
     void testProduceLog() throws Exception {
         long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
@@ -148,10 +145,7 @@ public class TabletServiceITCase {
     @Test
     void testFetchLog() throws Exception {
         long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
@@ -257,10 +251,7 @@ public class TabletServiceITCase {
     @Test
     void testFetchLogWithMinFetchSizeAndTimeout() throws Exception {
         long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
@@ -374,9 +365,7 @@ public class TabletServiceITCase {
     void testPutKv() throws Exception {
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        DATA1_TABLE_INFO_PK.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
@@ -413,9 +402,7 @@ public class TabletServiceITCase {
     void testLookup() throws Exception {
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        DATA1_TABLE_INFO_PK.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
@@ -466,10 +453,7 @@ public class TabletServiceITCase {
 
         // Lookup from a non-pk table.
         long logTableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket logTableBucket = new TableBucket(logTableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(logTableBucket);
@@ -499,7 +483,7 @@ public class TabletServiceITCase {
                         .column("d", DataTypes.STRING())
                         .primaryKey("a", "b", "c")
                         .build();
-        RowType rowType = schema.toRowType();
+        RowType rowType = schema.getRowType();
         RowType primaryKeyType =
                 DataTypes.ROW(
                         new DataField("a", DataTypes.INT()),
@@ -589,10 +573,7 @@ public class TabletServiceITCase {
 
         // Prefix lookup an unsupported prefixLookup table.
         long logTableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         tb = new TableBucket(logTableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
         leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
@@ -615,9 +596,7 @@ public class TabletServiceITCase {
     void testLimitScanPrimaryKeyTable() throws Exception {
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        DATA1_TABLE_INFO_PK.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
@@ -649,10 +628,7 @@ public class TabletServiceITCase {
     @Test
     void testLimitScanLogTable() throws Exception {
         long logTableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket logTableBucket = new TableBucket(logTableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(logTableBucket);
         int logLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(logTableBucket);
@@ -694,10 +670,7 @@ public class TabletServiceITCase {
     @Test
     void testListOffsets() throws Exception {
         long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);

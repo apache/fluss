@@ -71,7 +71,7 @@ public class FlussLakehousePaimon {
         Filter<TableInfo> tableFilter =
                 (tableInfo) ->
                         // data lake should enable
-                        tableInfo.getTableDescriptor().isDataLakeEnabled();
+                        tableInfo.getTableConfig().isDataLakeEnabled();
         Configuration flussConfig = Configuration.fromMap(flussConfigMap);
         FlussDatabaseSyncSource.Builder databaseSyncSourceBuilder =
                 FlussDatabaseSyncSource.newBuilder(flussConfig)

@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.kv;
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -266,7 +267,7 @@ final class KvManagerTest {
                 logTablet,
                 KvFormat.COMPACTED,
                 DATA1_SCHEMA_PK,
-                new Configuration(),
+                new TableConfig(new Configuration()),
                 ArrowCompressionInfo.NO_COMPRESSION);
     }
 

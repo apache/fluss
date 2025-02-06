@@ -18,7 +18,7 @@ package com.alibaba.fluss.client.table.writer;
 
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriterClient;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
@@ -30,7 +30,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 public class TableUpsert implements Upsert {
 
     private final TablePath tablePath;
-    private final TableDescriptor tableDescriptor;
+    private final TableInfo tableInfo;
     private final WriterClient writerClient;
     private final MetadataUpdater metadataUpdater;
 
@@ -38,20 +38,20 @@ public class TableUpsert implements Upsert {
 
     public TableUpsert(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             WriterClient writerClient) {
-        this(tablePath, tableDescriptor, metadataUpdater, writerClient, null);
+        this(tablePath, tableInfo, metadataUpdater, writerClient, null);
     }
 
     private TableUpsert(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             WriterClient writerClient,
             @Nullable int[] targetColumns) {
         this.tablePath = tablePath;
-        this.tableDescriptor = tableDescriptor;
+        this.tableInfo = tableInfo;
         this.writerClient = writerClient;
         this.metadataUpdater = metadataUpdater;
         this.targetColumns = targetColumns;
@@ -61,7 +61,7 @@ public class TableUpsert implements Upsert {
     public Upsert partialUpdate(@Nullable int[] targetColumns) {
         // check if the target columns are valid and throw pretty exception messages
         if (targetColumns != null) {
-            int numColumns = tableDescriptor.getSchema().getColumns().size();
+            int numColumns = tableInfo.getRowType().getFieldCount();
             for (int targetColumn : targetColumns) {
                 if (targetColumn < 0 || targetColumn >= numColumns) {
                     throw new IllegalArgumentException(
@@ -75,15 +75,14 @@ public class TableUpsert implements Upsert {
                 }
             }
         }
-        return new TableUpsert(
-                tablePath, tableDescriptor, metadataUpdater, writerClient, targetColumns);
+        return new TableUpsert(tablePath, tableInfo, metadataUpdater, writerClient, targetColumns);
     }
 
     @Override
     public Upsert partialUpdate(String... targetColumnNames) {
         checkNotNull(targetColumnNames, "targetColumnNames");
         // check if the target columns are valid
-        RowType rowType = tableDescriptor.getSchema().toRowType();
+        RowType rowType = tableInfo.getRowType();
         int[] targetColumns = new int[targetColumnNames.length];
         for (int i = 0; i < targetColumnNames.length; i++) {
             targetColumns[i] = rowType.getFieldIndex(targetColumnNames[i]);
@@ -102,6 +101,6 @@ public class TableUpsert implements Upsert {
     @Override
     public UpsertWriter createWriter() {
         return new UpsertWriterImpl(
-                tablePath, tableDescriptor, targetColumns, writerClient, metadataUpdater);
+                tablePath, tableInfo, targetColumns, writerClient, metadataUpdater);
     }
 }

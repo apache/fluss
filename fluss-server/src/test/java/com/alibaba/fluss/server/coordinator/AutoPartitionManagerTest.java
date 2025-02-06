@@ -319,17 +319,18 @@ class AutoPartitionManagerTest {
                         .comment("partitioned table")
                         .distributedBy(16)
                         .partitionedBy("dt")
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 2)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 4)
                         .build();
         TableInfo tableInfo =
-                new TableInfo(
+                TableInfo.of(
                         tablePath,
                         tableId,
-                        descriptor,
                         1,
+                        descriptor,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableRegistration registration = TableRegistration.newTable(tableId, descriptor);

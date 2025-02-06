@@ -27,6 +27,7 @@ import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -138,7 +139,7 @@ public class RemoteLogScannerITCase {
         int expectedSize = 30;
         for (int i = 0; i < expectedSize; i++) {
             String value = i % 2 == 0 ? "hello, friend" + i : null;
-            InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+            InternalRow row = row(schema.getRowType(), new Object[] {i, 100, value, i * 10L});
             appendWriter.append(row);
             if (i % 10 == 0) {
                 // insert 3 bathes, each batch has 10 rows
@@ -259,7 +260,7 @@ public class RemoteLogScannerITCase {
 
     private long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
-        admin.createDatabase(tablePath.getDatabaseName(), false).get();
+        admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false).get();
         admin.createTable(tablePath, tableDescriptor, false).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }

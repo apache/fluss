@@ -186,23 +186,7 @@ public final class Cluster {
     }
 
     public int getBucketCount(TablePath tablePath) {
-        return tableInfoByPath
-                .get(tablePath)
-                .getTableDescriptor()
-                .getTableDistribution()
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        "table distribution is null for table: "
-                                                + tablePath
-                                                + " in cluster"))
-                .getBucketCount()
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        "bucket count is null for table: "
-                                                + tablePath
-                                                + " in cluster"));
+        return tableInfoByPath.get(tablePath).getNumBuckets();
     }
 
     /** Get the bucket location for this table-bucket. */
@@ -296,11 +280,7 @@ public final class Cluster {
     /** Get the latest schema for the given table. */
     public Optional<SchemaInfo> getSchema(TablePath tablePath) {
         return getTable(tablePath)
-                .map(
-                        tableInfo ->
-                                new SchemaInfo(
-                                        tableInfo.getTableDescriptor().getSchema(),
-                                        tableInfo.getSchemaId()));
+                .map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
     }
 
     /** Get the table path to table id map. */

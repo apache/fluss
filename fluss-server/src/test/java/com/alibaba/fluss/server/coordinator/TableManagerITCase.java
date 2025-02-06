@@ -24,6 +24,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
+import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
@@ -261,7 +262,7 @@ class TableManagerITCase {
         GetTableInfoResponse response =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
-        assertThat(gottenTable).isEqualTo(tableDescriptor);
+        assertThat(gottenTable).isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // check assignment, just check replica numbers, don't care about actual assignment
         checkAssignmentWithReplicaFactor(
@@ -351,7 +352,7 @@ class TableManagerITCase {
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true");
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), timeUnit.name());
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "1");
-        TableDescriptor tableDescriptor = newPartitionedTable().copy(options);
+        TableDescriptor tableDescriptor = newPartitionedTable().withProperties(options);
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
         // wait util partition is created
@@ -392,7 +393,8 @@ class TableManagerITCase {
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         // then create a partitioned table and removes all options
-        TableDescriptor tableWithoutOptions = newPartitionedTable().copy(Collections.emptyMap());
+        TableDescriptor tableWithoutOptions =
+                newPartitionedTable().withProperties(Collections.emptyMap());
         assertThatThrownBy(
                         () ->
                                 adminGateway
@@ -401,7 +403,7 @@ class TableManagerITCase {
                                                         tablePath, tableWithoutOptions, false))
                                         .get())
                 .cause()
-                .isInstanceOf(InvalidTableException.class)
+                .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         "Currently, partitioned table must enable auto partition, "
                                 + "please set table property 'table.auto-partition.enabled' to true.");
@@ -434,7 +436,7 @@ class TableManagerITCase {
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(
-                        "Currently, partitioned table only supports STRING type partition key, but got partition key 'id' with data type INT NOT NULL.");
+                        "Currently, auto partition enabled table only supports STRING type partition key, but got partition key 'id' with data type INT NOT NULL.");
     }
 
     @ParameterizedTest
@@ -471,7 +473,7 @@ class TableManagerITCase {
         PbTableMetadata tableMetadata = metadataResponse.getTableMetadataAt(0);
         assertThat(toTablePath(tableMetadata.getTablePath())).isEqualTo(tablePath);
         assertThat(TableDescriptor.fromJsonBytes(tableMetadata.getTableJson()))
-                .isEqualTo(tableDescriptor);
+                .isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // now, check the table buckets metadata
         assertThat(tableMetadata.getBucketMetadatasCount()).isEqualTo(expectBucketCount);

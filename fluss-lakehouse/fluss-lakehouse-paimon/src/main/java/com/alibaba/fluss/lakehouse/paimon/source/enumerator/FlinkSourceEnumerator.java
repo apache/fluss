@@ -32,7 +32,6 @@ import com.alibaba.fluss.lakehouse.paimon.source.split.SourceSplitBase;
 import com.alibaba.fluss.lakehouse.paimon.source.state.SourceEnumeratorState;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.ExceptionUtils;
@@ -256,7 +255,7 @@ public class FlinkSourceEnumerator
                         flussAdmin.getTableInfo(new TablePath(database, tableName)).get();
                 if (tableFilter.test(tableInfo)) {
                     tableInfos.put(tableInfo.getTableId(), tableInfo);
-                    if (tableInfo.getTableDescriptor().isPartitioned()) {
+                    if (tableInfo.isPartitioned()) {
                         partitionedTables.put(tableInfo.getTableId(), tableInfo.getTablePath());
                     }
                 }
@@ -362,11 +361,10 @@ public class FlinkSourceEnumerator
 
             // if is partitioned table, we don't generate splits,
             // we will generate splits during partition discovering
-            if (tableInfo.getTableDescriptor().isPartitioned()) {
+            if (tableInfo.isPartitioned()) {
                 continue;
             }
-            TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-            if (tableDescriptor.hasPrimaryKey()) {
+            if (tableInfo.hasPrimaryKey()) {
                 final KvSnapshots kvSnapshots;
                 try {
                     kvSnapshots = flussAdmin.getLatestKvSnapshots(tableIdAndPath.tablePath).get();
@@ -379,8 +377,7 @@ public class FlinkSourceEnumerator
                 }
                 return getHybridSnapshotAndLogSplits(kvSnapshots, tableInfo.getTablePath(), null);
             } else {
-                splits.addAll(
-                        getLogSplits(tableIdAndPath, getBucketCount(tableDescriptor), null, null));
+                splits.addAll(getLogSplits(tableIdAndPath, tableInfo.getNumBuckets(), null, null));
             }
         }
         return splits;
@@ -393,7 +390,7 @@ public class FlinkSourceEnumerator
             long tableId = entry.getKey();
             Collection<PartitionInfo> partitionInfos = entry.getValue();
             TableInfo tableInfo = tableInfos.get(tableId);
-            if (tableInfo.getTableDescriptor().hasPrimaryKey()) {
+            if (tableInfo.hasPrimaryKey()) {
                 sourceSplitBases.addAll(
                         initPrimaryKeyTablePartitionSplits(
                                 tableId, tableInfo.getTablePath(), partitionInfos));
@@ -411,7 +408,7 @@ public class FlinkSourceEnumerator
             splits.addAll(
                     getLogSplits(
                             new TableIdAndPath(tableInfo.getTableId(), tableInfo.getTablePath()),
-                            getBucketCount(tableInfo.getTableDescriptor()),
+                            tableInfo.getNumBuckets(),
                             partition.getPartitionId(),
                             partition.getPartitionName()));
         }
@@ -474,14 +471,6 @@ public class FlinkSourceEnumerator
         }
 
         return splits;
-    }
-
-    private int getBucketCount(TableDescriptor tableDescriptor) {
-        return tableDescriptor
-                .getTableDistribution()
-                .orElseThrow(() -> new IllegalStateException("Table distribution is not set."))
-                .getBucketCount()
-                .orElseThrow(() -> new IllegalStateException("Bucket count is not set."));
     }
 
     private List<SourceSplitBase> getLogSplits(

@@ -41,6 +41,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * A schema represents the schema part of a {@code CREATE TABLE} DDL statement in SQL. It defines
  * columns of different kind, constraints.
@@ -80,7 +82,7 @@ public final class Schema implements Serializable {
         return Optional.ofNullable(primaryKey);
     }
 
-    public RowType toRowType() {
+    public RowType getRowType() {
         return rowType;
     }
 
@@ -91,6 +93,11 @@ public final class Schema implements Serializable {
                 .map(pk -> pk.columnNames)
                 .map(pkColumns -> pkColumns.stream().mapToInt(columns::indexOf).toArray())
                 .orElseGet(() -> new int[0]);
+    }
+
+    /** Returns the primary key column names, if any, otherwise returns an empty array. */
+    public List<String> getPrimaryKeyColumnNames() {
+        return getPrimaryKey().map(PrimaryKey::getColumnNames).orElse(Collections.emptyList());
     }
 
     /**
@@ -194,11 +201,10 @@ public final class Schema implements Serializable {
         }
 
         /** Adopts all fields of the given row as columns of the schema. */
-        public Builder fromRowDataType(DataType dataType) {
-            Preconditions.checkNotNull(dataType, "Data type must not be null.");
-            Preconditions.checkArgument(dataType instanceof RowType, "Data type of ROW expected.");
-            final List<DataType> fieldDataTypes = dataType.getChildren();
-            final List<String> fieldNames = ((RowType) dataType).getFieldNames();
+        public Builder fromRowType(RowType rowType) {
+            checkNotNull(rowType, "rowType must not be null.");
+            final List<DataType> fieldDataTypes = rowType.getChildren();
+            final List<String> fieldNames = rowType.getFieldNames();
             IntStream.range(0, fieldDataTypes.size())
                     .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
             return this;
@@ -207,8 +213,8 @@ public final class Schema implements Serializable {
         /** Adopts the given field names and field data types as physical columns of the schema. */
         public Builder fromFields(
                 List<String> fieldNames, List<? extends DataType> fieldDataTypes) {
-            Preconditions.checkNotNull(fieldNames, "Field names must not be null.");
-            Preconditions.checkNotNull(fieldDataTypes, "Field data types must not be null.");
+            checkNotNull(fieldNames, "Field names must not be null.");
+            checkNotNull(fieldDataTypes, "Field data types must not be null.");
             Preconditions.checkArgument(
                     fieldNames.size() == fieldDataTypes.size(),
                     "Field names and field data types must have the same length.");
@@ -234,8 +240,8 @@ public final class Schema implements Serializable {
          * @param dataType data type of the column
          */
         public Builder column(String columnName, DataType dataType) {
-            Preconditions.checkNotNull(columnName, "Column name must not be null.");
-            Preconditions.checkNotNull(dataType, "Data type must not be null.");
+            checkNotNull(columnName, "Column name must not be null.");
+            checkNotNull(dataType, "Data type must not be null.");
             columns.add(new Column(columnName, dataType));
             return this;
         }
@@ -264,7 +270,7 @@ public final class Schema implements Serializable {
          * @param columnNames columns that form a unique primary key
          */
         public Builder primaryKey(String... columnNames) {
-            Preconditions.checkNotNull(columnNames, "Primary key column names must not be null.");
+            checkNotNull(columnNames, "Primary key column names must not be null.");
             return primaryKey(Arrays.asList(columnNames));
         }
 
@@ -279,7 +285,7 @@ public final class Schema implements Serializable {
          * @param columnNames columns that form a unique primary key
          */
         public Builder primaryKey(List<String> columnNames) {
-            Preconditions.checkNotNull(columnNames, "Primary key column names must not be null.");
+            checkNotNull(columnNames, "Primary key column names must not be null.");
             final String generatedConstraintName =
                     columnNames.stream().collect(Collectors.joining("_", "PK_", ""));
             return primaryKeyNamed(generatedConstraintName, columnNames);
@@ -503,7 +509,7 @@ public final class Schema implements Serializable {
 
     public static RowType getKeyRowType(Schema schema, int[] keyIndexes) {
         List<DataField> keyRowFields = new ArrayList<>(keyIndexes.length);
-        List<DataField> rowFields = schema.toRowType().getFields();
+        List<DataField> rowFields = schema.getRowType().getFields();
         for (int index : keyIndexes) {
             keyRowFields.add(rowFields.get(index));
         }

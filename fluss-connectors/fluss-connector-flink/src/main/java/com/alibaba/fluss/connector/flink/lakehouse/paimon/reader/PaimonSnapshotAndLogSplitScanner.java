@@ -75,7 +75,7 @@ public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
             FileStoreTable fileStoreTable,
             PaimonSnapshotAndFlussLogSplit snapshotAndFlussLogSplit,
             @Nullable int[] projectedFields) {
-        this.pkIndexes = flussTable.getDescriptor().getSchema().getPrimaryKeyIndexes();
+        this.pkIndexes = flussTable.getTableInfo().getSchema().getPrimaryKeyIndexes();
         int[] newProjectedFields = getNeedProjectFields(flussTable, projectedFields);
         this.tableRead =
                 fileStoreTable.newReadBuilder().withProjection(newProjectedFields).newRead();
@@ -157,8 +157,7 @@ public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
         } else {
             // no projectedFields, use all fields
             keyIndexesInRow = pkIndexes;
-            return IntStream.range(
-                            0, flussTable.getDescriptor().getSchema().getColumnNames().size())
+            return IntStream.range(0, flussTable.getTableInfo().getRowType().getFieldCount())
                     .toArray();
         }
     }

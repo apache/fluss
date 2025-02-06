@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.kv.rowmerger;
 
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.Schema;
@@ -62,23 +62,21 @@ public interface RowMerger {
     RowMerger configureTargetColumns(@Nullable int[] targetColumns);
 
     /** Create a row merger based on the given configuration. */
-    static RowMerger create(Configuration tableConf, Schema schema, KvFormat kvFormat) {
-        Optional<MergeEngineType> mergeEngineType =
-                tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);
+    static RowMerger create(TableConfig tableConf, Schema schema, KvFormat kvFormat) {
+        Optional<MergeEngineType> mergeEngineType = tableConf.getMergeEngineType();
         if (mergeEngineType.isPresent()) {
             switch (mergeEngineType.get()) {
                 case FIRST_ROW:
                     return new FirstRowRowMerger();
                 case VERSIONED:
-                    Optional<String> versionColumn =
-                            tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN);
+                    Optional<String> versionColumn = tableConf.getMergeEngineVersionColumn();
                     if (!versionColumn.isPresent()) {
                         throw new IllegalArgumentException(
                                 String.format(
                                         "'%s' must be set for versioned merge engine.",
                                         ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                     }
-                    return new VersionedRowMerger(schema.toRowType(), versionColumn.get());
+                    return new VersionedRowMerger(schema.getRowType(), versionColumn.get());
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());

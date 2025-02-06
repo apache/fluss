@@ -694,7 +694,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         .column("d", DataTypes.STRING())
                         .primaryKey("a", "b", "c")
                         .build();
-        RowType rowType = schema.toRowType();
+        RowType rowType = schema.getRowType();
         RowType keyType =
                 DataTypes.ROW(
                         new DataField("a", DataTypes.INT()),

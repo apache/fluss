@@ -19,7 +19,6 @@ package com.alibaba.fluss.client.table.scanner.batch;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.rocksdb.RocksDBHandle;
 import com.alibaba.fluss.rocksdb.RocksIteratorWrapper;
 import com.alibaba.fluss.row.InternalRow;
@@ -27,6 +26,7 @@ import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.row.decode.RowDecoder;
 import com.alibaba.fluss.row.encode.ValueDecoder;
 import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.IOUtils;
@@ -64,14 +64,13 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
     SnapshotFilesReader(
             KvFormat kvFormat,
             Path rocksDbPath,
-            Schema tableSchema,
+            RowType tableRowType,
             @Nullable int[] projectedFields)
             throws IOException {
         this.valueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
-                                kvFormat,
-                                tableSchema.toRowType().getChildren().toArray(new DataType[0])));
+                                kvFormat, tableRowType.getChildren().toArray(new DataType[0])));
         this.projectedFields = projectedFields;
         closeableRegistry = new CloseableRegistry();
         try {

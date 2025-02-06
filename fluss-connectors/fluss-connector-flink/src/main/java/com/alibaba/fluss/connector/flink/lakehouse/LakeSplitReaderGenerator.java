@@ -111,7 +111,7 @@ public class LakeSplitReaderGenerator {
                 ? this.projectedFields
                 // only read the field in origin fluss table, not include log_offset, log_timestamp
                 // fields
-                : IntStream.range(0, flussTable.getDescriptor().getSchema().getColumnNames().size())
+                : IntStream.range(0, flussTable.getTableInfo().getRowType().getFieldCount())
                         .toArray();
     }
 

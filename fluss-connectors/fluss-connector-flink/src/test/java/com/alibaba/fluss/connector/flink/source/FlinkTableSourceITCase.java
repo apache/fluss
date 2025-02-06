@@ -201,7 +201,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         tableName, logFormat));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Table table = conn.getTable(tablePath);
-        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows =
                 Arrays.asList(
                         genRow(false, dataType, new Object[] {1, "v1", 100L, 1000, 100, 1000L}),
@@ -267,7 +267,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Table table = conn.getTable(tablePath);
 
-        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows =
                 Arrays.asList(
                         genRow(isPkTable, dataType, new Object[] {1, "v1", 100L, 1000}),
@@ -401,7 +401,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         }
         Table table = conn.getTable(tablePath);
 
-        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows1 =
                 Arrays.asList(
                         row(dataType, rowValues(new Object[] {1, "v1", 100L, 1000}, partitionName)),
@@ -543,7 +543,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
             partitionName = partitionNameById.values().iterator().next();
         }
 
-        RowType dataType = conn.getTable(tablePath).getDescriptor().getSchema().toRowType();
+        RowType dataType = conn.getTable(tablePath).getTableInfo().getRowType();
 
         List<InternalRow> rows1 =
                 Arrays.asList(
@@ -1049,7 +1049,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         // prepare dim table data
         try (Table dimTable = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
-            RowType dimTableRowType = dimTable.getDescriptor().getSchema().toRowType();
+            RowType dimTableRowType = dimTable.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null

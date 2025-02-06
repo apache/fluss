@@ -68,7 +68,7 @@ public class TableScan implements Scan {
     @Override
     public Scan project(List<String> projectedColumnNames) {
         int[] columnIndexes = new int[projectedColumnNames.size()];
-        RowType rowType = tableInfo.getTableDescriptor().getSchema().toRowType();
+        RowType rowType = tableInfo.getRowType();
         for (int i = 0; i < projectedColumnNames.size(); i++) {
             int index = rowType.getFieldIndex(projectedColumnNames.get(i));
             if (index < 0) {
@@ -127,12 +127,12 @@ public class TableScan implements Scan {
         }
 
         return new KvSnapshotBatchScanner(
-                tableInfo.getTableDescriptor().getSchema(),
+                tableInfo.getRowType(),
                 tableBucket,
                 snapshotMeta.getSnapshotFiles(),
                 projectedColumns,
                 scannerTmpDir,
-                tableInfo.getTableDescriptor().getKvFormat(),
+                tableInfo.getTableConfig().getKvFormat(),
                 conn.getOrCreateRemoteFileDownloader());
     }
 }

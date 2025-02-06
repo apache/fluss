@@ -72,7 +72,7 @@ class UpsertSinkFunction extends FlinkSinkFunction {
     @Override
     FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter() {
         return FlinkRowToFlussRowConverter.create(
-                tableRowType, table.getDescriptor().getKvFormat());
+                tableRowType, table.getTableInfo().getTableConfig().getKvFormat());
     }
 
     @Override

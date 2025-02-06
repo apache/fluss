@@ -85,7 +85,7 @@ public class LogScannerImpl implements LogScanner {
             @Nullable int[] projectedFields) {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
-        this.isPartitionedTable = tableInfo.getTableDescriptor().isPartitioned();
+        this.isPartitionedTable = tableInfo.isPartitioned();
         // add this table to metadata updater.
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
         this.logScannerStatus = new LogScannerStatus();
@@ -110,7 +110,7 @@ public class LogScannerImpl implements LogScanner {
      */
     @Nullable
     private Projection sanityProjection(@Nullable int[] projectedFields, TableInfo tableInfo) {
-        RowType tableRowType = tableInfo.getTableDescriptor().getSchema().toRowType();
+        RowType tableRowType = tableInfo.getRowType();
         if (projectedFields != null) {
             for (int projectedField : projectedFields) {
                 if (projectedField < 0 || projectedField >= tableRowType.getFieldCount()) {

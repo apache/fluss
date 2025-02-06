@@ -21,9 +21,9 @@ import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.FileUtils;
@@ -71,7 +71,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
     public static final CloseableIterator<InternalRow> NO_DATA_AVAILABLE =
             CloseableIterator.emptyIterator();
 
-    private final Schema tableSchema;
+    private final RowType tableRowType;
     private final TableBucket tableBucket;
     private final List<FsPathAndFileName> fsPathAndFileNames;
     @Nullable private final int[] projectedFields;
@@ -92,14 +92,14 @@ public class KvSnapshotBatchScanner implements BatchScanner {
     @Nullable private volatile Throwable initSnapshotFilesReaderException = null;
 
     public KvSnapshotBatchScanner(
-            Schema tableSchema,
+            RowType tableRowType,
             TableBucket tableBucket,
             List<FsPathAndFileName> fsPathAndFileNames,
             @Nullable int[] projectedFields,
             String scannerTmpDir,
             KvFormat kvFormat,
             RemoteFileDownloader remoteFileDownloader) {
-        this.tableSchema = tableSchema;
+        this.tableRowType = tableRowType;
         this.tableBucket = tableBucket;
         this.fsPathAndFileNames = fsPathAndFileNames;
         this.projectedFields = projectedFields;
@@ -203,7 +203,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
                                                 new SnapshotFilesReader(
                                                         kvFormat,
                                                         snapshotLocalDirectory,
-                                                        tableSchema,
+                                                        tableRowType,
                                                         projectedFields);
                                         readerIsReady.signalAll();
                                     } catch (Throwable e) {

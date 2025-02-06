@@ -36,6 +36,8 @@ import java.util.Optional;
  * @since 0.6
  */
 public class DatabaseDescriptor {
+    public static final DatabaseDescriptor EMPTY = DatabaseDescriptor.builder().build();
+
     private final Map<String, String> customProperties;
     private final String comment;
 

@@ -369,7 +369,7 @@ public final class RecordAccumulator {
         if (writeRecord.getKey() != null) {
             return WriteBatch.WriteBatchType.KV;
         } else {
-            LogFormat logFormat = tableInfo.getTableDescriptor().getLogFormat();
+            LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
             if (logFormat == LogFormat.ARROW) {
                 return WriteBatch.WriteBatchType.ARROW_LOG;
             } else if (logFormat == LogFormat.INDEXED) {
@@ -524,7 +524,7 @@ public final class RecordAccumulator {
                             tb,
                             physicalTablePath,
                             schemaId,
-                            tableInfo.getTableDescriptor().getKvFormat(),
+                            tableInfo.getTableConfig().getKvFormat(),
                             outputView.getPreAllocatedSize(),
                             outputView,
                             writeRecord.getTargetColumns(),
@@ -535,8 +535,8 @@ public final class RecordAccumulator {
                             tableInfo.getTableId(),
                             schemaId,
                             outputView.getPreAllocatedSize(),
-                            tableInfo.getTableDescriptor().getSchema().toRowType(),
-                            tableInfo.getTableDescriptor().getArrowCompressionInfo());
+                            tableInfo.getRowType(),
+                            tableInfo.getTableConfig().getArrowCompressionInfo());
             batch =
                     new ArrowLogWriteBatch(
                             tb,

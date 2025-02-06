@@ -117,7 +117,7 @@ public class LogFetcher implements Closeable {
             ScannerMetricGroup scannerMetricGroup,
             RemoteFileDownloader remoteFileDownloader) {
         this.tablePath = tableInfo.getTablePath();
-        this.isPartitioned = tableInfo.getTableDescriptor().isPartitioned();
+        this.isPartitioned = tableInfo.isPartitioned();
         this.readContext = LogRecordReadContext.createReadContext(tableInfo, false, projection);
         this.remoteReadContext =
                 LogRecordReadContext.createReadContext(tableInfo, true, projection);

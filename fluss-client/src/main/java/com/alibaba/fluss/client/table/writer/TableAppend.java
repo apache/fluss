@@ -18,30 +18,30 @@ package com.alibaba.fluss.client.table.writer;
 
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriterClient;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 
 /** API for configuring and creating {@link AppendWriter}. */
 public class TableAppend implements Append {
 
     private final TablePath tablePath;
-    private final TableDescriptor tableDescriptor;
+    private final TableInfo tableInfo;
     private final MetadataUpdater metadataUpdater;
     private final WriterClient writerClient;
 
     public TableAppend(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             WriterClient writerClient) {
         this.tablePath = tablePath;
-        this.tableDescriptor = tableDescriptor;
+        this.tableInfo = tableInfo;
         this.metadataUpdater = metadataUpdater;
         this.writerClient = writerClient;
     }
 
     @Override
     public AppendWriter createWriter() {
-        return new AppendWriterImpl(tablePath, tableDescriptor, metadataUpdater, writerClient);
+        return new AppendWriterImpl(tablePath, tableInfo, metadataUpdater, writerClient);
     }
 }

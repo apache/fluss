@@ -25,7 +25,7 @@ import com.alibaba.fluss.client.table.writer.Append;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 
 /**
  * Used to communicate with a single Fluss table. Obtain an instance from a {@link Connection}.
@@ -38,14 +38,14 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 public interface Table extends AutoCloseable {
 
     /**
-     * Get the {@link TableDescriptor} for this table.
+     * Get the {@link TableInfo} for this table.
      *
      * <p>Note: the table info of this {@link Table} is set during the creation of this {@link
      * Table} and will not be updated after that, even if the table info of the table has been
      * changed. Therefore, if there are any changes to the table info, it may be necessary to
      * reconstruct the {@link Table}.
      */
-    TableDescriptor getDescriptor();
+    TableInfo getTableInfo();
 
     /**
      * Creates a new {@link Scan} for this table to configure and create a scanner to scan data for

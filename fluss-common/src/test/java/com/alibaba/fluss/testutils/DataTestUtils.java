@@ -96,7 +96,7 @@ public class DataTestUtils {
      */
     public static IndexedRow keyRow(Schema schema, Object[] objects) {
         int[] pkIndex = schema.getPrimaryKeyIndexes();
-        RowType rowType = schema.toRowType();
+        RowType rowType = schema.getRowType();
         return row(rowType, objects).projectRow(pkIndex);
     }
 
@@ -309,7 +309,7 @@ public class DataTestUtils {
     public static List<KvRecord> genKvRecords(Object[]... values) {
         KvRecordTestUtils.PKBasedKvRecordFactory kvRecordFactory =
                 KvRecordTestUtils.PKBasedKvRecordFactory.of(
-                        DATA1_SCHEMA_PK.toRowType(), DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
+                        DATA1_SCHEMA_PK.getRowType(), DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
         List<KvRecord> records = new ArrayList<>();
         for (Object[] value : values) {
             records.add(kvRecordFactory.ofRecord(value));

@@ -151,11 +151,6 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<Void> createDatabase(String databaseName, boolean ignoreIfExists) {
-        return createDatabase(databaseName, DatabaseDescriptor.builder().build(), ignoreIfExists);
-    }
-
-    @Override
     public CompletableFuture<Void> createDatabase(
             String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists) {
         TablePath.validateDatabaseName(databaseName);
@@ -227,11 +222,11 @@ public class FlussAdmin implements Admin {
         return gateway.getTableInfo(request)
                 .thenApply(
                         r ->
-                                new TableInfo(
+                                TableInfo.of(
                                         tablePath,
                                         r.getTableId(),
-                                        TableDescriptor.fromJsonBytes(r.getTableJson()),
                                         r.getSchemaId(),
+                                        TableDescriptor.fromJsonBytes(r.getTableJson()),
                                         r.getCreatedTime(),
                                         r.getModifiedTime()));
     }

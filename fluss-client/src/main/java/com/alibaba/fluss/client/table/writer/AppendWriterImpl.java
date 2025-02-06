@@ -21,7 +21,7 @@ import com.alibaba.fluss.client.table.getter.BucketKeyGetter;
 import com.alibaba.fluss.client.write.WriteKind;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
@@ -38,15 +38,15 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
 
     AppendWriterImpl(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             WriterClient writerClient) {
-        super(tablePath, tableDescriptor, metadataUpdater, writerClient);
-        List<String> bucketKeys = tableDescriptor.getBucketKey();
+        super(tablePath, tableInfo, metadataUpdater, writerClient);
+        List<String> bucketKeys = tableInfo.getBucketKeys();
         this.bucketKeyGetter =
                 bucketKeys.isEmpty()
                         ? null
-                        : new BucketKeyGetter(tableDescriptor.getSchema().toRowType(), bucketKeys);
+                        : new BucketKeyGetter(tableInfo.getRowType(), bucketKeys);
     }
 
     /**

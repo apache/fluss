@@ -43,7 +43,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -82,10 +82,7 @@ class KvReplicaRestoreITCase {
         for (int i = 0; i < tableNum; i++) {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId =
-                    createTable(
-                            FLUSS_CLUSTER_EXTENSION,
-                            tablePath,
-                            DATA1_TABLE_INFO_PK.getTableDescriptor());
+                    createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
             }

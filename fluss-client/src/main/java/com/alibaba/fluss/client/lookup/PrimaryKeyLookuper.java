@@ -19,9 +19,7 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.decode.RowDecoder;
@@ -70,43 +68,38 @@ class PrimaryKeyLookuper implements Lookuper {
     public PrimaryKeyLookuper(
             TableInfo tableInfo, MetadataUpdater metadataUpdater, LookupClient lookupClient) {
         checkArgument(
-                tableInfo.getTableDescriptor().hasPrimaryKey(),
+                tableInfo.hasPrimaryKey(),
                 "Log table %s doesn't support lookup",
                 tableInfo.getTablePath());
         this.tableInfo = tableInfo;
-        this.numBuckets =
-                tableInfo.getTableDescriptor().getTableDistribution().get().getBucketCount().get();
+        this.numBuckets = tableInfo.getNumBuckets();
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
 
-        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        Schema schema = tableDescriptor.getSchema();
-        RowType primaryKeyRowType = schema.toRowType().project(schema.getPrimaryKeyIndexes());
+        // the row type of the input lookup row
+        RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());
+        // the encoded primary key is the physical primary key
         this.primaryKeyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        primaryKeyRowType,
-                        primaryKeyRowType.getFieldNames(),
-                        tableDescriptor.getPartitionKeys());
-        if (tableDescriptor.isDefaultBucketKey()) {
+                KeyEncoder.createKeyEncoder(lookupRowType, tableInfo.getPhysicalPrimaryKeys());
+        if (tableInfo.isDefaultBucketKey()) {
             this.bucketKeyEncoder = primaryKeyEncoder;
         } else {
             // bucket key doesn't contain partition key, so no need exclude partition keys
             this.bucketKeyEncoder =
-                    new KeyEncoder(primaryKeyRowType, tableDescriptor.getBucketKeyIndexes());
+                    KeyEncoder.createKeyEncoder(lookupRowType, tableInfo.getBucketKeys());
         }
-        this.isDataLakeEnable = tableInfo.getTableDescriptor().isDataLakeEnabled();
+        this.isDataLakeEnable = tableInfo.getTableConfig().isDataLakeEnabled();
         this.lakeTableBucketAssigner =
-                new LakeTableBucketAssigner(
-                        primaryKeyRowType, tableDescriptor.getBucketKey(), numBuckets);
+                new LakeTableBucketAssigner(lookupRowType, tableInfo.getBucketKeys(), numBuckets);
         this.partitionGetter =
-                tableDescriptor.isPartitioned()
-                        ? new PartitionGetter(primaryKeyRowType, tableDescriptor.getPartitionKeys())
+                tableInfo.isPartitioned()
+                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
                         : null;
         this.kvValueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
-                                tableDescriptor.getKvFormat(),
-                                schema.toRowType().getChildren().toArray(new DataType[0])));
+                                tableInfo.getTableConfig().getKvFormat(),
+                                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
     }
 
     @Override

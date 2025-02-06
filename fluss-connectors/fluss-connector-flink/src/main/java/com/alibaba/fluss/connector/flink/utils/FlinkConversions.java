@@ -86,28 +86,19 @@ public class FlinkConversions {
 
     /** Convert Fluss's table to Flink's table. */
     public static CatalogTable toFlinkTable(TableInfo tableInfo) {
-        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        Map<String, String> newOptions =
-                new HashMap<>(tableInfo.getTableDescriptor().getCustomProperties());
+        Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
 
         // put fluss table properties into flink options, to make the properties visible to users
-        convertFlussTablePropertiesToFlinkOptions(
-                tableInfo.getTableDescriptor().getProperties(), newOptions);
+        convertFlussTablePropertiesToFlinkOptions(tableInfo.getProperties().toMap(), newOptions);
 
         org.apache.flink.table.api.Schema.Builder schemaBuilder =
                 org.apache.flink.table.api.Schema.newBuilder();
-        Schema schema = tableInfo.getTableDescriptor().getSchema();
-        if (schema.getPrimaryKey().isPresent()) {
-            schemaBuilder.primaryKey(
-                    schema.getPrimaryKey()
-                            .map(Schema.PrimaryKey::getColumnNames)
-                            .orElse(Collections.emptyList()));
+        if (tableInfo.hasPrimaryKey()) {
+            schemaBuilder.primaryKey(tableInfo.getPrimaryKeys());
         }
 
-        List<String> physicalColumns =
-                schema.getColumns().stream()
-                        .map(Schema.Column::getName)
-                        .collect(Collectors.toList());
+        Schema schema = tableInfo.getSchema();
+        List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
                 physicalColumns.size()
                         + CatalogPropertiesUtils.nonPhysicalColumnsCount(
@@ -131,28 +122,20 @@ public class FlinkConversions {
         }
 
         // now, put distribution information to options
-        if (tableDescriptor.getTableDistribution().isPresent()) {
-            TableDescriptor.TableDistribution tableDistribution =
-                    tableDescriptor.getTableDistribution().get();
-            if (tableDistribution.getBucketCount().isPresent()) {
-                newOptions.put(
-                        BUCKET_NUMBER.key(),
-                        String.valueOf(tableDistribution.getBucketCount().get()));
-            }
-            if (!tableDistribution.getBucketKeys().isEmpty()) {
-                newOptions.put(
-                        BUCKET_KEY.key(), String.join(",", tableDistribution.getBucketKeys()));
-            }
+        newOptions.put(BUCKET_NUMBER.key(), String.valueOf(tableInfo.getNumBuckets()));
+        if (!tableInfo.getBucketKeys().isEmpty()) {
+            newOptions.put(BUCKET_KEY.key(), String.join(",", tableInfo.getBucketKeys()));
         }
 
         // deserialize watermark
         CatalogPropertiesUtils.deserializeWatermark(newOptions, schemaBuilder);
 
-        return CatalogTable.of(
-                schemaBuilder.build(),
-                tableDescriptor.getComment().orElse(null),
-                tableDescriptor.getPartitionKeys(),
-                CatalogPropertiesUtils.deserializeOptions(newOptions));
+        return CatalogTable.newBuilder()
+                .schema(schemaBuilder.build())
+                .comment(tableInfo.getComment().orElse(null))
+                .partitionKeys(tableInfo.getPartitionKeys())
+                .options(CatalogPropertiesUtils.deserializeOptions(newOptions))
+                .build();
     }
 
     /** Convert Flink's table to Fluss's table. */

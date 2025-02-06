@@ -31,15 +31,7 @@ public class BucketKeyGetter {
     private final KeyEncoder bucketKeyEncoder;
 
     public BucketKeyGetter(RowType rowType, List<String> bucketKeyNames) {
-        // check the partition column
-        List<String> fieldNames = rowType.getFieldNames();
-        int[] bucketKeyIndexes = new int[bucketKeyNames.size()];
-        for (int i = 0; i < bucketKeyNames.size(); i++) {
-            String bucketKeyName = bucketKeyNames.get(i);
-            bucketKeyIndexes[i] = fieldNames.indexOf(bucketKeyName);
-        }
-
-        this.bucketKeyEncoder = new KeyEncoder(rowType, bucketKeyIndexes);
+        this.bucketKeyEncoder = KeyEncoder.createKeyEncoder(rowType, bucketKeyNames);
     }
 
     public byte[] getBucketKey(InternalRow row) {

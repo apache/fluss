@@ -19,7 +19,7 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.server.replica.Replica;
@@ -39,8 +39,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
@@ -69,7 +69,8 @@ public class StopReplicaITCase {
     @ValueSource(booleans = {true, false})
     void testStopReplica(boolean isPkTable) throws Exception {
         TablePath tablePath = isPkTable ? DATA1_TABLE_PATH_PK : DATA1_TABLE_PATH;
-        TableInfo tableInfo = isPkTable ? DATA1_TABLE_INFO_PK : DATA1_TABLE_INFO;
+        TableDescriptor tableDescriptor =
+                isPkTable ? DATA1_TABLE_DESCRIPTOR_PK : DATA1_TABLE_DESCRIPTOR;
 
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
@@ -77,7 +78,7 @@ public class StopReplicaITCase {
 
         long tableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
 
@@ -95,7 +96,7 @@ public class StopReplicaITCase {
         // create this table again.
         tableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb1 = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb1);
 
@@ -112,7 +113,7 @@ public class StopReplicaITCase {
         // create this table even if the drop table operation may not be completed.
         tableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb2 = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb2);
 

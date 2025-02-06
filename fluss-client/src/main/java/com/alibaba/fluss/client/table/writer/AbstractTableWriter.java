@@ -22,7 +22,7 @@ import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
@@ -41,16 +41,14 @@ public abstract class AbstractTableWriter implements TableWriter {
 
     protected AbstractTableWriter(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             WriterClient writerClient) {
         this.tablePath = tablePath;
         this.writerClient = writerClient;
         this.partitionFieldGetter =
-                tableDescriptor.isPartitioned()
-                        ? new PartitionGetter(
-                                tableDescriptor.getSchema().toRowType(),
-                                tableDescriptor.getPartitionKeys())
+                tableInfo.isPartitioned()
+                        ? new PartitionGetter(tableInfo.getRowType(), tableInfo.getPartitionKeys())
                         : null;
         this.metadataUpdater = metadataUpdater;
     }

@@ -34,7 +34,7 @@ import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
-import com.alibaba.fluss.server.coordinator.MetaDataManager;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import com.alibaba.fluss.server.replica.Replica;
@@ -100,7 +100,7 @@ public final class FlussClusterExtension
     private TestingServer zooKeeperServer;
     private ZooKeeperClient zooKeeperClient;
     private RpcClient rpcClient;
-    private MetaDataManager metaDataManager;
+    private MetadataManager metadataManager;
 
     private File tempDir;
 
@@ -140,12 +140,12 @@ public final class FlussClusterExtension
         String defaultDb = BUILTIN_DATABASE;
         // TODO: we need to cleanup all zk nodes, including the assignments,
         //  but currently, we don't have a good way to do it
-        if (metaDataManager != null) {
+        if (metadataManager != null) {
             // drop all database and tables
-            List<String> databases = metaDataManager.listDatabases();
+            List<String> databases = metadataManager.listDatabases();
             for (String database : databases) {
                 if (!database.equals(defaultDb)) {
-                    metaDataManager.dropDatabase(database, true, true);
+                    metadataManager.dropDatabase(database, true, true);
                     // delete the data dirs
                     for (int serverId : tabletServers.keySet()) {
                         String dataDir = getDataDir(serverId);
@@ -153,9 +153,9 @@ public final class FlussClusterExtension
                     }
                 }
             }
-            List<String> tables = metaDataManager.listTables(defaultDb);
+            List<String> tables = metadataManager.listTables(defaultDb);
             for (String table : tables) {
-                metaDataManager.dropTable(TablePath.of(defaultDb, table), true);
+                metadataManager.dropTable(TablePath.of(defaultDb, table), true);
             }
         }
     }
@@ -165,7 +165,7 @@ public final class FlussClusterExtension
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
                 createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
-        metaDataManager = new MetaDataManager(zooKeeperClient);
+        metadataManager = new MetadataManager(zooKeeperClient);
         Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(

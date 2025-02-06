@@ -181,18 +181,8 @@ public class FlinkSourceEnumerator
         try {
             TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
             tableId = tableInfo.getTableId();
-            lakeEnabled = tableInfo.getTableDescriptor().isDataLakeEnabled();
-            bucketCount =
-                    tableInfo
-                            .getTableDescriptor()
-                            .getTableDistribution()
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "Table distribution is not set."))
-                            .getBucketCount()
-                            .orElseThrow(
-                                    () -> new IllegalStateException("Bucket count is not set."));
+            lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
+            bucketCount = tableInfo.getNumBuckets();
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to get table info for %s", tablePath),

@@ -28,7 +28,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
@@ -103,16 +102,12 @@ public class MetadataUpdater {
         return cluster.getBucketLocation(tableBucket);
     }
 
-    public int getBucketCount(TablePath tablePath) {
-        return cluster.getBucketCount(tablePath);
+    private Optional<TableInfo> getTableInfo(TablePath tablePath) {
+        return cluster.getTable(tablePath);
     }
 
-    private Optional<TableDescriptor> getTableDescriptor(TablePath tablePath) {
-        return cluster.getTable(tablePath).map(TableInfo::getTableDescriptor);
-    }
-
-    public TableDescriptor getTableDescriptorOrElseThrow(long tableId) {
-        return getTableDescriptor(cluster.getTablePathOrElseThrow(tableId))
+    public TableInfo getTableInfoOrElseThrow(long tableId) {
+        return getTableInfo(cluster.getTablePathOrElseThrow(tableId))
                 .orElseThrow(
                         () ->
                                 new FlussRuntimeException(

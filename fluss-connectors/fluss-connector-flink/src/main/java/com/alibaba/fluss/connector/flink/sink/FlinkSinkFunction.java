@@ -23,7 +23,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.metrics.FlinkMetricRegistry;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.Gauge;
 import com.alibaba.fluss.metrics.Metric;
@@ -110,7 +110,7 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
                         metricGroup, Collections.singleton(MetricNames.WRITER_SEND_LATENCY_MS));
         connection = ConnectionFactory.createConnection(flussConfig, flinkMetricRegistry);
         table = connection.getTable(tablePath);
-        sanityCheck(table.getDescriptor());
+        sanityCheck(table.getTableInfo());
         dataConverter = createFlinkRowToFlussRowConverter();
         initMetrics();
     }
@@ -204,17 +204,16 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
         LOG.info("Finished closing Fluss sink function.");
     }
 
-    private void sanityCheck(TableDescriptor flussTableDescriptor) {
+    private void sanityCheck(TableInfo flussTableInfo) {
         // when it's UpsertSinkFunction, it means it has primary key got from Flink's metadata
         boolean hasPrimaryKey = this instanceof UpsertSinkFunction;
-        if (flussTableDescriptor.hasPrimaryKey() != hasPrimaryKey) {
+        if (flussTableInfo.hasPrimaryKey() != hasPrimaryKey) {
             throw new ValidationException(
                     String.format(
                             "Primary key constraint is not matched between metadata in Fluss (%s) and Flink (%s).",
-                            flussTableDescriptor.hasPrimaryKey(), hasPrimaryKey));
+                            flussTableInfo.hasPrimaryKey(), hasPrimaryKey));
         }
-        RowType currentTableRowType =
-                FlinkConversions.toFlinkRowType(flussTableDescriptor.getSchema().toRowType());
+        RowType currentTableRowType = FlinkConversions.toFlinkRowType(flussTableInfo.getRowType());
         if (!this.tableRowType.copy(false).equals(currentTableRowType.copy(false))) {
             // The default nullability of Flink row type and Fluss row type might be not the same,
             // thus we need to compare the row type without nullability here.

@@ -93,7 +93,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
         flinkRowToFlussRowConverter =
                 FlinkRowToFlussRowConverter.create(
-                        lookupKeyRowType, table.getDescriptor().getKvFormat());
+                        lookupKeyRowType, table.getTableInfo().getTableConfig().getKvFormat());
 
         final RowType outputRowType;
         if (projection == null) {

@@ -18,12 +18,9 @@ package com.alibaba.fluss.metadata;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.ConfigurationUtils;
-import com.alibaba.fluss.utils.AutoPartitionStrategy;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
 import com.alibaba.fluss.utils.json.TableDescriptorJsonSerde;
@@ -65,11 +62,6 @@ public final class TableDescriptor implements Serializable {
     private final @Nullable TableDistribution tableDistribution;
     private final Map<String, String> properties;
     private final Map<String, String> customProperties;
-
-    /** The cached Configuration object for the {@link #properties}. */
-    private transient Configuration config;
-
-    private transient AutoPartitionStrategy autoPartitionStrategy;
 
     private TableDescriptor(
             Schema schema,
@@ -128,36 +120,8 @@ public final class TableDescriptor implements Serializable {
                         .allMatch(e -> e.getKey() != null && e.getValue() != null),
                 "options cannot have null keys or values.");
 
-        if (getAutoPartitionStrategy().isAutoPartitionEnabled() && !isPartitioned()) {
-            throw new IllegalArgumentException(
-                    "Auto partition is only supported when table is partitioned.");
-        }
-
-        if (hasPrimaryKey()
-                && getKvFormat() == KvFormat.COMPACTED
-                && getLogFormat() != LogFormat.ARROW) {
-            throw new IllegalArgumentException(
-                    "For Primary Key Table, if kv format is compacted, log format must be arrow.");
-        }
-
-        if (!hasPrimaryKey() && getMergeEngineType() != null) {
-            throw new IllegalArgumentException(
-                    "Merge engine is only supported in primary key table.");
-        }
-
-        // TODO: generalize the validation for ConfigOption
-        if (properties.containsKey(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key())) {
-            int compressionLevel =
-                    Integer.parseInt(
-                            properties.get(
-                                    ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key()));
-            if (compressionLevel < 1 || compressionLevel > 22) {
-                throw new IllegalArgumentException(
-                        "Invalid ZSTD compression level: "
-                                + compressionLevel
-                                + ". Expected a value between 1 and 22.");
-            }
-        }
+        // we don't check property validation here, it will be checked in server,
+        // as the property may be supported in future version.
     }
 
     /** Creates a builder for building table descriptor. */
@@ -176,17 +140,10 @@ public final class TableDescriptor implements Serializable {
     }
 
     /** Returns the bucket key of the table, empty if no bucket key is set. */
-    public List<String> getBucketKey() {
+    public List<String> getBucketKeys() {
         return this.getTableDistribution()
                 .map(TableDescriptor.TableDistribution::getBucketKeys)
                 .orElse(Collections.emptyList());
-    }
-
-    /**
-     * Returns the indexes of the bucket key fields in the schema, empty if no bucket key is set.
-     */
-    public int[] getBucketKeyIndexes() {
-        return schema.getColumnIndexes(getBucketKey());
     }
 
     /**
@@ -199,9 +156,9 @@ public final class TableDescriptor implements Serializable {
      */
     public boolean isDefaultBucketKey() {
         if (schema.getPrimaryKey().isPresent()) {
-            return getBucketKey().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+            return getBucketKeys().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
         } else {
-            return getBucketKey().isEmpty();
+            return getBucketKeys().isEmpty();
         }
     }
 
@@ -254,60 +211,43 @@ public final class TableDescriptor implements Serializable {
         return customProperties;
     }
 
-    /** Gets the replication factor of the table. */
-    public int getReplicationFactor(int defaultReplicas) {
-        return configuration()
-                .getOptional(ConfigOptions.TABLE_REPLICATION_FACTOR)
-                .orElse(defaultReplicas);
+    /**
+     * Gets the replication factor of the table.
+     *
+     * @throws IllegalArgumentException if the replication factor is not set
+     */
+    public int getReplicationFactor() {
+        String factor = properties.get(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        checkArgument(
+                factor != null, "%s is not set.", ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        return Integer.parseInt(factor);
     }
 
-    public AutoPartitionStrategy getAutoPartitionStrategy() {
-        if (autoPartitionStrategy == null) {
-            autoPartitionStrategy = AutoPartitionStrategy.from(properties);
-        }
-        return autoPartitionStrategy;
-    }
-
-    /** Gets the log format of the table. */
-    public LogFormat getLogFormat() {
-        return configuration().get(ConfigOptions.TABLE_LOG_FORMAT);
-    }
-
-    /** Gets the kv format of the table. */
-    public KvFormat getKvFormat() {
-        return configuration().get(ConfigOptions.TABLE_KV_FORMAT);
-    }
-
-    /** Gets the log TTL of the table. */
-    public long getLogTTLMs() {
-        return configuration().get(ConfigOptions.TABLE_LOG_TTL).toMillis();
-    }
-
-    /** Gets the local segments to retain for tiered log of the table. */
-    public int getTieredLogLocalSegments() {
-        return configuration().get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);
-    }
-
-    /** Whether the data lake is enabled. */
-    public boolean isDataLakeEnabled() {
-        return configuration().get(ConfigOptions.TABLE_DATALAKE_ENABLED);
-    }
-
-    public @Nullable MergeEngineType getMergeEngineType() {
-        return configuration().get(ConfigOptions.TABLE_MERGE_ENGINE);
-    }
-
-    /** Gets the Arrow compression type and compression level of the table. */
-    public ArrowCompressionInfo getArrowCompressionInfo() {
-        return ArrowCompressionInfo.fromConf(configuration());
-    }
-
-    public TableDescriptor copy(Map<String, String> newProperties) {
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * properties.
+     */
+    public TableDescriptor withProperties(Map<String, String> newProperties) {
         return new TableDescriptor(
                 schema, comment, partitionKeys, tableDistribution, newProperties, customProperties);
     }
 
-    public TableDescriptor copy(int newBucketCount) {
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * replication factor property.
+     */
+    public TableDescriptor withReplicationFactor(int newReplicationFactor) {
+        Map<String, String> newProperties = new HashMap<>(properties);
+        newProperties.put(
+                ConfigOptions.TABLE_REPLICATION_FACTOR.key(), String.valueOf(newReplicationFactor));
+        return withProperties(newProperties);
+    }
+
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * bucket count.
+     */
+    public TableDescriptor withBucketCount(int newBucketCount) {
         return new TableDescriptor(
                 schema,
                 comment,
@@ -383,13 +323,6 @@ public final class TableDescriptor implements Serializable {
                 + ", customProperties="
                 + customProperties
                 + '}';
-    }
-
-    private Configuration configuration() {
-        if (config == null) {
-            config = Configuration.fromMap(properties);
-        }
-        return config;
     }
 
     // ----------------------------------------------------------------------------------------

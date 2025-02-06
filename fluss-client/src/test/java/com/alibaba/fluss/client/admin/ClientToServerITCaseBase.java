@@ -29,6 +29,7 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -96,7 +97,8 @@ public abstract class ClientToServerITCaseBase {
     protected long createTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
             throws Exception {
-        admin.createDatabase(tablePath.getDatabaseName(), ignoreIfExists).get();
+        admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, ignoreIfExists)
+                .get();
         admin.createTable(tablePath, tableDescriptor, ignoreIfExists).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }
@@ -123,7 +125,7 @@ public abstract class ClientToServerITCaseBase {
     }
 
     protected static void subscribeFromBeginning(LogScanner logScanner, Table table) {
-        int bucketCount = getBucketCount(table);
+        int bucketCount = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < bucketCount; i++) {
             logScanner.subscribeFromBeginning(i);
         }
@@ -173,18 +175,11 @@ public abstract class ClientToServerITCaseBase {
 
     protected static List<Integer> getAllBuckets(Table table) {
         List<Integer> buckets = new ArrayList<>();
-        int bucketCount = getBucketCount(table);
+        int bucketCount = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < bucketCount; i++) {
             buckets.add(i);
         }
         return buckets;
-    }
-
-    private static int getBucketCount(Table table) {
-        return table.getDescriptor()
-                .getTableDistribution()
-                .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                .orElse(ConfigOptions.DEFAULT_BUCKET_NUMBER.defaultValue());
     }
 
     public static void verifyPartitionLogs(
@@ -216,9 +211,8 @@ public abstract class ClientToServerITCaseBase {
         verifyRows(rowType, actualRows, expectPartitionsRows);
     }
 
-    public static void waitAllReplicasReady(long tableId, TableDescriptor tableDescriptor) {
+    public static void waitAllReplicasReady(long tableId, int expectBucketCount) {
         // retry until all replica ready.
-        int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
         for (int i = 0; i < expectBucketCount; i++) {
             FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(new TableBucket(tableId, i));
         }
@@ -246,7 +240,7 @@ public abstract class ClientToServerITCaseBase {
     protected static void verifyPutAndLookup(Table table, Schema tableSchema, Object[] fields)
             throws Exception {
         // put data.
-        InternalRow row = compactedRow(tableSchema.toRowType(), fields);
+        InternalRow row = compactedRow(tableSchema.getRowType(), fields);
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
         // put data.
         upsertWriter.upsert(row);

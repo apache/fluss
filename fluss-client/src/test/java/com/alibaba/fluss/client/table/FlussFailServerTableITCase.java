@@ -33,8 +33,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
@@ -56,7 +56,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAppend() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
@@ -80,7 +80,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPut() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
         // put one row
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -106,7 +106,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLogScan() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         // append one row.
         IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
         try (Table table = conn.getTable(DATA1_TABLE_PATH);

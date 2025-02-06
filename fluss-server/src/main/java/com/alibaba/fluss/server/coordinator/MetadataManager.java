@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.config.FlussConfigUtils;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -49,14 +48,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 
-/** A manager for metadata. */
-public class MetaDataManager {
+import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
-    private static final Logger LOG = LoggerFactory.getLogger(MetaDataManager.class);
+/** A manager for metadata. */
+public class MetadataManager {
+
+    private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
 
     private final ZooKeeperClient zookeeperClient;
 
-    public MetaDataManager(ZooKeeperClient zookeeperClient) {
+    public MetadataManager(ZooKeeperClient zookeeperClient) {
         this.zookeeperClient = zookeeperClient;
     }
 
@@ -127,7 +128,7 @@ public class MetaDataManager {
     public Map<String, Long> listPartitions(TablePath tablePath)
             throws TableNotExistException, TableNotPartitionedException {
         TableInfo tableInfo = getTable(tablePath);
-        if (!tableInfo.getTableDescriptor().isPartitioned()) {
+        if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Table '" + tablePath + "' is not a partitioned table.");
         }
@@ -188,17 +189,20 @@ public class MetaDataManager {
      * Returns -1 if the table already exists and ignoreIfExists is true.
      *
      * @param tablePath the table path
-     * @param tableDescriptor the table descriptor
+     * @param tableToCreate the table descriptor describing the table to create
      * @param tableAssignment the table assignment, will be null when the table is partitioned table
      * @param ignoreIfExists whether to ignore if the table already exists
      * @return the table id
      */
     public long createTable(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableDescriptor tableToCreate,
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
+        // validate table properties before creating table
+        validateTableDescriptor(tableToCreate);
+
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
                     "Database " + tablePath.getDatabaseName() + " does not exist.");
@@ -211,14 +215,11 @@ public class MetaDataManager {
             }
         }
 
-        // validate all table properties are known to Fluss and property values are valid.
-        FlussConfigUtils.validateTableProperties(tableDescriptor.getProperties());
-
         // register schema to zk
         // first register a schema to the zk, if then register the table
         // to zk fails, there's no harm to register a new schema to zk again
         try {
-            zookeeperClient.registerSchema(tablePath, tableDescriptor.getSchema());
+            zookeeperClient.registerSchema(tablePath, tableToCreate.getSchema());
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     "Fail to register schema when creating table " + tablePath, e);
@@ -236,7 +237,7 @@ public class MetaDataManager {
                     }
                     // register the table
                     zookeeperClient.registerTable(
-                            tablePath, TableRegistration.newTable(tableId, tableDescriptor), false);
+                            tablePath, TableRegistration.newTable(tableId, tableToCreate), false);
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
@@ -252,15 +253,9 @@ public class MetaDataManager {
         if (!optionalTable.isPresent()) {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
-        SchemaInfo schemaInfo = getLatestSchema(tablePath);
         TableRegistration tableReg = optionalTable.get();
-        return new TableInfo(
-                tablePath,
-                tableReg.tableId,
-                tableReg.toTableDescriptor(schemaInfo.getSchema()),
-                schemaInfo.getSchemaId(),
-                tableReg.createdTime,
-                tableReg.modifiedTime);
+        SchemaInfo schemaInfo = getLatestSchema(tablePath);
+        return tableReg.toTableInfo(tablePath, schemaInfo);
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {

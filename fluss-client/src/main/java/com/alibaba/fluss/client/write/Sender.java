@@ -27,7 +27,7 @@ import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -332,10 +332,8 @@ public class Sender implements Runnable {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         writeBatchByTable.forEach(
                 (tableId, writeBatches) -> {
-                    TableDescriptor tableDescriptor =
-                            metadataUpdater.getTableDescriptorOrElseThrow(tableId);
-
-                    if (tableDescriptor.hasPrimaryKey()) {
+                    TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
+                    if (tableInfo.hasPrimaryKey()) {
                         sendPutKvRequestAndHandleResponse(
                                 gateway,
                                 makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),

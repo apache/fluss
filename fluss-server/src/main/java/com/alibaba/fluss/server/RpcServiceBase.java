@@ -79,7 +79,7 @@ import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.server.coordinator.CoordinatorService;
-import com.alibaba.fluss.server.coordinator.MetaDataManager;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
 import com.alibaba.fluss.server.metadata.PartitionMetadataInfo;
@@ -130,7 +130,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private final ApiManager apiManager;
     protected final ZooKeeperClient zkClient;
     protected final ServerMetadataCache metadataCache;
-    protected final MetaDataManager metadataManager;
+    protected final MetadataManager metadataManager;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
@@ -148,7 +148,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.apiManager = new ApiManager(provider);
         this.zkClient = zkClient;
         this.metadataCache = metadataCache;
-        this.metadataManager = new MetaDataManager(zkClient);
+        this.metadataManager = new MetadataManager(zkClient);
         this.lakeStorageInfo =
                 config.get(ConfigOptions.LAKEHOUSE_STORAGE) != null
                         ? LakeStorageUtils.getLakeStorageInfo(config)
@@ -216,7 +216,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         GetTableInfoResponse response = new GetTableInfoResponse();
         TablePath tablePath = toTablePath(request.getTablePath());
         TableInfo tableInfo = metadataManager.getTable(tablePath);
-        response.setTableJson(tableInfo.getTableDescriptor().toJsonBytes())
+        response.setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                 .setSchemaId(tableInfo.getSchemaId())
                 .setTableId(tableInfo.getTableId())
                 .setCreatedTime(tableInfo.getCreatedTime())
@@ -298,9 +298,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
 
-        boolean hasPrimaryKey = tableInfo.getTableDescriptor().hasPrimaryKey();
+        boolean hasPrimaryKey = tableInfo.hasPrimaryKey();
         boolean hasPartitionName = request.hasPartitionName();
-        boolean isPartitioned = tableInfo.getTableDescriptor().isPartitioned();
+        boolean isPartitioned = tableInfo.isPartitioned();
         if (!hasPrimaryKey) {
             throw new NonPrimaryKeyTableException(
                     "Table '"
@@ -319,13 +319,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         try {
             // get table id
             long tableId = tableInfo.getTableId();
-            int numBuckets =
-                    tableInfo
-                            .getTableDescriptor()
-                            .getTableDistribution()
-                            .get()
-                            .getBucketCount()
-                            .get();
+            int numBuckets = tableInfo.getNumBuckets();
             Long partitionId =
                     hasPartitionName ? getPartitionId(tablePath, request.getPartitionName()) : null;
             Map<Integer, Optional<BucketSnapshot>> snapshots;
@@ -484,7 +478,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                         toBucketLocations(
                                 PhysicalTablePath.of(tablePath), tableId, null, tableAssignment);
             } else {
-                if (!tableInfo.getTableDescriptor().isPartitioned()) {
+                if (!tableInfo.isPartitioned()) {
                     LOG.warn("No table assignment node found for table {}", tableId);
                 }
             }

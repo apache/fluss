@@ -23,7 +23,7 @@ import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.coordinator.MetaDataManager;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
 import com.alibaba.fluss.server.coordinator.event.CreatePartitionEvent;
 import com.alibaba.fluss.server.coordinator.event.CreateTableEvent;
@@ -61,7 +61,8 @@ class TableChangeWatcherTest {
             TableDescriptor.builder()
                     .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
                     .distributedBy(3, "a")
-                    .build();
+                    .build()
+                    .withReplicationFactor(3);
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -70,7 +71,7 @@ class TableChangeWatcherTest {
     private static ZooKeeperClient zookeeperClient;
     private TestingEventManager eventManager;
     private TableChangeWatcher tableChangeWatcher;
-    private static MetaDataManager metaDataManager;
+    private static MetadataManager metadataManager;
 
     @BeforeAll
     static void beforeAll() {
@@ -78,8 +79,8 @@ class TableChangeWatcherTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metaDataManager = new MetaDataManager(zookeeperClient);
-        metaDataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
+        metadataManager = new MetadataManager(zookeeperClient);
+        metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
     }
 
     @BeforeEach
@@ -105,15 +106,15 @@ class TableChangeWatcherTest {
             TableAssignment tableAssignment =
                     TableAssignmentUtils.generateAssignment(3, 3, new int[] {0, 1, 2});
             long tableId =
-                    metaDataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
-            SchemaInfo schemaInfo = metaDataManager.getLatestSchema(tablePath);
+                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             expectedCreateTableEvents.add(
                     new CreateTableEvent(
-                            new TableInfo(
+                            TableInfo.of(
                                     tablePath,
                                     tableId,
-                                    TEST_TABLE,
                                     schemaInfo.getSchemaId(),
+                                    TEST_TABLE,
                                     System.currentTimeMillis(),
                                     System.currentTimeMillis()),
                             tableAssignment));
@@ -130,7 +131,7 @@ class TableChangeWatcherTest {
         for (CoordinatorEvent coordinatorEvent : expectedCreateTableEvents) {
             CreateTableEvent createTableEvent = (CreateTableEvent) coordinatorEvent;
             TableInfo tableInfo = createTableEvent.getTableInfo();
-            metaDataManager.dropTable(tableInfo.getTablePath(), false);
+            metadataManager.dropTable(tableInfo.getTablePath(), false);
             expectedTableEvents.add(new DropTableEvent(tableInfo.getTableId(), false));
         }
 
@@ -157,18 +158,20 @@ class TableChangeWatcherTest {
                         .distributedBy(3, "a")
                         .partitionedBy("b")
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
-                        .build();
-        long tableId = metaDataManager.createTable(tablePath, partitionedTable, null, false);
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
+                        .build()
+                        .withReplicationFactor(3);
+        long tableId = metadataManager.createTable(tablePath, partitionedTable, null, false);
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
-        SchemaInfo schemaInfo = metaDataManager.getLatestSchema(tablePath);
+        SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
         expectedEvents.add(
                 new CreateTableEvent(
-                        new TableInfo(
+                        TableInfo.of(
                                 tablePath,
                                 tableId,
-                                partitionedTable,
                                 schemaInfo.getSchemaId(),
+                                partitionedTable,
                                 System.currentTimeMillis(),
                                 System.currentTimeMillis()),
                         TableAssignment.builder().build()));
@@ -199,7 +202,7 @@ class TableChangeWatcherTest {
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
-        metaDataManager.dropTable(tablePath, false);
+        metadataManager.dropTable(tablePath, false);
 
         // drop partitions event
         expectedEvents.add(new DropPartitionEvent(tableId, 1L));

@@ -79,7 +79,7 @@ public class TestingDatabaseSyncSink extends RichSinkFunction<MultiplexCdcRecord
         if (sinkFunction == null) {
             TableDescriptor tableDescriptor =
                     admin.getTableInfo(tablePath).get().getTableDescriptor();
-            RowType rowType = tableDescriptor.getSchema().toRowType();
+            RowType rowType = tableDescriptor.getSchema().getRowType();
 
             FlinkTableSink flinkTableSink =
                     new FlinkTableSink(

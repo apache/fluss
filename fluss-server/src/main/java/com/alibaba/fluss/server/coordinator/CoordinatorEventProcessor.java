@@ -26,7 +26,6 @@ import com.alibaba.fluss.exception.InvalidUpdateVersionException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
@@ -116,7 +115,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
     private final CoordinatorEventManager coordinatorEventManager;
-    private final MetaDataManager metaDataManager;
+    private final MetadataManager metadataManager;
     private final TableManager tableManager;
     private final AutoPartitionManager autoPartitionManager;
     private final TableChangeWatcher tableChangeWatcher;
@@ -180,10 +179,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         new CoordinatorRequestBatch(
                                 coordinatorChannelManager, coordinatorEventManager),
                         zooKeeperClient);
-        this.metaDataManager = new MetaDataManager(zooKeeperClient);
+        this.metadataManager = new MetadataManager(zooKeeperClient);
         this.tableManager =
                 new TableManager(
-                        metaDataManager,
+                        metadataManager,
                         coordinatorContext,
                         replicaStateMachine,
                         tableBucketStateMachine);
@@ -293,15 +292,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // load all tables
         Map<Long, TableInfo> autoPartitionTables = new HashMap<>();
-        for (String database : metaDataManager.listDatabases()) {
-            for (String tableName : metaDataManager.listTables(database)) {
+        for (String database : metadataManager.listDatabases()) {
+            for (String tableName : metadataManager.listTables(database)) {
                 TablePath tablePath = TablePath.of(database, tableName);
-                TableInfo tableInfo = metaDataManager.getTable(tablePath);
+                TableInfo tableInfo = metadataManager.getTable(tablePath);
                 coordinatorContext.putTablePath(tableInfo.getTableId(), tablePath);
                 coordinatorContext.putTableInfo(tableInfo);
 
-                TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-                if (!tableDescriptor.getPartitionKeys().isEmpty()) {
+                if (tableInfo.isPartitioned()) {
                     Map<String, Long> partitions =
                             zooKeeperClient.getPartitionNameAndIds(tablePath);
                     for (Map.Entry<String, Long> partition : partitions.entrySet()) {
@@ -309,7 +307,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext.putPartition(partition.getValue(), partition.getKey());
                     }
                     // if the table is auto partition, put the partitions info
-                    if (tableDescriptor.getAutoPartitionStrategy().isAutoPartitionEnabled()) {
+                    if (tableInfo
+                            .getTableConfig()
+                            .getAutoPartitionStrategy()
+                            .isAutoPartitionEnabled()) {
                         autoPartitionTables.put(tableInfo.getTableId(), tableInfo);
                     }
                 }

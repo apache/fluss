@@ -120,7 +120,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
-        sanityCheck(table.getDescriptor().getSchema().toRowType(), projectedFields);
+        sanityCheck(table.getTableInfo().getRowType(), projectedFields);
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();

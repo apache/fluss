@@ -64,7 +64,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                     .build();
 
     private static final KeyEncoder DEFAULT_KEY_ENCODER =
-            new KeyEncoder(DEFAULT_SCHEMA.toRowType(), DEFAULT_SCHEMA.getPrimaryKeyIndexes());
+            new KeyEncoder(DEFAULT_SCHEMA.getRowType(), DEFAULT_SCHEMA.getPrimaryKeyIndexes());
 
     private static final HashBucketAssigner DEFAULT_BUCKET_ASSIGNER =
             new HashBucketAssigner(DEFAULT_BUCKET_NUM);

@@ -36,6 +36,8 @@ import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
+import com.alibaba.fluss.metadata.KvFormat;
+import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -62,6 +64,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -144,7 +147,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         long timestampAfterCreate = System.currentTimeMillis();
         TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
-        assertThat(tableInfo.getTableDescriptor()).isEqualTo(DEFAULT_TABLE_DESCRIPTOR);
+        assertThat(tableInfo.toTableDescriptor())
+                .isEqualTo(DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         assertThat(tableInfo.getCreatedTime()).isLessThan(timestampAfterCreate);
 
@@ -164,15 +168,21 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         tableInfo = admin.getTableInfo(tablePath).get();
         timestampAfterCreate = System.currentTimeMillis();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
-        assertThat(tableInfo.getTableDescriptor()).isEqualTo(DEFAULT_TABLE_DESCRIPTOR);
+        assertThat(tableInfo.toTableDescriptor())
+                .isEqualTo(DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
+        // assert created time
         assertThat(tableInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
     }
 
     @Test
     void testCreateInvalidDatabaseAndTable() {
-        assertThatThrownBy(() -> admin.createDatabase("*invalid_db*", false).get())
+        assertThatThrownBy(
+                        () ->
+                                admin.createDatabase(
+                                                "*invalid_db*", DatabaseDescriptor.EMPTY, false)
+                                        .get())
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining(
                         "Database name *invalid_db* is invalid: '*invalid_db*' contains one or more characters other than");
@@ -268,8 +278,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
-                        "Failed to create versioned merge engine: The version column 'non-existed' "
-                                + "for versioned merge engine doesn't exist in schema.");
+                        "The version column 'non-existed' for versioned merge engine doesn't exist in schema.");
 
         TableDescriptor t6 =
                 TableDescriptor.builder()
@@ -283,9 +292,37 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
-                        "Failed to create versioned merge engine: The version column 'name' "
-                                + "for versioned merge engine must be one type of "
-                                + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but is STRING.");
+                        "The version column 'name' for versioned merge engine must be one type of "
+                                + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but got STRING.");
+
+        TableDescriptor t7 =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a")
+                                        .build())
+                        .kvFormat(KvFormat.COMPACTED)
+                        .logFormat(LogFormat.INDEXED)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, t7, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Currently, Primary Key Table only supports ARROW log format if kv format is COMPACTED.");
+
+        TableDescriptor t8 =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, t8, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage(
+                        "Currently, auto partition is only supported for partitioned table, please set table property '%s' to false.",
+                        ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key());
     }
 
     @Test
@@ -338,7 +375,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // we can create the table now
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
         TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
-        assertThat(tableInfo.getTableDescriptor()).isEqualTo(DEFAULT_TABLE_DESCRIPTOR);
+        assertThat(tableInfo.toTableDescriptor())
+                .isEqualTo(DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3));
     }
 
     @Test
@@ -403,9 +441,9 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testListDatabasesAndTables() throws Exception {
-        admin.createDatabase("db1", true).get();
-        admin.createDatabase("db2", true).get();
-        admin.createDatabase("db3", true).get();
+        admin.createDatabase("db1", DatabaseDescriptor.EMPTY, true).get();
+        admin.createDatabase("db2", DatabaseDescriptor.EMPTY, true).get();
+        admin.createDatabase("db3", DatabaseDescriptor.EMPTY, true).get();
         assertThat(admin.listDatabases().get())
                 .containsExactlyInAnyOrder("test_db", "db1", "db2", "db3", "fluss");
 
@@ -482,7 +520,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < 10; i++) {
                 upsertWriter.upsert(
-                        compactedRow(DEFAULT_SCHEMA.toRowType(), new Object[] {i, "v" + i, i + 1}));
+                        compactedRow(
+                                DEFAULT_SCHEMA.getRowType(), new Object[] {i, "v" + i, i + 1}));
             }
             upsertWriter.flush();
 
@@ -501,7 +540,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
             // write data again, should fall into bucket 2
             upsertWriter.upsert(
-                    compactedRow(DEFAULT_SCHEMA.toRowType(), new Object[] {0, "v000", 1}));
+                    compactedRow(DEFAULT_SCHEMA.getRowType(), new Object[] {0, "v000", 1}));
             upsertWriter.flush();
 
             TableBucket tb = new TableBucket(snapshots.getTableId(), 2);

@@ -19,7 +19,7 @@ package com.alibaba.fluss.server.replica;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.exception.InvalidTimestampException;
@@ -30,12 +30,11 @@ import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.NotEnoughReplicasException;
 import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
 import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.Counter;
 import com.alibaba.fluss.metrics.MeterView;
@@ -168,14 +167,10 @@ public final class Replica {
 
     private final List<String> partitionKeys;
     private final Schema schema;
+    private final TableConfig tableConfig;
+    // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
-    private final KvFormat kvFormat;
-    private final long logTTLMs;
-    private final boolean dataLakeEnabled;
-    private final int tieredLogLocalSegments;
-    // TODO: merge above config fields into a table config
-    private final Configuration tableConfig;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
@@ -218,7 +213,7 @@ public final class Replica {
             ServerMetadataCache metadataCache,
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             Clock clock)
             throws Exception {
         this.physicalPath = physicalPath;
@@ -234,15 +229,11 @@ public final class Replica {
         this.adjustIsrManager = adjustIsrManager;
         this.fatalErrorHandler = fatalErrorHandler;
         this.bucketMetricGroup = bucketMetricGroup;
-        this.schema = tableDescriptor.getSchema();
-        this.logFormat = tableDescriptor.getLogFormat();
-        this.arrowCompressionInfo = tableDescriptor.getArrowCompressionInfo();
-        this.kvFormat = tableDescriptor.getKvFormat();
-        this.logTTLMs = tableDescriptor.getLogTTLMs();
-        this.dataLakeEnabled = tableDescriptor.isDataLakeEnabled();
-        this.tieredLogLocalSegments = tableDescriptor.getTieredLogLocalSegments();
-        this.tableConfig = Configuration.fromMap(tableDescriptor.getProperties());
-        this.partitionKeys = tableDescriptor.getPartitionKeys();
+        this.schema = tableInfo.getSchema();
+        this.tableConfig = tableInfo.getTableConfig();
+        this.logFormat = tableConfig.getLogFormat();
+        this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
+        this.partitionKeys = tableInfo.getPartitionKeys();
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
@@ -272,7 +263,7 @@ public final class Replica {
     }
 
     public RowType getRowType() {
-        return schema.toRowType();
+        return schema.getRowType();
     }
 
     public ArrowCompressionInfo getArrowCompressionInfo() {
@@ -304,7 +295,7 @@ public final class Replica {
     }
 
     public boolean isDataLakeEnabled() {
-        return dataLakeEnabled;
+        return tableConfig.isDataLakeEnabled();
     }
 
     public long getLocalLogStartOffset() {
@@ -324,7 +315,7 @@ public final class Replica {
     }
 
     public long getLogTTLMs() {
-        return logTTLMs;
+        return tableConfig.getLogTTLMs();
     }
 
     public int writerIdCount() {
@@ -622,7 +613,7 @@ public final class Replica {
                                 physicalPath,
                                 tableBucket,
                                 logTablet,
-                                kvFormat,
+                                tableConfig.getKvFormat(),
                                 schema,
                                 tableConfig,
                                 arrowCompressionInfo);
@@ -697,7 +688,7 @@ public final class Replica {
                             logTablet,
                             startRecoverLogOffset,
                             recoverContext,
-                            kvFormat,
+                            tableConfig.getKvFormat(),
                             partitionKeys);
             kvRecoverHelper.recover();
         } catch (Exception e) {
@@ -1719,7 +1710,11 @@ public final class Replica {
             throws Exception {
         LogTablet log =
                 logManager.getOrCreateLog(
-                        physicalPath, tableBucket, logFormat, tieredLogLocalSegments, isKvTable());
+                        physicalPath,
+                        tableBucket,
+                        tableConfig.getLogFormat(),
+                        tableConfig.getTieredLogLocalSegments(),
+                        isKvTable());
         // update high watermark.
         Optional<Long> watermarkOpt = lazyHighWatermarkCheckpoint.fetch(tableBucket);
         long watermark =

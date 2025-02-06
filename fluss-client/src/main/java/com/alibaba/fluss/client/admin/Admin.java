@@ -99,28 +99,6 @@ public interface Admin extends AutoCloseable {
      * </ul>
      *
      * @param databaseName The name of the database to create.
-     * @param ignoreIfExists Flag to specify behavior when a database with the given name already
-     *     exists: if set to false, throw a DatabaseAlreadyExistException, if set to true, do
-     *     nothing.
-     * @throws InvalidDatabaseException if the database name is invalid, e.g., contains illegal
-     *     characters, or exceeds the maximum length.
-     * @deprecated use {@link #createDatabase(String, DatabaseDescriptor, boolean)} instead.
-     */
-    @Deprecated
-    CompletableFuture<Void> createDatabase(String databaseName, boolean ignoreIfExists)
-            throws InvalidDatabaseException;
-
-    /**
-     * Create a new database asynchronously.
-     *
-     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
-     *
-     * <ul>
-     *   <li>{@link DatabaseAlreadyExistException} if the database already exists and {@code
-     *       ignoreIfExists} is false.
-     * </ul>
-     *
-     * @param databaseName The name of the database to create.
      * @param databaseDescriptor The descriptor of the database to create.
      * @param ignoreIfExists Flag to specify behavior when a database with the given name already
      *     exists: if set to false, throw a DatabaseAlreadyExistException, if set to true, do

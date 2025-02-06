@@ -60,7 +60,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
         TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR;
         long tableId = createTable(tablePath, tableDescriptor);
-        RowType rowType = tableDescriptor.getSchema().toRowType();
+        RowType rowType = tableDescriptor.getSchema().getRowType();
 
         // wait util partitions are created
         ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
@@ -83,7 +83,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                 createReader(
                         clientConf,
                         tablePath,
-                        tableDescriptor.getSchema().toRowType(),
+                        tableDescriptor.getSchema().getRowType(),
                         readerContext)) {
 
             // first of all, add all splits of all partitions to the reader
