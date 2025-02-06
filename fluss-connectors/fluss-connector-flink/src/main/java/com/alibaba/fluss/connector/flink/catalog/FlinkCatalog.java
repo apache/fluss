@@ -241,30 +241,17 @@ public class FlinkCatalog implements Catalog {
     public CatalogBaseTable getTable(ObjectPath objectPath)
             throws TableNotExistException, CatalogException {
         // may be should be as a datalake table
-        String tableName = objectPath.getObjectName();
-        TablePath tablePath = toTablePath(objectPath);
+        TablePath tablePath = extractOriginTablePath(objectPath);
         try {
-            TableInfo tableInfo;
+            TableInfo tableInfo = admin.getTable(tablePath).get();
             // table name contains $lake, means to read from datalake
-            if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-                tableInfo =
-                        admin.getTable(
-                                        TablePath.of(
-                                                objectPath.getDatabaseName(),
-                                                tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
-                                .get();
+            if (isLakeTablePath(objectPath)) {
                 // we need to make sure the table enable datalake
                 if (!tableInfo.getTableDescriptor().isDataLakeEnabled()) {
                     throw new UnsupportedOperationException(
-                            String.format(
-                                    "Table %s is not datalake enabled.",
-                                    TablePath.of(
-                                            objectPath.getDatabaseName(),
-                                            tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
+                            String.format("Table %s is not datalake enabled.", tablePath));
                 }
-                return getLakeTable(objectPath.getDatabaseName(), tableName);
-            } else {
-                tableInfo = admin.getTable(tablePath).get();
+                return getLakeTable(objectPath.getDatabaseName(), objectPath.getObjectName());
             }
 
             // should be as a fluss table
@@ -300,6 +287,9 @@ public class FlinkCatalog implements Catalog {
 
     @Override
     public boolean tableExists(ObjectPath objectPath) throws CatalogException {
+        if (isLakeTablePath(objectPath)) {
+            return false;
+        }
         TablePath tablePath = toTablePath(objectPath);
         try {
             return admin.tableExists(tablePath).get();
@@ -314,6 +304,7 @@ public class FlinkCatalog implements Catalog {
     @Override
     public void dropTable(ObjectPath objectPath, boolean ignoreIfNotExists)
             throws TableNotExistException, CatalogException {
+        expectedTablePath(objectPath, false);
         TablePath tablePath = toTablePath(objectPath);
         try {
             admin.deleteTable(tablePath, ignoreIfNotExists).get();
@@ -528,6 +519,28 @@ public class FlinkCatalog implements Catalog {
 
     protected TablePath toTablePath(ObjectPath objectPath) {
         return TablePath.of(objectPath.getDatabaseName(), objectPath.getObjectName());
+    }
+
+    /** Extract the origin table from the given objectPath. */
+    private TablePath extractOriginTablePath(ObjectPath objectPath) {
+        if (isLakeTablePath(objectPath)) {
+            return TablePath.of(
+                    objectPath.getDatabaseName(),
+                    objectPath.getObjectName().split("\\" + LAKE_TABLE_SPLITTER)[0]);
+        } else {
+            return toTablePath(objectPath);
+        }
+    }
+
+    private boolean isLakeTablePath(ObjectPath objectPath) {
+        return objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER);
+    }
+
+    private void expectedTablePath(ObjectPath objectPath, boolean expectLakeTable)
+            throws TableNotExistException {
+        if (expectLakeTable != isLakeTablePath(objectPath)) {
+            throw new TableNotExistException(getName(), objectPath);
+        }
     }
 
     private void mayInitLakeCatalogCatalog() {
