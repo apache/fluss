@@ -28,6 +28,7 @@ import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorEventProcessor;
 import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
 import com.alibaba.fluss.server.coordinator.CoordinatorTestUtils;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
@@ -95,7 +96,10 @@ class TableBucketStateMachineTest {
                         });
         serverMetadataCache = new ServerMetadataCacheImpl();
         autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
+                new AutoPartitionManager(
+                        serverMetadataCache,
+                        new MetadataManager(zookeeperClient),
+                        new Configuration());
     }
 
     @Test

@@ -91,7 +91,6 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -311,7 +310,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorChannelManager.startup(tabletServers);
 
         // load all tables
-        Map<Long, TableInfo> autoPartitionTables = new HashMap<>();
+        List<TableInfo> autoPartitionTables = new ArrayList<>();
         for (String database : metadataManager.listDatabases()) {
             for (String tableName : metadataManager.listTables(database)) {
                 TablePath tablePath = TablePath.of(database, tableName);
@@ -331,7 +330,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             .getTableConfig()
                             .getAutoPartitionStrategy()
                             .isAutoPartitionEnabled()) {
-                        autoPartitionTables.put(tableInfo.getTableId(), tableInfo);
+                        autoPartitionTables.add(tableInfo);
                     }
                 }
             }
@@ -522,12 +521,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (coordinatorContext.containsPartitionId(partitionId)) {
             return;
         }
+
+        long tableId = createPartitionEvent.getTableId();
+        String partitionName = createPartitionEvent.getPartitionName();
         tableManager.onCreateNewPartition(
                 createPartitionEvent.getTablePath(),
-                createPartitionEvent.getTableId(),
+                tableId,
                 createPartitionEvent.getPartitionId(),
-                createPartitionEvent.getPartitionName(),
+                partitionName,
                 createPartitionEvent.getPartitionAssignment());
+        autoPartitionManager.addPartition(tableId, partitionName);
     }
 
     private void processDropTable(DropTableEvent dropTableEvent) {
@@ -548,24 +551,23 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {
+        long tableId = dropPartitionEvent.getTableId();
         TablePartition tablePartition =
-                new TablePartition(
-                        dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
+                new TablePartition(tableId, dropPartitionEvent.getPartitionId());
 
         // If this is a primary key table partition, drop the kv snapshot store.
-        TableInfo dropTableInfo =
-                coordinatorContext.getTableInfoById(dropPartitionEvent.getTableId());
+        TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
         if (dropTableInfo.hasPrimaryKey()) {
             Set<TableBucket> deleteTableBuckets =
                     coordinatorContext.getAllBucketsForPartition(
-                            dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
+                            tableId, dropPartitionEvent.getPartitionId());
             completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
                     deleteTableBuckets);
         }
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
-        tableManager.onDeletePartition(
-                dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
+        tableManager.onDeletePartition(tableId, dropPartitionEvent.getPartitionId());
+        autoPartitionManager.removePartition(tableId, dropPartitionEvent.getPartitionName());
     }
 
     private void processDeleteReplicaResponseReceived(

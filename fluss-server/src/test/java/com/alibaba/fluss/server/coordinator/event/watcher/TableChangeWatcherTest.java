@@ -207,8 +207,8 @@ class TableChangeWatcherTest {
         metadataManager.dropTable(tablePath, false);
 
         // drop partitions event
-        expectedEvents.add(new DropPartitionEvent(tableId, 1L));
-        expectedEvents.add(new DropPartitionEvent(tableId, 2L));
+        expectedEvents.add(new DropPartitionEvent(tableId, 1L, "2011"));
+        expectedEvents.add(new DropPartitionEvent(tableId, 2L, "2022"));
         // drop table event
         expectedEvents.add(new DropTableEvent(tableId, true));
 

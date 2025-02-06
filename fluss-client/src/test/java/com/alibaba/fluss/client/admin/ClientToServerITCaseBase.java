@@ -31,6 +31,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -49,6 +50,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -257,5 +259,9 @@ public abstract class ClientToServerITCaseBase {
     protected static InternalRow lookupRow(Lookuper lookuper, InternalRow keyRow) throws Exception {
         // lookup this key.
         return lookuper.lookup(keyRow).get().getSingletonRow();
+    }
+
+    protected static PartitionSpec newPartitionSpec(String partitionKey, String partitionValue) {
+        return new PartitionSpec(Collections.singletonMap(partitionKey, partitionValue));
     }
 }

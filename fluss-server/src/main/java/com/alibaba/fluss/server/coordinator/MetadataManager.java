@@ -20,18 +20,23 @@ import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
+import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -46,6 +51,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
@@ -306,6 +312,88 @@ public class MetadataManager {
     public long initWriterId() {
         return uncheck(
                 zookeeperClient::getWriterIdAndIncrement, "Fail to get writer id from zookeeper");
+    }
+
+    public Set<String> getPartitions(TablePath tablePath) {
+        return uncheck(
+                () -> zookeeperClient.getPartitions(tablePath),
+                "Fail to get partitions from zookeeper for table " + tablePath);
+    }
+
+    public void createPartition(
+            TablePath tablePath,
+            long tableId,
+            PartitionAssignment partitionAssignment,
+            ResolvedPartitionSpec partition,
+            boolean ignoreIfExists) {
+        String partitionName = partition.getPartitionName();
+        Optional<TablePartition> optionalTablePartition =
+                getOptionalTablePartition(tablePath, partitionName);
+        if (optionalTablePartition.isPresent()) {
+            if (ignoreIfExists) {
+                return;
+            }
+            throw new PartitionAlreadyExistsException(
+                    String.format(
+                            "Partition '%s' already exists for table %s",
+                            partition.getPartitionQualifiedName(), tablePath));
+        }
+
+        try {
+            long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+            // register partition assignments to zk first
+            zookeeperClient.registerPartitionAssignment(partitionId, partitionAssignment);
+            // then register the partition metadata to zk
+            zookeeperClient.registerPartition(tablePath, tableId, partitionName, partitionId);
+            LOG.info(
+                    "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
+        } catch (Exception e) {
+            LOG.error(
+                    "Register partition to zookeeper failed to create partition {} for table [{}]",
+                    partitionName,
+                    tablePath,
+                    e);
+        }
+    }
+
+    public void dropPartition(
+            TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
+        String partitionName = partition.getPartitionName();
+        Optional<TablePartition> optionalTablePartition =
+                getOptionalTablePartition(tablePath, partitionName);
+        if (!optionalTablePartition.isPresent()) {
+            if (ignoreIfNotExists) {
+                return;
+            }
+
+            throw new PartitionNotExistException(
+                    String.format(
+                            "Partition '%s' does not exist for table %s",
+                            partition.getPartitionQualifiedName(), tablePath));
+        }
+
+        try {
+            zookeeperClient.deletePartition(tablePath, partitionName);
+        } catch (Exception e) {
+            LOG.error(
+                    "Fail to delete partition '{}' from zookeeper for table {}.",
+                    partitionName,
+                    tablePath,
+                    e);
+        }
+    }
+
+    private Optional<TablePartition> getOptionalTablePartition(
+            TablePath tablePath, String partitionName) {
+        try {
+            return zookeeperClient.getPartition(tablePath, partitionName);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Fail to get partition '%s' of table %s from zookeeper.",
+                            tablePath, partitionName),
+                    e);
+        }
     }
 
     private void rethrowIfIsNotNoNodeException(

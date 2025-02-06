@@ -63,7 +63,9 @@ public enum ApiKeys {
     GET_LATEST_LAKE_SNAPSHOT(1033, 0, 0, PUBLIC),
     LIMIT_SCAN(1034, 0, 0, PUBLIC),
     PREFIX_LOOKUP(1035, 0, 0, PUBLIC),
-    GET_DATABASE_INFO(1036, 0, 0, PUBLIC);
+    GET_DATABASE_INFO(1036, 0, 0, PUBLIC),
+    CREATE_PARTITION(1037, 0, 0, PUBLIC),
+    DROP_PARTITION(1038, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

@@ -140,7 +140,7 @@ public class TablePath implements Serializable {
         }
     }
 
-    static String detectInvalidName(String identifier) {
+    public static String detectInvalidName(String identifier) {
         if (identifier == null) {
             return "null string is not allowed";
         }
@@ -168,7 +168,7 @@ public class TablePath implements Serializable {
         return null;
     }
 
-    /** Valid characters for Fluss table names are the ASCII alphanumerics, '_', and '-'. */
+    /** Valid characters for Fluss table names are the ASCII alphanumerics, '_' and '-'. */
     private static boolean containsInvalidPattern(String identifier) {
         for (int i = 0; i < identifier.length(); ++i) {
             char c = identifier.charAt(i);
@@ -180,6 +180,7 @@ public class TablePath implements Serializable {
                             || (c >= 'A' && c <= 'Z')
                             || c == '_'
                             || c == '-';
+
             if (!validChar) {
                 return true;
             }

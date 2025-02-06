@@ -28,6 +28,7 @@ import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
@@ -192,6 +193,7 @@ public class TabletServer extends ServerBase {
                             systemClock);
             replicaManager.startup();
 
+            MetadataManager metadataManager = new MetadataManager(zkClient);
             this.tabletService =
                     new TabletService(
                             conf,
@@ -199,7 +201,8 @@ public class TabletServer extends ServerBase {
                             remoteFileSystem,
                             zkClient,
                             replicaManager,
-                            metadataCache);
+                            metadataCache,
+                            metadataManager);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);

@@ -24,9 +24,12 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.TestingMetadataCache;
+import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
+import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -49,6 +52,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link AutoPartitionManager}. */
@@ -59,6 +63,7 @@ class AutoPartitionManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     protected static ZooKeeperClient zookeeperClient;
+    private static MetadataManager metadataManager;
 
     @BeforeAll
     static void beforeAll() {
@@ -66,6 +71,7 @@ class AutoPartitionManagerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        metadataManager = new MetadataManager(zookeeperClient);
     }
 
     @AfterEach
@@ -81,6 +87,8 @@ class AutoPartitionManagerTest {
                                 .startTime("2024-09-10T01:00:00")
                                 .expectedPartitions(
                                         "2024091001", "2024091002", "2024091003", "2024091004")
+                                .manualCreatedPartition("2024091006")
+                                .manualDroppedPartition("2024091001")
                                 .advanceClock(c -> c.plusHours(3))
                                 // current partition is "2024091004"
                                 .expectedPartitionsAfterAdvance(
@@ -103,6 +111,8 @@ class AutoPartitionManagerTest {
                         TestParams.builder(AutoPartitionTimeUnit.DAY)
                                 .startTime("2024-09-10T00:00:00")
                                 .expectedPartitions("20240910", "20240911", "20240912", "20240913")
+                                .manualCreatedPartition("20240915")
+                                .manualDroppedPartition("20240910")
                                 .advanceClock(c -> c.plusDays(3))
                                 // current partition is "20240913", retain "20240911", "20240912"
                                 .expectedPartitionsAfterAdvance(
@@ -125,6 +135,8 @@ class AutoPartitionManagerTest {
                         TestParams.builder(AutoPartitionTimeUnit.MONTH)
                                 .startTime("2024-09-10T00:00:00")
                                 .expectedPartitions("202409", "202410", "202411", "202412")
+                                .manualCreatedPartition("202502")
+                                .manualDroppedPartition("202409")
                                 .advanceClock(c -> c.plusMonths(3))
                                 // current partition is "202412", retain "202410", "202411"
                                 .expectedPartitionsAfterAdvance(
@@ -136,6 +148,8 @@ class AutoPartitionManagerTest {
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.QUARTER)
                                 .startTime("2024-09-10T00:00:00")
+                                .manualCreatedPartition("20254")
+                                .manualDroppedPartition("20243")
                                 .expectedPartitions("20243", "20244", "20251", "20252")
                                 .advanceClock(c -> c.plusMonths(3 * 3))
                                 // current partition is "20253", retain "20251", "20252"
@@ -148,6 +162,8 @@ class AutoPartitionManagerTest {
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.YEAR)
                                 .startTime("2024-09-10T00:00:00")
+                                .manualCreatedPartition("2029")
+                                .manualDroppedPartition("2024")
                                 .expectedPartitions("2024", "2025", "2026", "2027")
                                 .advanceClock(c -> c.plusYears(3))
                                 // current partition is "2027", retain "2025", "2026"
@@ -169,7 +185,7 @@ class AutoPartitionManagerTest {
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingMetadataCache(3),
-                        zookeeperClient,
+                        new MetadataManager(zookeeperClient),
                         new Configuration(),
                         clock,
                         periodicExecutor);
@@ -184,6 +200,32 @@ class AutoPartitionManagerTest {
         Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitions);
+
+        // manually create a partition.
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                TableAssignmentUtils.generateAssignment(
+                                table.getNumBuckets(), replicaFactor, new int[] {0, 1, 2})
+                        .getBucketAssignments();
+        long tableId = table.getTableId();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, bucketAssignments);
+        metadataManager.createPartition(
+                tablePath,
+                tableId,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), params.manualCreatedPartition),
+                false);
+        // mock the partition is created in zk.
+        autoPartitionManager.addPartition(tableId, params.manualCreatedPartition);
+
+        // manually drop a partition.
+        metadataManager.dropPartition(
+                tablePath,
+                fromPartitionName(table.getPartitionKeys(), params.manualDroppedPartition),
+                false);
+        // mock the partition is dropped in zk.
+        autoPartitionManager.removePartition(tableId, params.manualDroppedPartition);
 
         clock.advanceTime(params.advanceDuration);
         periodicExecutor.triggerPeriodicScheduledTasks();
@@ -205,6 +247,8 @@ class AutoPartitionManagerTest {
     private static class TestParams {
         final AutoPartitionTimeUnit timeUnit;
         final long startTimeMs;
+        final String manualCreatedPartition;
+        final String manualDroppedPartition;
         final String[] expectedPartitions;
         final Duration advanceDuration;
         final String[] expectedPartitionsAfterAdvance;
@@ -214,6 +258,8 @@ class AutoPartitionManagerTest {
         private TestParams(
                 AutoPartitionTimeUnit timeUnit,
                 long startTimeMs,
+                String manualCreatedPartition,
+                String manualDroppedPartition,
                 String[] expectedPartitions,
                 Duration advanceDuration,
                 String[] expectedPartitionsAfterAdvance,
@@ -221,6 +267,8 @@ class AutoPartitionManagerTest {
                 String[] expectedPartitionsFinal) {
             this.timeUnit = timeUnit;
             this.startTimeMs = startTimeMs;
+            this.manualCreatedPartition = manualCreatedPartition;
+            this.manualDroppedPartition = manualDroppedPartition;
             this.expectedPartitions = expectedPartitions;
             this.advanceDuration = advanceDuration;
             this.expectedPartitionsAfterAdvance = expectedPartitionsAfterAdvance;
@@ -242,6 +290,8 @@ class AutoPartitionManagerTest {
         AutoPartitionTimeUnit timeUnit;
         ZonedDateTime startTime;
         String[] expectedPartitions;
+        String manualCreatedPartition;
+        String manualDroppedPartition;
         long advanceSeconds;
         String[] expectedPartitionsAfterAdvance;
         long advanceSeconds2;
@@ -258,6 +308,16 @@ class AutoPartitionManagerTest {
 
         public TestParamsBuilder expectedPartitions(String... expectedPartitions) {
             this.expectedPartitions = expectedPartitions;
+            return this;
+        }
+
+        public TestParamsBuilder manualCreatedPartition(String manualCreatedPartition) {
+            this.manualCreatedPartition = manualCreatedPartition;
+            return this;
+        }
+
+        public TestParamsBuilder manualDroppedPartition(String manualDroppedPartition) {
+            this.manualDroppedPartition = manualDroppedPartition;
             return this;
         }
 
@@ -293,6 +353,8 @@ class AutoPartitionManagerTest {
             return new TestParams(
                     timeUnit,
                     startTime.toInstant().toEpochMilli(),
+                    manualCreatedPartition,
+                    manualDroppedPartition,
                     expectedPartitions,
                     Duration.ofSeconds(advanceSeconds),
                     expectedPartitionsAfterAdvance,

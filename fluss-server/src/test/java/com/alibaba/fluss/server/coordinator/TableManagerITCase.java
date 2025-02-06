@@ -24,7 +24,6 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
-import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
@@ -50,7 +49,6 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.utils.AutoPartitionUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -90,6 +88,7 @@ import static com.alibaba.fluss.server.utils.RpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
+import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -370,7 +369,8 @@ class TableManagerITCase {
                         Duration.ofMinutes(1),
                         "partition is not created");
         // check the created partitions
-        List<String> expectAddedPartitions = getExpectAddedPartitions(now, timeUnit, 1);
+        List<String> expectAddedPartitions =
+                getExpectAddedPartitions(Collections.singletonList("dt"), now, timeUnit, 1);
         assertThat(partitions).containsOnlyKeys(expectAddedPartitions);
 
         // let's drop the table
@@ -392,21 +392,6 @@ class TableManagerITCase {
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
-        // then create a partitioned table and removes all options
-        TableDescriptor tableWithoutOptions =
-                newPartitionedTable().withProperties(Collections.emptyMap());
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableWithoutOptions, false))
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table must enable auto partition, "
-                                + "please set table property 'table.auto-partition.enabled' to true.");
 
         TableDescriptor tableWithMultiPartKey =
                 newPartitionedTableBuilder(new Schema.Column("tttt", DataTypes.INT()))
@@ -436,7 +421,7 @@ class TableManagerITCase {
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(
-                        "Currently, auto partition enabled table only supports STRING type partition key, but got partition key 'id' with data type INT NOT NULL.");
+                        "Currently, partitioned table supported partition key type are [STRING], but got partition key 'id' with data type INT NOT NULL.");
     }
 
     @ParameterizedTest
@@ -612,11 +597,16 @@ class TableManagerITCase {
     }
 
     public static List<String> getExpectAddedPartitions(
-            Instant addInstant, AutoPartitionTimeUnit timeUnit, int newPartitions) {
+            List<String> partitionKeys,
+            Instant addInstant,
+            AutoPartitionTimeUnit timeUnit,
+            int newPartitions) {
         ZonedDateTime addDateTime = ZonedDateTime.ofInstant(addInstant, ZoneId.systemDefault());
         List<String> partitions = new ArrayList<>();
         for (int i = 0; i < newPartitions; i++) {
-            partitions.add(AutoPartitionUtils.getPartitionString(addDateTime, i, timeUnit));
+            partitions.add(
+                    generateAutoPartition(partitionKeys, addDateTime, i, timeUnit)
+                            .getPartitionName());
         }
         return partitions;
     }

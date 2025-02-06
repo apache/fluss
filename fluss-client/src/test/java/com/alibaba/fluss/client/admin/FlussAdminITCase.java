@@ -28,8 +28,11 @@ import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
+import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.InvalidReplicationFactorException;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
@@ -56,7 +59,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,7 +71,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -320,18 +325,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         "Currently, Primary Key Table only supports ARROW log format if kv format is COMPACTED.");
-
-        TableDescriptor t8 =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .build();
-        assertThatThrownBy(() -> admin.createTable(tablePath, t8, false).get())
-                .cause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessage(
-                        "Currently, auto partition is only supported for partitioned table, please set table property '%s' to false.",
-                        ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key());
     }
 
     @Test
@@ -572,6 +565,191 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(serverNodes).containsExactlyInAnyOrderElementsOf(expectedNodes);
     }
 
+    @Test
+    void testCreateIllegalPartitionTable() {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("name", "age")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_create_illegal_partitioned_table_1");
+        assertThatThrownBy(() -> admin.createTable(tablePath, partitionedTable, true).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Currently, partitioned table only supports one partition key, "
+                                + "but got partition keys [name, age].");
+    }
+
+    @Test
+    void testAddAndDropPartitions() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("age")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_add_and_drop_partitioned_table");
+        admin.createTable(tablePath, partitionedTable, true).get();
+        assertPartitionInfo(admin.listPartitionInfos(tablePath).get(), Collections.emptyList());
+
+        // add two partitions.
+        admin.createPartition(tablePath, newPartitionSpec("age", "10"), false).get();
+        admin.createPartition(tablePath, newPartitionSpec("age", "11"), false).get();
+        assertPartitionInfo(admin.listPartitionInfos(tablePath).get(), Arrays.asList("10", "11"));
+
+        // drop one partition.
+        admin.dropPartition(tablePath, newPartitionSpec("age", "10"), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(), Collections.singletonList("11"));
+
+        // test create partition for a not existed table.
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                TablePath.of("unknown_db", "unknown_table"),
+                                                newPartitionSpec("age", "10"),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("Table 'unknown_db.unknown_table' does not exist.");
+
+        // test drop partition for a not existed table.
+        assertThatThrownBy(
+                        () ->
+                                admin.dropPartition(
+                                                TablePath.of("unknown_db", "unknown_table"),
+                                                newPartitionSpec("age", "10"),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("Table 'unknown_db.unknown_table' does not exist.");
+
+        // test create partition already exists with ignoreIfNotExists = false.
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath, newPartitionSpec("age", "11"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(PartitionAlreadyExistsException.class)
+                .hasMessageContaining(
+                        "Partition 'age=11' already exists for table test_db.test_add_and_drop_partitioned_table");
+
+        // test drop partition not-exists with ignoreIfNotExists = false.
+        assertThatThrownBy(
+                        () ->
+                                admin.dropPartition(tablePath, newPartitionSpec("age", "13"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(PartitionNotExistException.class)
+                .hasMessageContaining(
+                        "Partition 'age=13' does not exist for table test_db.test_add_and_drop_partitioned_table");
+
+        // test create partition with illegal value.
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath, newPartitionSpec("age", "$10"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        "The partition value $10 is invalid: '$10' contains one or more "
+                                + "characters other than ASCII alphanumerics, '_' and '-'");
+
+        // test create partition with wrong partition key.
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath, newPartitionSpec("name", "10"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        "PartitionSpec PartitionSpec{{name=10}} does not contain "
+                                + "partition key 'age' for partitioned table test_db.test_add_and_drop_partitioned_table.");
+    }
+
+    @Test
+    void testAddAndDropPartitionsForAutoPartitionedTable() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_add_and_drop_partitioned_table_1");
+        admin.createTable(tablePath, partitionedTable, true).get();
+        // wait all auto partitions created.
+        FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+
+        // there are four auto created partitions.
+        int currentYear = LocalDate.now().getYear();
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(),
+                Arrays.asList(
+                        String.valueOf(currentYear),
+                        String.valueOf(currentYear + 1),
+                        String.valueOf(currentYear + 2),
+                        String.valueOf(currentYear + 3)));
+
+        // add two older partitions (currentYear - 2, currentYear - 1).
+        admin.createPartition(
+                        tablePath, newPartitionSpec("pt", String.valueOf(currentYear - 2)), false)
+                .get();
+        admin.createPartition(
+                        tablePath, newPartitionSpec("pt", String.valueOf(currentYear - 1)), false)
+                .get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(),
+                Arrays.asList(
+                        String.valueOf(currentYear - 2),
+                        String.valueOf(currentYear - 1),
+                        String.valueOf(currentYear),
+                        String.valueOf(currentYear + 1),
+                        String.valueOf(currentYear + 2),
+                        String.valueOf(currentYear + 3)));
+
+        // drop one auto created partition.
+        admin.dropPartition(
+                        tablePath, newPartitionSpec("pt", String.valueOf(currentYear + 1)), false)
+                .get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(),
+                Arrays.asList(
+                        String.valueOf(currentYear - 2),
+                        String.valueOf(currentYear - 1),
+                        String.valueOf(currentYear),
+                        String.valueOf(currentYear + 2),
+                        String.valueOf(currentYear + 3)));
+    }
+
     private void assertHasTabletServerNumber(int tabletServerNumber) {
         CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         retry(
@@ -625,6 +803,15 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // check offset
         assertThat(snapshotMetadata.getLogOffset()).isEqualTo(expectedSnapshot.getLogOffset());
+    }
+
+    private void assertPartitionInfo(
+            List<PartitionInfo> partitionInfos, List<String> expectedPartitionNames) {
+        assertThat(
+                        partitionInfos.stream()
+                                .map(PartitionInfo::getPartitionName)
+                                .collect(Collectors.toList()))
+                .containsExactlyInAnyOrderElementsOf(expectedPartitionNames);
     }
 
     private List<FsPathAndFileName> toFsPathAndFileNames(KvSnapshotHandle kvSnapshotHandle) {

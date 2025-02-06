@@ -144,7 +144,7 @@ class CoordinatorEventProcessorTest {
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
+                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         eventProcessor =
@@ -931,12 +931,12 @@ class CoordinatorEventProcessorTest {
                                     // otherwise, should be online
                                     retry(
                                             Duration.ofMinutes(1),
-                                            () -> {
-                                                assertThat(
-                                                                coordinatorContext.getReplicaState(
-                                                                        bucketReplica))
-                                                        .isEqualTo(OnlineReplica);
-                                            });
+                                            () ->
+                                                    assertThat(
+                                                                    coordinatorContext
+                                                                            .getReplicaState(
+                                                                                    bucketReplica))
+                                                            .isEqualTo(OnlineReplica));
                                 }
                             }
                         });

@@ -145,13 +145,14 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             FileSystem remoteFileSystem,
             ServerType provider,
             ZooKeeperClient zkClient,
-            ServerMetadataCache metadataCache) {
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
         this.zkClient = zkClient;
         this.metadataCache = metadataCache;
-        this.metadataManager = new MetadataManager(zkClient);
+        this.metadataManager = metadataManager;
         this.lakeStorageInfo =
                 config.get(ConfigOptions.DATALAKE_FORMAT) != null
                         ? LakeStorageUtils.getLakeStorageInfo(config)

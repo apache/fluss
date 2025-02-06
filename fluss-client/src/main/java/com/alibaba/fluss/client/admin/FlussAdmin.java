@@ -27,6 +27,7 @@ import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -73,6 +74,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -265,6 +268,22 @@ public class FlussAdmin implements Admin {
                 .setTableName(tablePath.getTableName());
         return gateway.listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
+    }
+
+    @Override
+    public CompletableFuture<Void> createPartition(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists) {
+        return gateway.createPartition(
+                        makeCreatePartitionRequest(tablePath, partitionSpec, ignoreIfExists))
+                .thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> dropPartition(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        return gateway.dropPartition(
+                        makeDropPartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
+                .thenApply(r -> null);
     }
 
     @Override

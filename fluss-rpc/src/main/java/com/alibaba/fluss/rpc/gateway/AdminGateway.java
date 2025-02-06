@@ -18,10 +18,14 @@ package com.alibaba.fluss.rpc.gateway;
 
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
+import com.alibaba.fluss.rpc.messages.CreatePartitionResponse;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
@@ -62,6 +66,22 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.DROP_TABLE)
     CompletableFuture<DropTableResponse> dropTable(DropTableRequest request);
+
+    /**
+     * create a new partition for a partitioned table.
+     *
+     * @param request Create partition request
+     */
+    @RPC(api = ApiKeys.CREATE_PARTITION)
+    CompletableFuture<CreatePartitionResponse> createPartition(CreatePartitionRequest request);
+
+    /**
+     * Drop a partition from a partitioned table.
+     *
+     * @param request Drop partition request
+     */
+    @RPC(api = ApiKeys.DROP_PARTITION)
+    CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request);
 
     // todo: rename table & alter table
 }

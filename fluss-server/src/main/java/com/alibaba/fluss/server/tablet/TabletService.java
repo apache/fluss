@@ -50,6 +50,7 @@ import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.server.RpcServiceBase;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.entity.FetchData;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
@@ -82,8 +83,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             ReplicaManager replicaManager,
-            ServerMetadataCache metadataCache) {
-        super(config, remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataCache);
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager) {
+        super(
+                config,
+                remoteFileSystem,
+                ServerType.TABLET_SERVER,
+                zkClient,
+                metadataCache,
+                metadataManager);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
     }

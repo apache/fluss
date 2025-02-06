@@ -28,6 +28,7 @@ import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
+import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.InvalidReplicationFactorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
 import com.alibaba.fluss.exception.InvalidTableException;
@@ -46,6 +47,7 @@ import com.alibaba.fluss.exception.NotEnoughReplicasException;
 import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
 import com.alibaba.fluss.exception.OperationNotAttemptedException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
+import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RecordTooLargeException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
@@ -176,7 +178,11 @@ public enum Errors {
     INVALID_CONFIG_EXCEPTION(39, "The config is invalid.", InvalidConfigException::new),
     LAKE_STORAGE_NOT_CONFIGURED_EXCEPTION(
             40, "The lake storage is not configured.", LakeStorageNotConfiguredException::new),
-    KV_SNAPSHOT_NOT_EXIST(41, "The kv snapshot is not exist.", KvSnapshotNotExistException::new);
+    KV_SNAPSHOT_NOT_EXIST(41, "The kv snapshot is not exist.", KvSnapshotNotExistException::new),
+    PARTITION_ALREADY_EXISTS(
+            42, "The partition already exists.", PartitionAlreadyExistsException::new),
+    PARTITION_SPEC_INVALID_EXCEPTION(
+            43, "The partition spec is invalid.", InvalidPartitionException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

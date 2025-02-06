@@ -28,6 +28,7 @@ import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ObjectPath;
@@ -40,6 +41,7 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
+import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
 import org.apache.flink.table.factories.FactoryUtil;
@@ -392,6 +394,45 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
+    }
+
+    @Test
+    void testListPartitions() throws Exception {
+        catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
+        assertThatThrownBy(() -> catalog.listPartitions(new ObjectPath("db1", "unkown_table")))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        "Table (or view) db1.unkown_table does not exist in Catalog test-catalog.");
+
+        // create a none partitioned table.
+        CatalogTable table = this.newCatalogTable(Collections.emptyMap());
+        ObjectPath path1 = new ObjectPath(DEFAULT_DB, "t1");
+        catalog.createTable(path1, table, false);
+        assertThatThrownBy(() -> catalog.listPartitions(path1))
+                .isInstanceOf(TableNotPartitionedException.class)
+                .hasMessage("Table default.t1 in catalog test-catalog is not partitioned.");
+
+        // create partition table and list partitions.
+        ObjectPath path2 = new ObjectPath(DEFAULT_DB, "partitioned_t1");
+        ResolvedSchema resolvedSchema = this.createSchema();
+        CatalogTable table2 =
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                                "test comment",
+                                Collections.singletonList("first"),
+                                Collections.emptyMap()),
+                        resolvedSchema);
+        catalog.createTable(path2, table2, false);
+        catalog.createPartition(
+                path2,
+                new CatalogPartitionSpec(Collections.singletonMap("first", "1")),
+                null,
+                false);
+
+        List<CatalogPartitionSpec> catalogPartitionSpecs = catalog.listPartitions(path2);
+        assertThat(catalogPartitionSpecs).hasSize(1);
+        assertThat(catalogPartitionSpecs.get(0).getPartitionSpec()).containsEntry("first", "1");
     }
 
     private void createAndCheckAndDropTable(

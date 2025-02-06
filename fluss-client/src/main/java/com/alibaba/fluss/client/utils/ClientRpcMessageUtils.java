@@ -29,6 +29,7 @@ import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -37,7 +38,9 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
+import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
@@ -375,6 +378,44 @@ public class ClientRpcMessageUtils {
             throw new IllegalArgumentException("Unsupported offset spec: " + offsetSpec);
         }
         return listOffsetsRequest;
+    }
+
+    public static CreatePartitionRequest makeCreatePartitionRequest(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        CreatePartitionRequest createPartitionRequest =
+                new CreatePartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        createPartitionRequest
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
+        partitionSpec
+                .getPartitionSpec()
+                .forEach(
+                        (partitionKey, value) ->
+                                pbPartitionKeyAndValues.add(
+                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+        createPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
+        return createPartitionRequest;
+    }
+
+    public static DropPartitionRequest makeDropPartitionRequest(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        DropPartitionRequest dropPartitionRequest =
+                new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        dropPartitionRequest
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
+        partitionSpec
+                .getPartitionSpec()
+                .forEach(
+                        (partitionKey, value) ->
+                                pbPartitionKeyAndValues.add(
+                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+        dropPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
+        return dropPartitionRequest;
     }
 
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
