@@ -17,7 +17,6 @@
 package com.alibaba.fluss.server.replica.delay;
 
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterEach;
@@ -46,8 +45,7 @@ public class DelayedOperationTest {
 
     @BeforeEach
     void setup() {
-        delayedOperationManager =
-                new DelayedOperationManager<>("test", 0, 1000, NOPMetricsGroup.newInstance());
+        delayedOperationManager = new DelayedOperationManager<>("test", 0, 1000);
     }
 
     @AfterEach

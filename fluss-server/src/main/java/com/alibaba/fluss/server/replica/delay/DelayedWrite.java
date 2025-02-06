@@ -21,6 +21,7 @@ import com.alibaba.fluss.rpc.entity.WriteResultForBucket;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.utils.types.Tuple2;
@@ -48,16 +49,19 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
     private final DelayedWriteMetadata<T> delayedWriteMetadata;
     private final ReplicaManager replicaManager;
     private final Consumer<List<T>> callback;
+    private final TabletServerMetricGroup serverMetricGroup;
 
     public DelayedWrite(
             long delayMs,
             DelayedWriteMetadata<T> delayedWriteMetadata,
             ReplicaManager replicaManager,
-            Consumer<List<T>> callback) {
+            Consumer<List<T>> callback,
+            TabletServerMetricGroup serverMetricGroup) {
         super(delayMs);
         this.delayedWriteMetadata = delayedWriteMetadata;
         this.replicaManager = replicaManager;
         this.callback = callback;
+        this.serverMetricGroup = serverMetricGroup;
 
         // first update the acks pending variable according to the error code.
         updateStatus();
@@ -146,6 +150,7 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
 
     @Override
     public void onExpiration() {
+        serverMetricGroup.delayedWriteExpireCount().inc();
         delayedWriteMetadata
                 .getBucketStatusMap()
                 .forEach(

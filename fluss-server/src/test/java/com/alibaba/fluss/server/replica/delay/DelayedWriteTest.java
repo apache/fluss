@@ -20,6 +20,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.log.LogAppendInfo;
+import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaTestBase;
 import com.alibaba.fluss.server.replica.delay.DelayedWrite.DelayedBucketStatus;
@@ -62,22 +63,22 @@ final class DelayedWriteTest extends ReplicaTestBase {
 
         DelayedOperationManager<DelayedWrite<?>> delayedWriteManager =
                 replicaManager.getDelayedWriteManager();
-        DelayedWriteKey delayedWriteKey = new DelayedWriteKey(tb);
+        DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
         boolean completed =
                 delayedWriteManager.tryCompleteElseWatch(
-                        delayedWrite, Collections.singletonList(delayedWriteKey));
+                        delayedWrite, Collections.singletonList(delayedTableBucketKey));
         assertThat(completed).isFalse();
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
 
-        int numComplete = delayedWriteManager.checkAndComplete(delayedWriteKey);
+        int numComplete = delayedWriteManager.checkAndComplete(delayedTableBucketKey);
         assertThat(numComplete).isEqualTo(0);
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
 
         // update highWatermark to log end offset.
         replica.getLogTablet().updateHighWatermark(10L);
-        numComplete = delayedWriteManager.checkAndComplete(delayedWriteKey);
+        numComplete = delayedWriteManager.checkAndComplete(delayedTableBucketKey);
         assertThat(numComplete).isEqualTo(1);
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(0);
         assertThat(delayedWriteManager.watched()).isEqualTo(0);
@@ -89,8 +90,8 @@ final class DelayedWriteTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb.getBucket());
         Replica replica = replicaManager.getReplicaOrException(tb);
 
-        DelayedWriteKey delayedWriteKey = new DelayedWriteKey(tb);
-        assertThat(delayedWriteKey.getTableBucket()).isEqualTo(tb);
+        DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
+        assertThat(delayedTableBucketKey.getTableBucket()).isEqualTo(tb);
         DelayedOperationManager<DelayedWrite<?>> delayedWriteManager =
                 replicaManager.getDelayedWriteManager();
 
@@ -104,20 +105,20 @@ final class DelayedWriteTest extends ReplicaTestBase {
                             assertThat(resultList.get(0).getWriteLogEndOffset()).isEqualTo(10);
                         });
         // Directly watch for the delayedWrite.
-        delayedWriteManager.watchForOperation(delayedWriteKey, delayedWrite);
+        delayedWriteManager.watchForOperation(delayedTableBucketKey, delayedWrite);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
 
         // new a delayedWriteKey point to the same tableBucket. It's import to new a delayedWriteKey
         // because when we want to check and complete the operation in ReplicaManager/Replica,
         // we will always make a new delayedWriteKey.
-        DelayedWriteKey newDelayedWriteKey = new DelayedWriteKey(tb);
-        int numComplete = delayedWriteManager.checkAndComplete(newDelayedWriteKey);
+        DelayedTableBucketKey newDelayedTableBucketKey = new DelayedTableBucketKey(tb);
+        int numComplete = delayedWriteManager.checkAndComplete(newDelayedTableBucketKey);
         assertThat(numComplete).isEqualTo(0);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
 
         // update highWatermark to log end offset.
         replica.getLogTablet().updateHighWatermark(10L);
-        numComplete = delayedWriteManager.checkAndComplete(newDelayedWriteKey);
+        numComplete = delayedWriteManager.checkAndComplete(newDelayedTableBucketKey);
         assertThat(numComplete).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(0);
     }
@@ -142,15 +143,15 @@ final class DelayedWriteTest extends ReplicaTestBase {
 
         DelayedOperationManager<DelayedWrite<?>> delayedWriteManager =
                 replicaManager.getDelayedWriteManager();
-        DelayedWriteKey delayedWriteKey = new DelayedWriteKey(tb);
+        DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
         boolean completed =
                 delayedWriteManager.tryCompleteElseWatch(
-                        delayedWrite, Collections.singletonList(delayedWriteKey));
+                        delayedWrite, Collections.singletonList(delayedTableBucketKey));
         assertThat(completed).isFalse();
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
 
-        int numComplete = delayedWriteManager.checkAndComplete(delayedWriteKey);
+        int numComplete = delayedWriteManager.checkAndComplete(delayedTableBucketKey);
         assertThat(numComplete).isEqualTo(0);
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
@@ -178,6 +179,10 @@ final class DelayedWriteTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, new DelayedBucketStatus<>(10, appendResult));
 
         return new DelayedWrite<>(
-                delayMs, new DelayedWriteMetadata<>(-1, bucketStatusMap), replicaManager, callback);
+                delayMs,
+                new DelayedWriteMetadata<>(-1, bucketStatusMap),
+                replicaManager,
+                callback,
+                TestingMetricGroups.TABLET_SERVER_METRICS);
     }
 }

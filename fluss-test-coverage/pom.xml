@@ -210,6 +210,7 @@
                                         <exclude>com.alibaba.fluss.cluster.*</exclude>
                                         <exclude>com.alibaba.fluss.Bucket</exclude>
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
+                                        <exclude>com.alibaba.fluss.compression.*</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.connector.flink.catalog.*
                                         </exclude>

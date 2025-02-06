@@ -42,8 +42,9 @@ class UpsertSinkFunction extends FlinkSinkFunction {
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
-            @Nullable int[] targetColumnIndexes) {
-        super(tablePath, flussConfig, tableRowType, targetColumnIndexes);
+            @Nullable int[] targetColumnIndexes,
+            boolean ignoreDelete) {
+        super(tablePath, flussConfig, tableRowType, targetColumnIndexes, ignoreDelete);
     }
 
     @Override

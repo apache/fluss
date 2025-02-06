@@ -23,6 +23,7 @@ import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.config.Password;
 import com.alibaba.fluss.connector.flink.FlinkConnectorOptions;
 import com.alibaba.fluss.connector.flink.catalog.FlinkCatalogFactory;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -32,6 +33,7 @@ import com.alibaba.fluss.utils.StringUtils;
 import com.alibaba.fluss.utils.TimeUtils;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
@@ -242,6 +244,14 @@ public class FlinkConversions {
                 .build();
     }
 
+    /** Convert Flink's table to Fluss's database. */
+    public static DatabaseDescriptor toFlussDatabase(CatalogDatabase catalogDatabase) {
+        return DatabaseDescriptor.builder()
+                .comment(catalogDatabase.getComment())
+                .customProperties(catalogDatabase.getProperties())
+                .build();
+    }
+
     /** Convert Fluss's ConfigOptions to Flink's ConfigOptions. */
     public static List<org.apache.flink.configuration.ConfigOption<?>> toFlinkOptions(
             Collection<ConfigOption<?>> flussOption) {
@@ -251,8 +261,9 @@ public class FlinkConversions {
     }
 
     /** Convert Fluss's ConfigOption to Flink's ConfigOption. */
-    public static org.apache.flink.configuration.ConfigOption<?> toFlinkOption(
-            ConfigOption<?> flussOption) {
+    @SuppressWarnings("unchecked")
+    public static <T> org.apache.flink.configuration.ConfigOption<T> toFlinkOption(
+            ConfigOption<T> flussOption) {
         org.apache.flink.configuration.ConfigOptions.OptionBuilder builder =
                 org.apache.flink.configuration.ConfigOptions.key(flussOption.key());
         org.apache.flink.configuration.ConfigOption<?> option;
@@ -301,7 +312,7 @@ public class FlinkConversions {
         }
         option.withDescription(flussOption.description());
         // TODO: support fallback keys in the future.
-        return option;
+        return (org.apache.flink.configuration.ConfigOption<T>) option;
     }
 
     private static Map<String, String> convertFlinkOptionsToFlussTableProperties(

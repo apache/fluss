@@ -20,6 +20,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
@@ -146,7 +147,8 @@ class CoordinatorEventProcessorTest {
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         eventProcessor.startup();
-        metaDataManager.createDatabase(defaultDatabase, false);
+        metaDataManager.createDatabase(
+                defaultDatabase, DatabaseDescriptor.builder().build(), false);
     }
 
     @AfterEach

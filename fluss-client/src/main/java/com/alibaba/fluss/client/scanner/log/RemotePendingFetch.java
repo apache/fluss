@@ -20,9 +20,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.FileLogRecords;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.utils.Projection;
-
-import javax.annotation.Nullable;
 
 /**
  * {@link RemotePendingFetch} is a {@link PendingFetch} that represents a pending fetch that waiting
@@ -39,7 +36,6 @@ class RemotePendingFetch implements PendingFetch {
     private final LogRecordReadContext readContext;
     private final LogScannerStatus logScannerStatus;
     private final boolean isCheckCrc;
-    private final @Nullable Projection projection;
 
     RemotePendingFetch(
             RemoteLogSegment remoteLogSegment,
@@ -49,8 +45,7 @@ class RemotePendingFetch implements PendingFetch {
             long highWatermark,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
-            boolean isCheckCrc,
-            @Nullable Projection projection) {
+            boolean isCheckCrc) {
         this.remoteLogSegment = remoteLogSegment;
         this.downloadFuture = downloadFuture;
         this.posInLogSegment = posInLogSegment;
@@ -59,7 +54,6 @@ class RemotePendingFetch implements PendingFetch {
         this.readContext = readContext;
         this.logScannerStatus = logScannerStatus;
         this.isCheckCrc = isCheckCrc;
-        this.projection = projection;
     }
 
     @Override
@@ -83,7 +77,6 @@ class RemotePendingFetch implements PendingFetch {
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset,
-                projection,
                 downloadFuture.getRecycleCallback());
     }
 }

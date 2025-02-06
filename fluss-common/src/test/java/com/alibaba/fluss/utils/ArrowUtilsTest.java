@@ -55,6 +55,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link com.alibaba.fluss.utils.ArrowUtils}. */
@@ -83,7 +84,7 @@ class ArrowUtilsTest {
                         DataTypes.FIELD("f2", DataTypes.STRING()),
                         DataTypes.FIELD("f3", DataTypes.DOUBLE()));
         Schema schema = ArrowUtils.toArrowSchema(rowType);
-        int metadataSize = ArrowUtils.estimateArrowMetadataLength(schema);
+        int metadataSize = ArrowUtils.estimateArrowMetadataLength(schema, DEFAULT_BODY_COMPRESSION);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (BufferAllocator allocator = new RootAllocator();
@@ -122,7 +123,7 @@ class ArrowUtilsTest {
         }
         RowType rowType = new RowType(fields);
         Schema schema = ArrowUtils.toArrowSchema(rowType);
-        int metadataSize = ArrowUtils.estimateArrowMetadataLength(schema);
+        int metadataSize = ArrowUtils.estimateArrowMetadataLength(schema, DEFAULT_BODY_COMPRESSION);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int rowCount = RandomUtils.nextInt(1, 1000);

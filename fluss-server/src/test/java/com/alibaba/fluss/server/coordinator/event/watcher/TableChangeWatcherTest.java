@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -78,7 +79,7 @@ class TableChangeWatcherTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         metaDataManager = new MetaDataManager(zookeeperClient);
-        metaDataManager.createDatabase(DEFAULT_DB, false);
+        metaDataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
     }
 
     @BeforeEach
@@ -108,7 +109,13 @@ class TableChangeWatcherTest {
             SchemaInfo schemaInfo = metaDataManager.getLatestSchema(tablePath);
             expectedCreateTableEvents.add(
                     new CreateTableEvent(
-                            new TableInfo(tablePath, tableId, TEST_TABLE, schemaInfo.getSchemaId()),
+                            new TableInfo(
+                                    tablePath,
+                                    tableId,
+                                    TEST_TABLE,
+                                    schemaInfo.getSchemaId(),
+                                    System.currentTimeMillis(),
+                                    System.currentTimeMillis()),
                             tableAssignment));
         }
 
@@ -158,7 +165,12 @@ class TableChangeWatcherTest {
         expectedEvents.add(
                 new CreateTableEvent(
                         new TableInfo(
-                                tablePath, tableId, partitionedTable, schemaInfo.getSchemaId()),
+                                tablePath,
+                                tableId,
+                                partitionedTable,
+                                schemaInfo.getSchemaId(),
+                                System.currentTimeMillis(),
+                                System.currentTimeMillis()),
                         TableAssignment.builder().build()));
 
         // register partition

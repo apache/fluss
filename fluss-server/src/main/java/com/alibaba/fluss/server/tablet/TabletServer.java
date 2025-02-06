@@ -156,8 +156,8 @@ public class TabletServer extends ServerBase {
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
 
-            this.logManager =
-                    LogManager.create(conf, zkClient, scheduler, SystemClock.getInstance());
+            SystemClock systemClock = SystemClock.getInstance();
+            this.logManager = LogManager.create(conf, zkClient, scheduler, systemClock);
             logManager.startup();
 
             this.kvManager = KvManager.create(conf, zkClient, logManager);
@@ -188,7 +188,8 @@ public class TabletServer extends ServerBase {
                             coordinatorGateway,
                             DefaultCompletedKvSnapshotCommitter.create(rpcClient, metadataCache),
                             this,
-                            tabletServerMetricGroup);
+                            tabletServerMetricGroup,
+                            systemClock);
             replicaManager.startup();
 
             this.tabletService =

@@ -17,6 +17,7 @@
 package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
@@ -25,7 +26,9 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.FieldNode;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.Message;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TypeLayout;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBodyCompression;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBuffer;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
@@ -88,7 +91,11 @@ public class FileLogProjection {
         this.arrowHeaderBuffer.order(ByteOrder.LITTLE_ENDIAN);
     }
 
-    public void setCurrentProjection(long tableId, RowType schema, int[] selectedFields) {
+    public void setCurrentProjection(
+            long tableId,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo,
+            int[] selectedFields) {
         if (projectionsCache.containsKey(tableId)) {
             // the schema and projection should identical for the same table id.
             currentProjection = projectionsCache.get(tableId);
@@ -126,7 +133,10 @@ public class FileLogProjection {
         }
 
         Schema projectedArrowSchema = ArrowUtils.toArrowSchema(schema.project(selectedFields));
-        int metadataLength = ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema);
+        ArrowBodyCompression bodyCompression =
+                CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
+        int metadataLength =
+                ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
         currentProjection =
                 new ProjectionInfo(
                         nodesProjection,
@@ -134,6 +144,7 @@ public class FileLogProjection {
                         bufferIndex,
                         schema,
                         metadataLength,
+                        bodyCompression,
                         selectedFields);
         projectionsCache.put(tableId, currentProjection);
     }
@@ -191,6 +202,7 @@ public class FileLogProjection {
                             currentProjection.buffersProjection,
                             currentProjection.bufferCount);
             long arrowBodyLength = projectedArrowBatch.bodyLength();
+
             int newBatchSizeInBytes =
                     RECORD_BATCH_HEADER_SIZE
                             + rowKindBytes
@@ -203,7 +215,10 @@ public class FileLogProjection {
 
             // 3. create new arrow batch metadata which already projected.
             byte[] headerMetadata =
-                    serializeArrowRecordBatchMetadata(projectedArrowBatch, arrowBodyLength);
+                    serializeArrowRecordBatchMetadata(
+                            projectedArrowBatch,
+                            arrowBodyLength,
+                            currentProjection.bodyCompression);
             checkState(
                     headerMetadata.length == currentProjection.arrowMetadataLength,
                     "Invalid metadata length");
@@ -269,10 +284,16 @@ public class FileLogProjection {
      * @see ArrowRecordBatch#writeTo(FlatBufferBuilder)
      */
     private byte[] serializeArrowRecordBatchMetadata(
-            ProjectedArrowBatch batch, long arrowBodyLength) throws IOException {
+            ProjectedArrowBatch batch, long arrowBodyLength, ArrowBodyCompression bodyCompression)
+            throws IOException {
         outputStream.reset();
         ArrowUtils.serializeArrowRecordBatchMetadata(
-                writeChannel, batch.numRecords, batch.nodes, batch.buffersLayout, arrowBodyLength);
+                writeChannel,
+                batch.numRecords,
+                batch.nodes,
+                batch.buffersLayout,
+                bodyCompression,
+                arrowBodyLength);
         return outputStream.toByteArray();
     }
 
@@ -346,6 +367,7 @@ public class FileLogProjection {
         final int bufferCount;
         final RowType schema;
         final int arrowMetadataLength;
+        final ArrowBodyCompression bodyCompression;
         final int[] selectedFields;
 
         private ProjectionInfo(
@@ -354,12 +376,14 @@ public class FileLogProjection {
                 int bufferCount,
                 RowType schema,
                 int arrowMetadataLength,
+                ArrowBodyCompression bodyCompression,
                 int[] selectedFields) {
             this.nodesProjection = nodesProjection;
             this.buffersProjection = buffersProjection;
             this.bufferCount = bufferCount;
             this.schema = schema;
             this.arrowMetadataLength = arrowMetadataLength;
+            this.bodyCompression = bodyCompression;
             this.selectedFields = selectedFields;
         }
     }

@@ -18,6 +18,7 @@ package com.alibaba.fluss.client.utils;
 
 import com.alibaba.fluss.client.admin.OffsetSpec;
 import com.alibaba.fluss.client.lookup.LookupBatch;
+import com.alibaba.fluss.client.lookup.PrefixLookupBatch;
 import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
 import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
 import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
@@ -54,12 +55,14 @@ import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import com.alibaba.fluss.rpc.messages.PbLakeStorageInfo;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import com.alibaba.fluss.rpc.messages.PbSnapshotForBucket;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -181,6 +184,22 @@ public class ClientRpcMessageUtils {
                         pbLookupReqForBucket.setPartitionId(tb.getPartitionId());
                     }
                     batch.lookups().forEach(get -> pbLookupReqForBucket.addKey(get.key()));
+                });
+        return request;
+    }
+
+    public static PrefixLookupRequest makePrefixLookupRequest(
+            long tableId, Collection<PrefixLookupBatch> lookupBatches) {
+        PrefixLookupRequest request = new PrefixLookupRequest().setTableId(tableId);
+        lookupBatches.forEach(
+                (batch) -> {
+                    TableBucket tb = batch.tableBucket();
+                    PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket =
+                            request.addBucketsReq().setBucketId(tb.getBucket());
+                    if (tb.getPartitionId() != null) {
+                        pbPrefixLookupReqForBucket.setPartitionId(tb.getPartitionId());
+                    }
+                    batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
                 });
         return request;
     }

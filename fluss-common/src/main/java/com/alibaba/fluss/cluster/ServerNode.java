@@ -16,9 +16,16 @@
 
 package com.alibaba.fluss.cluster;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.util.Objects;
 
-/** Information about a Fluss server node. */
+/**
+ * Information about a Fluss server node.
+ *
+ * @since 0.6
+ */
+@PublicEvolving
 public class ServerNode {
     private final int id;
     private final String uid;

@@ -23,6 +23,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
+import com.alibaba.fluss.server.entity.StopReplicaData;
+import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import com.alibaba.fluss.server.tablet.TabletServer;
@@ -35,11 +37,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecords;
 import static com.alibaba.fluss.testutils.DataTestUtils.getKeyValuePairs;
@@ -85,6 +93,7 @@ class KvSnapshotITCase {
             }
         }
 
+        Set<File> bucketKvSnapshotDirs = new HashSet<>();
         for (TableBucket tableBucket : tableBuckets) {
             long tableId = tableBucket.getTableId();
             int bucket = tableBucket.getBucket();
@@ -122,6 +131,8 @@ class KvSnapshotITCase {
                                     Tuple2.of("k1", new Object[] {1, "k1"}),
                                     Tuple2.of("k2", new Object[] {2, "k2"})));
             KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 2);
+            bucketKvSnapshotDirs.add(
+                    new File(completedSnapshot.getSnapshotLocation().getParent().getPath()));
 
             // put kv batch again
             kvRecordBatch =
@@ -160,7 +171,23 @@ class KvSnapshotITCase {
                                 assertThat(replica.getLogTablet().getMinRetainOffset())
                                         .as("Replica %s min retain offset", replica)
                                         .isEqualTo(6));
+                CompletableFuture<List<StopReplicaResultForBucket>> future =
+                        new CompletableFuture<>();
+                server.getReplicaManager()
+                        .stopReplicas(
+                                INITIAL_COORDINATOR_EPOCH,
+                                Collections.singletonList(
+                                        new StopReplicaData(
+                                                tableBucket, true, INITIAL_COORDINATOR_EPOCH, 1)),
+                                future::complete);
             }
+        }
+        checkBucketDirsDeleted(bucketKvSnapshotDirs);
+    }
+
+    private void checkBucketDirsDeleted(Set<File> bucketDirs) {
+        for (File bucketDir : bucketDirs) {
+            assertThat(bucketDir.exists()).isFalse();
         }
     }
 

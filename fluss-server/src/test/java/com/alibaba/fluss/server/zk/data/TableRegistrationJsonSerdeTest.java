@@ -40,7 +40,9 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         Arrays.asList("a", "b"),
                         new TableDistribution(16, Arrays.asList("b", "c")),
                         Maps.newHashMap(),
-                        Collections.singletonMap("custom-3", "\"300\""));
+                        Collections.singletonMap("custom-3", "\"300\""),
+                        1735538268L,
+                        1735538268L);
 
         tableRegistrations[1] =
                 new TableRegistration(
@@ -49,7 +51,9 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         Collections.emptyList(),
                         null,
                         Collections.singletonMap("option-3", "300"),
-                        Maps.newHashMap());
+                        Maps.newHashMap(),
+                        -1,
+                        -1);
 
         return tableRegistrations;
     }
@@ -58,8 +62,8 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
     protected String[] expectedJsons() {
         return new String[] {
             "{\"version\":1,\"table_id\":1234,\"comment\":\"first-table\",\"partition_key\":[\"a\",\"b\"],"
-                    + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"}}",
-            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"partition_key\":[],\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{}}",
+                    + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"created_time\":1735538268,\"modified_time\":1735538268}",
+            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"partition_key\":[],\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
         };
     }
 }

@@ -18,6 +18,7 @@ package com.alibaba.fluss.metadata;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.annotation.PublicStable;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -111,8 +112,8 @@ public final class TableDescriptor implements Serializable {
                                     f));
         }
 
-        if (tableDistribution != null) {
-            tableDistribution
+        if (this.tableDistribution != null) {
+            this.tableDistribution
                     .getBucketKeys()
                     .forEach(
                             f ->
@@ -127,11 +128,35 @@ public final class TableDescriptor implements Serializable {
                         .allMatch(e -> e.getKey() != null && e.getValue() != null),
                 "options cannot have null keys or values.");
 
+        if (getAutoPartitionStrategy().isAutoPartitionEnabled() && !isPartitioned()) {
+            throw new IllegalArgumentException(
+                    "Auto partition is only supported when table is partitioned.");
+        }
+
         if (hasPrimaryKey()
                 && getKvFormat() == KvFormat.COMPACTED
                 && getLogFormat() != LogFormat.ARROW) {
             throw new IllegalArgumentException(
                     "For Primary Key Table, if kv format is compacted, log format must be arrow.");
+        }
+
+        if (!hasPrimaryKey() && getMergeEngineType() != null) {
+            throw new IllegalArgumentException(
+                    "Merge engine is only supported in primary key table.");
+        }
+
+        // TODO: generalize the validation for ConfigOption
+        if (properties.containsKey(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key())) {
+            int compressionLevel =
+                    Integer.parseInt(
+                            properties.get(
+                                    ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key()));
+            if (compressionLevel < 1 || compressionLevel > 22) {
+                throw new IllegalArgumentException(
+                        "Invalid ZSTD compression level: "
+                                + compressionLevel
+                                + ". Expected a value between 1 and 22.");
+            }
         }
     }
 
@@ -150,10 +175,34 @@ public final class TableDescriptor implements Serializable {
         return schema;
     }
 
+    /** Returns the bucket key of the table, empty if no bucket key is set. */
     public List<String> getBucketKey() {
         return this.getTableDistribution()
                 .map(TableDescriptor.TableDistribution::getBucketKeys)
                 .orElse(Collections.emptyList());
+    }
+
+    /**
+     * Returns the indexes of the bucket key fields in the schema, empty if no bucket key is set.
+     */
+    public int[] getBucketKeyIndexes() {
+        return schema.getColumnIndexes(getBucketKey());
+    }
+
+    /**
+     * Check if the table is using a default bucket key. A default bucket key is:
+     *
+     * <ul>
+     *   <li>the same as the primary keys excluding the partition keys.
+     *   <li>empty if the table is not a primary key table.
+     * </ul>
+     */
+    public boolean isDefaultBucketKey() {
+        if (schema.getPrimaryKey().isPresent()) {
+            return getBucketKey().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+        } else {
+            return getBucketKey().isEmpty();
+        }
     }
 
     /**
@@ -242,6 +291,15 @@ public final class TableDescriptor implements Serializable {
     /** Whether the data lake is enabled. */
     public boolean isDataLakeEnabled() {
         return configuration().get(ConfigOptions.TABLE_DATALAKE_ENABLED);
+    }
+
+    public @Nullable MergeEngineType getMergeEngineType() {
+        return configuration().get(ConfigOptions.TABLE_MERGE_ENGINE);
+    }
+
+    /** Gets the Arrow compression type and compression level of the table. */
+    public ArrowCompressionInfo getArrowCompressionInfo() {
+        return ArrowCompressionInfo.fromConf(configuration());
     }
 
     public TableDescriptor copy(Map<String, String> newProperties) {
@@ -360,21 +418,17 @@ public final class TableDescriptor implements Serializable {
                             originDistribution.getBucketCount().orElse(null),
                             defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
                 } else {
-                    // check the provided bucket key and expected bucket key
-                    List<String> expectedBucketKeys =
-                            defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys);
+                    // check the provided bucket key
                     List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
-
-                    if (expectedBucketKeys.size() != bucketKeys.size()
-                            || !new HashSet<>(expectedBucketKeys).containsAll(bucketKeys)) {
+                    if (!new HashSet<>(pkColumns).containsAll(bucketKeys)) {
                         throw new IllegalArgumentException(
                                 String.format(
-                                        "Currently, bucket keys must be equal to primary keys excluding partition keys for primary-key tables. "
-                                                + "The primary keys are %s, the partition keys are %s, "
-                                                + "the expected bucket keys are %s, but the user-defined bucket keys are %s.",
-                                        pkColumns, partitionKeys, expectedBucketKeys, bucketKeys));
+                                        "Bucket keys must be a subset of primary keys excluding partition "
+                                                + "keys for primary-key tables. The primary keys are %s, the "
+                                                + "partition keys are %s, but "
+                                                + "the user-defined bucket keys are %s.",
+                                        pkColumns, partitionKeys, bucketKeys));
                     }
-
                     return new TableDistribution(
                             originDistribution.getBucketCount().orElse(null), bucketKeys);
                 }

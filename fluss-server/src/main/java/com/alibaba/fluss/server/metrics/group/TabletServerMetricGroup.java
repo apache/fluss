@@ -43,6 +43,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     // ---- metrics ----
     private final Counter replicationBytesIn;
     private final Counter replicationBytesOut;
+    private final Counter delayedWriteExpireCount;
+    private final Counter delayedFetchFromFollowerExpireCount;
+    private final Counter delayedFetchFromClientExpireCount;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, int serverId) {
@@ -55,6 +58,17 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.REPLICATION_IN_RATE, new MeterView(replicationBytesIn));
         replicationBytesOut = new ThreadSafeSimpleCounter();
         meter(MetricNames.REPLICATION_OUT_RATE, new MeterView(replicationBytesOut));
+
+        delayedWriteExpireCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.DELAYED_WRITE_EXPIRES_RATE, new MeterView(delayedWriteExpireCount));
+        delayedFetchFromFollowerExpireCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE,
+                new MeterView(delayedFetchFromFollowerExpireCount));
+        delayedFetchFromClientExpireCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
+                new MeterView(delayedFetchFromClientExpireCount));
     }
 
     @Override
@@ -75,6 +89,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter replicationBytesOut() {
         return replicationBytesOut;
+    }
+
+    public Counter delayedWriteExpireCount() {
+        return delayedWriteExpireCount;
+    }
+
+    public Counter delayedFetchFromFollowerExpireCount() {
+        return delayedFetchFromFollowerExpireCount;
+    }
+
+    public Counter delayedFetchFromClientExpireCount() {
+        return delayedFetchFromClientExpireCount;
     }
 
     // ------------------------------------------------------------------------

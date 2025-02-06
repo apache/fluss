@@ -33,6 +33,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
+import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
@@ -101,7 +102,9 @@ public class WriterClient {
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
-            this.accumulator = new RecordAccumulator(conf, idempotenceManager, writerMetricGroup);
+            this.accumulator =
+                    new RecordAccumulator(
+                            conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);

@@ -20,19 +20,23 @@ import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.OffsetSpec.LatestSpec;
 import com.alibaba.fluss.client.admin.OffsetSpec.TimestampSpec;
+import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
 import com.alibaba.fluss.client.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.RowType;
 
@@ -48,6 +52,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
 import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -236,5 +242,24 @@ public abstract class ClientToServerITCaseBase {
                 assertThatRow(actual.get(i)).withSchema(rowType).isEqualTo(expected.get(i));
             }
         }
+    }
+
+    protected static void verifyPutAndLookup(Table table, Schema tableSchema, Object[] fields)
+            throws Exception {
+        // put data.
+        InternalRow row = compactedRow(tableSchema.toRowType(), fields);
+        UpsertWriter upsertWriter = table.getUpsertWriter();
+        // put data.
+        upsertWriter.upsert(row);
+        upsertWriter.flush();
+        // lookup this key.
+        Lookuper lookuper = table.getLookuper();
+        IndexedRow keyRow = keyRow(tableSchema, fields);
+        assertThat(lookupRow(lookuper, keyRow)).isEqualTo(row);
+    }
+
+    protected static InternalRow lookupRow(Lookuper lookuper, IndexedRow keyRow) throws Exception {
+        // lookup this key.
+        return lookuper.lookup(keyRow).get().getRow();
     }
 }

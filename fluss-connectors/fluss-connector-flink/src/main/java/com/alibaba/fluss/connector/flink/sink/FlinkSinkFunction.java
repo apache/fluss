@@ -63,6 +63,7 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
     private final Configuration flussConfig;
     protected final RowType tableRowType;
     protected final @Nullable int[] targetColumnIndexes;
+    private final boolean ignoreDelete;
 
     private transient Connection connection;
     protected transient Table table;
@@ -75,19 +76,25 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
     private transient Counter numRecordsOutErrorsCounter;
     private volatile Throwable asyncWriterException;
 
-    public FlinkSinkFunction(TablePath tablePath, Configuration flussConfig, RowType tableRowType) {
-        this(tablePath, flussConfig, tableRowType, null);
+    public FlinkSinkFunction(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            boolean ignoreDelete) {
+        this(tablePath, flussConfig, tableRowType, null, ignoreDelete);
     }
 
     public FlinkSinkFunction(
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
-            @Nullable int[] targetColumns) {
+            @Nullable int[] targetColumns,
+            boolean ignoreDelete) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.targetColumnIndexes = targetColumns;
         this.tableRowType = tableRowType;
+        this.ignoreDelete = ignoreDelete;
     }
 
     @Override
@@ -117,11 +124,17 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
     @Override
     public void invoke(RowData value, SinkFunction.Context context) throws IOException {
         checkAsyncException();
+        if (ignoreDelete
+                && (value.getRowKind() == RowKind.UPDATE_BEFORE
+                        || value.getRowKind() == RowKind.DELETE)) {
+            return;
+        }
+
         InternalRow internalRow = dataConverter.toInternalRow(value);
         CompletableFuture<Void> writeFuture = writeRow(value.getRowKind(), internalRow);
         writeFuture.exceptionally(
                 exception -> {
-                    if (this.asyncWriterException != null) {
+                    if (this.asyncWriterException == null) {
                         this.asyncWriterException = exception;
                     }
                     return null;

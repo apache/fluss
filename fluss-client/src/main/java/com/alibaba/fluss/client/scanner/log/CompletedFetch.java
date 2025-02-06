@@ -24,18 +24,14 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.InternalRow.FieldGetter;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
-import com.alibaba.fluss.utils.Projection;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.annotation.Nullable;
 
 import java.io.Closeable;
 import java.util.ArrayList;
@@ -60,9 +56,8 @@ abstract class CompletedFetch {
     private final boolean isCheckCrcs;
     private final Iterator<LogRecordBatch> batches;
     private final LogScannerStatus logScannerStatus;
-    private final LogRecordReadContext readContext;
-    @Nullable protected final Projection projection;
-    protected final InternalRow.FieldGetter[] fieldGetters;
+    protected final LogRecordReadContext readContext;
+    protected final InternalRow.FieldGetter[] selectedFieldGetters;
 
     private LogRecordBatch currentBatch;
     private LogRecord lastRecord;
@@ -83,8 +78,7 @@ abstract class CompletedFetch {
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrcs,
-            long fetchOffset,
-            @Nullable Projection projection) {
+            long fetchOffset) {
         this.tableBucket = tableBucket;
         this.error = error;
         this.sizeInBytes = sizeInBytes;
@@ -93,16 +87,21 @@ abstract class CompletedFetch {
         this.readContext = readContext;
         this.isCheckCrcs = isCheckCrcs;
         this.logScannerStatus = logScannerStatus;
-        this.projection = projection;
         this.nextFetchOffset = fetchOffset;
-        RowType rowType = readContext.getRowType();
-        this.fieldGetters = new FieldGetter[rowType.getFieldCount()];
-        for (int i = 0; i < fieldGetters.length; i++) {
-            fieldGetters[i] = InternalRow.createFieldGetter(rowType.getChildren().get(i), i);
-        }
+        this.selectedFieldGetters = readContext.getSelectedFieldGetters();
     }
 
-    protected abstract ScanRecord toScanRecord(LogRecord record);
+    // TODO: optimize this to avoid deep copying the record.
+    //  refactor #fetchRecords to return an iterator which lazily deserialize
+    //  from underlying record stream and arrow buffer.
+    ScanRecord toScanRecord(LogRecord record) {
+        GenericRow newRow = new GenericRow(selectedFieldGetters.length);
+        InternalRow internalRow = record.getRow();
+        for (int i = 0; i < selectedFieldGetters.length; i++) {
+            newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
+        }
+        return new ScanRecord(record.logOffset(), record.timestamp(), record.getRowKind(), newRow);
+    }
 
     boolean isConsumed() {
         return isConsumed;
@@ -229,7 +228,7 @@ abstract class CompletedFetch {
 
     private void maybeEnsureValid(LogRecordBatch batch) {
         if (isCheckCrcs) {
-            if (projection != null) {
+            if (readContext.isProjectionPushDowned()) {
                 LOG.debug("Skipping CRC check for column projected log record batch.");
                 return;
             }

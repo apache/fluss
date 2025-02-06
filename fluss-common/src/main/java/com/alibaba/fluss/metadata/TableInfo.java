@@ -37,13 +37,22 @@ public final class TableInfo {
     private final TableDescriptor tableDescriptor;
     private final long tableId;
     private final int schemaId;
+    private final long createdTime;
+    private final long modifiedTime;
 
     public TableInfo(
-            TablePath tablePath, long tableId, TableDescriptor tableDescriptor, int schemaId) {
+            TablePath tablePath,
+            long tableId,
+            TableDescriptor tableDescriptor,
+            int schemaId,
+            long createdTime,
+            long modifiedTime) {
         this.tablePath = tablePath;
         this.tableId = tableId;
         this.tableDescriptor = tableDescriptor;
         this.schemaId = schemaId;
+        this.createdTime = createdTime;
+        this.modifiedTime = modifiedTime;
     }
 
     public TablePath getTablePath() {
@@ -60,6 +69,14 @@ public final class TableInfo {
 
     public int getSchemaId() {
         return schemaId;
+    }
+
+    public long getCreatedTime() {
+        return createdTime;
+    }
+
+    public long getModifiedTime() {
+        return modifiedTime;
     }
 
     @Override
@@ -87,12 +104,16 @@ public final class TableInfo {
         return "TableInfo{"
                 + "tablePath="
                 + tablePath
+                + ", tableDescriptor="
+                + tableDescriptor
                 + ", tableId="
                 + tableId
                 + ", schemaId="
                 + schemaId
-                + ", tableDescriptor="
-                + tableDescriptor
+                + ", createdTime="
+                + createdTime
+                + ", modifiedTime="
+                + modifiedTime
                 + '}';
     }
 }

@@ -18,6 +18,8 @@ package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
+import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
@@ -50,11 +52,15 @@ public class ArrowWriterPool implements ArrowWriterProvider {
     @GuardedBy("lock")
     private boolean closed = false;
 
+    @GuardedBy("lock")
+    private final Map<String, ArrowCompressionRatioEstimator> compressionRatioEstimators;
+
     private final ReentrantLock lock = new ReentrantLock();
 
     public ArrowWriterPool(BufferAllocator allocator) {
         this.allocator = allocator;
         this.freeWriters = new HashMap<>();
+        this.compressionRatioEstimators = new HashMap<>();
     }
 
     @Override
@@ -68,7 +74,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                     } else {
                         Deque<ArrowWriter> roots =
                                 freeWriters.computeIfAbsent(
-                                        writer.tableSchemaId, k -> new ArrayDeque<>());
+                                        writer.writerKey, k -> new ArrayDeque<>());
                         writer.increaseEpoch();
                         roots.add(writer);
                     }
@@ -77,8 +83,12 @@ public class ArrowWriterPool implements ArrowWriterProvider {
 
     @Override
     public ArrowWriter getOrCreateWriter(
-            long tableId, int schemaId, int maxSizeInBytes, RowType schema) {
-        final String tableSchemaId = tableId + "-" + schemaId;
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo) {
+        final String writerKey = tableId + "-" + schemaId + "-" + compressionInfo.toString();
         return inLock(
                 lock,
                 () -> {
@@ -86,20 +96,29 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                         throw new FlussRuntimeException(
                                 "Arrow VectorSchemaRoot pool closed while getting/creating root.");
                     }
-                    Deque<ArrowWriter> writers = freeWriters.get(tableSchemaId);
+                    Deque<ArrowWriter> writers = freeWriters.get(writerKey);
+                    ArrowCompressionRatioEstimator compressionRatioEstimator =
+                            compressionRatioEstimators.computeIfAbsent(
+                                    writerKey, k -> new ArrowCompressionRatioEstimator());
                     if (writers != null && !writers.isEmpty()) {
-                        return initialize(writers.pollFirst(), maxSizeInBytes);
+                        return initialize(writers.pollFirst(), bufferSizeInBytes);
                     } else {
                         return initialize(
                                 new ArrowWriter(
-                                        tableSchemaId, maxSizeInBytes, schema, allocator, this),
-                                maxSizeInBytes);
+                                        writerKey,
+                                        bufferSizeInBytes,
+                                        schema,
+                                        allocator,
+                                        this,
+                                        compressionInfo,
+                                        compressionRatioEstimator),
+                                bufferSizeInBytes);
                     }
                 });
     }
 
-    private ArrowWriter initialize(ArrowWriter writer, int maxSizeInBytes) {
-        writer.reset(maxSizeInBytes);
+    private ArrowWriter initialize(ArrowWriter writer, int bufferSizeInBytes) {
+        writer.reset(bufferSizeInBytes);
         return writer;
     }
 
@@ -113,6 +132,7 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                 }
             }
             freeWriters.clear();
+            compressionRatioEstimators.clear();
             closed = true;
         } finally {
             lock.unlock();

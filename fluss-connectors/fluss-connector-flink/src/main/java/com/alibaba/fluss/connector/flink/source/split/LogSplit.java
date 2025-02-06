@@ -85,4 +85,19 @@ public class LogSplit extends SourceSplitBase {
     public int hashCode() {
         return Objects.hash(super.hashCode(), startingOffset, stoppingOffset);
     }
+
+    @Override
+    public String toString() {
+        return "LogSplit{"
+                + "tableBucket="
+                + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + ", startingOffset="
+                + startingOffset
+                + ", stoppingOffset="
+                + stoppingOffset
+                + '}';
+    }
 }

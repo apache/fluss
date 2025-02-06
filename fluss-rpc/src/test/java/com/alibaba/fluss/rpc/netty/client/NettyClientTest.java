@@ -28,6 +28,7 @@ import com.alibaba.fluss.rpc.messages.GetTableRequest;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
+import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.netty.server.NettyServer;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
@@ -162,6 +163,21 @@ final class NettyClientTest {
         assertThat(nettyClient.connections().size()).isEqualTo(1);
         assertThat(nettyClient.connections().get(serverNode.uid()).getServerNode())
                 .isEqualTo(serverNode);
+    }
+
+    @Test
+    void testBindFailureDetection() {
+        Throwable ex = new java.net.BindException();
+        assertThat(NettyUtils.isBindFailure(ex)).isTrue();
+
+        ex = new Exception(new java.net.BindException());
+        assertThat(NettyUtils.isBindFailure(ex)).isTrue();
+
+        ex = new Exception();
+        assertThat(NettyUtils.isBindFailure(ex)).isFalse();
+
+        ex = new RuntimeException();
+        assertThat(NettyUtils.isBindFailure(ex)).isFalse();
     }
 
     private void buildNettyServer(int serverId) throws Exception {

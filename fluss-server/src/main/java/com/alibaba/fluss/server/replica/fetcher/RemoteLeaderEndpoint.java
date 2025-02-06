@@ -47,6 +47,9 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     /** The max fetch size for a bucket in bytes. */
     private final int maxFetchSizeForBucket;
 
+    private final int minFetchBytes;
+    private final int maxFetchWaitMs;
+
     RemoteLeaderEndpoint(
             Configuration conf,
             int followerServerId,
@@ -54,9 +57,12 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
             TabletServerGateway tabletServerGateway) {
         this.followerServerId = followerServerId;
         this.remoteNode = remoteNode;
-        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
         this.maxFetchSizeForBucket =
-                (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
+        this.minFetchBytes = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MIN_BYTES).getBytes();
+        this.maxFetchWaitMs =
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_WAIT_MAX_TIME).toMillis();
         this.tabletServerGateway = tabletServerGateway;
     }
 
@@ -87,7 +93,12 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     public Optional<FetchLogRequest> buildFetchLogRequest(
             Map<TableBucket, BucketFetchStatus> replicas) {
         return buildFetchLogRequest(
-                replicas, followerServerId, maxFetchSize, maxFetchSizeForBucket);
+                replicas,
+                followerServerId,
+                maxFetchSize,
+                maxFetchSizeForBucket,
+                minFetchBytes,
+                maxFetchWaitMs);
     }
 
     @Override
@@ -99,11 +110,15 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
             Map<TableBucket, BucketFetchStatus> replicas,
             int followerServerId,
             int maxFetchSize,
-            int maxFetchSizeForBucket) {
+            int maxFetchSizeForBucket,
+            int minFetchBytes,
+            int maxFetchWaitMs) {
         FetchLogRequest fetchRequest =
                 new FetchLogRequest()
                         .setFollowerServerId(followerServerId)
-                        .setMaxBytes(maxFetchSize);
+                        .setMaxBytes(maxFetchSize)
+                        .setMinBytes(minFetchBytes)
+                        .setMaxWaitMs(maxFetchWaitMs);
         Map<Long, List<PbFetchLogReqForBucket>> fetchLogReqForBuckets = new HashMap<>();
         int readyForFetchCount = 0;
         for (Map.Entry<TableBucket, BucketFetchStatus> entry : replicas.entrySet()) {

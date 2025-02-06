@@ -194,7 +194,9 @@ public class TableChangeWatcher {
                                     tablePath,
                                     tableId,
                                     table.toTableDescriptor(schemaInfo.getSchema()),
-                                    schemaInfo.getSchemaId()),
+                                    schemaInfo.getSchemaId(),
+                                    table.createdTime,
+                                    table.modifiedTime),
                             assignment));
         }
 

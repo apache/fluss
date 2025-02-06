@@ -45,7 +45,7 @@ import java.util.Iterator;
 
 /**
  * A reader to read kv snapshot files to {@link ScanRecord}s. It will return the {@link ScanRecord}s
- * as a iterator.
+ * as an iterator.
  */
 @NotThreadSafe
 class SnapshotFilesReader implements Iterator<ScanRecord>, AutoCloseable {

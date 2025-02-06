@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.RpcServer;
@@ -225,7 +226,8 @@ public class CoordinatorServer extends ServerBase {
         MetaDataManager metaDataManager = new MetaDataManager(zkClient);
         List<String> databases = metaDataManager.listDatabases();
         if (databases.isEmpty()) {
-            metaDataManager.createDatabase(DEFAULT_DATABASE, true);
+            metaDataManager.createDatabase(
+                    DEFAULT_DATABASE, DatabaseDescriptor.builder().build(), true);
             LOG.info("Created default database '{}' because no database exists.", DEFAULT_DATABASE);
         }
     }

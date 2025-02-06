@@ -125,6 +125,15 @@ public final class Schema implements Serializable {
         return columnNames;
     }
 
+    /** Returns the indexes of the fields in the schema. */
+    public int[] getColumnIndexes(List<String> keyNames) {
+        int[] keyIndexes = new int[keyNames.size()];
+        for (int i = 0; i < keyNames.size(); i++) {
+            keyIndexes[i] = rowType.getFieldIndex(keyNames.get(i));
+        }
+        return keyIndexes;
+    }
+
     @Override
     public String toString() {
         final List<Object> components = new ArrayList<>(columns);
@@ -490,5 +499,14 @@ public final class Schema implements Serializable {
         return names.stream()
                 .filter(name -> Collections.frequency(names, name) > 1)
                 .collect(Collectors.toSet());
+    }
+
+    public static RowType getKeyRowType(Schema schema, int[] keyIndexes) {
+        List<DataField> keyRowFields = new ArrayList<>(keyIndexes.length);
+        List<DataField> rowFields = schema.toRowType().getFields();
+        for (int index : keyIndexes) {
+            keyRowFields.add(rowFields.get(index));
+        }
+        return new RowType(keyRowFields);
     }
 }

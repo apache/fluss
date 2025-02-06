@@ -68,6 +68,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
+
 /** Utilities for pushdown abilities. */
 public class PushdownUtils {
     private static final int LIMIT_PUSH_DOWN_CEIL = 1024;
@@ -255,13 +257,13 @@ public class PushdownUtils {
             int[] primaryKeyIndexes,
             int lookupMaxRetryTimes,
             @Nullable int[] projectedFields) {
-        LookupNormalizer lookupNormalizer = LookupNormalizer.NOOP_NORMALIZER;
+        LookupNormalizer lookupNormalizer =
+                createPrimaryKeyLookupNormalizer(primaryKeyIndexes, sourceOutputType);
         LookupFunction lookupFunction =
                 new FlinkLookupFunction(
                         flussConfig,
                         tablePath,
                         sourceOutputType,
-                        primaryKeyIndexes,
                         lookupMaxRetryTimes,
                         lookupNormalizer,
                         projectedFields);
@@ -276,8 +278,8 @@ public class PushdownUtils {
 
     public static void deleteSingleRow(
             GenericRow deleteRow, TablePath tablePath, Configuration flussConfig) {
-        try (Connection connection = ConnectionFactory.createConnection(flussConfig)) {
-            Table table = connection.getTable(tablePath);
+        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
+                Table table = connection.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.getUpsertWriter();
             upsertWriter.delete(deleteRow).get();
         } catch (Exception e) {

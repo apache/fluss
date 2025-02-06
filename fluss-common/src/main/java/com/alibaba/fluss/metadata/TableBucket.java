@@ -47,6 +47,10 @@ public class TableBucket implements Serializable {
     // will be null if the bucket doesn't belong to a partition
     private final @Nullable Long partitionId;
 
+    // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
+    // RecordAccumulator.ready)
+    private Integer hash;
+
     public TableBucket(long tableId, int bucket) {
         this(tableId, null, bucket);
     }
@@ -86,7 +90,14 @@ public class TableBucket implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, bucket, partitionId);
+        Integer h = this.hash;
+        if (h == null) {
+            int result = Objects.hash(tableId, bucket, partitionId);
+            this.hash = result;
+            return result;
+        } else {
+            return h;
+        }
     }
 
     @Override

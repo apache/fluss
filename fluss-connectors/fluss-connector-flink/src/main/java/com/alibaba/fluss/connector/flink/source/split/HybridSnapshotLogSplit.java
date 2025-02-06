@@ -94,10 +94,17 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
     @Override
     public String toString() {
         return "HybridSnapshotLogSplit{"
-                + "recordsToSkip="
-                + recordsToSkip
-                + ", tableBucket="
+                + "tableBucket="
                 + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + ", isSnapshotFinished="
+                + isSnapshotFinished
+                + ", logStartingOffset="
+                + logStartingOffset
+                + ", recordsToSkip="
+                + recordsToSkip
                 + '}';
     }
 }

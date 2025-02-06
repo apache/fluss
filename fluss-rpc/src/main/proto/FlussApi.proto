@@ -49,9 +49,21 @@ message GetTableSchemaResponse {
 message CreateDatabaseRequest {
   required string database_name = 1;
   required bool ignore_if_exists = 2;
+  optional bytes database_json = 3;
 }
 
 message CreateDatabaseResponse {
+}
+
+// get table request and response
+message GetDatabaseRequest {
+  required string database_name = 1;
+}
+
+message GetDatabaseResponse {
+  required bytes database_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
 }
 
 // drop database request and response
@@ -97,6 +109,8 @@ message GetTableResponse {
   required int64 table_id = 1;
   required int32 schema_id = 2;
   required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
 }
 
 // list tables request and response
@@ -171,6 +185,8 @@ message FetchLogRequest {
   required int32 follower_server_id = 1;  // value -1 indicate the request from client.
   required int32 max_bytes = 2;
   repeated PbFetchLogReqForTable tables_req = 3;
+  optional int32 max_wait_ms = 4;
+  optional int32 min_bytes = 5;
 }
 
 message FetchLogResponse {
@@ -200,6 +216,16 @@ message LookupRequest {
 
 message LookupResponse {
   repeated PbLookupRespForBucket buckets_resp = 1;
+}
+
+// Prefix Lookup request and response
+message PrefixLookupRequest {
+  required int64 table_id = 1;
+  repeated PbPrefixLookupReqForBucket buckets_req = 2;
+}
+
+message PrefixLookupResponse {
+  repeated PbPrefixLookupRespForBucket buckets_resp = 1;
 }
 
 
@@ -456,6 +482,8 @@ message PbTableMetadata {
   required int32 schema_id = 3;
   required bytes table_json = 4;
   repeated PbBucketMetadata bucket_metadata = 5;
+  required int64 created_time = 6;
+  required int64 modified_time = 7;
 }
 
 message PbPartitionMetadata {
@@ -548,6 +576,24 @@ message PbLookupRespForBucket {
 message PbValue {
   // optional, if empty, means no value
   optional bytes values = 1;
+}
+
+message PbValueList {
+  repeated bytes values = 1;
+}
+
+message PbPrefixLookupReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  repeated bytes keys = 3;
+}
+
+message PbPrefixLookupRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  repeated PbValueList value_lists = 5;
 }
 
 message PbTableBucket {

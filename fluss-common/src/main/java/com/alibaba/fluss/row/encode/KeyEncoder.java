@@ -54,7 +54,7 @@ public class KeyEncoder {
         return new KeyEncoder(rowType, encodeColIndexes);
     }
 
-    protected KeyEncoder(RowType rowType) {
+    public KeyEncoder(RowType rowType) {
         this(rowType, IntStream.range(0, rowType.getFieldCount()).toArray());
     }
 

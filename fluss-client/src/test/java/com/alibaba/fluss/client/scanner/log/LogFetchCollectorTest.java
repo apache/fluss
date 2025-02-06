@@ -157,6 +157,6 @@ public class LogFetchCollectorTest {
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
         return new DefaultCompletedFetch(
-                tableBucket, resultForBucket, readContext, logScannerStatus, true, offset, null);
+                tableBucket, resultForBucket, readContext, logScannerStatus, true, offset);
     }
 }

@@ -158,7 +158,9 @@ class CommitLakeTableSnapshotITCase {
                                 .distributedBy(BUCKET_NUM, "a")
                                 .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                                 .build(),
-                        1);
+                        1,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
         return RpcMessageTestUtils.createTable(
                 FLUSS_CLUSTER_EXTENSION,
                 DATA1_TABLE_PATH,

@@ -44,7 +44,8 @@ public class TableRegistrationJsonSerde
     static final String BUCKET_COUNT_NAME = "bucket_count";
     static final String PROPERTIES_NAME = "properties";
     static final String CUSTOM_PROPERTIES_NAME = "custom_properties";
-
+    static final String CREATED_TIME = "created_time";
+    static final String MODIFIED_TIME = "modified_time";
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 1;
 
@@ -97,6 +98,12 @@ public class TableRegistrationJsonSerde
         }
         generator.writeEndObject();
 
+        // serialize createdTime
+        generator.writeNumberField(CREATED_TIME, tableReg.createdTime);
+
+        // serialize modifiedTime
+        generator.writeNumberField(MODIFIED_TIME, tableReg.createdTime);
+
         generator.writeEndObject();
     }
 
@@ -136,8 +143,18 @@ public class TableRegistrationJsonSerde
         Map<String, String> customProperties =
                 deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME));
 
+        long createdTime = node.get(CREATED_TIME).asLong();
+        long modifiedTime = node.get(MODIFIED_TIME).asLong();
+
         return new TableRegistration(
-                tableId, comment, partitionKeys, distribution, properties, customProperties);
+                tableId,
+                comment,
+                partitionKeys,
+                distribution,
+                properties,
+                customProperties,
+                createdTime,
+                modifiedTime);
     }
 
     private Map<String, String> deserializeProperties(JsonNode node) {

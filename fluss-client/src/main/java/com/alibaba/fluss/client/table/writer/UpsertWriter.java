@@ -41,7 +41,9 @@ import java.util.concurrent.CompletableFuture;
 @PublicEvolving
 public class UpsertWriter extends TableWriter {
 
-    private final KeyEncoder keyEncoder;
+    private final KeyEncoder primaryKeyEncoder;
+    // same to primaryKeyEncoder if the bucket key is the same to the primary key
+    private final KeyEncoder bucketKeyEncoder;
     private final @Nullable int[] targetColumns;
 
     public UpsertWriter(
@@ -54,13 +56,21 @@ public class UpsertWriter extends TableWriter {
         Schema schema = tableDescriptor.getSchema();
         sanityCheck(schema, upsertWrite.getPartialUpdateColumns());
 
+        RowType rowType = schema.toRowType();
         this.targetColumns = upsertWrite.getPartialUpdateColumns();
 
-        this.keyEncoder =
+        this.primaryKeyEncoder =
                 KeyEncoder.createKeyEncoder(
-                        schema.toRowType(),
+                        rowType,
                         schema.getPrimaryKey().get().getColumnNames(),
                         tableDescriptor.getPartitionKeys());
+
+        if (tableDescriptor.isDefaultBucketKey()) {
+            this.bucketKeyEncoder = primaryKeyEncoder;
+        } else {
+            int[] bucketKeyIndexes = tableDescriptor.getBucketKeyIndexes();
+            this.bucketKeyEncoder = new KeyEncoder(rowType, bucketKeyIndexes);
+        }
     }
 
     private static void sanityCheck(Schema schema, @Nullable int[] targetColumns) {
@@ -110,9 +120,12 @@ public class UpsertWriter extends TableWriter {
      * @return A {@link CompletableFuture} that always returns null when complete normally.
      */
     public CompletableFuture<Void> upsert(InternalRow row) {
-        byte[] key = keyEncoder.encode(row);
+        byte[] key = primaryKeyEncoder.encode(row);
+        byte[] bucketKey =
+                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encode(row);
         return send(
-                new WriteRecord(getPhysicalPath(row), WriteKind.PUT, key, key, row, targetColumns));
+                new WriteRecord(
+                        getPhysicalPath(row), WriteKind.PUT, key, bucketKey, row, targetColumns));
     }
 
     /**
@@ -123,9 +136,16 @@ public class UpsertWriter extends TableWriter {
      * @return A {@link CompletableFuture} that always returns null when complete normally.
      */
     public CompletableFuture<Void> delete(InternalRow row) {
-        byte[] key = keyEncoder.encode(row);
+        byte[] key = primaryKeyEncoder.encode(row);
+        byte[] bucketKey =
+                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encode(row);
         return send(
                 new WriteRecord(
-                        getPhysicalPath(row), WriteKind.DELETE, key, key, null, targetColumns));
+                        getPhysicalPath(row),
+                        WriteKind.DELETE,
+                        key,
+                        bucketKey,
+                        null,
+                        targetColumns));
     }
 }

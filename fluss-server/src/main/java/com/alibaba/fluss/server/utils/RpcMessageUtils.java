@@ -38,6 +38,7 @@ import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.LimitScanResultForBucket;
 import com.alibaba.fluss.rpc.entity.ListOffsetsResultForBucket;
 import com.alibaba.fluss.rpc.entity.LookupResultForBucket;
+import com.alibaba.fluss.rpc.entity.PrefixLookupResultForBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.PutKvResultForBucket;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
@@ -84,6 +85,8 @@ import com.alibaba.fluss.rpc.messages.PbNotifyLakeTableOffsetReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
@@ -97,6 +100,9 @@ import com.alibaba.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbTableBucket;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.PbValue;
+import com.alibaba.fluss.rpc.messages.PbValueList;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
+import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -602,6 +608,28 @@ public class RpcMessageUtils {
         return lookupEntryData;
     }
 
+    public static Map<TableBucket, List<byte[]>> toPrefixLookupData(
+            PrefixLookupRequest prefixLookupRequest) {
+        long tableId = prefixLookupRequest.getTableId();
+        Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
+        for (PbPrefixLookupReqForBucket lookupReqForBucket :
+                prefixLookupRequest.getBucketsReqsList()) {
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            lookupReqForBucket.hasPartitionId()
+                                    ? lookupReqForBucket.getPartitionId()
+                                    : null,
+                            lookupReqForBucket.getBucketId());
+            List<byte[]> keys = new ArrayList<>(lookupReqForBucket.getKeysCount());
+            for (int i = 0; i < lookupReqForBucket.getKeysCount(); i++) {
+                keys.add(lookupReqForBucket.getKeyAt(i));
+            }
+            lookupEntryData.put(tb, keys);
+        }
+        return lookupEntryData;
+    }
+
     public static @Nullable int[] getTargetColumns(PutKvRequest putKvRequest) {
         int[] targetColumns = putKvRequest.getTargetColumns();
         return targetColumns.length == 0 ? null : targetColumns;
@@ -704,6 +732,39 @@ public class RpcMessageUtils {
             }
         }
         return lookupResponse;
+    }
+
+    public static PrefixLookupResponse makePrefixLookupResponse(
+            Map<TableBucket, PrefixLookupResultForBucket> prefixLookupResult) {
+        PrefixLookupResponse prefixLookupResponse = new PrefixLookupResponse();
+        List<PbPrefixLookupRespForBucket> resultForAll = new ArrayList<>();
+        for (Map.Entry<TableBucket, PrefixLookupResultForBucket> entry :
+                prefixLookupResult.entrySet()) {
+            PbPrefixLookupRespForBucket respForBucket = new PbPrefixLookupRespForBucket();
+            TableBucket tb = entry.getKey();
+            respForBucket.setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                respForBucket.setPartitionId(tb.getPartitionId());
+            }
+
+            PrefixLookupResultForBucket bucketResult = entry.getValue();
+            if (bucketResult.failed()) {
+                respForBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
+            } else {
+                List<PbValueList> keyResultList = new ArrayList<>();
+                for (List<byte[]> res : bucketResult.prefixLookupValues()) {
+                    PbValueList pbValueList = new PbValueList();
+                    for (byte[] bytes : res) {
+                        pbValueList.addValue(bytes);
+                    }
+                    keyResultList.add(pbValueList);
+                }
+                respForBucket.addAllValueLists(keyResultList);
+            }
+            resultForAll.add(respForBucket);
+        }
+        prefixLookupResponse.addAllBucketsResps(resultForAll);
+        return prefixLookupResponse;
     }
 
     public static AdjustIsrRequest makeAdjustIsrRequest(

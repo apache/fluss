@@ -21,7 +21,10 @@ import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.messages.LookupResponse;
 import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbValue;
+import com.alibaba.fluss.rpc.messages.PbValueList;
+import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -49,7 +52,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test utils related to Kv. */
@@ -165,11 +167,28 @@ public class KvTestUtils {
 
     public static void assertLookupResponse(
             LookupResponse lookupResponse, @Nullable byte[] expectedValue) {
-        checkArgument(lookupResponse.getBucketsRespsCount() == 1);
+        assertThat(lookupResponse.getBucketsRespsCount()).isEqualTo(1);
         PbLookupRespForBucket pbLookupRespForBucket = lookupResponse.getBucketsRespAt(0);
-        checkArgument(pbLookupRespForBucket.getValuesCount() == 1);
+        assertThat(pbLookupRespForBucket.getValuesCount()).isEqualTo(1);
         PbValue pbValue = pbLookupRespForBucket.getValueAt(0);
         byte[] lookupValue = pbValue.hasValues() ? pbValue.getValues() : null;
         assertThat(lookupValue).isEqualTo(expectedValue);
+    }
+
+    public static void assertPrefixLookupResponse(
+            PrefixLookupResponse prefixLookupResponse, List<List<byte[]>> expectedValues) {
+        assertThat(prefixLookupResponse.getBucketsRespsCount()).isEqualTo(1);
+        PbPrefixLookupRespForBucket pbPrefixLookupRespForBucket =
+                prefixLookupResponse.getBucketsRespAt(0);
+        assertThat(pbPrefixLookupRespForBucket.getValueListsCount())
+                .isEqualTo(expectedValues.size());
+        for (int i = 0; i < expectedValues.size(); i++) {
+            PbValueList pbValueList = pbPrefixLookupRespForBucket.getValueListAt(i);
+            List<byte[]> bytesResultForOnePrefixKey = expectedValues.get(i);
+            assertThat(pbValueList.getValuesCount()).isEqualTo(bytesResultForOnePrefixKey.size());
+            for (int j = 0; j < bytesResultForOnePrefixKey.size(); j++) {
+                assertThat(pbValueList.getValueAt(j)).isEqualTo(bytesResultForOnePrefixKey.get(j));
+            }
+        }
     }
 }

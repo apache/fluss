@@ -106,7 +106,9 @@ public class ClusterMetadataInfo {
                     new PbTableMetadata()
                             .setTableId(tableInfo.getTableId())
                             .setSchemaId(tableInfo.getSchemaId())
-                            .setTableJson(tableInfo.getTableDescriptor().toJsonBytes());
+                            .setTableJson(tableInfo.getTableDescriptor().toJsonBytes())
+                            .setCreatedTime(tableInfo.getCreatedTime())
+                            .setModifiedTime(tableInfo.getModifiedTime());
             TablePath tablePath = tableInfo.getTablePath();
             tableMetadata
                     .setTablePath()

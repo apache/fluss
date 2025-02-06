@@ -68,7 +68,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // mock follower 2 to fetch data from leader. fetch offset is 10 (which indicate the
         // follower catch up the leader, it will be added into isr list).
         replicaManager.fetchLogRecords(
-                new FetchParams(2, (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes()),
+                new FetchParams(
+                        2, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
                 Collections.singletonMap(
                         tb, new FetchData(tb.getTableId(), 10L, Integer.MAX_VALUE)),
                 result -> {});
@@ -82,7 +83,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // mock follower 3 to fetch data from leader. fetch offset is 10 (which indicate the
         // follower catch up the leader, it will be added into isr list).
         replicaManager.fetchLogRecords(
-                new FetchParams(3, (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes()),
+                new FetchParams(
+                        3, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
                 Collections.singletonMap(
                         tb, new FetchData(tb.getTableId(), 10L, Integer.MAX_VALUE)),
                 result -> {});

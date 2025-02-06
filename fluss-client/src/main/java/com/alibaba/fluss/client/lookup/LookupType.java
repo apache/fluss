@@ -14,22 +14,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.memory;
+package com.alibaba.fluss.client.lookup;
 
 import com.alibaba.fluss.annotation.Internal;
 
-import javax.annotation.Nullable;
-
-/** Interface describing entities that can provide memory segments. */
+/** Enum to represent the type of lookup operation. */
 @Internal
-public interface MemorySegmentSource {
-
-    /**
-     * Gets the next memory segment. If no more segments are available, it returns null.
-     *
-     * @param waiting Flag indicating whether the method should wait until a segment is available.
-     * @return The next memory segment, or null, if none is available.
-     */
-    @Nullable
-    MemorySegment nextSegment(boolean waiting);
+public enum LookupType {
+    LOOKUP,
+    PREFIX_LOOKUP;
 }

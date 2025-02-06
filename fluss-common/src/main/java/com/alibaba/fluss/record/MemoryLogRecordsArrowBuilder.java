@@ -21,23 +21,19 @@ import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_ROWKIND_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
+import static com.alibaba.fluss.record.DefaultLogRecordBatch.LAST_OFFSET_DELTA_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.WRITE_CLIENT_ID_OFFSET;
 import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
@@ -57,13 +53,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private final MemorySegment firstSegment;
     private final AbstractPagedOutputView pagedOutputView;
 
-    private final AtomicBoolean serializationLock = new AtomicBoolean(false);
-    private volatile boolean serialized = false;
-
     private MultiBytesView bytesView = null;
     private long writerId;
     private int batchSequence;
-    private int sizeInBytes;
+    private int estimatedSizeInBytes;
     private int recordCount;
     private boolean isClosed;
     private boolean reCalculateSizeInBytes = false;
@@ -95,10 +88,11 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                         + ARROW_ROWKIND_OFFSET
                         + " bytes.");
         this.rowKindWriter = new RowKindVectorWriter(firstSegment, ARROW_ROWKIND_OFFSET);
-        this.sizeInBytes = ARROW_ROWKIND_OFFSET;
+        this.estimatedSizeInBytes = ARROW_ROWKIND_OFFSET;
         this.recordCount = 0;
     }
 
+    @VisibleForTesting
     public static MemoryLogRecordsArrowBuilder builder(
             long baseLogOffset,
             int schemaId,
@@ -115,75 +109,22 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 BUILDER_DEFAULT_OFFSET, schemaId, CURRENT_LOG_MAGIC_VALUE, arrowWriter, outputView);
     }
 
-    public void serialize() throws IOException {
-        // use CAS to make sure there is only one thread to serialize the arrow batch
-        // and only serialize once
-        if (serializationLock.compareAndSet(false, true)) {
-            if (!isClosed) {
-                throw new IllegalStateException(
-                        "Tried to build Arrow batch into memory before it is closed.");
-            }
-            // serialize the arrow batch to dynamically allocated memory segments
-            arrowWriter.serializeToOutputView(
-                    pagedOutputView,
-                    firstSegment,
-                    ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes(),
-                    true);
-            arrowWriter.recycle(writerEpoch);
-            serialized = true;
-        }
-    }
-
-    public boolean trySerialize() {
-        // use CAS to make sure there is only one thread to serialize the arrow batch
-        // and only serialize once
-        if (serializationLock.compareAndSet(false, true)) {
-            if (!isClosed) {
-                throw new IllegalStateException(
-                        "Tried to build Arrow batch into memory before it is closed.");
-            }
-            // serialize the arrow batch to dynamically allocated memory segments, no waiting mem
-            try {
-                arrowWriter.serializeToOutputView(
-                        pagedOutputView,
-                        firstSegment,
-                        ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes(),
-                        false);
-                arrowWriter.recycle(writerEpoch);
-                serialized = true;
-                return true;
-            } catch (IOException e) {
-                // reset all state if failed to serialize (e.g., EOFException when no more memory)
-                pagedOutputView.recycleAllocated();
-                pagedOutputView.clear();
-                // make pagedOutputView holds the ref of first segment to can recycle it later
-                pagedOutputView.seekOutput(
-                        firstSegment, ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes(), true);
-                serializationLock.set(false);
-                return false;
-            }
-        } else {
-            // this builder has already been serialized or is serializing
-            return serialized;
-        }
-    }
-
     public MultiBytesView build() throws IOException {
         if (bytesView != null) {
             return bytesView;
         }
 
-        // build() must be happen after serialize() or trySerialize()
-        if (!serialized) {
-            throw new IllegalStateException(
-                    "Tried to collect memory segments before the Arrow batch is serialized.");
-        }
-
-        writeBatchHeader();
+        // serialize the arrow batch to dynamically allocated memory segments
+        arrowWriter.serializeToOutputView(
+                pagedOutputView, ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes());
+        recordCount = arrowWriter.getRecordsCount();
         bytesView =
                 MultiBytesView.builder()
-                        .addMemorySegmentByteViewList(pagedOutputView.getSegmentBytesViewList())
+                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
                         .build();
+        arrowWriter.recycle(writerEpoch);
+
+        writeBatchHeader();
         return bytesView;
     }
 
@@ -237,26 +178,29 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             return;
         }
 
-        // update sizeInBytes and recordCount if needed
-        getSizeInBytes();
         isClosed = true;
     }
 
-    public void deallocate() {
+    public void recycleArrowWriter() {
         arrowWriter.recycle(writerEpoch);
-        pagedOutputView.recycleAll();
     }
 
-    public int getSizeInBytes() {
+    public int estimatedSizeInBytes() {
+        if (bytesView != null) {
+            // accurate total size in bytes (compressed if compression is enabled)
+            return bytesView.getBytesLength();
+        }
+
         if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
-            sizeInBytes =
-                    ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
-            recordCount = arrowWriter.getRecordsCount();
+            estimatedSizeInBytes =
+                    ARROW_ROWKIND_OFFSET
+                            + rowKindWriter.sizeInBytes()
+                            + arrowWriter.estimatedSizeInBytes();
         }
 
         reCalculateSizeInBytes = false;
-        return sizeInBytes;
+        return estimatedSizeInBytes;
     }
 
     // ----------------------- internal methods -------------------------------
@@ -267,7 +211,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         outputView.setPosition(0);
         // update header.
         outputView.writeLong(baseLogOffset);
-        outputView.writeInt(sizeInBytes - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
+        outputView.writeInt(bytesView.getBytesLength() - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
         outputView.writeByte(magic);
 
         // write empty timestamp which will be overridden on server side
@@ -277,39 +221,26 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
         outputView.writeShort((short) schemaId);
         // skip write attributes
-        outputView.setPosition(WRITE_CLIENT_ID_OFFSET);
+        outputView.setPosition(LAST_OFFSET_DELTA_OFFSET);
+        if (recordCount > 0) {
+            outputView.writeInt(recordCount - 1);
+        } else {
+            // If there is no record, we write 0 for filed lastOffsetDelta, see the comments about
+            // the field 'lastOffsetDelta' in DefaultLogRecordBatch.
+            outputView.writeInt(0);
+        }
         outputView.writeLong(writerId);
         outputView.writeInt(batchSequence);
         outputView.writeInt(recordCount);
 
         // Update crc.
+        long crc = Crc32C.compute(pagedOutputView.getWrittenSegments(), SCHEMA_ID_OFFSET);
         outputView.setPosition(CRC_OFFSET);
-        outputView.writeUnsignedInt(calculateCrc());
-    }
-
-    private long calculateCrc() {
-        // pagedOutputView contains the first segment (including the batch header)
-        List<MemorySegmentBytesView> bytesViewList = pagedOutputView.getSegmentBytesViewList();
-        ByteBuffer[] buffers = new ByteBuffer[bytesViewList.size()];
-        int[] offsets = new int[bytesViewList.size()];
-        int[] sizes = new int[bytesViewList.size()];
-        for (int i = 0; i < bytesViewList.size(); i++) {
-            MemorySegmentBytesView bytesView = bytesViewList.get(i);
-            buffers[i] = bytesView.getMemorySegment().wrap(0, bytesView.getBytesLength());
-            if (i == 0) {
-                offsets[i] = SCHEMA_ID_OFFSET;
-                sizes[i] = bytesView.getBytesLength() - SCHEMA_ID_OFFSET;
-            } else {
-                offsets[i] = bytesView.getPosition();
-                sizes[i] = bytesView.getBytesLength();
-            }
-        }
-
-        return Crc32C.compute(buffers, offsets, sizes);
+        outputView.writeUnsignedInt(crc);
     }
 
     @VisibleForTesting
-    int getMaxSizeInBytes() {
-        return arrowWriter.getMaxSizeInBytes();
+    int getWriteLimitInBytes() {
+        return arrowWriter.getWriteLimitInBytes();
     }
 }

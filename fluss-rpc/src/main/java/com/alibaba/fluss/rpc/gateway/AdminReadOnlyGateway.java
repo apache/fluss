@@ -21,6 +21,8 @@ import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
+import com.alibaba.fluss.rpc.messages.GetDatabaseRequest;
+import com.alibaba.fluss.rpc.messages.GetDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import com.alibaba.fluss.rpc.messages.GetKvSnapshotRequest;
@@ -62,6 +64,16 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.LIST_DATABASES)
     CompletableFuture<ListDatabasesResponse> listDatabases(ListDatabasesRequest request);
+
+    /**
+     * Return a {@link com.alibaba.fluss.rpc.messages.GetDatabaseResponse} by the given {@link
+     * com.alibaba.fluss.rpc.messages.GetDatabaseRequest}.
+     *
+     * @param request Name of the database
+     * @return The response of requested database.
+     */
+    @RPC(api = ApiKeys.GET_DATABASE)
+    CompletableFuture<GetDatabaseResponse> getDatabase(GetDatabaseRequest request);
 
     /**
      * Check if a database exists in this catalog.

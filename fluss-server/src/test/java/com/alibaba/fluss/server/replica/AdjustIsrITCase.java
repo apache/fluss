@@ -231,7 +231,9 @@ public class AdjustIsrITCase {
                                 .schema(DATA1_SCHEMA)
                                 .distributedBy(1, "a")
                                 .build(),
-                        1);
+                        1,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
         return RpcMessageTestUtils.createTable(
                 FLUSS_CLUSTER_EXTENSION,
                 DATA1_TABLE_PATH,

@@ -405,19 +405,25 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
             enumerator.start();
-            // register all readers
-            for (int i = 0; i < numSubtasks; i++) {
-                registerReader(context, enumerator, i);
-            }
 
-            // invoke partition discovery callable again and there should assignments.
+            // invoke partition discovery callable again and there should be pending assignments.
             runPeriodicPartitionDiscovery(context);
+
+            // register two readers
+            registerReader(context, enumerator, 0);
+            registerReader(context, enumerator, 1);
+
+            // invoke partition discovery callable again, shouldn't produce RemovePartitionEvent.
+            runPeriodicPartitionDiscovery(context);
+            assertThat(context.getSentSourceEvent()).isEmpty();
+
+            // now, register the third reader
+            registerReader(context, enumerator, 2);
 
             // check the assignments
             Map<Integer, List<SourceSplitBase>> expectedAssignment =
                     expectAssignments(enumerator, tableId, partitionNameByIds);
-            Map<Integer, List<SourceSplitBase>> actualAssignments =
-                    getLastReadersAssignments(context);
+            Map<Integer, List<SourceSplitBase>> actualAssignments = getReadersAssignments(context);
             checkAssignmentIgnoreOrder(actualAssignments, expectedAssignment);
 
             // now, create a new partition and runPeriodicPartitionDiscovery again,

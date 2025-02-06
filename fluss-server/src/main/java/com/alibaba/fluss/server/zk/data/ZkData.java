@@ -52,6 +52,15 @@ public final class ZkData {
         public static String path(String databaseName) {
             return DatabasesZNode.path() + "/" + databaseName;
         }
+
+        public static byte[] encode(DatabaseRegistration databaseRegistration) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    databaseRegistration, DatabaseRegistrationJsonSerde.INSTANCE);
+        }
+
+        public static DatabaseRegistration decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, DatabaseRegistrationJsonSerde.INSTANCE);
+        }
     }
 
     /**

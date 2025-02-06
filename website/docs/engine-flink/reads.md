@@ -4,7 +4,7 @@ sidebar_position: 4
 ---
 
 # Flink Reads
-Fluss support streaming and batch read with [Apache Flink](https://flink.apache.org/)'s SQL & Table API. Execute the following SQL command to switch execution mode from streaming to batch, and vice versa:
+Fluss supports streaming and batch read with [Apache Flink](https://flink.apache.org/)'s SQL & Table API. Execute the following SQL command to switch execution mode from streaming to batch, and vice versa:
 ```sql 
 -- Execute the flink job in streaming mode for current session context
 SET 'execution.runtime-mode' = 'streaming';
@@ -32,7 +32,7 @@ SELECT * FROM my_table /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 ## Batch Read
 
 ### Limit Read
-The Fluss sources supports limiting reads for both primary-key tables and log tables, making it convenient to preview the latest `N` records in a table.
+The Fluss source supports limiting reads for both primary-key tables and log tables, making it convenient to preview the latest `N` records in a table.
 
 #### Example
 1. Create a table and prepare data
@@ -100,7 +100,7 @@ SELECT * FROM pk_table WHERE c_custkey = 1;
 ```
 
 ### Aggregations
-The Fluss source support pushdown count aggregation for the log table in batch mode. It is useful to preview the total number of the log table;
+The Fluss source supports pushdown count aggregation for the log table in batch mode. It is useful to preview the total number of the log table;
 ```sql
 -- Execute the flink job in batch mode for current session context
 SET 'execution.runtime-mode' = 'batch';

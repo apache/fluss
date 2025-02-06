@@ -35,8 +35,12 @@ class AppendSinkFunction extends FlinkSinkFunction {
 
     private transient AppendWriter appendWriter;
 
-    AppendSinkFunction(TablePath tablePath, Configuration flussConfig, RowType tableRowType) {
-        super(tablePath, flussConfig, tableRowType);
+    AppendSinkFunction(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            boolean ignoreDelete) {
+        super(tablePath, flussConfig, tableRowType, ignoreDelete);
     }
 
     @Override

@@ -16,8 +16,7 @@
 
 name: Bug report 🐞
 description: Problems, bugs and issues with Fluss
-title: "[Bug] "
-labels: ["bug"]
+type: "bug"
 body:
   - type: markdown
     attributes:
@@ -32,27 +31,29 @@ body:
         - label: >
             I searched in the [issues](https://github.com/alibaba/fluss/issues) and found nothing similar.
           required: true
-  - type: textarea
+  - type: dropdown
     attributes:
       label: Fluss version
+      description: What Fluss version are you using?
+      multiple: false
+      options:
+        - "0.5.0 (latest release)"
+        - "main (development)"
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Please describe the bug 🐞
       description: >
-        Please provide the version of Fluss you are using. If you are using the `main` branch, please provide the commit id.
+        Please describe the problem, what to expect, and how to reproduce.
+        Feel free to include stacktraces and the Fluss server/client configuration.
+        You can include files by dragging and dropping them here.
     validations:
       required: true
   - type: textarea
     attributes:
-      label: Minimal reproduce step
-      description: Please try to give reproducing steps to facilitate quick location of the problem.
-    validations:
-      required: true
-  - type: textarea
-    attributes:
-      label: What doesn't meet your expectations?
-    validations:
-      required: true
-  - type: textarea
-    attributes:
-      label: Anything else?
+      label: Solution
+      description: Describe the proposed solution about how to fix it if any.
   - type: checkboxes
     attributes:
       label: Are you willing to submit a PR?

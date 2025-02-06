@@ -217,7 +217,9 @@ public class StickyBucketAssignerTest {
                                             .schema(DATA1_SCHEMA)
                                             .distributedBy(3)
                                             .build(),
-                                    1));
+                                    1,
+                                    System.currentTimeMillis(),
+                                    System.currentTimeMillis()));
                 });
 
         return new Cluster(

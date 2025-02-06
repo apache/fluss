@@ -45,10 +45,12 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -185,10 +187,32 @@ public class RpcMessageTestUtils {
 
     public static FetchLogRequest newFetchLogRequest(
             int followerId, long tableId, int bucketId, long fetchOffset, int[] selectedFields) {
+        return newFetchLogRequest(
+                followerId,
+                tableId,
+                bucketId,
+                fetchOffset,
+                selectedFields,
+                -1,
+                Integer.MAX_VALUE,
+                -1);
+    }
+
+    public static FetchLogRequest newFetchLogRequest(
+            int followerId,
+            long tableId,
+            int bucketId,
+            long fetchOffset,
+            int[] selectedFields,
+            int minFetchBytes,
+            int maxFetchBytes,
+            int maxWaitMs) {
         FetchLogRequest fetchLogRequest =
-                new FetchLogRequest()
-                        .setFollowerServerId(followerId)
-                        .setMaxBytes(Integer.MAX_VALUE);
+                new FetchLogRequest().setFollowerServerId(followerId).setMaxBytes(maxFetchBytes);
+        if (minFetchBytes > 0) {
+            fetchLogRequest.setMinBytes(minFetchBytes).setMaxWaitMs(maxWaitMs);
+        }
+
         PbFetchLogReqForTable fetchLogReqForTable = new PbFetchLogReqForTable().setTableId(tableId);
         if (selectedFields != null) {
             fetchLogReqForTable
@@ -213,6 +237,17 @@ public class RpcMessageTestUtils {
         PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
         pbLookupReqForBucket.setBucketId(bucketId).addKey(key);
         return lookupRequest;
+    }
+
+    public static PrefixLookupRequest newPrefixLookupRequest(
+            long tableId, int bucketId, List<byte[]> prefixKeys) {
+        PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);
+        PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket = prefixLookupRequest.addBucketsReq();
+        pbPrefixLookupReqForBucket.setBucketId(bucketId);
+        for (byte[] prefixKey : prefixKeys) {
+            pbPrefixLookupReqForBucket.addKey(prefixKey);
+        }
+        return prefixLookupRequest;
     }
 
     public static LimitScanRequest newLimitScanRequest(long tableId, int bucketId, int limit) {

@@ -68,49 +68,7 @@ class ClusterTest {
 
     @Test
     void testReturnModifiableCollections() {
-        Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
-        tablePathToBucketLocations.put(
-                DATA1_PHYSICAL_TABLE_PATH,
-                Arrays.asList(
-                        new BucketLocation(
-                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, NODES[0], NODES),
-                        new BucketLocation(
-                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, null, NODES),
-                        new BucketLocation(
-                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, NODES[2], NODES)));
-        tablePathToBucketLocations.put(
-                PhysicalTablePath.of(DATA2_TABLE_PATH),
-                Arrays.asList(
-                        new BucketLocation(
-                                PhysicalTablePath.of(DATA2_TABLE_PATH),
-                                DATA2_TABLE_ID,
-                                0,
-                                null,
-                                NODES),
-                        new BucketLocation(
-                                PhysicalTablePath.of(DATA2_TABLE_PATH),
-                                DATA2_TABLE_ID,
-                                1,
-                                NODES[0],
-                                NODES)));
-
-        Map<TablePath, Long> tablePathToTableId = new HashMap<>();
-        tablePathToTableId.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
-        tablePathToTableId.put(DATA2_TABLE_PATH, DATA2_TABLE_ID);
-
-        Map<TablePath, TableInfo> tablePathToTableInfo = new HashMap<>();
-        tablePathToTableInfo.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
-        tablePathToTableInfo.put(DATA2_TABLE_PATH, DATA2_TABLE_INFO);
-
-        Cluster cluster =
-                new Cluster(
-                        aliveTabletServersById,
-                        COORDINATOR_SERVER,
-                        tablePathToBucketLocations,
-                        tablePathToTableId,
-                        Collections.emptyMap(),
-                        tablePathToTableInfo);
-
+        Cluster cluster = createCluster();
         assertThatThrownBy(() -> cluster.getAliveTabletServers().put(1, NODES[3]))
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(
@@ -129,6 +87,50 @@ class ClusterTest {
 
     @Test
     void testGetTable() {
+        Cluster cluster = createCluster();
+        assertThat(cluster.getTable(DATA1_TABLE_PATH).get()).isEqualTo(DATA1_TABLE_INFO);
+        assertThat(cluster.getTable(DATA2_TABLE_PATH).get()).isEqualTo(DATA2_TABLE_INFO);
+        assertThat(cluster.getSchema(DATA1_TABLE_PATH).get())
+                .isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
+        assertThat(cluster.getSchema(DATA2_TABLE_PATH).get())
+                .isEqualTo(new SchemaInfo(DATA2_SCHEMA, 1));
+    }
+
+    @Test
+    void testInvalidMetaAndUpdate() {
+        Cluster cluster = createCluster();
+        for (int i = 0; i < 10000; i++) {
+            // mock invalid meta
+            cluster =
+                    cluster.invalidPhysicalTableBucketMeta(
+                            Collections.singleton(DATA1_PHYSICAL_TABLE_PATH));
+            // mock update meta
+            cluster =
+                    new Cluster(
+                            aliveTabletServersById,
+                            COORDINATOR_SERVER,
+                            new HashMap<>(cluster.getBucketLocationsByPath()),
+                            new HashMap<>(cluster.getTableIdByPath()),
+                            Collections.emptyMap(),
+                            new HashMap<>(cluster.getTableInfoByPath()));
+        }
+
+        // verify available buckets
+        List<BucketLocation> availableBuckets =
+                cluster.getAvailableBucketsForPhysicalTablePath(
+                        PhysicalTablePath.of(DATA2_TABLE_PATH));
+        assertThat(availableBuckets)
+                .isEqualTo(
+                        Collections.singletonList(
+                                new BucketLocation(
+                                        PhysicalTablePath.of(DATA2_TABLE_PATH),
+                                        DATA2_TABLE_ID,
+                                        1,
+                                        NODES[0],
+                                        NODES)));
+    }
+
+    private Cluster createCluster() {
         Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
         tablePathToBucketLocations.put(
                 DATA1_PHYSICAL_TABLE_PATH,
@@ -163,20 +165,12 @@ class ClusterTest {
         tablePathToTableInfo.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
         tablePathToTableInfo.put(DATA2_TABLE_PATH, DATA2_TABLE_INFO);
 
-        Cluster cluster =
-                new Cluster(
-                        aliveTabletServersById,
-                        COORDINATOR_SERVER,
-                        tablePathToBucketLocations,
-                        tablePathToTableId,
-                        Collections.emptyMap(),
-                        tablePathToTableInfo);
-
-        assertThat(cluster.getTable(DATA1_TABLE_PATH).get()).isEqualTo(DATA1_TABLE_INFO);
-        assertThat(cluster.getTable(DATA2_TABLE_PATH).get()).isEqualTo(DATA2_TABLE_INFO);
-        assertThat(cluster.getSchema(DATA1_TABLE_PATH).get())
-                .isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
-        assertThat(cluster.getSchema(DATA2_TABLE_PATH).get())
-                .isEqualTo(new SchemaInfo(DATA2_SCHEMA, 1));
+        return new Cluster(
+                aliveTabletServersById,
+                COORDINATOR_SERVER,
+                tablePathToBucketLocations,
+                tablePathToTableId,
+                Collections.emptyMap(),
+                tablePathToTableInfo);
     }
 }

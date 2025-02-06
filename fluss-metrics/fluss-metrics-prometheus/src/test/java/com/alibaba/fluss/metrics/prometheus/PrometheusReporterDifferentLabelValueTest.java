@@ -28,9 +28,12 @@ import com.alibaba.fluss.utils.NetUtils;
 import com.mashape.unirest.http.exceptions.UnirestException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
+import java.util.stream.Stream;
 
 import static com.alibaba.fluss.metrics.prometheus.PrometheusReporterTest.pollMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,17 +45,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PrometheusReporterDifferentLabelValueTest {
 
     private static final String[] LABEL_NAMES = {"label1", "label2"};
-    private static final String[] LABEL_VALUES_1 = new String[] {"value1_1", "value1_2"};
-    private static final String[] LABEL_VALUES_2 = new String[] {"value2_1", "value2_2"};
     private static final String LOGICAL_SCOPE = "logical_scope";
     private static final String METRIC_NAME = "myMetric";
-
-    private final MetricGroup metricGroup1 =
-            TestUtils.createTestMetricGroup(
-                    LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, LABEL_VALUES_1));
-    private final MetricGroup metricGroup2 =
-            TestUtils.createTestMetricGroup(
-                    LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, LABEL_VALUES_2));
 
     private PrometheusReporter reporter;
 
@@ -68,8 +62,39 @@ class PrometheusReporterDifferentLabelValueTest {
         }
     }
 
-    @Test
-    void countersCanBeAddedSeveralTimesIfTheyDifferInLabels() {
+    private static Stream<Arguments> provideParameters() {
+        final String[] labelValues1 = new String[] {"value1_1", "value1_2"};
+        final String[] labelValues2 = new String[] {"value2_1", "value2_2"};
+        final String[] labelValues3 = new String[] {"value3_1", ""};
+        final String[] labelValues4 = new String[] {"values4_1", ""};
+
+        final MetricGroup metricGroup1 =
+                TestUtils.createTestMetricGroup(
+                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues1));
+        final MetricGroup metricGroup2 =
+                TestUtils.createTestMetricGroup(
+                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues2));
+        final MetricGroup metricGroup3 =
+                TestUtils.createTestMetricGroup(
+                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues3));
+        final MetricGroup metricGroup4 =
+                TestUtils.createTestMetricGroup(
+                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues4));
+
+        return Stream.of(
+                Arguments.of(metricGroup1, labelValues1, metricGroup2, labelValues2),
+                Arguments.of(metricGroup1, labelValues1, metricGroup3, labelValues3),
+                Arguments.of(metricGroup3, labelValues3, metricGroup2, labelValues2),
+                Arguments.of(metricGroup3, labelValues3, metricGroup4, labelValues4));
+    }
+
+    @ParameterizedTest
+    @MethodSource("provideParameters")
+    void countersCanBeAddedSeveralTimesIfTheyDifferInLabelValues(
+            MetricGroup metricGroup1,
+            String[] expectedLabelValues1,
+            MetricGroup metricGroup2,
+            String[] expectedLabelValues2) {
         Counter counter1 = new SimpleCounter();
         counter1.inc(1);
         Counter counter2 = new SimpleCounter();
@@ -80,16 +105,21 @@ class PrometheusReporterDifferentLabelValueTest {
 
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_1))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(1.);
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_2))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(2.);
     }
 
-    @Test
-    void gaugesCanBeAddedSeveralTimesIfTheyDifferInLabels() {
+    @ParameterizedTest
+    @MethodSource("provideParameters")
+    void gaugesCanBeAddedSeveralTimesIfTheyDifferInLabelValues(
+            MetricGroup metricGroup1,
+            String[] expectedLabelValues1,
+            MetricGroup metricGroup2,
+            String[] expectedLabelValues2) {
         Gauge<Integer> gauge1 = () -> 3;
         Gauge<Integer> gauge2 = () -> 4;
 
@@ -98,16 +128,21 @@ class PrometheusReporterDifferentLabelValueTest {
 
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_1))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(3.);
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_2))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(4.);
     }
 
-    @Test
-    void metersCanBeAddedSeveralTimesIfTheyDifferInLabels() {
+    @ParameterizedTest
+    @MethodSource("provideParameters")
+    void metersCanBeAddedSeveralTimesIfTheyDifferInLabelValues(
+            MetricGroup metricGroup1,
+            String[] expectedLabelValues1,
+            MetricGroup metricGroup2,
+            String[] expectedLabelValues2) {
         Meter meter1 = new TestMeter(1, 1.0);
         Meter meter2 = new TestMeter(2, 2.0);
 
@@ -116,16 +151,22 @@ class PrometheusReporterDifferentLabelValueTest {
 
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_1))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(meter1.getRate());
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_2))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(meter2.getRate());
     }
 
-    @Test
-    void histogramsCanBeAddedSeveralTimesIfTheyDifferInLabels() throws UnirestException {
+    @ParameterizedTest
+    @MethodSource("provideParameters")
+    void histogramsCanBeAddedSeveralTimesIfTheyDifferInLabelValues(
+            MetricGroup metricGroup1,
+            String[] expectedLabelValues1,
+            MetricGroup metricGroup2,
+            String[] expectedLabelValues2)
+            throws UnirestException {
         TestHistogram histogram1 = new TestHistogram();
         histogram1.setCount(1);
         TestHistogram histogram2 = new TestHistogram();
@@ -135,8 +176,10 @@ class PrometheusReporterDifferentLabelValueTest {
         reporter.notifyOfAddedMetric(histogram2, METRIC_NAME, metricGroup2);
 
         final String exportedMetrics = pollMetrics(reporter.getPort()).getBody();
-        assertThat(exportedMetrics).contains("label2=\"value1_2\",} 1.0");
-        assertThat(exportedMetrics).contains("label2=\"value2_2\",} 2.0");
+        assertThat(exportedMetrics)
+                .contains(formatAsPrometheusLabels(LABEL_NAMES, expectedLabelValues1) + " 1.0");
+        assertThat(exportedMetrics)
+                .contains(formatAsPrometheusLabels(LABEL_NAMES, expectedLabelValues2) + " 2.0");
 
         final String[] labelNamesWithQuantile = addToArray(LABEL_NAMES, "quantile");
         for (Double quantile : PrometheusReporter.HistogramSummaryProxy.QUANTILES) {
@@ -144,19 +187,24 @@ class PrometheusReporterDifferentLabelValueTest {
                             reporter.registry.getSampleValue(
                                     getLogicalScope(METRIC_NAME),
                                     labelNamesWithQuantile,
-                                    addToArray(LABEL_VALUES_1, "" + quantile)))
+                                    addToArray(expectedLabelValues1, "" + quantile)))
                     .isEqualTo(quantile);
             assertThat(
                             reporter.registry.getSampleValue(
                                     getLogicalScope(METRIC_NAME),
                                     labelNamesWithQuantile,
-                                    addToArray(LABEL_VALUES_2, "" + quantile)))
+                                    addToArray(expectedLabelValues2, "" + quantile)))
                     .isEqualTo(quantile);
         }
     }
 
-    @Test
-    void removingSingleInstanceOfMetricDoesNotBreakOtherInstances() {
+    @ParameterizedTest
+    @MethodSource("provideParameters")
+    void removingSingleInstanceOfMetricDoesNotBreakOtherInstances(
+            MetricGroup metricGroup1,
+            String[] expectedLabelValues1,
+            MetricGroup metricGroup2,
+            String[] expectedLabelValues2) {
         Counter counter1 = new SimpleCounter();
         counter1.inc(1);
         Counter counter2 = new SimpleCounter();
@@ -167,23 +215,23 @@ class PrometheusReporterDifferentLabelValueTest {
 
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_1))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(1.);
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_2))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(2.);
 
         reporter.notifyOfRemovedMetric(counter2, METRIC_NAME, metricGroup2);
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_1))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(1.);
 
         reporter.notifyOfRemovedMetric(counter1, METRIC_NAME, metricGroup1);
         assertThat(
                         reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, LABEL_VALUES_1))
+                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isNull();
     }
 
@@ -198,5 +246,26 @@ class PrometheusReporterDifferentLabelValueTest {
         final String[] labelNames = Arrays.copyOf(array, LABEL_NAMES.length + 1);
         labelNames[LABEL_NAMES.length] = element;
         return labelNames;
+    }
+
+    private static String formatAsPrometheusLabels(String[] labelNames, String[] labelValues) {
+        if (labelNames == null
+                || labelValues == null
+                || labelNames.length == 0
+                || labelValues.length == 0
+                || labelNames.length != labelValues.length) {
+            throw new IllegalStateException("Erroneous test setup!");
+        }
+
+        final StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < labelNames.length; i++) {
+            sb.append(labelNames[i]);
+            sb.append("=\"");
+            sb.append(labelValues[i]);
+            sb.append("\",");
+        }
+        sb.append("}");
+
+        return sb.toString();
     }
 }

@@ -591,26 +591,28 @@ public class FlinkSourceEnumerator
                     }
                 };
 
+        Set<PartitionInfo> assignedOrPendingPartitions = new HashSet<>();
         assignedPartitions.forEach(
                 (partitionId, partitionName) ->
-                        dedupOrMarkAsRemoved.accept(new PartitionInfo(partitionId, partitionName)));
+                        assignedOrPendingPartitions.add(
+                                new PartitionInfo(partitionId, partitionName)));
+        pendingSplitAssignment.values().stream()
+                .flatMap(Collection::stream)
+                .forEach(
+                        split -> {
+                            long partitionId =
+                                    checkNotNull(
+                                            split.getTableBucket().getPartitionId(),
+                                            "partition id shouldn't be null for the splits of partitioned table.");
+                            String partitionName =
+                                    checkNotNull(
+                                            split.getPartitionName(),
+                                            "partition name shouldn't be null for the splits of partitioned table.");
+                            assignedOrPendingPartitions.add(
+                                    new PartitionInfo(partitionId, partitionName));
+                        });
 
-        pendingSplitAssignment.forEach(
-                (reader, splits) ->
-                        splits.forEach(
-                                split -> {
-                                    long partitionId =
-                                            checkNotNull(
-                                                    split.getTableBucket().getPartitionId(),
-                                                    "partition id shouldn't be null for the splits of partitioned table.");
-                                    String partitionName =
-                                            checkNotNull(
-                                                    split.getPartitionName(),
-                                                    "partition name shouldn't be null for the splits of partitioned table.");
-                                    PartitionInfo partitionInfo =
-                                            new PartitionInfo(partitionId, partitionName);
-                                    dedupOrMarkAsRemoved.accept(partitionInfo);
-                                }));
+        assignedOrPendingPartitions.forEach(dedupOrMarkAsRemoved);
 
         if (!removedPartitionIds.isEmpty()) {
             LOG.info("Discovered removed partitions: {}", removedPartitionIds);

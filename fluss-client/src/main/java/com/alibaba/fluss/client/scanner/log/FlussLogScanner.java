@@ -22,7 +22,6 @@ import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.client.scanner.ScanRecord;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -46,7 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The default impl of {@link FlussLogScanner}.
+ * The default impl of {@link LogScanner}.
  *
  * <p>The {@link FlussLogScanner} is NOT thread-safe. It is the responsibility of the user to ensure
  * that multithreaded access is properly synchronized. Un-synchronized access will result in {@link
@@ -113,13 +112,6 @@ public class FlussLogScanner implements LogScanner {
     private Projection sanityProjection(@Nullable int[] projectedFields, TableInfo tableInfo) {
         RowType tableRowType = tableInfo.getTableDescriptor().getSchema().toRowType();
         if (projectedFields != null) {
-            LogFormat logFormat = tableInfo.getTableDescriptor().getLogFormat();
-            if (logFormat != LogFormat.ARROW) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Only ARROW log format supports column projection, but the log format of table '%s' is %s",
-                                tableInfo.getTablePath(), logFormat));
-            }
             for (int projectedField : projectedFields) {
                 if (projectedField < 0 || projectedField >= tableRowType.getFieldCount()) {
                     throw new IllegalArgumentException(

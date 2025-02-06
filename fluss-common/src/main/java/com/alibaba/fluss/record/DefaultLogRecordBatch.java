@@ -18,6 +18,7 @@ package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.CorruptMessageException;
+import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.row.arrow.ArrowReader;
@@ -50,6 +51,7 @@ import java.util.NoSuchElementException;
  *   <li>CRC => Uint32
  *   <li>SchemaId => Int16
  *   <li>Attributes => Int8
+ *   <li>LastOffsetDelta => Int32
  *   <li>WriterID => Int64
  *   <li>SequenceID => Int32
  *   <li>RecordCount => Int32
@@ -61,6 +63,15 @@ import java.util.NoSuchElementException;
  * magic byte before deciding how to interpret the bytes between the batch length and the magic
  * byte. The CRC-32C (Castagnoli) polynomial is used for the computation. CommitTimestamp is also
  * located before the CRC, because it is determined in server side.
+ *
+ * <p>The field 'lastOffsetDelta is used to calculate the lastOffset of the current batch as:
+ * [lastOffset = baseOffset + LastOffsetDelta] instead of [lastOffset = baseOffset + recordCount -
+ * 1]. The reason for introducing this field is that there might be cases where the offset delta in
+ * batch does not match the recordCount. For example, when generating CDC logs for a kv table and
+ * sending a batch that only contains the deletion of non-existent kvs, no CDC logs would be
+ * generated. However, we need to increment the batchSequence for the corresponding writerId to make
+ * sure no {@link OutOfOrderSequenceException} will be thrown. In such a case, we would generate a
+ * logRecordBatch with a LastOffsetDelta of 0 but a recordCount of 0.
  *
  * <p>The current attributes are given below:
  *
@@ -82,6 +93,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     static final int CRC_LENGTH = 4;
     static final int SCHEMA_ID_LENGTH = 2;
     static final int ATTRIBUTE_LENGTH = 1;
+    static final int LAST_OFFSET_DELTA_LENGTH = 4;
     static final int WRITE_CLIENT_ID_LENGTH = 8;
     static final int BATCH_SEQUENCE_LENGTH = 4;
     static final int RECORDS_COUNT_LENGTH = 4;
@@ -93,7 +105,8 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     public static final int CRC_OFFSET = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
     protected static final int SCHEMA_ID_OFFSET = CRC_OFFSET + CRC_LENGTH;
     static final int ATTRIBUTES_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-    static final int WRITE_CLIENT_ID_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+    static final int LAST_OFFSET_DELTA_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+    static final int WRITE_CLIENT_ID_OFFSET = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
     static final int BATCH_SEQUENCE_OFFSET = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
     public static final int RECORDS_COUNT_OFFSET = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
     static final int RECORDS_OFFSET = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
@@ -201,7 +214,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private int lastOffsetDelta() {
-        return getRecordCount() - 1;
+        return segment.getInt(LAST_OFFSET_DELTA_OFFSET + position);
     }
 
     @Override

@@ -25,6 +25,7 @@ import com.alibaba.fluss.connector.flink.lakehouse.LakeCatalog;
 import com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -69,6 +70,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.connector.flink.utils.FlinkConversions.toFlussDatabase;
 import static org.apache.flink.util.Preconditions.checkArgument;
 
 /** A Flink Catalog for fluss. */
@@ -76,13 +78,13 @@ public class FlinkCatalog implements Catalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
 
-    private final ClassLoader classLoader;
+    protected final ClassLoader classLoader;
 
-    private final String catalogName;
-    private final @Nullable String defaultDatabase;
-    private final String bootstrapServers;
-    private Connection connection;
-    private Admin admin;
+    protected final String catalogName;
+    protected final @Nullable String defaultDatabase;
+    protected final String bootstrapServers;
+    protected Connection connection;
+    protected Admin admin;
 
     private volatile @Nullable LakeCatalog lakeCatalog;
 
@@ -143,7 +145,17 @@ public class FlinkCatalog implements Catalog {
         if (!databaseExists(databaseName)) {
             throw new DatabaseNotExistException(getName(), databaseName);
         }
-        return new CatalogDatabaseImpl(Collections.emptyMap(), null);
+        try {
+            DatabaseDescriptor databaseDescriptor =
+                    admin.getDatabase(databaseName).get().getDatabaseDescriptor();
+            return new CatalogDatabaseImpl(
+                    databaseDescriptor.getCustomProperties(),
+                    databaseDescriptor.getComment().orElse(null));
+        } catch (Exception e) {
+            throw new CatalogException(
+                    String.format("Failed to get database %s in %s", databaseName, getName()),
+                    ExceptionUtils.stripExecutionException(e));
+        }
     }
 
     @Override
@@ -163,7 +175,7 @@ public class FlinkCatalog implements Catalog {
             String databaseName, CatalogDatabase database, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException, CatalogException {
         try {
-            admin.createDatabase(databaseName, ignoreIfExists).get();
+            admin.createDatabase(databaseName, toFlussDatabase(database), ignoreIfExists).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isDatabaseAlreadyExist(t)) {
@@ -272,7 +284,7 @@ public class FlinkCatalog implements Catalog {
         }
     }
 
-    private CatalogBaseTable getLakeTable(String databaseName, String tableName)
+    protected CatalogBaseTable getLakeTable(String databaseName, String tableName)
             throws TableNotExistException, CatalogException {
         mayInitLakeCatalogCatalog();
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
@@ -514,7 +526,7 @@ public class FlinkCatalog implements Catalog {
         throw new UnsupportedOperationException();
     }
 
-    private TablePath toTablePath(ObjectPath objectPath) {
+    protected TablePath toTablePath(ObjectPath objectPath) {
         return TablePath.of(objectPath.getDatabaseName(), objectPath.getObjectName());
     }
 

@@ -17,8 +17,12 @@
 package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
+import com.alibaba.fluss.client.lookup.FlussLookuper;
+import com.alibaba.fluss.client.lookup.FlussPrefixLookuper;
 import com.alibaba.fluss.client.lookup.LookupClient;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.lookup.PrefixLookup;
+import com.alibaba.fluss.client.lookup.PrefixLookuper;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.client.scanner.ScanRecord;
@@ -27,7 +31,6 @@ import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
 import com.alibaba.fluss.client.scanner.snapshot.SnapshotScan;
 import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
-import com.alibaba.fluss.client.table.getter.PartitionGetter;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
@@ -35,14 +38,10 @@ import com.alibaba.fluss.client.token.DefaultSecurityTokenManager;
 import com.alibaba.fluss.client.token.DefaultSecurityTokenProvider;
 import com.alibaba.fluss.client.token.SecurityTokenManager;
 import com.alibaba.fluss.client.token.SecurityTokenProvider;
-import com.alibaba.fluss.client.write.HashBucketAssigner;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -59,7 +58,6 @@ import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.row.decode.RowDecoder;
-import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.row.encode.ValueDecoder;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -69,11 +67,9 @@ import com.alibaba.fluss.rpc.messages.LimitScanRequest;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -96,21 +92,14 @@ import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTablet
 public class FlussTable implements Table {
 
     private final Configuration conf;
-    private final long tableId;
     private final TablePath tablePath;
     private final RpcClient rpcClient;
     private final MetadataUpdater metadataUpdater;
     private final TableInfo tableInfo;
     private final boolean hasPrimaryKey;
     private final int numBuckets;
-    private final RowType keyRowType;
-    // encode the key bytes for kv lookups
-    private final KeyEncoder keyEncoder;
     // decode the lookup bytes to result row
     private final ValueDecoder kvValueDecoder;
-    // a getter to extract partition from key row, null when it's not a partitioned primary key
-    // table
-    private final @Nullable PartitionGetter keyRowPartitionGetter;
 
     private final Supplier<WriterClient> writerSupplier;
     private final Supplier<LookupClient> lookupClientSupplier;
@@ -120,8 +109,6 @@ public class FlussTable implements Table {
 
     private volatile RemoteFileDownloader remoteFileDownloader;
     private volatile SecurityTokenManager securityTokenManager;
-
-    private @Nullable LakeTableBucketAssigner lakeTableBucketAssigner;
 
     public FlussTable(
             Configuration conf,
@@ -142,71 +129,21 @@ public class FlussTable implements Table {
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
 
         this.tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
-        this.tableId = tableInfo.getTableId();
         TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        Schema schema = tableDescriptor.getSchema();
+        RowType rowType = tableDescriptor.getSchema().toRowType();
         this.hasPrimaryKey = tableDescriptor.hasPrimaryKey();
         this.numBuckets = metadataUpdater.getBucketCount(tablePath);
-        this.keyRowType = getKeyRowType(schema);
-        this.keyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        keyRowType, keyRowType.getFieldNames(), tableDescriptor.getPartitionKeys());
-        this.keyRowPartitionGetter =
-                tableDescriptor.isPartitioned() && tableDescriptor.hasPrimaryKey()
-                        ? new PartitionGetter(keyRowType, tableDescriptor.getPartitionKeys())
-                        : null;
         this.closed = new AtomicBoolean(false);
         this.kvValueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
                                 tableDescriptor.getKvFormat(),
-                                schema.toRowType().getChildren().toArray(new DataType[0])));
+                                rowType.getChildren().toArray(new DataType[0])));
     }
 
     @Override
     public TableDescriptor getDescriptor() {
         return tableInfo.getTableDescriptor();
-    }
-
-    @Override
-    public CompletableFuture<LookupResult> lookup(InternalRow key) {
-        if (!hasPrimaryKey) {
-            throw new FlussRuntimeException(
-                    String.format("none-pk table %s not support lookup()", tablePath));
-        }
-        // encoding the key row using a compacted way consisted with how the key is encoded when put
-        // a row
-        byte[] keyBytes = keyEncoder.encode(key);
-        Long partitionId = keyRowPartitionGetter == null ? null : getPartitionId(key);
-        int bucketId = getBucketId(keyBytes, key);
-        TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-        return lookupClientSupplier
-                .get()
-                .lookup(tableBucket, keyBytes)
-                .thenApply(
-                        valueBytes -> {
-                            InternalRow row =
-                                    valueBytes == null
-                                            ? null
-                                            : kvValueDecoder.decodeValue(valueBytes).row;
-                            return new LookupResult(row);
-                        });
-    }
-
-    private int getBucketId(byte[] keyBytes, InternalRow key) {
-        if (!tableInfo.getTableDescriptor().isDataLakeEnabled()) {
-            return HashBucketAssigner.bucketForRowKey(keyBytes, numBuckets);
-        } else {
-            if (lakeTableBucketAssigner == null) {
-                lakeTableBucketAssigner =
-                        new LakeTableBucketAssigner(
-                                keyRowType,
-                                tableInfo.getTableDescriptor().getBucketKey(),
-                                numBuckets);
-            }
-            return lakeTableBucketAssigner.assignBucket(
-                    keyBytes, key, metadataUpdater.getCluster());
-        }
     }
 
     @Override
@@ -279,7 +216,7 @@ public class FlussTable implements Table {
             }
         } else {
             LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(tableInfo, null);
+                    LogRecordReadContext.createReadContext(tableInfo, false, null);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the
@@ -321,29 +258,6 @@ public class FlussTable implements Table {
         } else {
             scanRecordList.add(new ScanRecord(newRow));
         }
-    }
-
-    /**
-     * Return the id of the partition the row belongs to. It'll try to update the metadata if the
-     * partition doesn't exist. If the partition doesn't exist yet after update metadata, it'll
-     * throw {@link PartitionNotExistException}.
-     */
-    private Long getPartitionId(InternalRow row) {
-        Preconditions.checkNotNull(keyRowPartitionGetter, "partitionGetter shouldn't be null.");
-        String partitionName = keyRowPartitionGetter.getPartition(row);
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
-        metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
-        return metadataUpdater.getCluster().getPartitionIdOrElseThrow(physicalTablePath);
-    }
-
-    private RowType getKeyRowType(Schema schema) {
-        int[] pkIndex = schema.getPrimaryKeyIndexes();
-        List<DataField> keyRowFields = new ArrayList<>(pkIndex.length);
-        List<DataField> rowFields = schema.toRowType().getFields();
-        for (int index : pkIndex) {
-            keyRowFields.add(rowFields.get(index));
-        }
-        return new RowType(keyRowFields);
     }
 
     @Override
@@ -400,6 +314,23 @@ public class FlussTable implements Table {
                 tableInfo.getTableDescriptor().getKvFormat(),
                 remoteFileDownloader,
                 snapshotScan);
+    }
+
+    @Override
+    public Lookuper getLookuper() {
+        return new FlussLookuper(
+                tableInfo, numBuckets, metadataUpdater, lookupClientSupplier.get(), kvValueDecoder);
+    }
+
+    @Override
+    public PrefixLookuper getPrefixLookuper(PrefixLookup prefixLookup) {
+        return new FlussPrefixLookuper(
+                tableInfo,
+                numBuckets,
+                metadataUpdater,
+                lookupClientSupplier.get(),
+                prefixLookup.getLookupColumnNames(),
+                kvValueDecoder);
     }
 
     @Override

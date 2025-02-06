@@ -294,16 +294,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
     }
 
     private List<CompressionType> toRocksDbCompressionTypes(
-            List<ConfigOptions.CompressionType> compressionTypes) {
+            List<ConfigOptions.KvCompressionType> compressionTypes) {
         List<CompressionType> rocksdbCompressionTypes = new ArrayList<>();
-        for (ConfigOptions.CompressionType compressionType : compressionTypes) {
+        for (ConfigOptions.KvCompressionType compressionType : compressionTypes) {
             rocksdbCompressionTypes.add(toRocksDbCompressionType(compressionType));
         }
         return rocksdbCompressionTypes;
     }
 
     private CompressionType toRocksDbCompressionType(
-            ConfigOptions.CompressionType compressionType) {
+            ConfigOptions.KvCompressionType compressionType) {
         switch (compressionType) {
             case NO:
                 return CompressionType.NO_COMPRESSION;

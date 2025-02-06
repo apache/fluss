@@ -170,7 +170,9 @@ class ZooKeeperClientTest {
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
-                        Collections.singletonMap("custom-1", "100"));
+                        Collections.singletonMap("custom-1", "100"),
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
 
         zookeeperClient.registerTable(tablePath, tableReg);
         Optional<TableRegistration> optionalTable = zookeeperClient.getTable(tablePath);
@@ -185,7 +187,9 @@ class ZooKeeperClientTest {
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
-                        Collections.singletonMap("custom-2", "200"));
+                        Collections.singletonMap("custom-2", "200"),
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
         zookeeperClient.updateTable(tablePath, tableReg);
         optionalTable = zookeeperClient.getTable(tablePath);
         assertThat(optionalTable.isPresent()).isTrue();
@@ -332,7 +336,9 @@ class ZooKeeperClientTest {
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
-                        Collections.emptyMap());
+                        Collections.emptyMap(),
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
         zookeeperClient.registerTable(tablePath, tableReg);
 
         Set<String> partitions = zookeeperClient.getPartitions(tablePath);

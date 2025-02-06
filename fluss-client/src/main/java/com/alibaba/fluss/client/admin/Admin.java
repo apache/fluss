@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
 import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
 import com.alibaba.fluss.client.table.snapshot.PartitionSnapshotInfo;
+import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -32,6 +33,8 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -51,6 +54,10 @@ import java.util.concurrent.CompletableFuture;
  */
 @PublicEvolving
 public interface Admin extends AutoCloseable {
+
+    /** Get the current server node information. asynchronously. */
+    CompletableFuture<List<ServerNode>> getServerNodes();
+
     /**
      * Get the latest table schema of the given table asynchronously.
      *
@@ -94,9 +101,45 @@ public interface Admin extends AutoCloseable {
      *     nothing.
      * @throws InvalidDatabaseException if the database name is invalid, e.g., contains illegal
      *     characters, or exceeds the maximum length.
+     * @deprecated use {@link #createDatabase(String, DatabaseDescriptor, boolean)} instead.
      */
+    @Deprecated
     CompletableFuture<Void> createDatabase(String databaseName, boolean ignoreIfExists)
             throws InvalidDatabaseException;
+
+    /**
+     * Create a new database asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseAlreadyExistException} if the database already exists and {@code
+     *       ignoreIfExists} is false.
+     * </ul>
+     *
+     * @param databaseName The name of the database to create.
+     * @param databaseDescriptor The descriptor of the database to create.
+     * @param ignoreIfExists Flag to specify behavior when a database with the given name already
+     *     exists: if set to false, throw a DatabaseAlreadyExistException, if set to true, do
+     *     nothing.
+     * @throws InvalidDatabaseException if the database name is invalid, e.g., contains illegal
+     *     characters, or exceeds the maximum length.
+     */
+    CompletableFuture<Void> createDatabase(
+            String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists);
+
+    /**
+     * Get the database with the given database name asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} if the database does not exist.
+     * </ul>
+     *
+     * @param databaseName The database name of the database.
+     */
+    CompletableFuture<DatabaseInfo> getDatabase(String databaseName);
 
     /**
      * Delete the database with the given name asynchronously.

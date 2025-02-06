@@ -27,6 +27,7 @@ import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
+import org.apache.flink.table.catalog.CatalogDatabaseImpl;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ObjectPath;
@@ -56,6 +57,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.addOptions;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
@@ -123,7 +125,8 @@ class FlinkCatalogTest {
     @BeforeEach
     void beforeEach() throws Exception {
         try {
-            catalog.createDatabase(DEFAULT_DB, null, true);
+            catalog.createDatabase(
+                    DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
         } catch (CatalogException e) {
             // the auto partitioned manager may create the db zk node
             // in an another thread, so if exception is NodeExistsException, just ignore
@@ -320,16 +323,33 @@ class FlinkCatalogTest {
     @Test
     void testDatabase() throws Exception {
         // test create db1
-        catalog.createDatabase("db1", null, false);
+        catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
         // test create db2
-        catalog.createDatabase("db2", null, false);
+        catalog.createDatabase(
+                "db2",
+                new CatalogDatabaseImpl(
+                        Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"),
+                        "test comment"),
+                false);
         assertThat(catalog.databaseExists("db2")).isTrue();
-        // create the database again should throw exception with ignore if exist = false
-        assertThatThrownBy(() -> catalog.createDatabase("db2", null, false));
-        // should be ok since we set ignore if exist = true
-        catalog.createDatabase("db2", null, true);
         CatalogDatabase db2 = catalog.getDatabase("db2");
-        assertThat(db2.getProperties()).isEmpty();
+        assertThat(db2.getComment()).isEqualTo("test comment");
+        assertThat(db2.getProperties())
+                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
+        // create the database again should throw exception with ignore if exist = false
+        assertThatThrownBy(
+                () ->
+                        catalog.createDatabase(
+                                "db2",
+                                new CatalogDatabaseImpl(Collections.emptyMap(), "test comment"),
+                                false));
+        // should be ok since we set ignore if exist = true
+        catalog.createDatabase(
+                "db2", new CatalogDatabaseImpl(Collections.emptyMap(), "test comment2"), true);
+        db2 = catalog.getDatabase("db2");
+        assertThat(db2.getComment()).isEqualTo("test comment");
+        assertThat(db2.getProperties())
+                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
         // test create table in db1
         ObjectPath path1 = new ObjectPath("db1", "t1");
         CatalogTable table = this.newCatalogTable(new HashMap<>());

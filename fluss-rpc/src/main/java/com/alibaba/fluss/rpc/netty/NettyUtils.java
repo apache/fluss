@@ -27,6 +27,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.ServerSocketChann
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
+import com.alibaba.fluss.shaded.netty4.io.netty.channel.unix.Errors;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.DefaultThreadFactory;
 
 import java.util.concurrent.CompletableFuture;
@@ -100,5 +101,20 @@ public class NettyUtils {
             shutdownFuture.complete(null);
         }
         return shutdownFuture;
+    }
+
+    /**
+     * check whether the provided {@link Throwable} represents a bind failure.
+     *
+     * @param t The {@link Throwable} object to be checked for bind failure.
+     * @return {@code true} if the provided {@link Throwable} represents a bind failure, {@code
+     *     false} otherwise.
+     */
+    public static boolean isBindFailure(Throwable t) {
+        return t instanceof java.net.BindException
+                || (t instanceof Errors.NativeIoException
+                        && t.getMessage() != null
+                        && t.getMessage().matches("^bind\\(.*\\) failed:.*"))
+                || (t.getCause() != null && isBindFailure(t.getCause()));
     }
 }

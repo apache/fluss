@@ -33,6 +33,8 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecordReadContext;
+import com.alibaba.fluss.record.LogRecords;
+import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
@@ -57,7 +59,6 @@ import javax.annotation.concurrent.GuardedBy;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -82,13 +83,15 @@ public class LogFetcher implements Closeable {
     private final boolean isPartitioned;
     private final LogRecordReadContext readContext;
     // TODO this context can be merge with readContext. Introduce it only because log remote read
-    // currently can only do project when generate scanRecord instead of doing project while read
-    // bytes from remote file.
+    //  currently can only do project when generate scanRecord instead of doing project while read
+    //  bytes from remote file.
     private final LogRecordReadContext remoteReadContext;
     @Nullable private final Projection projection;
     private final RpcClient rpcClient;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
+    private final int minFetchBytes;
+    private final int maxFetchWaitMs;
     private final boolean isCheckCrcs;
     private final LogScannerStatus logScannerStatus;
     private final LogFetchBuffer logFetchBuffer;
@@ -115,14 +118,23 @@ public class LogFetcher implements Closeable {
             RemoteFileDownloader remoteFileDownloader) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.getTableDescriptor().isPartitioned();
-        this.readContext = LogRecordReadContext.createReadContext(tableInfo, projection);
-        this.remoteReadContext = LogRecordReadContext.createReadContext(tableInfo, null);
+        this.readContext = LogRecordReadContext.createReadContext(tableInfo, false, projection);
+        this.remoteReadContext =
+                LogRecordReadContext.createReadContext(tableInfo, true, projection);
         this.projection = projection;
         this.rpcClient = rpcClient;
         this.logScannerStatus = logScannerStatus;
-        this.maxFetchBytes = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchBytes =
+                (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
         this.maxBucketFetchBytes =
-                (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
+                (int)
+                        conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)
+                                .getBytes();
+        this.minFetchBytes =
+                (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MIN_BYTES).getBytes();
+        this.maxFetchWaitMs =
+                (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME).toMillis();
+
         this.isCheckCrcs = conf.getBoolean(ConfigOptions.CLIENT_SCANNER_LOG_CHECK_CRC);
         this.logFetchBuffer = new LogFetchBuffer();
         this.nodesWithPendingFetchRequests = new HashSet<>();
@@ -257,7 +269,7 @@ public class LogFetcher implements Closeable {
                 // if is invalid metadata exception, we need to clear table bucket meta
                 // to enable another round of log fetch to request new medata
                 if (e instanceof InvalidMetadataException) {
-                    Collection<PhysicalTablePath> physicalTablePaths =
+                    Set<PhysicalTablePath> physicalTablePaths =
                             metadataUpdater.getPhysicalTablePathByIds(
                                     tableOrPartitionsInFetchRequest.tableIds,
                                     tableOrPartitionsInFetchRequest.tablePartitions);
@@ -301,16 +313,22 @@ public class LogFetcher implements Closeable {
                                     fetchOffset,
                                     fetchResultForBucket.getHighWatermark());
                         } else {
-                            DefaultCompletedFetch completedFetch =
-                                    new DefaultCompletedFetch(
-                                            tb,
-                                            fetchResultForBucket,
-                                            readContext,
-                                            logScannerStatus,
-                                            isCheckCrcs,
-                                            fetchOffset,
-                                            projection);
-                            logFetchBuffer.add(completedFetch);
+                            LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
+                            if (!MemoryLogRecords.EMPTY.equals(logRecords)) {
+                                // In oder to not signal notEmptyCondition, add completed fetch to
+                                // buffer until log records is not empty.
+                                DefaultCompletedFetch completedFetch =
+                                        new DefaultCompletedFetch(
+                                                tb,
+                                                fetchResultForBucket,
+                                                readContext,
+                                                logScannerStatus,
+                                                // skipping CRC check if projection push downed as
+                                                // the data is pruned
+                                                isCheckCrcs,
+                                                fetchOffset);
+                                logFetchBuffer.add(completedFetch);
+                            }
                         }
                     }
                 }
@@ -345,8 +363,7 @@ public class LogFetcher implements Closeable {
                             highWatermark,
                             remoteReadContext,
                             logScannerStatus,
-                            isCheckCrcs,
-                            projection);
+                            isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
             downloadFuture.onComplete(logFetchBuffer::tryComplete);
         }
@@ -411,10 +428,13 @@ public class LogFetcher implements Closeable {
                         FetchLogRequest fetchLogRequest =
                                 new FetchLogRequest()
                                         .setFollowerServerId(-1)
-                                        .setMaxBytes(maxFetchBytes);
+                                        .setMaxBytes(maxFetchBytes)
+                                        .setMinBytes(minFetchBytes)
+                                        .setMaxWaitMs(maxFetchWaitMs);
                         PbFetchLogReqForTable reqForTable =
                                 new PbFetchLogReqForTable().setTableId(finalTableId);
-                        if (projection != null) {
+                        if (readContext.isProjectionPushDowned()) {
+                            assert projection != null;
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
                                     .setProjectedFields(projection.getProjectionInOrder());

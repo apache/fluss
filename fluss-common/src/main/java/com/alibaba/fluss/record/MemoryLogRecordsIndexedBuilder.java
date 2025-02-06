@@ -16,9 +16,13 @@
 
 package com.alibaba.fluss.record;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.metadata.LogFormat;
+import com.alibaba.fluss.record.bytesview.BytesView;
+import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.crc.Crc32C;
@@ -27,10 +31,10 @@ import java.io.IOException;
 
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
+import static com.alibaba.fluss.record.DefaultLogRecordBatch.LAST_OFFSET_DELTA_OFFSET;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.WRITE_CLIENT_ID_OFFSET;
 import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
@@ -46,22 +50,22 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     // The max bytes can be appended.
     private final int writeLimit;
     private final byte magic;
-    private final MemorySegmentOutputView outputView;
+    private final AbstractPagedOutputView pagedOutputView;
+    private final MemorySegment firstSegment;
 
+    private BytesView builtBuffer = null;
     private long writerId;
     private int batchSequence;
     private int currentRecordNumber;
     private int sizeInBytes;
     private boolean isClosed;
-    private MemoryLogRecords builtRecords;
 
     private MemoryLogRecordsIndexedBuilder(
             long baseLogOffset,
             int schemaId,
             int writeLimit,
             byte magic,
-            MemorySegmentOutputView outputView)
-            throws IOException {
+            AbstractPagedOutputView pagedOutputView) {
         Preconditions.checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
@@ -69,7 +73,8 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
         this.schemaId = schemaId;
         this.writeLimit = writeLimit;
         this.magic = magic;
-        this.outputView = outputView;
+        this.pagedOutputView = pagedOutputView;
+        this.firstSegment = pagedOutputView.getCurrentSegment();
         this.writerId = NO_WRITER_ID;
         this.batchSequence = NO_BATCH_SEQUENCE;
         this.currentRecordNumber = 0;
@@ -77,39 +82,26 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
 
         // We don't need to write header information while the builder creating,
         // we'll skip it first.
-        outputView.setPosition(RECORD_BATCH_HEADER_SIZE);
+        this.pagedOutputView.setPosition(RECORD_BATCH_HEADER_SIZE);
         this.sizeInBytes = RECORD_BATCH_HEADER_SIZE;
     }
 
     public static MemoryLogRecordsIndexedBuilder builder(
-            int schemaId, int writeLimit, MemorySegment segment) throws IOException {
+            int schemaId, int writeLimit, AbstractPagedOutputView outputView) {
         return new MemoryLogRecordsIndexedBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                new MemorySegmentOutputView(segment));
+                BUILDER_DEFAULT_OFFSET, schemaId, writeLimit, CURRENT_LOG_MAGIC_VALUE, outputView);
     }
 
+    @VisibleForTesting
     public static MemoryLogRecordsIndexedBuilder builder(
             long baseLogOffset,
             int schemaId,
             int writeLimit,
             byte magic,
-            MemorySegmentOutputView outputView)
+            AbstractPagedOutputView outputView)
             throws IOException {
         return new MemoryLogRecordsIndexedBuilder(
                 baseLogOffset, schemaId, writeLimit, magic, outputView);
-    }
-
-    public static MemoryLogRecordsIndexedBuilder builder(
-            int schemaId, MemorySegmentOutputView outputView) throws IOException {
-        return new MemoryLogRecordsIndexedBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                Integer.MAX_VALUE,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView);
     }
 
     /**
@@ -130,20 +122,22 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
                     "Tried to append a record, but MemoryLogRecordsBuilder is closed for record appends");
         }
 
-        int recordByteSizes = DefaultLogRecord.writeTo(outputView, rowKind, row);
+        int recordByteSizes = DefaultLogRecord.writeTo(pagedOutputView, rowKind, row);
         currentRecordNumber++;
         sizeInBytes += recordByteSizes;
     }
 
-    public MemoryLogRecords build() throws IOException {
-        if (builtRecords != null) {
-            return builtRecords;
+    public BytesView build() throws IOException {
+        if (builtBuffer != null) {
+            return builtBuffer;
         }
 
         writeBatchHeader();
-        MemorySegment segment = outputView.getMemorySegment();
-        builtRecords = MemoryLogRecords.pointToMemory(segment, 0, sizeInBytes);
-        return builtRecords;
+        builtBuffer =
+                MultiBytesView.builder()
+                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
+                        .build();
+        return builtBuffer;
     }
 
     public void setWriterState(long writerId, int batchBaseSequence) {
@@ -153,13 +147,9 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
 
     public void resetWriterState(long writerId, int batchSequence) {
         // trigger to rewrite batch header
-        this.builtRecords = null;
+        this.builtBuffer = null;
         this.writerId = writerId;
         this.batchSequence = batchSequence;
-    }
-
-    public MemorySegment getMemorySegment() {
-        return outputView.getMemorySegment();
     }
 
     public long writerId() {
@@ -185,7 +175,9 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
 
     // ----------------------- internal methods -------------------------------
     private void writeBatchHeader() throws IOException {
-        int originPos = outputView.getPosition();
+        // pagedOutputView doesn't support seek to previous segment,
+        // so we create a new output view on the first segment
+        MemorySegmentOutputView outputView = new MemorySegmentOutputView(firstSegment);
         outputView.setPosition(0);
         // update header.
         outputView.writeLong(baseLogOffset);
@@ -199,21 +191,21 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
 
         outputView.writeShort((short) schemaId);
         // skip write attribute byte for now.
-        outputView.setPosition(WRITE_CLIENT_ID_OFFSET);
+        outputView.setPosition(LAST_OFFSET_DELTA_OFFSET);
+        if (currentRecordNumber > 0) {
+            outputView.writeInt(currentRecordNumber - 1);
+        } else {
+            // If there is no record, we write 0 for filed lastOffsetDelta, see the comments about
+            // the field 'lastOffsetDelta' in DefaultLogRecordBatch.
+            outputView.writeInt(0);
+        }
         outputView.writeLong(writerId);
         outputView.writeInt(batchSequence);
         outputView.writeInt(currentRecordNumber);
 
         // Update crc.
+        long crc = Crc32C.compute(pagedOutputView.getWrittenSegments(), SCHEMA_ID_OFFSET);
         outputView.setPosition(CRC_OFFSET);
-        long crc =
-                Crc32C.compute(
-                        outputView.getSharedBuffer(),
-                        SCHEMA_ID_OFFSET,
-                        sizeInBytes - SCHEMA_ID_OFFSET);
         outputView.writeUnsignedInt(crc);
-
-        // reset the position to origin position.
-        outputView.setPosition(originPos);
     }
 }

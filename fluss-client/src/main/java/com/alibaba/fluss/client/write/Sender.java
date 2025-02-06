@@ -203,21 +203,26 @@ public class Sender implements Runnable {
         Set<ServerNode> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
-            // will cause the CPU to be occupied. Currently, we just sleep 1 second to avoid this.
+            // will cause the CPU to be occupied.
             // In the future, we need to introduce delay logic to deal with it.
-            Thread.sleep(1);
+            // TODO: condition waiter
+            Thread.sleep(readyCheckResult.nextReadyCheckDelayMs);
         }
 
         // get the list of batches prepare to send.
         Map<Integer, List<WriteBatch>> batches =
                 accumulator.drain(metadataUpdater.getCluster(), readyNodes, maxRequestSize);
-        addToInflightBatches(batches);
 
-        updateWriterMetrics(batches);
+        if (!batches.isEmpty()) {
+            addToInflightBatches(batches);
 
-        // TODO add logic for batch expire.
+            // TODO add logic for batch expire.
 
-        sendWriteRequests(batches);
+            sendWriteRequests(batches);
+
+            // move metrics update to the end to make sure the batches has been built.
+            updateWriterMetrics(batches);
+        }
     }
 
     private void completeBatch(WriteBatch batch) {
@@ -525,10 +530,14 @@ public class Sender implements Runnable {
                                 int recordCount = batch.getRecordCount();
                                 writerMetricGroup.recordsSendTotal().inc(recordCount);
                                 writerMetricGroup.setBatchQueueTimeMs(batch.getQueueTimeMs());
-                                writerMetricGroup.bytesSendTotal().inc(batch.sizeInBytes());
+                                writerMetricGroup
+                                        .bytesSendTotal()
+                                        .inc(batch.estimatedSizeInBytes());
 
                                 writerMetricGroup.recordPerBatch().update(recordCount);
-                                writerMetricGroup.bytesPerBatch().update(batch.sizeInBytes());
+                                writerMetricGroup
+                                        .bytesPerBatch()
+                                        .update(batch.estimatedSizeInBytes());
                             }
                         });
     }

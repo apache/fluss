@@ -41,6 +41,10 @@ fi
 
 if [ "$(uname)" == "Darwin" ]; then
     SHASUM="shasum -a 512"
+    # turn off xattr headers in the generated archive file on macOS
+    TAR_OPTIONS="--no-xattrs"
+    # Disable the creation of ._* files on macOS.
+    export COPYFILE_DISABLE=1
 else
     SHASUM="sha512sum"
 fi
@@ -63,7 +67,7 @@ make_binary_release() {
 
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
   ${FLUSS_DIR}/tools/releasing/collect_license_files.sh ./fluss-${RELEASE_VERSION} ./fluss-${RELEASE_VERSION}
-  tar czf "${dir_name}.tgz" fluss-*
+  tar $TAR_OPTIONS -czf "${dir_name}.tgz" fluss-*
 
   cp fluss-*.tgz ${RELEASE_DIR}
   cd ${RELEASE_DIR}

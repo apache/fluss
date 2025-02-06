@@ -19,7 +19,12 @@ package com.alibaba.fluss.client.table;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.lookup.PrefixLookup;
+import com.alibaba.fluss.client.lookup.PrefixLookupResult;
+import com.alibaba.fluss.client.lookup.PrefixLookuper;
 import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.scanner.log.LogScan;
 import com.alibaba.fluss.client.scanner.log.LogScanner;
 import com.alibaba.fluss.client.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
@@ -31,6 +36,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
+import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -50,14 +56,17 @@ import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -68,6 +77,8 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static com.alibaba.fluss.record.TestData.DATA3_SCHEMA_PK;
+import static com.alibaba.fluss.record.TestData.DATA3_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertRowValueEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
@@ -216,6 +227,117 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPutAndPrefixLookup() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_put_and_prefix_lookup_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        createTable(tablePath, descriptor, false);
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, schema, new Object[] {1, "a", 1L, "value1"});
+        verifyPutAndLookup(table, schema, new Object[] {1, "a", 2L, "value2"});
+        verifyPutAndLookup(table, schema, new Object[] {1, "a", 3L, "value3"});
+        verifyPutAndLookup(table, schema, new Object[] {2, "a", 4L, "value4"});
+        RowType rowType = schema.toRowType();
+
+        // test prefix lookup.
+        Schema prefixKeySchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        RowType prefixKeyRowType = prefixKeySchema.toRowType();
+        PrefixLookuper prefixLookuper =
+                table.getPrefixLookuper(new PrefixLookup(prefixKeyRowType.getFieldNames()));
+        CompletableFuture<PrefixLookupResult> result =
+                prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {1, "a"}));
+        PrefixLookupResult prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        List<InternalRow> rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(3);
+        for (int i = 0; i < rowList.size(); i++) {
+            assertRowValueEquals(
+                    rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+        }
+
+        result = prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {2, "a"}));
+        prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(1);
+        assertRowValueEquals(rowType, rowList.get(0), new Object[] {2, "a", 4L, "value4"});
+
+        result = prefixLookuper.prefixLookup(compactedRow(prefixKeyRowType, new Object[] {3, "a"}));
+        prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testInvalidPrefixLookup() throws Exception {
+        // First, test the bucket keys not a prefix subset of primary keys.
+        TablePath tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.BIGINT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "c").build();
+        createTable(tablePath, descriptor, false);
+        Table table = conn.getTable(tablePath);
+
+        assertThatThrownBy(() -> table.getPrefixLookuper(new PrefixLookup(Arrays.asList("a", "c"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_1', "
+                                + "because the bucket keys [a, c] is not a prefix subset of the "
+                                + "physical primary keys [a, b, c] (excluded partition fields if present).");
+
+        // Second, test the lookup column names in PrefixLookup not a subset of primary keys.
+        tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_2");
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+
+        descriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        createTable(tablePath, descriptor, true);
+        Table table2 = conn.getTable(tablePath);
+
+        // not match bucket key
+        assertThatThrownBy(
+                        () -> table2.getPrefixLookuper(new PrefixLookup(Arrays.asList("a", "d"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [a, d] must contain all bucket keys [a, b] in order.");
+
+        // wrong bucket key order
+        assertThatThrownBy(
+                        () -> table2.getPrefixLookuper(new PrefixLookup(Arrays.asList("b", "a"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
+    }
+
+    @Test
     void testLookupForNotReadyTable() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_lookup_unready_table_t1");
         TableDescriptor descriptor =
@@ -226,7 +348,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         // if you want to test the lookup for not ready table, you can comment the following line.
         waitAllReplicasReady(tableId, descriptor);
         Table table = conn.getTable(tablePath);
-        assertThat(lookupRow(table, rowKey)).isNull();
+        Lookuper lookuper = table.getLookuper();
+        assertThat(lookupRow(lookuper, rowKey)).isNull();
     }
 
     @Test
@@ -335,23 +458,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    void verifyPutAndLookup(Table table, Schema tableSchema, Object[] fields) throws Exception {
-        // put data.
-        InternalRow row = compactedRow(tableSchema.toRowType(), fields);
-        UpsertWriter upsertWriter = table.getUpsertWriter();
-        // put data.
-        upsertWriter.upsert(row);
-        upsertWriter.flush();
-        // lookup this key.
-        IndexedRow keyRow = keyRow(tableSchema, fields);
-        assertThat(lookupRow(table, keyRow)).isEqualTo(row);
-    }
-
-    private InternalRow lookupRow(Table table, IndexedRow keyRow) throws Exception {
-        // lookup this key.
-        return table.lookup(keyRow).get().getRow();
-    }
-
     @Test
     void testPartialPutAndDelete() throws Exception {
         Schema schema =
@@ -377,10 +483,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         upsertWriter
                 .upsert(compactedRow(schema.toRowType(), new Object[] {1, "aaa", null, null}))
                 .get();
+        Lookuper lookuper = table.getLookuper();
 
         // check the row
         IndexedRow rowKey = row(pkRowType, new Object[] {1});
-        assertThat(lookupRow(table, rowKey))
+        assertThat(lookupRow(lookuper, rowKey))
                 .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "aaa", 1, true}));
 
         // partial update columns columns: a,b,c
@@ -391,14 +498,14 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .get();
 
         // lookup the row
-        assertThat(lookupRow(table, rowKey))
+        assertThat(lookupRow(lookuper, rowKey))
                 .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, true}));
 
         // test partial delete, target column is a,b,c
         upsertWriter
                 .delete(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, null}))
                 .get();
-        assertThat(lookupRow(table, rowKey))
+        assertThat(lookupRow(lookuper, rowKey))
                 .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, null, null, true}));
 
         // partial delete, target column is d
@@ -409,7 +516,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .get();
 
         // the row should be deleted, shouldn't get the row again
-        assertThat(lookupRow(table, rowKey)).isNull();
+        assertThat(lookupRow(lookuper, rowKey)).isNull();
 
         table.close();
     }
@@ -462,15 +569,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
             UpsertWriter upsertWriter = table.getUpsertWriter();
             upsertWriter.upsert(row).get();
+            Lookuper lookuper = table.getLookuper();
 
             // lookup this key.
             IndexedRow keyRow = keyRow(DATA1_SCHEMA_PK, new Object[] {1, "a"});
-            assertThat(lookupRow(table, keyRow)).isEqualTo(row);
+            assertThat(lookupRow(lookuper, keyRow)).isEqualTo(row);
 
             // delete this key.
             upsertWriter.delete(row).get();
             // lookup this key again, will return null.
-            assertThat(lookupRow(table, keyRow)).isNull();
+            assertThat(lookupRow(lookuper, keyRow)).isNull();
         }
     }
 
@@ -610,8 +718,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testAppendAndProject() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"INDEXED", "ARROW"})
+    void testAppendAndProject(String format) throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -619,7 +728,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("c", DataTypes.STRING())
                         .column("d", DataTypes.BIGINT())
                         .build();
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .logFormat(LogFormat.fromString(format))
+                        .build();
         TablePath tablePath = TablePath.of("test_db_1", "test_append_and_project");
         createTable(tablePath, tableDescriptor, false);
 
@@ -652,6 +765,29 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+
+            // fetch data with projection reorder.
+            logScanner = createLogScanner(table, new int[] {2, 0});
+            subscribeFromBeginning(logScanner, table);
+            count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                    assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(0).toString())
+                                .isEqualTo("hello, friend" + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(0)).isTrue();
                     }
                     count++;
                 }
@@ -784,10 +920,209 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         Table table = conn.getTable(DATA1_TABLE_PATH);
 
         // validation on projection
-        assertThatThrownBy(() -> createLogScanner(table, new int[] {1}))
+        assertThatThrownBy(() -> createLogScanner(table, new int[] {1, 2, 3, 4, 5}))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Only ARROW log format supports column projection, but the log format "
-                                + "of table 'test_db_1.test_non_pk_table_1' is INDEXED");
+                        "Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
+    }
+
+    @Test
+    void testFirstRowMergeEngine() throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.FIRST_ROW)
+                        .build();
+        RowType rowType = DATA1_SCHEMA_PK.toRowType();
+        createTable(DATA1_TABLE_PATH_PK, tableDescriptor, false);
+
+        RowType lookupRowType = RowType.of(DataTypes.INT());
+
+        int rows = 5;
+        int duplicateNum = 3;
+        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
+            // first, put rows
+            UpsertWriter upsertWriter = table.getUpsertWriter();
+            List<InternalRow> expectedRows = new ArrayList<>(rows);
+            for (int id = 0; id < rows; id++) {
+                for (int num = 0; num < duplicateNum; num++) {
+                    upsertWriter.upsert(compactedRow(rowType, new Object[] {id, "value_" + num}));
+                }
+                expectedRows.add(compactedRow(rowType, new Object[] {id, "value_0"}));
+            }
+            upsertWriter.flush();
+
+            Lookuper lookuper = table.getLookuper();
+            // now, get rows by lookup
+            for (int id = 0; id < rows; id++) {
+                InternalRow gotRow =
+                        lookuper.lookup(row(lookupRowType, new Object[] {id})).get().getRow();
+                assertThatRow(gotRow).withSchema(rowType).isEqualTo(expectedRows.get(id));
+            }
+            LogScanner logScanner = table.getLogScanner(new LogScan());
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(0);
+            while (actualLogRecords.size() < rows) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(actualLogRecords).hasSize(rows);
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord scanRecord = actualLogRecords.get(i);
+                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.INSERT);
+                assertThatRow(scanRecord.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expectedRows.get(i));
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"none,3", "lz4_frame,3", "zstd,3", "zstd,9"})
+    void testArrowCompressionAndProject(String compression, String level) throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
+                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_" + compression + level);
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
+                Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.getAppendWriter();
+            int expectedSize = 30;
+            for (int i = 0; i < expectedSize; i++) {
+                String value = i % 2 == 0 ? "hello, friend " + i : null;
+                InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                appendWriter.append(row);
+                if (i % 10 == 0) {
+                    // insert 3 bathes, each batch has 10 rows
+                    appendWriter.flush();
+                }
+            }
+
+            // fetch data without project.
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+            int count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                    assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(2).toString())
+                                .isEqualTo("hello, friend " + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+
+            // fetch data with project.
+            logScanner = createLogScanner(table, new int[] {0, 2});
+            subscribeFromBeginning(logScanner, table);
+            count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                    assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(1).toString())
+                                .isEqualTo("hello, friend " + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+        }
+    }
+
+    @Test
+    void testMergeEngineWithVersion() throws Exception {
+        // Create table.
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA3_SCHEMA_PK)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.VERSIONED)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, "b")
+                        .build();
+        RowType rowType = DATA3_SCHEMA_PK.toRowType();
+        createTable(DATA3_TABLE_PATH_PK, tableDescriptor, false);
+
+        int rows = 3;
+        try (Table table = conn.getTable(DATA3_TABLE_PATH_PK)) {
+            // put rows.
+            UpsertWriter upsertWriter = table.getUpsertWriter();
+            List<ScanRecord> expectedScanRecords = new ArrayList<>(rows);
+            // init rows.
+            for (int row = 0; row < rows; row++) {
+                upsertWriter.upsert(compactedRow(rowType, new Object[] {row, 1000L}));
+                expectedScanRecords.add(
+                        new ScanRecord(compactedRow(rowType, new Object[] {row, 1000L})));
+            }
+            // update row if id=0 and version < 1000L, will not update
+            upsertWriter.upsert(compactedRow(rowType, new Object[] {0, 999L}));
+
+            // update if version> 1000L
+            upsertWriter.upsert(compactedRow(rowType, new Object[] {1, 1001L}));
+            // update_before record, don't care about offset/timestamp
+            expectedScanRecords.add(
+                    new ScanRecord(
+                            -1,
+                            -1,
+                            RowKind.UPDATE_BEFORE,
+                            compactedRow(rowType, new Object[] {1, 1000L})));
+            // update_after record
+            expectedScanRecords.add(
+                    new ScanRecord(
+                            -1,
+                            -1,
+                            RowKind.UPDATE_AFTER,
+                            compactedRow(rowType, new Object[] {1, 1001L})));
+            rows = rows + 2;
+
+            upsertWriter.flush();
+
+            LogScanner logScanner = table.getLogScanner(new LogScan());
+            logScanner.subscribeFromBeginning(0);
+
+            List<ScanRecord> actualLogRecords = new ArrayList<>(rows);
+            while (actualLogRecords.size() < rows) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+
+            assertThat(actualLogRecords).hasSize(rows);
+            for (int i = 0; i < rows; i++) {
+                ScanRecord actualScanRecord = actualLogRecords.get(i);
+                ScanRecord expectedRecord = expectedScanRecords.get(i);
+                assertThat(actualScanRecord.getRowKind()).isEqualTo(expectedRecord.getRowKind());
+                assertThatRow(actualScanRecord.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expectedRecord.getRow());
+            }
+        }
     }
 }

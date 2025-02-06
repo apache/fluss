@@ -34,8 +34,14 @@ cd fluss-quickstart-flink
 
 2. Create a `docker-compose.yml` file with the following content:
 
+
+<!-- TODO: keep docker-compose manifest in sync at 
+ - /docs/quickstart-flink.md 
+ - /docs/maintenance/monitor-metrics.md, 
+ but MIND differences in the manifests -->
 ```yaml
 services:
+  #begin Flink cluster
   coordinator-server:
     image: fluss/fluss:0.5.0
     command: coordinatorServer
@@ -68,8 +74,9 @@ services:
         paimon.catalog.warehouse: /tmp/paimon
   zookeeper:
     restart: always
-    image: zookeeper:3.8.4
-
+    image: zookeeper:3.9.2
+  #end
+  #begin Flink cluster
   jobmanager:
     image: fluss/quickstart-flink:1.20-0.5
     ports:
@@ -95,7 +102,8 @@ services:
         taskmanager.memory.framework.off-heap.size: 256m
     volumes:
       - shared-tmpfs:/tmp/paimon
-
+  #end
+  
 volumes:
   shared-tmpfs:
     driver: local
@@ -485,4 +493,6 @@ docker compose down -v
 to stop all containers.
 
 ## Learn more
-Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink!
+Now that you're up an running with Fluss and Flink, check out 
+- the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink
+- [this guide](/docs/maintenance/monitor-metrics/#observability-prometheus--grafana) to learn how to set up an observability stack for Fluss and Flink.

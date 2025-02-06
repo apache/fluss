@@ -82,10 +82,15 @@ public abstract class SnapshotSplit extends SourceSplitBase {
     @Override
     public String toString() {
         return "SnapshotSplit{"
-                + "recordsToSkip="
-                + recordsToSkip
-                + ", tableBucket="
+                + "tableBucket="
                 + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + ", recordsToSkip="
+                + recordsToSkip
+                + ", snapshotFiles="
+                + snapshotFiles
                 + '}';
     }
 }

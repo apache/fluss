@@ -49,6 +49,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -56,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.connector.flink.source.testutils.RecordAndPosAssert.assertThatRecordAndPos;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
@@ -265,6 +267,57 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
             assignSplitsAndFetchUntilRetrieveRecords(
                     splitReader, totalSplits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.toRowType());
+        }
+    }
+
+    @Test
+    void testNoSubscribedBucket() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-no-subscribe-bucket-table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        final TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1).build();
+        createTable(tablePath, tableDescriptor);
+
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, schema.toRowType())) {
+            // fetch shouldn't throw exception
+            RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+            assertThat(records.nextSplit()).isNull();
+        }
+    }
+
+    @Test
+    void testSubscribeEmptySplits() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-subscribe-empty-splits");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(3).build());
+
+        // create two empty splits with log start offset equal to end offset
+        LogSplit split1 = new LogSplit(new TableBucket(tableId, 0), null, 0, 0);
+        LogSplit split2 = new LogSplit(new TableBucket(tableId, 1), null, 0, 0);
+        LogSplit split3 = new LogSplit(new TableBucket(tableId, 2), null, EARLIEST_OFFSET);
+        List<SourceSplitBase> subscribeSplits = Arrays.asList(split1, split2, split3);
+
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, schema.toRowType())) {
+            splitReader.handleSplitsChanges(new SplitsAddition<>(subscribeSplits));
+
+            // fetch records
+            RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+            // finished splits should be split1,split2
+            assertThat(records.finishedSplits())
+                    .containsExactlyInAnyOrder(split1.splitId(), split2.splitId());
         }
     }
 

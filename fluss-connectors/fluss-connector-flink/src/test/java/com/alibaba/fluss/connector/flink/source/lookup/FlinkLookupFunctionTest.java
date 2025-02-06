@@ -21,11 +21,11 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.table.connector.source.lookup.LookupOptions;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.AsyncLookupFunction;
+import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Collector;
 import org.junit.jupiter.api.Test;
 
@@ -37,6 +37,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -48,14 +49,14 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table");
         prepareData(tablePath, 3);
 
+        RowType flinkRowType = FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.toRowType());
         FlinkLookupFunction lookupFunction =
                 new FlinkLookupFunction(
                         clientConf,
                         tablePath,
-                        FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.toRowType()),
-                        new int[] {0},
+                        flinkRowType,
                         LookupOptions.MAX_RETRIES.defaultValue(),
-                        LookupNormalizer.NOOP_NORMALIZER,
+                        createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         null);
 
         ListOutputCollector collector = new ListOutputCollector();
@@ -84,14 +85,15 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "async-lookup-table");
         int rows = 3;
         prepareData(tablePath, rows);
+
+        RowType flinkRowType = FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.toRowType());
         AsyncLookupFunction asyncLookupFunction =
                 new FlinkAsyncLookupFunction(
                         clientConf,
                         tablePath,
-                        FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.toRowType()),
-                        new int[] {0},
+                        flinkRowType,
                         LookupOptions.MAX_RETRIES.defaultValue(),
-                        LookupNormalizer.NOOP_NORMALIZER,
+                        createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         null);
         asyncLookupFunction.open(null);
 
@@ -134,7 +136,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
     private void prepareData(TablePath tablePath, int rows) throws Exception {
         createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
 
-        RowType rowType = DEFAULT_PK_TABLE_SCHEMA.toRowType();
+        com.alibaba.fluss.types.RowType rowType = DEFAULT_PK_TABLE_SCHEMA.toRowType();
 
         // first write some data to the table
         try (Table table = conn.getTable(tablePath)) {

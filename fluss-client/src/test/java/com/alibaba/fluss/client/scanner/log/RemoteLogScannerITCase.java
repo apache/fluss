@@ -27,6 +27,7 @@ import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -40,6 +41,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -107,6 +110,88 @@ public class RemoteLogScannerITCase {
         }
         assertThat(rowList).hasSize(recordSize);
         assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"INDEXED", "ARROW"})
+    void testScanFromRemoteAndProject(String format) throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.fromString(format))
+                        .build();
+        long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor);
+
+        // append a batch of data.
+        List<InternalRow> expectedRows = new ArrayList<>();
+        Table table = conn.getTable(DATA1_TABLE_PATH);
+        AppendWriter appendWriter = table.getAppendWriter();
+        int expectedSize = 30;
+        for (int i = 0; i < expectedSize; i++) {
+            String value = i % 2 == 0 ? "hello, friend" + i : null;
+            InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+            appendWriter.append(row);
+            if (i % 10 == 0) {
+                // insert 3 bathes, each batch has 10 rows
+                appendWriter.flush();
+            }
+        }
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
+
+        // test fetch.
+        LogScanner logScanner = createLogScanner(table, new int[] {0, 2});
+        logScanner.subscribeFromBeginning(0);
+        int count = 0;
+        while (count < expectedSize) {
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (ScanRecord scanRecord : scanRecords) {
+                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                if (count % 2 == 0) {
+                    assertThat(scanRecord.getRow().getString(1).toString())
+                            .isEqualTo("hello, friend" + count);
+                } else {
+                    // check null values
+                    assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
+                }
+                count++;
+            }
+        }
+        assertThat(count).isEqualTo(expectedSize);
+        logScanner.close();
+
+        // fetch data with projection reorder.
+        logScanner = createLogScanner(table, new int[] {2, 0});
+        logScanner.subscribeFromBeginning(0);
+        count = 0;
+        while (count < expectedSize) {
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (ScanRecord scanRecord : scanRecords) {
+                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
+                if (count % 2 == 0) {
+                    assertThat(scanRecord.getRow().getString(0).toString())
+                            .isEqualTo("hello, friend" + count);
+                } else {
+                    // check null values
+                    assertThat(scanRecord.getRow().isNullAt(0)).isTrue();
+                }
+                count++;
+            }
+        }
+        assertThat(count).isEqualTo(expectedSize);
+        logScanner.close();
     }
 
     @Test
@@ -185,5 +270,9 @@ public class RemoteLogScannerITCase {
         conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofSeconds(1));
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("1kb"));
         return conf;
+    }
+
+    private static LogScanner createLogScanner(Table table, int[] projectFields) {
+        return table.getLogScanner(new LogScan().withProjectedFields(projectFields));
     }
 }

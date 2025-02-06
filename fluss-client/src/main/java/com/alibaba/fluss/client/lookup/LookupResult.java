@@ -14,25 +14,30 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.replica.delay;
+package com.alibaba.fluss.client.lookup;
 
-import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.row.InternalRow;
 
-/** Delayed write key, used as watch key in delay operation manager. */
-public class DelayedWriteKey implements DelayedOperationKey {
-    private final TableBucket tableBucket;
+import javax.annotation.Nullable;
 
-    public DelayedWriteKey(TableBucket tableBucket) {
-        this.tableBucket = tableBucket;
+import java.util.Objects;
+
+/**
+ * The result of {@link Lookuper#lookup(InternalRow)}.
+ *
+ * @since 0.1
+ */
+@PublicEvolving
+public final class LookupResult {
+    private final @Nullable InternalRow row;
+
+    public LookupResult(@Nullable InternalRow row) {
+        this.row = row;
     }
 
-    @Override
-    public String keyLabel() {
-        return String.format("%s-%d", tableBucket.getTableId(), tableBucket.getBucket());
-    }
-
-    public TableBucket getTableBucket() {
-        return tableBucket;
+    public @Nullable InternalRow getRow() {
+        return row;
     }
 
     @Override
@@ -43,12 +48,18 @@ public class DelayedWriteKey implements DelayedOperationKey {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        DelayedWriteKey that = (DelayedWriteKey) o;
-        return tableBucket.equals(that.tableBucket);
+
+        LookupResult lookupResult = (LookupResult) o;
+        return Objects.equals(row, lookupResult.row);
     }
 
     @Override
     public int hashCode() {
-        return tableBucket.hashCode();
+        return Objects.hash(row);
+    }
+
+    @Override
+    public String toString() {
+        return "LookupResult{row=" + row + '}';
     }
 }

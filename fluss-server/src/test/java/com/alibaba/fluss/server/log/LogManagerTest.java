@@ -106,11 +106,11 @@ final class LogManagerTest extends LogTestBase {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 tablePath1,
-                TableRegistration.of(DATA1_TABLE_ID, DATA1_TABLE_INFO.getTableDescriptor()));
+                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_INFO.getTableDescriptor()));
         zkClient.registerSchema(tablePath1, DATA1_SCHEMA);
         zkClient.registerTable(
                 tablePath2,
-                TableRegistration.of(DATA2_TABLE_ID, DATA2_TABLE_INFO.getTableDescriptor()));
+                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_INFO.getTableDescriptor()));
         zkClient.registerSchema(tablePath2, DATA2_SCHEMA);
     }
 

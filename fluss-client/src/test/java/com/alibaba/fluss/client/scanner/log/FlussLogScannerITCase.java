@@ -166,7 +166,7 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testLogHeavyWriteAndScan() throws Exception {
         final String db = "db";
-        final String tbl = "kv_heavy_table";
+        final String tbl = "log_heavy_table";
         // create table
         TableDescriptor descriptor =
                 TableDescriptor.builder()
@@ -214,6 +214,7 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
                 total += scanRecords.count();
             }
             assertThat(scanned).isEqualTo(recordSize).isEqualTo(total);
+            logScanner.close();
         }
     }
 
@@ -269,6 +270,7 @@ public class FlussLogScannerITCase extends ClientToServerITCaseBase {
                 total += scanRecords.count();
             }
             assertThat(scanned).isEqualTo(recordSize).isEqualTo(total);
+            logScanner.close();
         }
     }
 

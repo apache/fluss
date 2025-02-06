@@ -19,34 +19,29 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.TableBucket;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Class to represent a Lookup operation, it contains the table bucket that the key should lookup
- * from, the bytes of the key, and a future for the lookup operation.
+ * Class to represent a prefix lookup operation, it contains the table id, bucketNums and related
+ * CompletableFuture.
  */
 @Internal
-public class Lookup {
+public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
+    private final CompletableFuture<List<byte[]>> future;
 
-    private final TableBucket tableBucket;
-    private final byte[] key;
-    private final CompletableFuture<byte[]> future;
-
-    Lookup(TableBucket tableBucket, byte[] key) {
-        this.tableBucket = tableBucket;
-        this.key = key;
+    PrefixLookupQuery(TableBucket tableBucket, byte[] prefixKey) {
+        super(tableBucket, prefixKey);
         this.future = new CompletableFuture<>();
     }
 
-    public TableBucket tableBucket() {
-        return tableBucket;
-    }
-
-    public byte[] key() {
-        return key;
-    }
-
-    public CompletableFuture<byte[]> future() {
+    @Override
+    public CompletableFuture<List<byte[]>> future() {
         return future;
+    }
+
+    @Override
+    public LookupType lookupType() {
+        return LookupType.PREFIX_LOOKUP;
     }
 }

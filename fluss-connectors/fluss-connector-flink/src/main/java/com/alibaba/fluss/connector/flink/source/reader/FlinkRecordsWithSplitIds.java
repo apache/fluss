@@ -55,18 +55,9 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     private @Nullable TableBucket currentTableBucket;
     private @Nullable Long currentSplitStoppingOffset;
 
-    // for multiple splits
-    public FlinkRecordsWithSplitIds(
-            Map<String, CloseableIterator<RecordAndPos>> splitRecords,
-            Iterator<String> splitIterator,
-            Iterator<TableBucket> tableBucketIterator,
+    public static FlinkRecordsWithSplitIds emptyRecords(
             FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
-        this(
-                splitRecords,
-                splitIterator,
-                tableBucketIterator,
-                new HashSet<>(),
-                flinkSourceReaderMetrics);
+        return new FlinkRecordsWithSplitIds(Collections.emptySet(), flinkSourceReaderMetrics);
     }
 
     // only for single split

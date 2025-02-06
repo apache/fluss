@@ -67,7 +67,8 @@ public class FlinkSinkFunctionTest extends FlinkTestBase {
                         Arrays.asList(
                                 new RowType.RowField("id", DataTypes.INT().getLogicalType()),
                                 new RowType.RowField("name", DataTypes.STRING().getLogicalType())));
-        FlinkSinkFunction flinkSinkFunction = new AppendSinkFunction(tablePath, flussConf, rowType);
+        FlinkSinkFunction flinkSinkFunction =
+                new AppendSinkFunction(tablePath, flussConf, rowType, false);
         InterceptingOperatorMetricGroup interceptingOperatorMetricGroup =
                 new InterceptingOperatorMetricGroup();
         MockStreamingRuntimeContext mockStreamingRuntimeContext =

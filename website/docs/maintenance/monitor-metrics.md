@@ -299,7 +299,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="6"><strong>tabletServer</strong></th>
+      <th rowspan="10"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
       <td>replicationBytesInPerSecond</td>
       <td>The bytes of data write into follower replica for data sync.</td>
@@ -326,9 +326,29 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>delayedOperationsSize</td>
-      <td>The delayed operations size in this TabletServer.</td>
+      <td>delayedWriteCount</td>
+      <td>The delayed write count in this TabletServer.</td>
       <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>delayedFetchCount</td>
+      <td>The delayed fetch log operation count in this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>delayedWriteExpiresPerSecond</td>
+      <td>The delayed write operation expire count per second in this TabletServer.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>delayedFetchFromFollowerExpiresPerSecond</td>
+      <td>The delayed fetch log operation from follower expire count per second in this TabletServer.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>delayedFetchFromClientExpiresPerSecond</td>
+      <td>The delayed fetch log operation from client expire count per second in this TabletServer.</td>
+      <td>Meter</td>
     </tr>
   </tbody>
 </table>
@@ -366,7 +386,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td>requestErrorPerSecond</td>
+      <td>errorsPerSecond</td>
       <td>The total number of error requests processed per second by the TabletServer node.</td>
       <td>Meter</td>
     </tr>
@@ -434,8 +454,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="31"><strong>tabletServer</strong></th>
-      <td rowspan="16">table</td>
+      <th rowspan="35"><strong>tabletserver</strong></th>
+      <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table</td>
       <td>Meter</td>
@@ -488,6 +508,26 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>failedLookupRequestsPerSecond</td>
       <td>The number of failed lookup requests to lookup value by key from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>totalLimitScanRequestsPerSecond</td>
+      <td>The number of limit scan requests to scan records with limit from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedLimitScanRequestsPerSecond</td>
+      <td>The number of failed limit scan requests to scan records with limit from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>totalPrefixLookupRequestsPerSecond</td>
+      <td>The number of prefix lookup requests to lookup value by prefix key from this table per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>failedPrefixLookupRequestsPerSecond</td>
+      <td>The number of failed prefix lookup requests to lookup value by prefix key from this table per second.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -672,6 +712,173 @@ How to use flink metrics, you can see [flink metrics](https://nightlies.apache.o
     </tbody>
 </table>
 
-## Grafana template
+## Observability (Prometheus + Grafana)
 
-We will provide a grafana template for you to monitor fluss soon.
+We provide a minimal quickstart configuration for application observability with Prometheus and
+Grafana [here](../assets/fluss-quickstart-observability.zip). The quickstart configuration comes with 2 dashboards.
+
+- `Fluss – overview`: Selected metrics to observe the overall cluster status
+- `Fluss – detail`: Majority of metrics listed in [metrics list](#metrics-list)
+
+
+### Quickstart
+
+Based on the [Flink quickstart guide](/docs/quickstart/flink), you can add observability capabilities as follows.
+
+1. Download the [observability quickstart configuration](../assets/fluss-quickstart-observability.zip) and extract the ZIP archive in your working directory.
+After extracting the archive, the contents of the working directory should be as follows.
+
+```
+├── docker-compose.yml              # docker compose manifest from quickstart guide
+└── fluss-quickstart-observability  # downloaded and extracted ZIP archive
+    ├── grafana
+    │   ├── grafana.ini
+    │   └── provisioning
+    │       ├── dashboards
+    │       │   ├── default.yml
+    │       │   └── fluss
+    │       │       └── ...
+    │       └── datatsources
+    │           └── default.yml
+    └── prometheus
+        └── prometheus.yml
+```
+
+
+2. Next, you need to adapt the `docker-compose.yml` manifest and
+
+- add containers for Prometheus and Grafana and mount the corresponding configuration directories, and
+- configure Fluss to expose metrics via Prometheus
+```
+metrics.reporters: prometheus
+metrics.reporter.prometheus.port: 9250
+```
+- configure Flink to expose metrics via Prometheus
+```
+metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+metrics.reporter.prom.port: 9250
+```
+
+You can simply copy the manifest below into your `docker-compose.yml`
+
+<!-- TODO: based on manifest in Flink quickstart guide + additions (see enumeration above) -->
+```yaml
+services:
+  #begin Flink cluster
+  coordinator-server:
+    image: fluss/fluss:0.5.0
+    command: coordinatorServer
+    depends_on:
+      - zookeeper
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        coordinator.host: coordinator-server
+        remote.data.dir: /tmp/fluss/remote-data
+        lakehouse.storage: paimon
+        paimon.catalog.metastore: filesystem
+        paimon.catalog.warehouse: /tmp/paimon
+        metrics.reporters: prometheus
+        metrics.reporter.prometheus.port: 9250
+  tablet-server:
+    image: fluss/fluss:0.5.0
+    command: tabletServer
+    depends_on:
+      - coordinator-server
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        tablet-server.host: tablet-server
+        data.dir: /tmp/fluss/data
+        remote.data.dir: /tmp/fluss/remote-data
+        kv.snapshot.interval: 0s
+        lakehouse.storage: paimon
+        paimon.catalog.metastore: filesystem
+        paimon.catalog.warehouse: /tmp/paimon
+        metrics.reporters: prometheus
+        metrics.reporter.prometheus.port: 9250
+  zookeeper:
+    restart: always
+    image: zookeeper:3.9.2
+  #end
+  #begin Flink cluster
+  jobmanager:
+    image: fluss/quickstart-flink:1.20-0.5
+    ports:
+      - "8083:8081"
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9250
+    volumes:
+      - shared-tmpfs:/tmp/paimon
+  taskmanager:
+    image: fluss/quickstart-flink:1.20-0.5
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 10
+        taskmanager.memory.process.size: 2048m
+        taskmanager.memory.framework.off-heap.size: 256m
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9250
+    volumes:
+      - shared-tmpfs:/tmp/paimon
+  #end
+  #begin observability
+  prometheus:
+    image: bitnami/prometheus:2.55.1-debian-12-r0
+    ports:
+      - 9092:9090
+    volumes:
+      - ./fluss-quickstart-observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  grafana:
+    image:
+      grafana/grafana:11.4.0
+    ports:
+      - 3002:3000
+    depends_on:
+      - prometheus
+    volumes:
+      - ./fluss-quickstart-observability/grafana:/etc/grafana:ro
+  #end
+
+volumes:
+  shared-tmpfs:
+    driver: local
+    driver_opts:
+      type: "tmpfs"
+      device: "tmpfs"
+```
+
+and run
+
+```shell
+docker compose up -d
+```
+
+to apply the changes.
+
+:::warning
+This recreates `shared-tmpfs` and all data is lost (created tables, running jobs, etc.)
+:::
+
+Make sure that the Prometheus and Grafana container are up and running using
+
+```shell
+docker ps
+```
+
+3. Now you are all set! You can visit
+
+- [Grafana](http://localhost:3002/dashboards) to observe the cluster status of the Fluss and Flink cluster with the provided dashboards, or
+- the [Prometheus Web UI](http://localhost:9092) to directly query Prometheus with [PromQL](https://prometheus.io/docs/prometheus/2.55/getting_started/).
