@@ -26,7 +26,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 
 /**
- * Used to configure and create a scanners to scan data for a table.
+ * Used to configure and create a scanner to scan data for a table.
  *
  * <p>{@link Scan} objects are immutable and can be shared between threads. Refinement methods, like
  * {@link #project} and {@link #limit(int)}, create new Scan instances.

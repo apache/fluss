@@ -272,7 +272,7 @@ public interface Admin extends AutoCloseable {
      * <ul>
      *   <li>{@link TableNotExistException} if the table does not exist.
      *   <li>{@link NonPrimaryKeyTableException} if the table is not a primary key table.
-     *   <li>{@link InvalidTableException} if the table is partitioned, use {@link
+     *   <li>{@link PartitionNotExistException} if the table is partitioned, use {@link
      *       #getLatestKvSnapshots(TablePath, String)} instead to get the latest kv snapshot of a
      *       partition of a partitioned table.
      *   <li>
@@ -294,7 +294,7 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link TableNotExistException} if the table does not exist.
      *   <li>{@link NonPrimaryKeyTableException} if the table is not a primary key table.
      *   <li>{@link PartitionNotExistException} if the partition does not exist
-     *   <li>{@link PartitionNotExistException} if the table is not partitioned, use {@link
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned, use {@link
      *       #getLatestKvSnapshots(TablePath)} instead to get the latest kv snapshots for a
      *       non-partitioned table.
      * </ul>
