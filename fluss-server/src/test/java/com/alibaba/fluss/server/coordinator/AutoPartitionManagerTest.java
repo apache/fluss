@@ -161,23 +161,23 @@ class AutoPartitionManagerTest {
 
     @ParameterizedTest
     @MethodSource("parameters")
-    void testAddPartitionedTable(TestParams params) throws Exception {
+    void testAddAutoPartitionedTable(TestParams params) throws Exception {
         ManualClock clock = new ManualClock(params.startTimeMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
 
-        AutoPartitionManager autoPartitionManager =
-                new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+        PartitionManager partitionManager =
+                new PartitionManager(
                         zookeeperClient,
+                        new TestingMetadataCache(3),
                         new Configuration(),
                         clock,
                         periodicExecutor);
-        autoPartitionManager.start();
+        partitionManager.start();
 
-        TableInfo table = createPartitionedTable(params.timeUnit);
+        TableInfo table = createAutoPartitionedTable(params.timeUnit);
         TablePath tablePath = table.getTablePath();
-        autoPartitionManager.addAutoPartitionTable(table);
+        partitionManager.addPartitionTable(table);
         // the first auto-partition task is a non-periodic task
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
@@ -303,7 +303,7 @@ class AutoPartitionManagerTest {
 
     // -------------------------------------------------------------------------------------------
 
-    private TableInfo createPartitionedTable(AutoPartitionTimeUnit timeUnit) throws Exception {
+    private TableInfo createAutoPartitionedTable(AutoPartitionTimeUnit timeUnit) throws Exception {
         long tableId = 1;
         TablePath tablePath = TablePath.of("db", "test_partition_" + UUID.randomUUID());
         TableDescriptor descriptor =

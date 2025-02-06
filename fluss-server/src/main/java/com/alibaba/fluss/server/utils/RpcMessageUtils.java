@@ -21,6 +21,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -85,6 +86,7 @@ import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLakeTableOffsetReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
@@ -1257,6 +1259,14 @@ public class RpcMessageUtils {
         }
 
         return getLakeTableSnapshotResponse;
+    }
+
+    public static PartitionSpec getPartitionSpec(List<PbPartitionSpec> partitionSpecs) {
+        Map<String, String> partitionFieldSpec = new HashMap<>();
+        for (PbPartitionSpec pbPartitionSpec : partitionSpecs) {
+            partitionFieldSpec.put(pbPartitionSpec.getPartitionKey(), pbPartitionSpec.getValue());
+        }
+        return new PartitionSpec(partitionFieldSpec);
     }
 
     private static PbLakeStorageInfo toPbLakeStorageInfo(LakeStorageInfo lakeStorageInfo) {

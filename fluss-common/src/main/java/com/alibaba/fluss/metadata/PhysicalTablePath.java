@@ -85,7 +85,7 @@ public class PhysicalTablePath implements Serializable {
      */
     public boolean isValid() {
         return getTablePath().isValid()
-                && (partitionName == null || detectInvalidName(partitionName) == null);
+                && (partitionName == null || detectInvalidName(partitionName, true) == null);
     }
 
     @Override

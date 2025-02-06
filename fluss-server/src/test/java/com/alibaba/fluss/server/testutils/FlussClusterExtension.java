@@ -551,6 +551,10 @@ public final class FlussClusterExtension
         return waitUntilPartitionsCreated(tablePath, preCreatePartitions);
     }
 
+    public Map<String, Long> waitUtilPartitionAllReady(TablePath tablePath, int expectCount) {
+        return waitUntilPartitionsCreated(tablePath, expectCount);
+    }
+
     public Map<String, Long> waitUntilPartitionsCreated(TablePath tablePath, int expectCount) {
         return waitValue(
                 () -> {

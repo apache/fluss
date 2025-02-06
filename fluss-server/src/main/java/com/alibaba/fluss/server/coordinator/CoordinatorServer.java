@@ -107,7 +107,7 @@ public class CoordinatorServer extends ServerBase {
     private ZooKeeperClient zkClient;
 
     @GuardedBy("lock")
-    private AutoPartitionManager autoPartitionManager;
+    private PartitionManager partitionManager;
 
     public CoordinatorServer(Configuration conf) {
         super(conf);
@@ -142,12 +142,16 @@ public class CoordinatorServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
+            this.partitionManager = new PartitionManager(metadataCache, zkClient, conf);
+            partitionManager.start();
+
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
                             remoteFileSystem,
                             zkClient,
                             this::getCoordinatorEventManager,
+                            partitionManager,
                             metadataCache);
 
             this.rpcServer =
@@ -173,9 +177,6 @@ public class CoordinatorServer extends ServerBase {
                             conf.getInt(ConfigOptions.COORDINATOR_IO_POOL_SIZE),
                             zkClient);
 
-            this.autoPartitionManager = new AutoPartitionManager(metadataCache, zkClient, conf);
-            autoPartitionManager.start();
-
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
             // up.
@@ -187,7 +188,7 @@ public class CoordinatorServer extends ServerBase {
                             metadataCache,
                             coordinatorChannelManager,
                             bucketSnapshotManager,
-                            autoPartitionManager,
+                            partitionManager,
                             serverMetricGroup);
             coordinatorEventProcessor.startup();
 
@@ -260,8 +261,8 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
-                if (autoPartitionManager != null) {
-                    autoPartitionManager.close();
+                if (partitionManager != null) {
+                    partitionManager.close();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

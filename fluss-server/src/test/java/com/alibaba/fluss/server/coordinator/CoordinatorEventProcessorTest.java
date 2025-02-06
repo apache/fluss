@@ -116,7 +116,7 @@ class CoordinatorEventProcessorTest {
     private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
-    private AutoPartitionManager autoPartitionManager;
+    private PartitionManager partitionManager;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -138,15 +138,15 @@ class CoordinatorEventProcessorTest {
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         completedSnapshotStoreManager = new CompletedSnapshotStoreManager(1, 1, zookeeperClient);
-        autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
+        partitionManager =
+                new PartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
         eventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
                         serverMetadataCache,
                         testCoordinatorChannelManager,
                         completedSnapshotStoreManager,
-                        autoPartitionManager,
+                        partitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         eventProcessor.startup();
         metadataManager.createDatabase(
@@ -206,7 +206,7 @@ class CoordinatorEventProcessorTest {
                         serverMetadataCache,
                         testCoordinatorChannelManager,
                         completedSnapshotStoreManager,
-                        autoPartitionManager,
+                        partitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 testCoordinatorChannelManager,
@@ -396,7 +396,7 @@ class CoordinatorEventProcessorTest {
                         serverMetadataCache,
                         testCoordinatorChannelManager,
                         completedSnapshotStoreManager,
-                        autoPartitionManager,
+                        partitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         CoordinatorContext newCoordinatorContext = eventProcessor.getCoordinatorContext();
 
@@ -444,7 +444,7 @@ class CoordinatorEventProcessorTest {
                         serverMetadataCache,
                         testCoordinatorChannelManager,
                         completedSnapshotStoreManager,
-                        autoPartitionManager,
+                        partitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
         int failedServer = 0;
@@ -630,7 +630,7 @@ class CoordinatorEventProcessorTest {
                         serverMetadataCache,
                         testCoordinatorChannelManager,
                         completedSnapshotStoreManager,
-                        autoPartitionManager,
+                        partitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS);
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 testCoordinatorChannelManager,
@@ -809,12 +809,12 @@ class CoordinatorEventProcessorTest {
                                     // otherwise, should be online
                                     retry(
                                             Duration.ofMinutes(1),
-                                            () -> {
-                                                assertThat(
-                                                                coordinatorContext.getReplicaState(
-                                                                        bucketReplica))
-                                                        .isEqualTo(OnlineReplica);
-                                            });
+                                            () ->
+                                                    assertThat(
+                                                                    coordinatorContext
+                                                                            .getReplicaState(
+                                                                                    bucketReplica))
+                                                            .isEqualTo(OnlineReplica));
                                 }
                             }
                         });

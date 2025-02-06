@@ -18,6 +18,8 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.rpc.messages.AddPartitionRequest;
+import com.alibaba.fluss.rpc.messages.AddPartitionResponse;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
@@ -38,6 +40,8 @@ import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -121,6 +125,16 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<DropTableResponse> dropTable(DropTableRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<AddPartitionResponse> addPartition(AddPartitionRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
         throw new UnsupportedOperationException();
     }
 

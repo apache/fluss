@@ -29,7 +29,9 @@ import com.alibaba.fluss.exception.InvalidReplicationFactorException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.KvSnapshotNotExistException;
 import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
+import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.PartitionSpecInvalidException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
@@ -38,6 +40,7 @@ import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -328,4 +331,50 @@ public interface Admin extends AutoCloseable {
 
     /** Describe the lake used for lakehouse storage. */
     CompletableFuture<LakeStorageInfo> describeLakeStorage();
+
+    /**
+     * Add a partition to a partitioned table.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist and {@code ignoreIfExists}
+     *       is false.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link PartitionAlreadyExistsException} if the partition already exists and {@code
+     *       ignoreIfExists} is false.
+     *   <li>{@link PartitionSpecInvalidException} if the input partition spec is invalid.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param partitionSpec The partition spec to add.
+     * @param ignoreIfExists Flag to specify behavior when a partition with the given name already
+     *     exists: if set to false, throw a PartitionAlreadyExistsException, if set to true, do
+     *     nothing.
+     */
+    CompletableFuture<Void> addPartition(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists);
+
+    /**
+     * Drop a partition from a partitioned table.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist and {@code ignoreIfExists}
+     *       is false.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link PartitionNotExistException} if the partition not exists and {@code
+     *       ignoreIfExists} is false.
+     *   <li>{@link PartitionSpecInvalidException} if the input partition spec is invalid.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param partitionSpec The partition spec to drop.
+     * @param ignoreIfNotExists Flag to specify behavior when a partition with the given name does
+     *     not exist: if set to false, throw a PartitionNotExistException, if set to true, do
+     *     nothing.
+     */
+    CompletableFuture<Void> dropPartition(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists);
 }

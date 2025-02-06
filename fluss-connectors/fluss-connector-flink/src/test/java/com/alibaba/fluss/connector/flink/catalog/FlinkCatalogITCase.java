@@ -18,7 +18,8 @@ package com.alibaba.fluss.connector.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.InvalidConfigException;
+import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.table.api.DataTypes;
@@ -28,6 +29,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -39,6 +41,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -154,17 +159,17 @@ class FlinkCatalogITCase {
 
     @Test
     void testCreateUnSupportedTable() {
-        // test unsupported table, partitioned table without auto partitioned enabled
+        // test unsupported table, partitioned table with illegal partition key.
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
                                         "create table test_table_unsupported"
-                                                + " (a int, b int) partitioned by (b)"))
+                                                + " (a int, $b int) partitioned by ($b)"))
                 .cause()
                 .isInstanceOf(CatalogException.class)
                 .cause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Currently, partitioned table must enable auto partition");
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Partition key should not contains separator: '$'");
 
         // test invalid property
         assertThatThrownBy(
@@ -195,19 +200,93 @@ class FlinkCatalogITCase {
     }
 
     @Test
-    void testCreatePartitionedTable() throws Exception {
+    void testStaticPartitionedTable() throws Exception {
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_static_partitioned_table");
+
+        // 1. first create.
         tEnv.executeSql(
-                "create table test_partitioned_table (a int, b string) partitioned by (b) "
+                "create table test_static_partitioned_table (a int, b int) partitioned by (b)");
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.INT());
+        Schema expectedSchema = schemaBuilder.build();
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        List<String> partitionKeys = table.getPartitionKeys();
+        assertThat(partitionKeys).isEqualTo(Collections.singletonList("b"));
+
+        // 2. add partitions.
+        tEnv.executeSql("alter table test_static_partitioned_table add partition (b = 1)");
+        tEnv.executeSql("alter table test_static_partitioned_table add partition (b = 2)");
+        tEnv.executeSql("alter table test_static_partitioned_table add partition (b = 3)");
+        assertCatalogPartitionSpecsEquals(
+                catalog.listPartitions(objectPath), partitionKeys, Arrays.asList("1", "2", "3"));
+
+        // 3. drop partitions.
+        tEnv.executeSql("alter table test_static_partitioned_table drop partition (b = 1)");
+        assertCatalogPartitionSpecsEquals(
+                catalog.listPartitions(objectPath), partitionKeys, Arrays.asList("2", "3"));
+    }
+
+    @Test
+    void testAutoPartitionedTable() throws Exception {
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_auto_partitioned_table");
+
+        // 1. test add table.
+        tEnv.executeSql(
+                "create table test_auto_partitioned_table (a int, b string) partitioned by (b) "
                         + "with ('table.auto-partition.enabled' = 'true',"
-                        + " 'table.auto-partition.time-unit' = 'day')");
+                        + " 'table.auto-partition.time-unit' = 'year')");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
         Schema expectedSchema = schemaBuilder.build();
-        CatalogTable table =
-                (CatalogTable)
-                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_partitioned_table"));
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
-        assertThat(table.getPartitionKeys()).isEqualTo(Collections.singletonList("b"));
+        List<String> partitionKeys = table.getPartitionKeys();
+        assertThat(partitionKeys).isEqualTo(Collections.singletonList("b"));
+
+        TablePath tablePath = new TablePath(DEFAULT_DB, "test_auto_partitioned_table");
+        FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+        int currentYear = LocalDate.now().getYear();
+        assertCatalogPartitionSpecsEquals(
+                catalog.listPartitions(objectPath),
+                partitionKeys,
+                Arrays.asList(
+                        String.valueOf(currentYear),
+                        String.valueOf(currentYear + 1),
+                        String.valueOf(currentYear + 2),
+                        String.valueOf(currentYear + 3)));
+
+        // 2. test add partitions.
+        tEnv.executeSql(
+                String.format(
+                        "alter table test_auto_partitioned_table add partition (b = '%s')",
+                        currentYear + 10));
+        assertCatalogPartitionSpecsEquals(
+                catalog.listPartitions(objectPath),
+                partitionKeys,
+                Arrays.asList(
+                        String.valueOf(currentYear),
+                        String.valueOf(currentYear + 1),
+                        String.valueOf(currentYear + 2),
+                        String.valueOf(currentYear + 3),
+                        String.valueOf(currentYear + 10)));
+
+        // 3. test drop partitions.
+        tEnv.executeSql(
+                String.format(
+                        "alter table test_auto_partitioned_table drop partition (b = '%s')",
+                        currentYear + 2));
+        tEnv.executeSql(
+                String.format(
+                        "alter table test_auto_partitioned_table drop partition (b = '%s')",
+                        currentYear + 10));
+        assertCatalogPartitionSpecsEquals(
+                catalog.listPartitions(objectPath),
+                partitionKeys,
+                Arrays.asList(
+                        String.valueOf(currentYear),
+                        String.valueOf(currentYear + 1),
+                        String.valueOf(currentYear + 3)));
     }
 
     @Test
@@ -318,5 +397,24 @@ class FlinkCatalogITCase {
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());
         assertThat(actualOptions).isEqualTo(expectedOptions);
+    }
+
+    private void assertCatalogPartitionSpecsEquals(
+            List<CatalogPartitionSpec> catalogPartitionSpecs,
+            List<String> partitionKeys,
+            List<String> expectedPartitionNames) {
+        assertThat(catalogPartitionSpecs.size()).isEqualTo(expectedPartitionNames.size());
+        List<String> actualPartitionNames = new ArrayList<>();
+        for (CatalogPartitionSpec catalogPartitionSpec : catalogPartitionSpecs) {
+            Map<String, String> actualPartitionSpec = catalogPartitionSpec.getPartitionSpec();
+            List<String> orderedPartitionSpec = new ArrayList<>();
+            for (String partitionKey : partitionKeys) {
+                assertThat(actualPartitionSpec.containsKey(partitionKey)).isTrue();
+                orderedPartitionSpec.add(actualPartitionSpec.get(partitionKey));
+            }
+            actualPartitionNames.add(String.join("$", orderedPartitionSpec));
+        }
+        assertThat(actualPartitionNames)
+                .containsExactlyInAnyOrderElementsOf(expectedPartitionNames);
     }
 }

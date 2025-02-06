@@ -27,6 +27,8 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -41,12 +43,15 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
@@ -57,8 +62,8 @@ import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** IT case for Fluss partitioned table. */
-class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
+/** IT case for Fluss auto partitioned table. */
+class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPartitionedPrimaryKeyTable() throws Exception {
@@ -341,6 +346,56 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         // todo: test the case that client produce to a partition to a server, but
         // the server delete the partition at the time, the client should receive the
         // exception and won't retry again and again
+    }
+
+    @Test
+    void testAddPartitionForAutoPartitionedTable() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_auto_partition_table_add_partition_1");
+        Schema schema = createPartitionedTable(tablePath, false);
+        int currentYear = LocalDateTime.now().getYear();
+
+        // add one partition.
+        admin.addPartition(
+                        tablePath,
+                        new PartitionSpec(
+                                Collections.singletonMap("c", String.valueOf(currentYear + 10))),
+                        false)
+                .get();
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath, 5);
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos.size()).isEqualTo(5);
+        assertThat(
+                        partitionInfos.stream()
+                                .map(PartitionInfo::getPartitionName)
+                                .collect(Collectors.toList()))
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.asList(
+                                String.valueOf(currentYear),
+                                String.valueOf(currentYear + 1),
+                                String.valueOf(currentYear + 2),
+                                String.valueOf(currentYear + 3),
+                                String.valueOf(currentYear + 10)));
+
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        int recordsPerPartition = 5;
+        Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
+        for (String partition : partitionIdByNames.keySet()) {
+            for (int i = 0; i < recordsPerPartition; i++) {
+                InternalRow row = row(schema.getRowType(), new Object[] {i, "a" + i, partition});
+                appendWriter.append(row);
+                expectPartitionAppendRows
+                        .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
+                        .add(row);
+            }
+        }
+        appendWriter.flush();
+
+        // then, let's verify the logs
+        verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
     }
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)

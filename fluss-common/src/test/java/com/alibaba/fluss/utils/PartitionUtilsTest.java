@@ -17,47 +17,76 @@
 package com.alibaba.fluss.utils;
 
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
+import com.alibaba.fluss.exception.PartitionSpecInvalidException;
 
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Arrays;
+import java.util.Collections;
 
+import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartitionName;
+import static com.alibaba.fluss.utils.PartitionUtils.getPartitionName;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link com.alibaba.fluss.utils.AutoPartitionUtils}. */
-class AutoPartitionUtilsTest {
+/** Test for {@link PartitionUtils}. */
+class PartitionUtilsTest {
 
     @Test
-    void testGetPartitionString() {
+    void testGetPartitionName() {
+        assertThat(getPartitionName(Collections.singletonList("a"), Collections.singletonList("1")))
+                .isEqualTo("1");
+
+        assertThat(getPartitionName(Arrays.asList("a", "b"), Arrays.asList("1", "2")))
+                .isEqualTo("1$2");
+
+        assertThatThrownBy(
+                        () ->
+                                getPartitionName(
+                                        Arrays.asList("a", "b", "c"), Arrays.asList("1", "2")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "The number of partition keys and partition specs should be the same.");
+
+        assertThatThrownBy(
+                        () -> getPartitionName(Arrays.asList("a", "b"), Arrays.asList("$1", "2")))
+                .isInstanceOf(PartitionSpecInvalidException.class)
+                .hasMessageContaining(
+                        "The value of partition key should not contains separator: '$'");
+    }
+
+    @Test
+    void testGenerateAutoPartitionName() {
         LocalDateTime localDateTime = LocalDateTime.of(2024, 11, 11, 11, 11);
         ZoneId zoneId = ZoneId.of("UTC-8");
         ZonedDateTime zonedDateTime = ZonedDateTime.of(localDateTime, zoneId);
 
         // for year
-        testGetPartitionString(
+        testGenerateAutoPartitionName(
                 zonedDateTime,
                 AutoPartitionTimeUnit.YEAR,
                 new int[] {-1, 0, 1, 2, 3},
                 new String[] {"2023", "2024", "2025", "2026", "2027"});
 
         // for quarter
-        testGetPartitionString(
+        testGenerateAutoPartitionName(
                 zonedDateTime,
                 AutoPartitionTimeUnit.QUARTER,
                 new int[] {-1, 0, 1, 2, 3},
                 new String[] {"20243", "20244", "20251", "20252", "20253"});
 
         // for month
-        testGetPartitionString(
+        testGenerateAutoPartitionName(
                 zonedDateTime,
                 AutoPartitionTimeUnit.MONTH,
                 new int[] {-1, 0, 1, 2, 3},
                 new String[] {"202410", "202411", "202412", "202501", "202502"});
 
         // for day
-        testGetPartitionString(
+        testGenerateAutoPartitionName(
                 zonedDateTime,
                 AutoPartitionTimeUnit.DAY,
                 new int[] {-1, 0, 1, 2, 3, 20},
@@ -66,7 +95,7 @@ class AutoPartitionUtilsTest {
                 });
 
         // for hour
-        testGetPartitionString(
+        testGenerateAutoPartitionName(
                 zonedDateTime,
                 AutoPartitionTimeUnit.HOUR,
                 new int[] {-2, -1, 0, 1, 2, 3, 13},
@@ -81,15 +110,18 @@ class AutoPartitionUtilsTest {
                 });
     }
 
-    void testGetPartitionString(
+    void testGenerateAutoPartitionName(
             ZonedDateTime zonedDateTime,
             AutoPartitionTimeUnit autoPartitionTimeUnit,
             int[] offsets,
             String[] expected) {
         for (int i = 0; i < offsets.length; i++) {
             String partitionString =
-                    AutoPartitionUtils.getPartitionString(
-                            zonedDateTime, offsets[i], autoPartitionTimeUnit);
+                    generateAutoPartitionName(
+                            Collections.singletonList("ds"),
+                            zonedDateTime,
+                            offsets[i],
+                            autoPartitionTimeUnit);
             assertThat(partitionString).isEqualTo(expected[i]);
         }
     }

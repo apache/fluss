@@ -132,7 +132,7 @@ class TableChangeWatcherTest {
             CreateTableEvent createTableEvent = (CreateTableEvent) coordinatorEvent;
             TableInfo tableInfo = createTableEvent.getTableInfo();
             metadataManager.dropTable(tableInfo.getTablePath(), false);
-            expectedTableEvents.add(new DropTableEvent(tableInfo.getTableId(), false));
+            expectedTableEvents.add(new DropTableEvent(tableInfo.getTableId(), false, false));
         }
 
         // collect all events and check the all events
@@ -208,7 +208,7 @@ class TableChangeWatcherTest {
         expectedEvents.add(new DropPartitionEvent(tableId, 1L));
         expectedEvents.add(new DropPartitionEvent(tableId, 2L));
         // drop table event
-        expectedEvents.add(new DropTableEvent(tableId, true));
+        expectedEvents.add(new DropTableEvent(tableId, true, true));
 
         retry(
                 Duration.ofMinutes(1),

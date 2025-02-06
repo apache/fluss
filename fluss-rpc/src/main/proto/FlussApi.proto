@@ -382,6 +382,24 @@ message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
 }
 
+// add partition request and response
+message AddPartitionRequest {
+  required PbTablePath table_path = 1;
+  repeated PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message AddPartitionResponse {}
+
+// drop partition request and response
+message DropPartitionRequest {
+  required PbTablePath table_path = 1;
+  repeated PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message DropPartitionResponse {}
+
 // commit remote log manifest request and response
 message CommitRemoteLogManifestRequest {
   required int64 table_id = 1;
@@ -716,6 +734,11 @@ message PbRemoteLogSegment {
 message PbPartitionInfo {
   required int64 partition_id = 1;
   required string partition_name = 2;
+}
+
+message PbPartitionSpec {
+  required string partition_key = 1;
+  required string value = 2;
 }
 
 message PbLakeStorageInfo {

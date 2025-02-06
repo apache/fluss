@@ -24,7 +24,6 @@ import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
@@ -48,9 +47,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -483,29 +484,52 @@ class FlinkTableSinkITCase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testWritePartitionedTable(boolean isPrimaryKeyTable) throws Exception {
+    @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+    void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isStaticPartitionedTable)
+            throws Exception {
         String tableName =
-                isPrimaryKeyTable
-                        ? "partitioned_primary_key_table_sink"
-                        : "partitioned_log_table_sink";
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-        tEnv.executeSql(
                 String.format(
-                        "create table %s ("
-                                + "a int not null,"
-                                + " b bigint, "
-                                + "c string"
-                                + (isPrimaryKeyTable ? ", primary key (a, c) NOT ENFORCED" : "")
-                                + ")"
-                                + " partitioned by (c) "
-                                + "with ('table.auto-partition.enabled' = 'true',"
-                                + " 'table.auto-partition.time-unit' = 'year')",
-                        tableName));
+                        "%s_partitioned_%s_table_sink",
+                        isStaticPartitionedTable ? "static" : "auto",
+                        isPrimaryKeyTable ? "primary_key" : "log_table");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
-        Collection<String> partitions =
-                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath)
-                        .values();
+        Collection<String> partitions;
+        if (isStaticPartitionedTable) {
+            tEnv.executeSql(
+                    String.format(
+                            "create table %s ("
+                                    + "a int not null,"
+                                    + " b bigint, "
+                                    + "c string"
+                                    + (isPrimaryKeyTable ? ", primary key (a, c) NOT ENFORCED" : "")
+                                    + ")"
+                                    + " partitioned by (c) ",
+                            tableName));
+            int currentYear = LocalDate.now().getYear();
+            tEnv.executeSql(
+                    String.format(
+                            "alter table %s add partition (c = '%s')", tableName, currentYear));
+            partitions =
+                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, 1)
+                            .values();
+        } else {
+            tEnv.executeSql(
+                    String.format(
+                            "create table %s ("
+                                    + "a int not null,"
+                                    + " b bigint, "
+                                    + "c string"
+                                    + (isPrimaryKeyTable ? ", primary key (a, c) NOT ENFORCED" : "")
+                                    + ")"
+                                    + " partitioned by (c) "
+                                    + "with ('table.auto-partition.enabled' = 'true',"
+                                    + " 'table.auto-partition.time-unit' = 'year')",
+                            tableName));
+            partitions =
+                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath)
+                            .values();
+        }
 
         InsertAndExpectValues insertAndExpectValues = rowsToInsertInto(partitions);
 
@@ -524,9 +548,10 @@ class FlinkTableSinkITCase {
 
         // create two partitions, write data to the new partitions
         List<String> newPartitions = Arrays.asList("2000", "2001");
-
-        FlinkTestBase.createPartitions(
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, newPartitions);
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, "2000"));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, "2001"));
 
         // insert into the new partition again, check we can read the data
         // in new partitions

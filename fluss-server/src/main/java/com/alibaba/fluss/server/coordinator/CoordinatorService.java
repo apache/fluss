@@ -21,11 +21,16 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.TableAlreadyExistException;
+import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.rpc.messages.AddPartitionRequest;
+import com.alibaba.fluss.rpc.messages.AddPartitionResponse;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -40,6 +45,8 @@ import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.server.RpcServiceBase;
@@ -58,36 +65,35 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.UncheckedIOException;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getCommitLakeTableSnapshotData;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.getPartitionSpec;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
-
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
+    private final PartitionManager partitionManager;
 
     public CoordinatorService(
             Configuration conf,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             Supplier<EventManager> eventManagerSupplier,
+            PartitionManager partitionManager,
             ServerMetadataCache metadataCache) {
         super(conf, remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataCache);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.eventManagerSupplier = eventManagerSupplier;
+        this.partitionManager = partitionManager;
     }
 
     @Override
@@ -109,7 +115,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return FutureUtils.failedFuture(e);
         }
 
-        DatabaseDescriptor databaseDescriptor = null;
+        DatabaseDescriptor databaseDescriptor;
         if (request.getDatabaseJson() != null) {
             databaseDescriptor = DatabaseDescriptor.fromJsonBytes(request.getDatabaseJson());
         } else {
@@ -133,7 +139,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
 
-        TableDescriptor tableDescriptor = null;
+        TableDescriptor tableDescriptor;
         try {
             tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
         } catch (Exception e) {
@@ -194,6 +200,51 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DropTableResponse response = new DropTableResponse();
         metadataManager.dropTable(
                 toTablePath(request.getTablePath()), request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<AddPartitionResponse> addPartition(AddPartitionRequest request) {
+        AddPartitionResponse response = new AddPartitionResponse();
+        TablePath tablePath = toTablePath(request.getTablePath());
+        if (!metadataManager.tableExists(tablePath)) {
+            if (!request.isIgnoreIfNotExists()) {
+                throw new TableAlreadyExistException("Table " + tablePath + " not exists.");
+            }
+        }
+
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
+            throw new TableNotPartitionedException("Only partitioned table support add partition.");
+        }
+
+        partitionManager.addPartition(
+                tableInfo,
+                getPartitionSpec(request.getPartitionSpecsList()),
+                request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
+        DropPartitionResponse response = new DropPartitionResponse();
+        TablePath tablePath = toTablePath(request.getTablePath());
+        if (!metadataManager.tableExists(tablePath)) {
+            if (!request.isIgnoreIfNotExists()) {
+                throw new TableAlreadyExistException("Table " + tablePath + " not exists.");
+            }
+        }
+
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
+            throw new TableNotPartitionedException(
+                    "Only partitioned table support drop partition.");
+        }
+
+        partitionManager.dropPartition(
+                metadataManager.getTable(tablePath),
+                getPartitionSpec(request.getPartitionSpecsList()),
+                request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 

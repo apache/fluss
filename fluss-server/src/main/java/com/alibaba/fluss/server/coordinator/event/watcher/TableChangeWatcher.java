@@ -141,6 +141,7 @@ public class TableChangeWatcher {
                             eventManager.put(
                                     new DropTableEvent(
                                             table.tableId,
+                                            !table.partitionKeys.isEmpty(),
                                             AutoPartitionStrategy.from(table.properties)
                                                     .isAutoPartitionEnabled()));
                         }

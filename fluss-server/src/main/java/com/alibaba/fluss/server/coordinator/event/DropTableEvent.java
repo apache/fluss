@@ -23,16 +23,23 @@ public class DropTableEvent implements CoordinatorEvent {
 
     private final long tableId;
 
+    private final boolean isPartitionTable;
+
     // true if the table is with auto partition enabled
     private final boolean isAutoPartitionTable;
 
-    public DropTableEvent(long tableId, boolean isAutoPartitionTable) {
+    public DropTableEvent(long tableId, boolean isPartitionTable, boolean isAutoPartitionTable) {
         this.tableId = tableId;
+        this.isPartitionTable = isPartitionTable;
         this.isAutoPartitionTable = isAutoPartitionTable;
     }
 
     public long getTableId() {
         return tableId;
+    }
+
+    public boolean isPartitionTable() {
+        return isPartitionTable;
     }
 
     public boolean isAutoPartitionTable() {
@@ -48,12 +55,14 @@ public class DropTableEvent implements CoordinatorEvent {
             return false;
         }
         DropTableEvent that = (DropTableEvent) o;
-        return tableId == that.tableId && isAutoPartitionTable == that.isAutoPartitionTable;
+        return tableId == that.tableId
+                && isPartitionTable == that.isPartitionTable
+                && isAutoPartitionTable == that.isAutoPartitionTable;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, isAutoPartitionTable);
+        return Objects.hash(tableId, isPartitionTable, isAutoPartitionTable);
     }
 
     @Override
@@ -61,6 +70,8 @@ public class DropTableEvent implements CoordinatorEvent {
         return "DropTableEvent{"
                 + "tableId="
                 + tableId
+                + ", isPartitionTable="
+                + isPartitionTable
                 + ", isAutoPartitionTable="
                 + isAutoPartitionTable
                 + '}';

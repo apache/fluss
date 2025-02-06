@@ -26,6 +26,8 @@ import com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -63,6 +65,7 @@ import org.apache.flink.table.factories.Factory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -70,6 +73,11 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
+import static com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
+import static com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils.isPartitionSpecInvalid;
+import static com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils.isTableNotExist;
+import static com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils.isTableNotPartitioned;
 import static com.alibaba.fluss.connector.flink.utils.FlinkConversions.toFlussDatabase;
 import static org.apache.flink.util.Preconditions.checkArgument;
 
@@ -275,7 +283,7 @@ public class FlinkCatalog implements Catalog {
             return catalogTable.copy(newOptions);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (CatalogExceptionUtils.isTableNotExist(t)) {
+            if (isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else {
                 throw new CatalogException(
@@ -319,7 +327,7 @@ public class FlinkCatalog implements Catalog {
             admin.deleteTable(tablePath, ignoreIfNotExists).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (CatalogExceptionUtils.isTableNotExist(t)) {
+            if (isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else {
                 throw new CatalogException(
@@ -371,8 +379,42 @@ public class FlinkCatalog implements Catalog {
     @Override
     public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
-        // TODO: use admin.listPartitionInfos()
-        return Collections.emptyList();
+        // TODO lake table should support.
+        if (objectPath.toString().contains("$lake")) {
+            return Collections.emptyList();
+        }
+
+        try {
+            TablePath tablePath = toTablePath(objectPath);
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            List<String> partitionKeys = tableInfo.getPartitionKeys();
+
+            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+            List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                String[] partitionSpec = partitionInfo.getPartitionName().split("\\$");
+                checkArgument(partitionKeys.size() == partitionSpec.length);
+                Map<String, String> flinkPartitionSpec = new HashMap<>();
+                for (int i = 0; i < partitionKeys.size(); i++) {
+                    flinkPartitionSpec.put(partitionKeys.get(i), partitionSpec[i]);
+                }
+                catalogPartitionSpecs.add(new CatalogPartitionSpec(flinkPartitionSpec));
+            }
+            return catalogPartitionSpecs;
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (isTableNotPartitioned(t)) {
+                throw new TableNotPartitionedException(getName(), objectPath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to list partitions of table %s in %s",
+                                objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
@@ -412,14 +454,51 @@ public class FlinkCatalog implements Catalog {
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, PartitionAlreadyExistsException,
                     CatalogException {
-        throw new UnsupportedOperationException();
+        PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
+        try {
+            admin.addPartition(toTablePath(objectPath), partitionSpec, b).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (isTableNotPartitioned(t)) {
+                throw new TableNotPartitionedException(getName(), objectPath);
+            } else if (isPartitionSpecInvalid(t)) {
+                throw new PartitionSpecInvalidException(
+                        getName(), null, objectPath, catalogPartitionSpec, e);
+            } else if (isPartitionAlreadyExists(t)) {
+                throw new PartitionAlreadyExistsException(
+                        getName(), objectPath, catalogPartitionSpec);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to create partition with partition spec %s of table %s in %s",
+                                catalogPartitionSpec, objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
     public void dropPartition(
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
             throws PartitionNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
+        try {
+            admin.dropPartition(toTablePath(objectPath), partitionSpec, b).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isPartitionNotExist(t)) {
+                throw new PartitionNotExistException(
+                        getName(), objectPath, catalogPartitionSpec, e);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to drop partition with partition spec %s of table %s in %s",
+                                catalogPartitionSpec, objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override

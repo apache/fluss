@@ -141,6 +141,10 @@ public class TablePath implements Serializable {
     }
 
     static String detectInvalidName(String identifier) {
+        return detectInvalidName(identifier, false);
+    }
+
+    static String detectInvalidName(String identifier, boolean isPartitionName) {
         if (identifier == null) {
             return "null string is not allowed";
         }
@@ -159,7 +163,7 @@ public class TablePath implements Serializable {
                     + "' is longer than the max allowed length "
                     + MAX_NAME_LENGTH;
         }
-        if (containsInvalidPattern(identifier)) {
+        if (containsInvalidPattern(identifier, isPartitionName)) {
             return "'"
                     + identifier
                     + "' contains one or more characters other than "
@@ -169,7 +173,7 @@ public class TablePath implements Serializable {
     }
 
     /** Valid characters for Fluss table names are the ASCII alphanumerics, '_', and '-'. */
-    private static boolean containsInvalidPattern(String identifier) {
+    private static boolean containsInvalidPattern(String identifier, boolean isPartitionName) {
         for (int i = 0; i < identifier.length(); ++i) {
             char c = identifier.charAt(i);
 
@@ -180,6 +184,12 @@ public class TablePath implements Serializable {
                             || (c >= 'A' && c <= 'Z')
                             || c == '_'
                             || c == '-';
+
+            // partition name can contain '$' as separator.
+            if (isPartitionName && (c == '$')) {
+                validChar = true;
+            }
+
             if (!validChar) {
                 return true;
             }

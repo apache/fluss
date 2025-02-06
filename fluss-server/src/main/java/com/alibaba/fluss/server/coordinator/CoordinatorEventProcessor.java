@@ -87,7 +87,6 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -117,7 +116,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorEventManager coordinatorEventManager;
     private final MetadataManager metadataManager;
     private final TableManager tableManager;
-    private final AutoPartitionManager autoPartitionManager;
+    private final PartitionManager partitionManager;
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
@@ -143,7 +142,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ServerMetadataCache serverMetadataCache,
             CoordinatorChannelManager coordinatorChannelManager,
             CompletedSnapshotStoreManager completedSnapshotStoreManager,
-            AutoPartitionManager autoPartitionManager,
+            PartitionManager partitionManager,
             CoordinatorMetricGroup coordinatorMetricGroup) {
         this(
                 zooKeeperClient,
@@ -151,7 +150,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorChannelManager,
                 new CoordinatorContext(),
                 completedSnapshotStoreManager,
-                autoPartitionManager,
+                partitionManager,
                 coordinatorMetricGroup);
     }
 
@@ -161,7 +160,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CoordinatorChannelManager coordinatorChannelManager,
             CoordinatorContext coordinatorContext,
             CompletedSnapshotStoreManager completedSnapshotStoreManager,
-            AutoPartitionManager autoPartitionManager,
+            PartitionManager partitionManager,
             CoordinatorMetricGroup coordinatorMetricGroup) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
@@ -192,7 +191,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorRequestBatch =
                 new CoordinatorRequestBatch(coordinatorChannelManager, coordinatorEventManager);
         this.completedSnapshotStoreManager = completedSnapshotStoreManager;
-        this.autoPartitionManager = autoPartitionManager;
+        this.partitionManager = partitionManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         registerMetric();
     }
@@ -291,7 +290,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorChannelManager.startup(tabletServers);
 
         // load all tables
-        Map<Long, TableInfo> autoPartitionTables = new HashMap<>();
+        List<TableInfo> partitionTables = new ArrayList<>();
         for (String database : metadataManager.listDatabases()) {
             for (String tableName : metadataManager.listTables(database)) {
                 TablePath tablePath = TablePath.of(database, tableName);
@@ -306,17 +305,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         // put partition info to coordinator context
                         coordinatorContext.putPartition(partition.getValue(), partition.getKey());
                     }
-                    // if the table is auto partition, put the partitions info
-                    if (tableInfo
-                            .getTableConfig()
-                            .getAutoPartitionStrategy()
-                            .isAutoPartitionEnabled()) {
-                        autoPartitionTables.put(tableInfo.getTableId(), tableInfo);
-                    }
+                    partitionTables.add(tableInfo);
                 }
             }
         }
-        autoPartitionManager.initAutoPartitionTables(autoPartitionTables);
+        partitionManager.initPartitionTables(partitionTables);
 
         // load all assignment
         loadTableAssignment();
@@ -484,8 +477,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableInfo.getTablePath(),
                 tableInfo.getTableId(),
                 createTableEvent.getTableAssignment());
-        if (createTableEvent.isAutoPartitionTable()) {
-            autoPartitionManager.addAutoPartitionTable(tableInfo);
+        if (tableInfo.isPartitioned()) {
+            partitionManager.addPartitionTable(tableInfo);
         }
     }
 
@@ -501,8 +494,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void processDropTable(DropTableEvent dropTableEvent) {
         coordinatorContext.queueTableDeletion(Collections.singleton(dropTableEvent.getTableId()));
         tableManager.onDeleteTable(dropTableEvent.getTableId());
-        if (dropTableEvent.isAutoPartitionTable()) {
-            autoPartitionManager.removeAutoPartitionTable(dropTableEvent.getTableId());
+        if (dropTableEvent.isPartitionTable()) {
+            partitionManager.removePartitionTable(
+                    dropTableEvent.getTableId(), dropTableEvent.isAutoPartitionTable());
         }
     }
 
