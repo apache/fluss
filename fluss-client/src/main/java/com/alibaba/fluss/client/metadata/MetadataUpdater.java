@@ -124,7 +124,15 @@ public class MetadataUpdater {
         if (serverNode == null) {
             for (int i = 0; i < MAX_RETRY_TIMES; i++) {
                 TablePath tablePath = cluster.getTablePathOrElseThrow(tableBucket.getTableId());
-                updateMetadata(Collections.singleton(tablePath), null, null);
+                // check if bucket is for a partition
+                if (tableBucket.getPartitionId() != null) {
+                    updateMetadata(
+                            Collections.singleton(tablePath),
+                            null,
+                            Collections.singleton(tableBucket.getPartitionId()));
+                } else {
+                    updateMetadata(Collections.singleton(tablePath), null, null);
+                }
                 serverNode = cluster.leaderFor(tableBucket);
                 if (serverNode != null) {
                     break;
