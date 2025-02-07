@@ -470,7 +470,7 @@ class FlinkTableSinkITCase {
                                 + "c string "
                                 + (isPrimaryKeyTable ? ", primary key (a) NOT ENFORCED" : "")
                                 + ") with('bucket.num' = '3',"
-                                + " 'sink.ignore_delete'='true')",
+                                + " 'sink.ignore-delete'='true')",
                         sinkName));
         tEnv.executeSql(String.format("INSERT INTO %s SELECT * FROM %s", sinkName, sourceName))
                 .await();

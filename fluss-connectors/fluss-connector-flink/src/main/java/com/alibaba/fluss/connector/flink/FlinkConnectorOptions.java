@@ -99,7 +99,7 @@ public class FlinkConnectorOptions {
                                     + " A non-positive value disables the partition discovery.");
 
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
-            ConfigOptions.key("sink.ignore_delete")
+            ConfigOptions.key("sink.ignore-delete")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
