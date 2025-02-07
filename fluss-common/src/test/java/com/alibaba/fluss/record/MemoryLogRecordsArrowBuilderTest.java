@@ -326,6 +326,50 @@ public class MemoryLogRecordsArrowBuilderTest {
         }
     }
 
+    @Test
+    void testResetWriterState() throws Exception {
+        int maxSizeInBytes = 1024;
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L,
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        ArrowCompressionInfo.NO_COMPRESSION);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024);
+        List<RowKind> rowKinds =
+                DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
+        List<InternalRow> rows =
+                DATA1.stream()
+                        .map(object -> row(DATA1_ROW_TYPE, object))
+                        .collect(Collectors.toList());
+        List<Object[]> expectedResult = new ArrayList<>();
+        while (!builder.isFull()) {
+            int rndIndex = RandomUtils.nextInt(0, DATA1.size());
+            builder.append(rowKinds.get(rndIndex), rows.get(rndIndex));
+            expectedResult.add(DATA1.get(rndIndex));
+        }
+        assertThat(builder.isFull()).isTrue();
+        builder.setWriterState(1L, 0);
+        builder.close();
+        assertThat(builder.isClosed()).isTrue();
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult);
+        LogRecordBatch recordBatch = records.batches().iterator().next();
+        assertThat(recordBatch.writerId()).isEqualTo(1L);
+        assertThat(recordBatch.batchSequence()).isEqualTo(0);
+
+        // test reset writer state and build (This situation will happen when the produceLog request
+        // failed and the batch is re-enqueue to send with different write state).
+        builder.resetWriterState(1L, 1);
+        records = MemoryLogRecords.pointToBytesView(builder.build());
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult);
+        recordBatch = records.batches().iterator().next();
+        assertThat(recordBatch.writerId()).isEqualTo(1L);
+        assertThat(recordBatch.batchSequence()).isEqualTo(1);
+    }
+
     private static List<ArrowCompressionInfo> compressionInfos() {
         return Arrays.asList(
                 new ArrowCompressionInfo(ArrowCompressionType.LZ4_FRAME, -1),
