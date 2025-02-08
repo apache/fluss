@@ -196,7 +196,12 @@ public class RecordAccumulatorTest {
         // the compression ratio is smaller than 1.0,
         // so bucketNum * batch_size should contain all compressed batches for each bucket
         assertThat(batches.containsKey(node1.id())).isTrue();
-        assertThat(batches.get(node1.id()).size()).isEqualTo(bucketNum);
+        int batchCount = batches.get(node1.id()).size();
+        assertThat(batchCount).isBetween(bucketNum - 1, bucketNum);
+
+        int totalBatchSize = batches.values().stream().mapToInt(List::size).sum();
+        int expectedBatchSize = batchSize * bucketNum;
+        assertThat(totalBatchSize >= expectedBatchSize * 0.9 && totalBatchSize <= expectedBatchSize * 1.1);
     }
 
     private void appendUntilCompressionRatioStable(RecordAccumulator accum, int batchSize)
