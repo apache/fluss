@@ -31,6 +31,7 @@ import com.alibaba.fluss.connector.flink.source.split.HybridSnapshotLogSplit;
 import com.alibaba.fluss.connector.flink.source.split.LogSplit;
 import com.alibaba.fluss.connector.flink.source.split.SnapshotSplit;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
@@ -241,18 +242,28 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         } else {
             Long partitionId = tableBucket.getPartitionId();
             int bucket = tableBucket.getBucket();
-            if (partitionId != null) {
-                logScanner.subscribe(partitionId, bucket, startingOffset);
-            } else {
-                logScanner.subscribe(bucket, startingOffset);
+            try {
+                if (partitionId != null) {
+                    // Try to subscribe using the partition id.
+                    logScanner.subscribe(partitionId, bucket, startingOffset);
+                } else {
+                    // If no partition id, subscribe by bucket only.
+                    logScanner.subscribe(bucket, startingOffset);
+                }
+            } catch (PartitionNotExistException e) {
+                // Instead of throwing, log a warning and return without adding the bucket.
+                LOG.warn(
+                        "Partition {} does not exist when subscribing to log for split {}. Skipping subscription.",
+                        partitionId,
+                        split.splitId());
+                return;
             }
 
             LOG.info(
                     "Subscribe to read log for split {} from offset {}.",
                     split.splitId(),
                     startingOffset);
-
-            // Track the new bucket in metrics
+            // Track the new bucket in metrics and internal state.
             flinkSourceReaderMetrics.registerTableBucket(tableBucket);
             subscribedBuckets.put(tableBucket, split.splitId());
         }
@@ -262,8 +273,31 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         // todo, may consider to close the current snapshot reader if
         // the current snapshot split is in the partition buckets
 
-        // may remove from pending snapshot splits
+        // Set to collect table buckets that are unsubscribed.
         Set<TableBucket> unsubscribedTableBuckets = new HashSet<>();
+        // First, if the current active bounded split belongs to a removed partition,
+        // finish it so it will not be restored.
+        if (currentBoundedSplit != null) {
+            TableBucket currentBucket = currentBoundedSplit.getTableBucket();
+            if (removedPartitions.containsKey(currentBucket.getPartitionId())) {
+                try {
+                    // Mark the current split as finished.
+                    closeCurrentBoundedSplit();
+                    unsubscribedTableBuckets.add(currentBucket);
+                    LOG.info(
+                            "Mark current bounded split {} as finished for removed partition {}.",
+                            currentBucket,
+                            removedPartitions.get(currentBucket.getPartitionId()));
+                } catch (IOException e) {
+                    LOG.warn(
+                            "Failed to close current bounded split for removed partition {}.",
+                            currentBucket.getPartitionId(),
+                            e);
+                }
+            }
+        }
+
+        // Remove pending snapshot splits whose table buckets belong to removed partitions.
         Iterator<SourceSplitBase> snapshotSplitIterator = boundedSplits.iterator();
         while (snapshotSplitIterator.hasNext()) {
             SourceSplitBase split = snapshotSplitIterator.next();
@@ -272,7 +306,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 snapshotSplitIterator.remove();
                 unsubscribedTableBuckets.add(tableBucket);
                 LOG.info(
-                        "Cancel to read snapshot split {} for non-existed partition {}.",
+                        "Cancel reading snapshot split {} for removed partition {}.",
                         split.splitId(),
                         removedPartitions.get(tableBucket.getPartitionId()));
             }
