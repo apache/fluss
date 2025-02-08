@@ -28,6 +28,9 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metrics.MeterView;
+import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordReadContext;
@@ -38,6 +41,7 @@ import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
 import com.alibaba.fluss.row.encode.ValueDecoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer;
+import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.KvPreWriteBufferTruncateReason;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -50,6 +54,7 @@ import com.alibaba.fluss.server.kv.wal.IndexWalBuilder;
 import com.alibaba.fluss.server.kv.wal.WalBuilder;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogTablet;
+import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.types.DataType;
@@ -237,6 +242,24 @@ public final class KvTablet {
         return flushedLogOffset;
     }
 
+    public void registerMetrics(BucketMetricGroup bucketMetricGroup) {
+        MetricGroup metricGroup = bucketMetricGroup.addGroup("kv");
+
+        // about pre-write buffer.
+        metricGroup.meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_RATE,
+                new MeterView(kvPreWriteBuffer.getFlushCount()));
+        metricGroup.histogram(
+                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS,
+                kvPreWriteBuffer.getFlushLatencyHistogram());
+        metricGroup.meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE,
+                new MeterView(kvPreWriteBuffer.getTruncateAsDuplicatedCount()));
+        metricGroup.meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE,
+                new MeterView(kvPreWriteBuffer.getTruncateAsErrorCount()));
+    }
+
     /**
      * Put the KvRecordBatch into the kv storage, and return the appended wal log info.
      *
@@ -344,7 +367,16 @@ public final class KvTablet {
                         // put a batch into file with recordCount 0 and offset plus 1L, it will
                         // update the batchSequence corresponding to the writerId and also increment
                         // the CDC log offset by 1.
-                        return logTablet.appendAsLeader(walBuilder.build());
+                        LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+
+                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
+                        // already written.
+                        if (logAppendInfo.duplicated()) {
+                            kvPreWriteBuffer.truncateTo(
+                                    logEndOffsetOfPrevBatch,
+                                    KvPreWriteBufferTruncateReason.DUPLICATED);
+                        }
+                        return logAppendInfo;
                     } catch (Throwable t) {
                         // While encounter error here, the CDC logs may fail writing to disk,
                         // and the client probably will resend the batch. If we do not remove the
@@ -352,7 +384,8 @@ public final class KvTablet {
                         // retry-send batch will produce incorrect CDC logs.
                         // TODO for some errors, the cdc logs may already be written to disk, for
                         //  those errors, we should not truncate the kvPreWriteBuffer.
-                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, t.getMessage());
+                        kvPreWriteBuffer.truncateTo(
+                                logEndOffsetOfPrevBatch, KvPreWriteBufferTruncateReason.ERROR);
                         throw t;
                     } finally {
                         // deallocate the memory and arrow writer used by the wal builder

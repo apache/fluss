@@ -683,6 +683,36 @@ class KvTabletTest {
         checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.toRowType());
     }
 
+    @Test
+    void testAppendDuplicatedKvBatch() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+        long writeId = 100L;
+        List<KvRecord> kvData1 =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "v11"}),
+                        kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v21"}),
+                        kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v23"}));
+        KvRecordBatch kvRecordBatch = kvRecordBatchFactory.ofRecords(kvData1, writeId, 0);
+        kvTablet.putAsLeader(kvRecordBatch, null);
+        assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(3);
+
+        // append a duplicated kv batch (with same writerId and batchSequenceId).
+        // This situation occurs when the client sends a KV batch of data to server, the server
+        // successfully ack the cdc log, but a network error occurs while returning the success
+        // response to client. The client will re-send this batch.
+        kvTablet.putAsLeader(kvRecordBatch, null);
+        assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(3);
+
+        // append a duplicated kv batch again.
+        kvTablet.putAsLeader(kvRecordBatch, null);
+        assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(3);
+
+        // append a new batch, the max LSN should be updated.
+        KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData1, writeId, 1);
+        kvTablet.putAsLeader(kvRecordBatch2, null);
+        assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(9);
+    }
+
     private LogRecords readLogRecords() throws Exception {
         return readLogRecords(0L);
     }

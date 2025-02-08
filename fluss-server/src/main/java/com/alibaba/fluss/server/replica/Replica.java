@@ -627,6 +627,9 @@ public final class Replica {
                                 tableConfig,
                                 arrowCompressionInfo);
             }
+
+            kvTablet.registerMetrics(bucketMetricGroup);
+
             logTablet.updateMinRetainOffset(restoreStartOffset);
             recoverKvTablet(restoreStartOffset);
         } catch (Exception e) {

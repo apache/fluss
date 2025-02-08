@@ -145,7 +145,7 @@ class KvPreWriteBufferTest {
         assertThat(buffer.getMaxLSN()).isEqualTo(elementCount - 1);
 
         // truncate to 5.
-        buffer.truncateTo(5, "test");
+        buffer.truncateTo(5, KvPreWriteBuffer.KvPreWriteBufferTruncateReason.ERROR);
         assertThat(buffer.getMaxLSN()).isEqualTo(4);
         assertThat(buffer.getAllKvEntries().size()).isEqualTo(5);
         for (int i = 0; i < 5; i++) {
@@ -165,7 +165,7 @@ class KvPreWriteBufferTest {
         bufferPut(buffer, "key1", "value1-1", elementCount++);
         assertThat(getValue(buffer, "key1")).isEqualTo("value1-1");
         assertThat(buffer.getMaxLSN()).isEqualTo(elementCount - 1);
-        buffer.truncateTo(5, "test");
+        buffer.truncateTo(5, KvPreWriteBuffer.KvPreWriteBufferTruncateReason.ERROR);
         assertThat(buffer.getMaxLSN()).isEqualTo(4);
         assertThat(buffer.getAllKvEntries().size()).isEqualTo(5);
         // to delete records and update records operation will be truncate.
@@ -175,7 +175,7 @@ class KvPreWriteBufferTest {
         }
 
         // truncate to zero
-        buffer.truncateTo(0, "test");
+        buffer.truncateTo(0, KvPreWriteBuffer.KvPreWriteBufferTruncateReason.ERROR);
         assertThat(buffer.getMaxLSN()).isEqualTo(-1);
         assertThat(buffer.getAllKvEntries().size()).isEqualTo(0);
         assertThat(buffer.getKvEntryMap().size()).isEqualTo(0);

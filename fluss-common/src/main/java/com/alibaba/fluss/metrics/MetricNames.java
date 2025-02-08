@@ -108,6 +108,13 @@ public class MetricNames {
 
     // for kv tablet
     public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
+    public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE =
+            "preWriteBufferTruncateAsDuplicatedPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
+            "preWriteBufferTruncateAsErrorPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_FLUSH_RATE = "preWriteBufferFlushPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS =
+            "preWriteBufferFlushLatencyMs";
 
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
