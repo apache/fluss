@@ -192,7 +192,7 @@ class NewTableAddedPaimonListenerTest {
                             "log_c1", "log_c2", OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME
                         }),
                 null,
-                -1,
+                BUCKET_NUM,
                 customProperties);
 
         // create partitioned table
