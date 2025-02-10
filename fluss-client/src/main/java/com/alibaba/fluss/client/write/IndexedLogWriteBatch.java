@@ -25,14 +25,16 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A batch of log records managed in INDEXED format that is or will be sent to server by {@link
@@ -61,14 +63,16 @@ public final class IndexedLogWriteBatch extends WriteBatch {
 
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
-        InternalRow row = writeRecord.getRow();
-        Preconditions.checkArgument(
+        checkNotNull(callback, "write callback must be not null");
+        checkNotNull(writeRecord.getRow(), "row must not be null for log record");
+        checkArgument(writeRecord.getKey() == null, "key must be null for log record");
+        checkArgument(
                 writeRecord.getTargetColumns() == null,
                 "target columns must be null for log record");
-        Preconditions.checkArgument(
-                writeRecord.getKey() == null, "key must be null for log record");
-        Preconditions.checkNotNull(row != null, "row must not be null for log record");
-        Preconditions.checkNotNull(callback, "write callback must be not null");
+        checkArgument(
+                writeRecord.getRow() instanceof IndexedRow,
+                "row must not be IndexRow for indexed log table");
+        IndexedRow row = (IndexedRow) writeRecord.getRow();
         if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
             return false;
         } else {

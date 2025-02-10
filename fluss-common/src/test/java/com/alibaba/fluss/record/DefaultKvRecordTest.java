@@ -20,7 +20,6 @@ import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.row.BinaryString;
-import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TestInternalRowGenerator;
 import com.alibaba.fluss.row.compacted.CompactedRow;
 import com.alibaba.fluss.row.encode.CompactedRowEncoder;
@@ -42,7 +41,7 @@ class DefaultKvRecordTest extends KvTestBase {
                 KvRecordReadContext.createReadContext(KvFormat.COMPACTED, baseRowFieldTypes);
         // create row.
 
-        InternalRow row;
+        CompactedRow row;
         try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
             writer.startNewRow();
             writer.encodeField(0, 10);

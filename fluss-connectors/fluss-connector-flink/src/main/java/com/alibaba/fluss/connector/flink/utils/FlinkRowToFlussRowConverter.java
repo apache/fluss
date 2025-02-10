@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.utils;
 
+import com.alibaba.fluss.connector.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
@@ -36,7 +37,14 @@ import org.apache.flink.table.types.logical.RowType;
 
 import java.io.Serializable;
 
-/** A converter to convert Flink's {@link RowData} to Fluss's {@link InternalRow}. */
+/**
+ * A converter to convert Flink's {@link RowData} to Fluss's {@link InternalRow}.
+ *
+ * @deprecated This class is deprecated and will be removed in future versions. It is recommended to
+ *     use the {@link FlinkAsFlussRow} to wraps Flink's {@link RowData} as Fluss's {@link
+ *     InternalRow}.
+ */
+@Deprecated
 public class FlinkRowToFlussRowConverter implements AutoCloseable {
 
     private final int fieldLength;

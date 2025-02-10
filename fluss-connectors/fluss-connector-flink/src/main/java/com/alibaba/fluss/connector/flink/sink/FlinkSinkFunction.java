@@ -21,8 +21,8 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.metrics.FlinkMetricRegistry;
+import com.alibaba.fluss.connector.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
-import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.Gauge;
@@ -65,9 +65,9 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
     protected final @Nullable int[] targetColumnIndexes;
     private final boolean ignoreDelete;
 
+    private transient FlinkAsFlussRow sinkRow;
     private transient Connection connection;
     protected transient Table table;
-    protected transient FlinkRowToFlussRowConverter dataConverter;
     protected transient FlinkMetricRegistry flinkMetricRegistry;
 
     protected transient SinkWriterMetricGroup metricGroup;
@@ -111,7 +111,7 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
         connection = ConnectionFactory.createConnection(flussConfig, flinkMetricRegistry);
         table = connection.getTable(tablePath);
         sanityCheck(table.getTableInfo());
-        dataConverter = createFlinkRowToFlussRowConverter();
+        sinkRow = new FlinkAsFlussRow();
         initMetrics();
     }
 
@@ -130,7 +130,7 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
             return;
         }
 
-        InternalRow internalRow = dataConverter.toInternalRow(value);
+        InternalRow internalRow = sinkRow.replace(value);
         CompletableFuture<?> writeFuture = writeRow(value.getRowKind(), internalRow);
         writeFuture.exceptionally(
                 exception -> {
@@ -157,8 +157,6 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
     }
 
     abstract void flush() throws IOException;
-
-    abstract FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter();
 
     abstract CompletableFuture<?> writeRow(RowKind rowKind, InternalRow internalRow);
 
@@ -188,15 +186,6 @@ abstract class FlinkSinkFunction extends RichSinkFunction<RowData>
             flinkMetricRegistry.close();
         }
         flinkMetricRegistry = null;
-
-        try {
-            if (dataConverter != null) {
-                dataConverter.close();
-            }
-        } catch (Exception e) {
-            LOG.warn("Exception occurs while closing Fluss RowData Converter.", e);
-        }
-        dataConverter = null;
 
         // Rethrow exception for the case in which close is called before writer() and flush().
         checkAsyncException();

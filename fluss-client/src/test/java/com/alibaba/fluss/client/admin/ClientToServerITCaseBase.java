@@ -36,7 +36,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.indexed.IndexedRow;
+import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.RowType;
 
@@ -52,8 +52,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
-import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -237,21 +236,22 @@ public abstract class ClientToServerITCaseBase {
         }
     }
 
-    protected static void verifyPutAndLookup(Table table, Schema tableSchema, Object[] fields)
-            throws Exception {
+    protected static void verifyPutAndLookup(Table table, Object[] fields) throws Exception {
+        Schema schema = table.getTableInfo().getSchema();
         // put data.
-        InternalRow row = compactedRow(tableSchema.getRowType(), fields);
+        InternalRow row = row(fields);
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
         // put data.
         upsertWriter.upsert(row);
         upsertWriter.flush();
         // lookup this key.
         Lookuper lookuper = table.newLookup().createLookuper();
-        IndexedRow keyRow = keyRow(tableSchema, fields);
-        assertThat(lookupRow(lookuper, keyRow)).isEqualTo(row);
+        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+        keyRow.replaceRow(row);
+        assertThatRow(lookupRow(lookuper, keyRow)).withSchema(schema.getRowType()).isEqualTo(row);
     }
 
-    protected static InternalRow lookupRow(Lookuper lookuper, IndexedRow keyRow) throws Exception {
+    protected static InternalRow lookupRow(Lookuper lookuper, InternalRow keyRow) throws Exception {
         // lookup this key.
         return lookuper.lookup(keyRow).get().getSingletonRow();
     }

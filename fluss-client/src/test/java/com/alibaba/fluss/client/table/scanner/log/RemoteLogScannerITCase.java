@@ -34,6 +34,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.DataTypes;
@@ -51,7 +52,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA2_ROW_TYPE;
@@ -86,11 +86,11 @@ public class RemoteLogScannerITCase {
 
         // append a batch of data.
         int recordSize = 20;
-        List<InternalRow> expectedRows = new ArrayList<>();
+        List<GenericRow> expectedRows = new ArrayList<>();
         Table table = conn.getTable(DATA1_TABLE_PATH);
         AppendWriter appendWriter = table.newAppend().createWriter();
         for (int i = 0; i < recordSize; i++) {
-            InternalRow row = row(DATA1_ROW_TYPE, new Object[] {i, "aaaaa"});
+            GenericRow row = row(i, "aaaaa");
             expectedRows.add(row);
             appendWriter.append(row).get();
         }
@@ -100,13 +100,13 @@ public class RemoteLogScannerITCase {
         // test fetch.
         LogScanner logScanner = table.newScan().createLogScanner();
         logScanner.subscribeFromBeginning(0);
-        List<InternalRow> rowList = new ArrayList<>();
+        List<GenericRow> rowList = new ArrayList<>();
         while (rowList.size() < recordSize) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (ScanRecord scanRecord : scanRecords) {
                 assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                 InternalRow row = scanRecord.getRow();
-                rowList.add(row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                rowList.add(row(row.getInt(0), row.getString(1)));
             }
         }
         assertThat(rowList).hasSize(recordSize);
@@ -133,13 +133,12 @@ public class RemoteLogScannerITCase {
         long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor);
 
         // append a batch of data.
-        List<InternalRow> expectedRows = new ArrayList<>();
         Table table = conn.getTable(DATA1_TABLE_PATH);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int expectedSize = 30;
         for (int i = 0; i < expectedSize; i++) {
             String value = i % 2 == 0 ? "hello, friend" + i : null;
-            InternalRow row = row(schema.getRowType(), new Object[] {i, 100, value, i * 10L});
+            GenericRow row = row(i, 100, value, i * 10L);
             appendWriter.append(row);
             if (i % 10 == 0) {
                 // insert 3 bathes, each batch has 10 rows
@@ -228,7 +227,7 @@ public class RemoteLogScannerITCase {
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow row = row(DATA2_ROW_TYPE, new Object[] {i, "aaaab" + i, partition});
+                GenericRow row = row(i, "aaaab" + i, partition);
                 appendWriter.append(row).get();
                 expectPartitionAppendRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())

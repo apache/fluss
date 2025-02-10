@@ -23,8 +23,8 @@ import com.alibaba.fluss.client.lookup.LookupType;
 import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.connector.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
-import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
 import com.alibaba.fluss.connector.flink.utils.FlinkUtils;
 import com.alibaba.fluss.connector.flink.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.metadata.TablePath;
@@ -58,11 +58,11 @@ public class FlinkLookupFunction extends LookupFunction {
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
 
-    private transient FlinkRowToFlussRowConverter flinkRowToFlussRowConverter;
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
     private transient Lookuper lookuper;
+    private transient FlinkAsFlussRow lookupRow;
     @Nullable private transient ProjectedRow projectedRow;
 
     public FlinkLookupFunction(
@@ -85,12 +85,7 @@ public class FlinkLookupFunction extends LookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
-        // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
-        int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
-        RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-        flinkRowToFlussRowConverter =
-                FlinkRowToFlussRowConverter.create(
-                        lookupKeyRowType, table.getTableInfo().getTableConfig().getKvFormat());
+        lookupRow = new FlinkAsFlussRow();
 
         final RowType outputRowType;
         if (projection == null) {
@@ -106,6 +101,8 @@ public class FlinkLookupFunction extends LookupFunction {
 
         Lookup lookup = table.newLookup();
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+            int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
+            RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
             lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
         }
         lookuper = lookup.createLookuper();
@@ -124,11 +121,8 @@ public class FlinkLookupFunction extends LookupFunction {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
         LookupNormalizer.RemainingFilter remainingFilter =
                 lookupNormalizer.createRemainingFilter(keyRow);
-        // to lookup a key, we will need to do two data conversion,
-        // first is converting from flink row to fluss row,
-        // second is extracting key from the fluss row when calling method table.get(flussKeyRow)
-        // todo: may be reduce to one data conversion when it's a bottle neck
-        InternalRow flussKeyRow = flinkRowToFlussRowConverter.toInternalRow(normalizedKeyRow);
+        // wrap flink row as fluss row to lookup, the flink row has already been in expected order.
+        InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
         for (int retry = 0; retry <= maxRetryTimes; retry++) {
             try {
                 List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get().getRowList();

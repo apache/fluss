@@ -175,11 +175,11 @@ class ArrowReaderWriterTest {
                         provider.getOrCreateWriter(
                                 1L, 1, 1024, DATA1_ROW_TYPE, ArrowCompressionInfo.NO_COMPRESSION)) {
             while (!writer.isFull()) {
-                writer.writeRow(row(DATA1_ROW_TYPE, DATA1.get(0)));
+                writer.writeRow(row(DATA1.get(0)));
             }
 
             // exceed max size
-            assertThatThrownBy(() -> writer.writeRow(row(DATA1_ROW_TYPE, DATA1.get(0))))
+            assertThatThrownBy(() -> writer.writeRow(row(DATA1.get(0))))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage(
                             "The arrow batch size is full and it shouldn't accept writing new rows, it's a bug.");

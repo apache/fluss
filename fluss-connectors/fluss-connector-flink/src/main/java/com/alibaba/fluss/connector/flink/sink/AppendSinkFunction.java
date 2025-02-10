@@ -18,7 +18,6 @@ package com.alibaba.fluss.connector.flink.sink;
 
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
@@ -59,11 +58,6 @@ class AppendSinkFunction extends FlinkSinkFunction {
     void flush() throws IOException {
         appendWriter.flush();
         checkAsyncException();
-    }
-
-    @Override
-    FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter() {
-        return FlinkRowToFlussRowConverter.create(tableRowType);
     }
 
     @Override

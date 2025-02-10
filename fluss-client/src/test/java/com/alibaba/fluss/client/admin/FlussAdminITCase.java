@@ -65,7 +65,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -519,9 +519,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(tablePath1)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < 10; i++) {
-                upsertWriter.upsert(
-                        compactedRow(
-                                DEFAULT_SCHEMA.getRowType(), new Object[] {i, "v" + i, i + 1}));
+                upsertWriter.upsert(row(i, "v" + i, i + 1));
             }
             upsertWriter.flush();
 
@@ -539,8 +537,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             assertTableSnapshot(snapshots, bucketNum, expectedSnapshots);
 
             // write data again, should fall into bucket 2
-            upsertWriter.upsert(
-                    compactedRow(DEFAULT_SCHEMA.getRowType(), new Object[] {0, "v000", 1}));
+            upsertWriter.upsert(row(0, "v000", 1));
             upsertWriter.flush();
 
             TableBucket tb = new TableBucket(snapshots.getTableId(), 2);

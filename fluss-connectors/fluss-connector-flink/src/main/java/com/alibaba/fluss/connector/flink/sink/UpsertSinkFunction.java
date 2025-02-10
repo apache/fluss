@@ -19,7 +19,6 @@ package com.alibaba.fluss.connector.flink.sink;
 import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
@@ -67,12 +66,6 @@ class UpsertSinkFunction extends FlinkSinkFunction {
         } else {
             throw new UnsupportedOperationException("Unsupported row kind: " + rowKind);
         }
-    }
-
-    @Override
-    FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter() {
-        return FlinkRowToFlussRowConverter.create(
-                tableRowType, table.getTableInfo().getTableConfig().getKvFormat());
     }
 
     @Override

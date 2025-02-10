@@ -60,7 +60,6 @@ import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
-import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -414,7 +413,7 @@ public class TabletServiceITCase {
         // first lookup without in table, key = 1.
         Object[] key1 = DATA_1_WITH_KEY_AND_VALUE.get(0).f0;
         KeyEncoder keyEncoder = new KeyEncoder(DATA1_ROW_TYPE, new int[] {0});
-        byte[] key1Bytes = keyEncoder.encode(row(DATA1_KEY_TYPE, key1));
+        byte[] key1Bytes = keyEncoder.encode(row(key1));
         assertLookupResponse(
                 leaderGateWay.lookup(newLookupRequest(tableId, 0, key1Bytes)).get(), null);
 
@@ -435,7 +434,7 @@ public class TabletServiceITCase {
 
         // key = 3 is deleted, need return null.
         Object[] key3 = DATA_1_WITH_KEY_AND_VALUE.get(2).f0;
-        byte[] key3Bytes = keyEncoder.encode(row(DATA1_KEY_TYPE, key3));
+        byte[] key3Bytes = keyEncoder.encode(row(key3));
         assertLookupResponse(
                 leaderGateWay.lookup(newLookupRequest(tableId, 0, key3Bytes)).get(), null);
 
@@ -489,10 +488,6 @@ public class TabletServiceITCase {
                         new DataField("a", DataTypes.INT()),
                         new DataField("b", DataTypes.STRING()),
                         new DataField("c", DataTypes.BIGINT()));
-        RowType prefixKeyType =
-                DataTypes.ROW(
-                        new DataField("a", DataTypes.INT()),
-                        new DataField("b", DataTypes.STRING()));
 
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
@@ -507,7 +502,7 @@ public class TabletServiceITCase {
         // first prefix lookup without in table, prefix key = (1, "a").
         Object[] prefixKey1 = new Object[] {1, "a"};
         KeyEncoder keyEncoder = new KeyEncoder(rowType, new int[] {0, 1});
-        byte[] prefixKey1Bytes = keyEncoder.encode(row(prefixKeyType, prefixKey1));
+        byte[] prefixKey1Bytes = keyEncoder.encode(row(prefixKey1));
         assertPrefixLookupResponse(
                 leaderGateWay
                         .prefixLookup(
@@ -555,7 +550,7 @@ public class TabletServiceITCase {
 
         // third prefix lookup in table for multi prefix keys, prefix key = (1, "a") and (2, "a").
         Object[] prefixKey2 = new Object[] {2, "a"};
-        byte[] prefixKey2Bytes = keyEncoder.encode(row(prefixKeyType, prefixKey2));
+        byte[] prefixKey2Bytes = keyEncoder.encode(row(prefixKey2));
         List<byte[]> key2ExpectedValues =
                 Collections.singletonList(
                         ValueEncoder.encodeValue(

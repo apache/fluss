@@ -28,9 +28,9 @@ import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.bytesview.BytesView;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CloseableIterator;
@@ -77,16 +77,13 @@ public class ArrowLogWriteBatchTest {
                 createArrowLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), maxSizeInBytes);
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {count, "a" + count})),
-                newWriteCallback())) {
+                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
             count++;
         }
 
         // batch full.
         boolean appendResult =
-                arrowLogWriteBatch.tryAppend(
-                        createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {1, "a"})),
-                        newWriteCallback());
+                arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
         assertThat(appendResult).isFalse();
 
         // close this batch.
@@ -138,16 +135,13 @@ public class ArrowLogWriteBatchTest {
 
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {count, "a" + count})),
-                newWriteCallback())) {
+                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
             count++;
         }
 
         // batch full.
         boolean appendResult =
-                arrowLogWriteBatch.tryAppend(
-                        createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {1, "a"})),
-                        newWriteCallback());
+                arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
         assertThat(appendResult).isFalse();
 
         // close this batch.
@@ -213,10 +207,7 @@ public class ArrowLogWriteBatchTest {
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
-                    createWriteRecord(
-                            row(
-                                    DATA1_ROW_TYPE,
-                                    new Object[] {recordCount, RandomStringUtils.random(100)})),
+                    createWriteRecord(row(recordCount, RandomStringUtils.random(100))),
                     newWriteCallback())) {
                 recordCount++;
             }
@@ -224,8 +215,7 @@ public class ArrowLogWriteBatchTest {
             // batch full.
             boolean appendResult =
                     arrowLogWriteBatch.tryAppend(
-                            createWriteRecord(row(DATA1_ROW_TYPE, new Object[] {1, "a"})),
-                            newWriteCallback());
+                            createWriteRecord(row(1, "a")), newWriteCallback());
             assertThat(appendResult).isFalse();
 
             // close this batch and recycle the writer.
@@ -244,8 +234,8 @@ public class ArrowLogWriteBatchTest {
         assertThat(currentRatio).isLessThan(1.0f);
     }
 
-    private WriteRecord createWriteRecord(IndexedRow row) {
-        return new WriteRecord(DATA1_PHYSICAL_TABLE_PATH, WriteKind.APPEND, row, null);
+    private WriteRecord createWriteRecord(GenericRow row) {
+        return WriteRecord.forArrowAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private ArrowLogWriteBatch createArrowLogWriteBatch(TableBucket tb, int maxSizeInBytes) {

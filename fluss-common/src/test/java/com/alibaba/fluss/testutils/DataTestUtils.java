@@ -42,6 +42,7 @@ import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.row.BinaryString;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
@@ -87,8 +88,25 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Utils for data related test. like create {@link IndexedRow} and create {@link MemoryLogRecords}.
  */
 public class DataTestUtils {
+
+    public static GenericRow row(Object... objects) {
+        GenericRow row = new GenericRow(objects.length);
+        for (int i = 0; i < objects.length; i++) {
+            if (objects[i] instanceof String) {
+                row.setField(i, BinaryString.fromString((String) objects[i]));
+            } else {
+                row.setField(i, objects[i]);
+            }
+        }
+        return row;
+    }
+
     public static CompactedRow compactedRow(RowType rowType, Object[] objects) {
         return genCompacted(rowType, objects);
+    }
+
+    public static IndexedRow indexedRow(RowType rowType, Object[] objects) {
+        return genIndexed(rowType, objects);
     }
 
     /**
@@ -97,10 +115,10 @@ public class DataTestUtils {
     public static IndexedRow keyRow(Schema schema, Object[] objects) {
         int[] pkIndex = schema.getPrimaryKeyIndexes();
         RowType rowType = schema.getRowType();
-        return row(rowType, objects).projectRow(pkIndex);
+        return genIndexed(rowType, objects).projectRow(pkIndex);
     }
 
-    public static IndexedRow row(RowType rowType, Object[] data) {
+    private static IndexedRow genIndexed(RowType rowType, Object[] data) {
         DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
         assertThat(dataTypes.length).isEqualTo(data.length);
         RowEncoder rowEncoder = RowEncoder.create(KvFormat.INDEXED, dataTypes);
@@ -217,7 +235,7 @@ public class DataTestUtils {
         for (Tuple2<Object[], Object[]> keyAndValue : keyAndValues) {
             records.add(
                     kvRecordFactory.ofRecord(
-                            keyEncoder.encode(row(keyType, keyAndValue.f0)), keyAndValue.f1));
+                            keyEncoder.encode(row(keyAndValue.f0)), keyAndValue.f1));
         }
         return kvRecordBatchFactory.ofRecords(records, writerId, batchSequence);
     }
@@ -390,9 +408,7 @@ public class DataTestUtils {
             throws Exception {
         if (logFormat == LogFormat.ARROW) {
             List<InternalRow> rows =
-                    objects.stream()
-                            .map(object -> row(rowType, object))
-                            .collect(Collectors.toList());
+                    objects.stream().map(DataTestUtils::row).collect(Collectors.toList());
             return createArrowMemoryLogRecords(
                     rowType,
                     offsetBase,
@@ -411,7 +427,7 @@ public class DataTestUtils {
                     batchSequence,
                     rowKinds,
                     objects.stream()
-                            .map(object -> row(rowType, object))
+                            .map(object -> indexedRow(rowType, object))
                             .collect(Collectors.toList()));
         }
     }

@@ -188,6 +188,19 @@ public interface InternalRow {
     }
 
     /**
+     * Creates an array of accessors for getting fields in an internal row data structure.
+     *
+     * @param rowType the row type of the internal row
+     */
+    static FieldGetter[] createFieldGetters(RowType rowType) {
+        final FieldGetter[] fieldGetters = new FieldGetter[rowType.getFieldCount()];
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            fieldGetters[i] = createFieldGetter(rowType.getTypeAt(i), i);
+        }
+        return fieldGetters;
+    }
+
+    /**
      * Creates an accessor for getting elements in an internal row data structure at the given
      * position.
      *

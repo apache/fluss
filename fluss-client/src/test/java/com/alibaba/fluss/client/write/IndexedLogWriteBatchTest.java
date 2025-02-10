@@ -40,7 +40,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.DataTestUtils.indexedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -51,7 +51,7 @@ public class IndexedLogWriteBatchTest {
 
     @BeforeEach
     void setup() {
-        row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         estimatedSizeInBytes = DefaultLogRecord.sizeOf(row);
     }
 
@@ -143,7 +143,7 @@ public class IndexedLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord() {
-        return new WriteRecord(DATA1_PHYSICAL_TABLE_PATH, WriteKind.APPEND, row, null);
+        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private IndexedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)

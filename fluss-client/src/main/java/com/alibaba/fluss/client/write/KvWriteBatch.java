@@ -25,9 +25,9 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.KvRecordBatchBuilder;
 import com.alibaba.fluss.record.bytesview.BytesView;
+import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -35,6 +35,9 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A batch of kv records that is or will be sent to server by {@link PutKvRequest}.
@@ -78,9 +81,9 @@ public class KvWriteBatch extends WriteBatch {
         }
 
         byte[] key = writeRecord.getKey();
-        InternalRow row = writeRecord.getRow();
-        Preconditions.checkNotNull(key != null, "key must be not null for kv record");
-        Preconditions.checkNotNull(callback, "write callback must be not null");
+        checkNotNull(key, "key must be not null for kv record");
+        checkNotNull(callback, "write callback must be not null");
+        BinaryRow row = checkRow(writeRecord.getRow());
         if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
             return false;
         } else {
@@ -144,5 +147,14 @@ public class KvWriteBatch extends WriteBatch {
     public void resetWriterState(long writerId, int batchSequence) {
         super.resetWriterState(writerId, batchSequence);
         recordsBuilder.resetWriterState(writerId, batchSequence);
+    }
+
+    private static BinaryRow checkRow(@Nullable InternalRow row) {
+        if (row != null) {
+            checkArgument(row instanceof BinaryRow, "row must be BinaryRow for kv record");
+            return (BinaryRow) row;
+        } else {
+            return null;
+        }
     }
 }

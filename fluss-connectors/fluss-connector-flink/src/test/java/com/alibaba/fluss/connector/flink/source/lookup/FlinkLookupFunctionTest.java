@@ -38,7 +38,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FlinkLookupFunction} and {@link FlinkAsyncLookupFunction}. */
@@ -138,13 +138,11 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
     private void prepareData(TablePath tablePath, int rows) throws Exception {
         createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
 
-        com.alibaba.fluss.types.RowType rowType = DEFAULT_PK_TABLE_SCHEMA.getRowType();
-
         // first write some data to the table
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
-                upsertWriter.upsert(compactedRow(rowType, new Object[] {i, "name" + i}));
+                upsertWriter.upsert(row(i, "name" + i));
             }
             upsertWriter.flush();
         }

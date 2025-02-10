@@ -25,7 +25,6 @@ import com.alibaba.fluss.row.compacted.CompactedRowReader;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.row.indexed.IndexedRowTest;
 import com.alibaba.fluss.row.indexed.IndexedRowWriter;
-import com.alibaba.fluss.testutils.DataTestUtils;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
@@ -37,6 +36,7 @@ import java.util.List;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.row.TestInternalRowGenerator.createAllRowType;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -47,13 +47,13 @@ class KeyEncoderTest {
     void testEncode() {
         // test int, long as primary key
         final RowType rowType = RowType.of(DataTypes.INT(), DataTypes.BIGINT(), DataTypes.INT());
-        InternalRow row = DataTestUtils.row(rowType, new Object[] {1, 3L, 2});
+        InternalRow row = row(1, 3L, 2);
         KeyEncoder encoder = new KeyEncoder(rowType);
 
         byte[] bytes = encoder.encode(row);
         assertThat(bytes).isEqualTo(new byte[] {1, 3, 2});
 
-        row = DataTestUtils.row(rowType, new Object[] {2, 5L, 6});
+        row = row(2, 5L, 6);
         bytes = encoder.encode(row);
         assertThat(bytes).isEqualTo(new byte[] {2, 5, 6});
     }
@@ -65,7 +65,7 @@ class KeyEncoderTest {
         final String[] fieldNames = new String[] {"partition", "f1", "f2"};
         final RowType rowType = RowType.of(dataTypes, fieldNames);
 
-        InternalRow row = DataTestUtils.row(rowType, new Object[] {"p1", 1L, "a2"});
+        InternalRow row = row("p1", 1L, "a2");
         List<String> pk = Collections.singletonList("f2");
 
         KeyEncoder keyEncoder = KeyEncoder.createKeyEncoder(rowType, pk);
@@ -91,7 +91,7 @@ class KeyEncoderTest {
         int[] pkIndexes = new int[] {0, 1, 2};
         final KeyEncoder keyEncoder = new KeyEncoder(rowType, pkIndexes);
 
-        InternalRow row = DataTestUtils.row(rowType, new Object[] {1, 3L, 2, "a1"});
+        InternalRow row = row(1, 3L, 2, "a1");
 
         byte[] keyBytes = keyEncoder.encode(row);
         assertThat(keyBytes).isEqualTo(new byte[] {1, 3, 2});
@@ -99,8 +99,7 @@ class KeyEncoderTest {
         // should throw exception when the column is null
         assertThatThrownBy(
                         () -> {
-                            InternalRow nullRow =
-                                    DataTestUtils.row(rowType, new Object[] {1, 2L, null, "a2"});
+                            InternalRow nullRow = row(1, 2L, null, "a2");
                             keyEncoder.encode(nullRow);
                         })
                 .isInstanceOf(IllegalArgumentException.class)
@@ -117,14 +116,11 @@ class KeyEncoderTest {
         pkIndexes = new int[] {1, 2};
         final KeyEncoder keyEncoder1 = new KeyEncoder(rowType1, pkIndexes);
         row =
-                DataTestUtils.row(
-                        rowType1,
-                        new Object[] {
-                            BinaryString.fromString("a1"),
-                            1,
-                            BinaryString.fromString("a2"),
-                            BinaryString.fromString("a3")
-                        });
+                row(
+                        BinaryString.fromString("a1"),
+                        1,
+                        BinaryString.fromString("a2"),
+                        BinaryString.fromString("a3"));
         keyBytes = keyEncoder1.encode(row);
 
         InternalRow keyRow =

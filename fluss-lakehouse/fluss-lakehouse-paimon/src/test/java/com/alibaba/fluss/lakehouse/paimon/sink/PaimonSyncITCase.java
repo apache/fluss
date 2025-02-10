@@ -45,8 +45,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -74,11 +72,7 @@ class PaimonSyncITCase extends PaimonSyncTestBase {
         long t1Id = createPkTable(t1);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         // write records
-        List<InternalRow> rows =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
         // write records
         writeRows(t1, rows, false);
         waitUntilSnapshot(t1Id, 1, 0);
@@ -100,11 +94,7 @@ class PaimonSyncITCase extends PaimonSyncTestBase {
         List<InternalRow> flussRows = new ArrayList<>();
         // write records
         for (int i = 0; i < 10; i++) {
-            rows =
-                    Arrays.asList(
-                            row(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                            row(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                            row(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+            rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
             flussRows.addAll(rows);
             // write records
             writeRows(t2, rows, true);
@@ -118,11 +108,7 @@ class PaimonSyncITCase extends PaimonSyncTestBase {
 
         // then write data to the pk tables
         // write records
-        rows =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v111"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v222"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v333"}));
+        rows = Arrays.asList(row(1, "v111"), row(2, "v222"), row(3, "v333"));
         // write records
         writeRows(t1, rows, false);
 

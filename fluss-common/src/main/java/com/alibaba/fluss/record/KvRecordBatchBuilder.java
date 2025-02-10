@@ -24,7 +24,7 @@ import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.compacted.CompactedRow;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.utils.Preconditions;
@@ -89,17 +89,11 @@ public class KvRecordBatchBuilder implements AutoCloseable {
                 schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat);
     }
 
-    public static KvRecordBatchBuilder builderWithUnlimited(
-            int schemaId, AbstractPagedOutputView outputView, KvFormat kvFormat) {
-        return new KvRecordBatchBuilder(
-                schemaId, CURRENT_KV_MAGIC_VALUE, Integer.MAX_VALUE, outputView, kvFormat);
-    }
-
     /**
      * Check if we have room for a new record containing the given row. If no records have been
      * appended, then this returns true.
      */
-    public boolean hasRoomFor(byte[] key, InternalRow row) {
+    public boolean hasRoomFor(byte[] key, @Nullable BinaryRow row) {
         return sizeInBytes + DefaultKvRecord.sizeOf(key, row) <= writeLimit;
     }
 
@@ -110,13 +104,12 @@ public class KvRecordBatchBuilder implements AutoCloseable {
      * @param row the value in the KvRecord to be appended. If the value is null, it means the
      *     KvRecord is for delete the corresponding key.
      */
-    public void append(byte[] key, @Nullable InternalRow row) throws IOException {
+    public void append(byte[] key, @Nullable BinaryRow row) throws IOException {
         if (isClosed) {
             throw new IllegalStateException(
                     "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
         }
-        int recordByteSizes =
-                DefaultKvRecord.writeTo(pagedOutputView, key, toTargetKvFormatRow(row));
+        int recordByteSizes = DefaultKvRecord.writeTo(pagedOutputView, key, validateRowFormat(row));
         currentRecordNumber++;
         if (currentRecordNumber == Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
@@ -198,30 +191,30 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         return 0;
     }
 
-    // TODO: support arbitrary InternalRow, especially for the GenericRow.
-    private InternalRow toTargetKvFormatRow(InternalRow internalRow) {
-        if (internalRow == null) {
+    /** Validate the row instance according to the kv format. */
+    private BinaryRow validateRowFormat(BinaryRow row) {
+        if (row == null) {
             return null;
         }
         if (kvFormat == KvFormat.COMPACTED) {
-            if (internalRow instanceof CompactedRow) {
-                return internalRow;
+            if (row instanceof CompactedRow) {
+                return row;
             } else {
                 // currently, we don't support to do row conversion for simplicity,
                 // just throw exception
                 throw new IllegalArgumentException(
                         "The row to be appended to kv record batch with compacted format "
                                 + "should be a compacted row, but got a "
-                                + internalRow.getClass().getSimpleName());
+                                + row.getClass().getSimpleName());
             }
         } else if (kvFormat == KvFormat.INDEXED) {
-            if (internalRow instanceof IndexedRow) {
-                return internalRow;
+            if (row instanceof IndexedRow) {
+                return row;
             } else {
                 throw new IllegalArgumentException(
                         "The row to be appended to kv record batch "
                                 + "with indexed format should be a indexed row, but got "
-                                + internalRow.getClass().getSimpleName());
+                                + row.getClass().getSimpleName());
             }
         } else {
             throw new UnsupportedOperationException("Unsupported kv format: " + kvFormat);

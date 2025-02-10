@@ -18,10 +18,6 @@ package com.alibaba.fluss.connector.flink.source.reader;
 
 import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.indexed.IndexedRow;
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
@@ -39,10 +35,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link BoundedSplitReader}. */
 class BoundedSplitReaderTest {
-
-    private static final RowType TEST_ROW_TYPE =
-            DataTypes.ROW(
-                    new DataField("a", DataTypes.INT()), new DataField("b", DataTypes.STRING()));
 
     @Test
     void testReadWithOutSkip() throws IOException {
@@ -106,8 +98,7 @@ class BoundedSplitReaderTest {
     private List<InternalRow> mockRows(int numRows) {
         List<InternalRow> rows = new ArrayList<>(numRows);
         for (int i = 0; i < numRows; i++) {
-            IndexedRow indexedRow = row(TEST_ROW_TYPE, new Object[] {i, "test" + i});
-            rows.add(indexedRow);
+            rows.add(row(i, "test" + i));
         }
         return rows;
     }

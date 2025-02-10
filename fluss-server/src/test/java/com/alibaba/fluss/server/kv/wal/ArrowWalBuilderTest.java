@@ -44,7 +44,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEqualsWithRowKind;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ArrowWalBuilder}. */
@@ -82,7 +82,7 @@ class ArrowWalBuilderTest {
         for (int i = 0; i < 10; i++) {
             RowKind rowKind = RowKind.INSERT;
             Object[] objects = {i, "v" + i};
-            walBuilder.append(rowKind, compactedRow(DATA1_ROW_TYPE, objects));
+            walBuilder.append(rowKind, row(objects));
             expectedResult.add(Tuple2.of(rowKind, objects));
         }
 
@@ -124,7 +124,7 @@ class ArrowWalBuilderTest {
         for (int i = 0; i < 10; i++) {
             RowKind rowKind = RowKind.INSERT;
             Object[] objects = {i, "v" + i};
-            walBuilder.append(rowKind, compactedRow(DATA1_ROW_TYPE, objects));
+            walBuilder.append(rowKind, row(objects));
             expectedResult.add(Tuple2.of(rowKind, objects));
         }
 

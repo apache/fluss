@@ -23,9 +23,9 @@ import com.alibaba.fluss.client.lookup.LookupType;
 import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.connector.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer.RemainingFilter;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
-import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
 import com.alibaba.fluss.connector.flink.utils.FlinkUtils;
 import com.alibaba.fluss.connector.flink.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.exception.TableNotExistException;
@@ -62,11 +62,11 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
 
-    private transient FlinkRowToFlussRowConverter flinkRowToFlussRowConverter;
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
     private transient Lookuper lookuper;
+    private transient FlinkAsFlussRow lookupRow;
 
     public FlinkAsyncLookupFunction(
             Configuration flussConfig,
@@ -88,12 +88,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
-        // TODO: convert to Fluss GenericRow to avoid unnecessary deserialization
-        int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
-        RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-        flinkRowToFlussRowConverter =
-                FlinkRowToFlussRowConverter.create(
-                        lookupKeyRowType, table.getTableInfo().getTableConfig().getKvFormat());
+        lookupRow = new FlinkAsFlussRow();
 
         final RowType outputRowType;
         if (projection == null) {
@@ -106,6 +101,8 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
 
         Lookup lookup = table.newLookup();
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+            int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
+            RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
             lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
         }
         lookuper = lookup.createLookuper();
@@ -122,7 +119,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     public CompletableFuture<Collection<RowData>> asyncLookup(RowData keyRow) {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
         RemainingFilter remainingFilter = lookupNormalizer.createRemainingFilter(keyRow);
-        InternalRow flussKeyRow = flinkRowToFlussRowConverter.toInternalRow(normalizedKeyRow);
+        InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
         CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
         // fetch result
         fetchResult(future, 0, flussKeyRow, remainingFilter);

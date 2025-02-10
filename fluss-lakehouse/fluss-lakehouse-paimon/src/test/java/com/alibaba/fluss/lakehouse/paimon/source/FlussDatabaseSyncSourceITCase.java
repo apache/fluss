@@ -28,7 +28,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.core.execution.JobClient;
@@ -47,8 +46,6 @@ import java.util.Map;
 import java.util.Objects;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,11 +118,7 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
         createTable(TablePath.of(sinkDataBase, "logtable"), table2Descriptor);
         // create in source database
         createTable(t2, table2Descriptor);
-        List<InternalRow> rows =
-                Arrays.asList(
-                        row(DATA1_ROW_TYPE, new Object[] {11, "v1"}),
-                        row(DATA1_ROW_TYPE, new Object[] {12, "v2"}),
-                        row(DATA1_ROW_TYPE, new Object[] {13, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(11, "v1"), row(12, "v2"), row(13, "v3"));
         // write records
         writeRows(t2, rows, true);
         // check the records are synced to target database
@@ -157,15 +150,14 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
 
     private List<String> writeRowsIntoPartitionedTable(
             TablePath tablePath, Map<Long, String> partitionNameByIds) throws Exception {
-        RowType rowType = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR.getSchema().getRowType();
         List<String> expected = new ArrayList<>();
         List<InternalRow> rows = new ArrayList<>();
         for (String partitionName : partitionNameByIds.values()) {
             rows.addAll(
                     Arrays.asList(
-                            compactedRow(rowType, new Object[] {11, "v1", partitionName}),
-                            compactedRow(rowType, new Object[] {12, "v2", partitionName}),
-                            compactedRow(rowType, new Object[] {13, "v3", partitionName})));
+                            row(11, "v1", partitionName),
+                            row(12, "v2", partitionName),
+                            row(13, "v3", partitionName)));
             expected.addAll(
                     Arrays.asList(
                             "+I[11, v1, " + partitionName + "]",
@@ -242,11 +234,7 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
                                         .build())
                         .build();
         createTable(tablePath, table1Descriptor);
-        List<InternalRow> rows =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
         // write records
         writeRows(tablePath, rows, false);
         return table1Descriptor;

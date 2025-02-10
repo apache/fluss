@@ -34,6 +34,8 @@ import org.apache.flink.types.RowKind;
 
 import java.io.Serializable;
 
+import static com.alibaba.fluss.connector.flink.utils.FlinkConversions.toFlinkRowKind;
+
 /**
  * A converter to convert Fluss's {@link InternalRow} to Flink's {@link RowData}.
  *
@@ -70,22 +72,6 @@ public class FlussRowToFlinkRowConverter {
             genericRowData.setField(i, toFlinkFieldConverters[i].deserialize(flussField));
         }
         return genericRowData;
-    }
-
-    private RowKind toFlinkRowKind(com.alibaba.fluss.record.RowKind rowKind) {
-        switch (rowKind) {
-            case APPEND_ONLY:
-            case INSERT:
-                return RowKind.INSERT;
-            case UPDATE_BEFORE:
-                return RowKind.UPDATE_BEFORE;
-            case UPDATE_AFTER:
-                return RowKind.UPDATE_AFTER;
-            case DELETE:
-                return RowKind.DELETE;
-            default:
-                throw new IllegalArgumentException("Unsupported row kind: " + rowKind);
-        }
     }
 
     /**

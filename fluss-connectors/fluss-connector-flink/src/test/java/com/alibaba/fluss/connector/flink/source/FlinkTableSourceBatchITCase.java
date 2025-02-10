@@ -22,7 +22,6 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -47,7 +46,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -366,13 +365,12 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // prepare table data
         try (Table dimTable = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
-            RowType dimTableRowType = dimTable.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
                                 ? new Object[] {i, "address" + i, "name" + i}
                                 : new Object[] {i, "address" + i, "name" + i, partition1};
-                upsertWriter.upsert(compactedRow(dimTableRowType, values));
+                upsertWriter.upsert(row(values));
             }
             upsertWriter.flush();
         }
@@ -399,10 +397,9 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // prepare table data
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
-            RowType rowType = table.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values = new Object[] {i, "address" + i, "name" + i};
-                appendWriter.append(compactedRow(rowType, values));
+                appendWriter.append(row(values));
                 // make sure every bucket has records
                 appendWriter.flush();
             }
@@ -435,11 +432,10 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // prepare table data
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
-            RowType rowType = table.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 for (String partition : partitions) {
                     Object[] values = new Object[] {i, "address" + i, "name" + i, partition};
-                    appendWriter.append(compactedRow(rowType, values));
+                    appendWriter.append(row(values));
                     // make sure every bucket has records
                     appendWriter.flush();
                 }

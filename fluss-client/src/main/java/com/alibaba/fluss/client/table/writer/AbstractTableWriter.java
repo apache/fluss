@@ -36,6 +36,7 @@ public abstract class AbstractTableWriter implements TableWriter {
     // the table path that the data will write to
     protected final TablePath tablePath;
     protected final WriterClient writerClient;
+    protected final int fieldCount;
     private final @Nullable PartitionGetter partitionFieldGetter;
     private final MetadataUpdater metadataUpdater;
 
@@ -46,6 +47,7 @@ public abstract class AbstractTableWriter implements TableWriter {
             WriterClient writerClient) {
         this.tablePath = tablePath;
         this.writerClient = writerClient;
+        this.fieldCount = tableInfo.getRowType().getFieldCount();
         this.partitionFieldGetter =
                 tableInfo.isPartitioned()
                         ? new PartitionGetter(tableInfo.getRowType(), tableInfo.getPartitionKeys())
@@ -89,6 +91,17 @@ public abstract class AbstractTableWriter implements TableWriter {
             // may update partition info
             metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
             return partitionPath;
+        }
+    }
+
+    protected void checkFieldCount(InternalRow row) {
+        if (row.getFieldCount() != fieldCount) {
+            throw new IllegalArgumentException(
+                    "The field count of the row does not match the table schema. "
+                            + "Expected: "
+                            + fieldCount
+                            + ", Actual: "
+                            + row.getFieldCount());
         }
     }
 }

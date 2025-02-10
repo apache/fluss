@@ -23,8 +23,8 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -62,9 +62,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -123,11 +121,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         tEnv.executeSql("create table like_test LIKE Orders (EXCLUDING OPTIONS)").await();
         TablePath tablePath = TablePath.of(DEFAULT_DB, "like_test");
 
-        List<InternalRow> rows =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         // write records
         writeRows(tablePath, rows, false);
@@ -146,11 +140,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                 "create table read_snapshot_test (a int not null primary key not enforced, b varchar)");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "read_snapshot_test");
 
-        List<InternalRow> rows =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         // write records
         writeRows(tablePath, rows, false);
@@ -168,11 +158,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         tEnv.executeSql("create table non_pk_table_test (a int, b varchar)");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "non_pk_table_test");
 
-        List<InternalRow> rows =
-                Arrays.asList(
-                        row(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        row(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        row(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         // write records
         writeRows(tablePath, rows, true);
@@ -200,23 +186,18 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                                 + " ('connector' = 'fluss', 'table.log.format' = '%s')",
                         tableName, logFormat));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-        Table table = conn.getTable(tablePath);
-        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows =
                 Arrays.asList(
-                        genRow(false, dataType, new Object[] {1, "v1", 100L, 1000, 100, 1000L}),
-                        genRow(false, dataType, new Object[] {2, "v2", 200L, 2000, 200, 2000L}),
-                        genRow(false, dataType, new Object[] {3, "v3", 300L, 3000, 300, 3000L}),
-                        genRow(false, dataType, new Object[] {4, "v4", 400L, 4000, 400, 4000L}),
-                        genRow(false, dataType, new Object[] {5, "v5", 500L, 5000, 500, 5000L}),
-                        genRow(false, dataType, new Object[] {6, "v6", 600L, 6000, 600, 6000L}),
-                        genRow(false, dataType, new Object[] {7, "v7", 700L, 7000, 700, 7000L}),
-                        genRow(false, dataType, new Object[] {8, "v8", 800L, 8000, 800, 8000L}),
-                        genRow(false, dataType, new Object[] {9, "v9", 900L, 9000, 900, 9000L}),
-                        genRow(
-                                false,
-                                dataType,
-                                new Object[] {10, "v10", 1000L, 10000, 1000, 10000L}));
+                        row(1, "v1", 100L, 1000, 100, 1000L),
+                        row(2, "v2", 200L, 2000, 200, 2000L),
+                        row(3, "v3", 300L, 3000, 300, 3000L),
+                        row(4, "v4", 400L, 4000, 400, 4000L),
+                        row(5, "v5", 500L, 5000, 500, 5000L),
+                        row(6, "v6", 600L, 6000, 600, 6000L),
+                        row(7, "v7", 700L, 7000, 700, 7000L),
+                        row(8, "v8", 800L, 8000, 800, 8000L),
+                        row(9, "v9", 900L, 9000, 900, 9000L),
+                        row(10, "v10", 1000L, 10000, 1000, 10000L));
         writeRows(tablePath, rows, true);
 
         // projection + reorder.
@@ -265,21 +246,18 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         "create table %s (a int, b varchar, c bigint, d int %s) with ('connector' = 'fluss')",
                         tableName, pkDDL));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-        Table table = conn.getTable(tablePath);
-
-        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows =
                 Arrays.asList(
-                        genRow(isPkTable, dataType, new Object[] {1, "v1", 100L, 1000}),
-                        genRow(isPkTable, dataType, new Object[] {2, "v2", 200L, 2000}),
-                        genRow(isPkTable, dataType, new Object[] {3, "v3", 300L, 3000}),
-                        genRow(isPkTable, dataType, new Object[] {4, "v4", 400L, 4000}),
-                        genRow(isPkTable, dataType, new Object[] {5, "v5", 500L, 5000}),
-                        genRow(isPkTable, dataType, new Object[] {6, "v6", 600L, 6000}),
-                        genRow(isPkTable, dataType, new Object[] {7, "v7", 700L, 7000}),
-                        genRow(isPkTable, dataType, new Object[] {8, "v8", 800L, 8000}),
-                        genRow(isPkTable, dataType, new Object[] {9, "v9", 900L, 9000}),
-                        genRow(isPkTable, dataType, new Object[] {10, "v10", 1000L, 10000}));
+                        row(1, "v1", 100L, 1000),
+                        row(2, "v2", 200L, 2000),
+                        row(3, "v3", 300L, 3000),
+                        row(4, "v4", 400L, 4000),
+                        row(5, "v5", 500L, 5000),
+                        row(6, "v6", 600L, 6000),
+                        row(7, "v7", 700L, 7000),
+                        row(8, "v8", 800L, 8000),
+                        row(9, "v9", 900L, 9000),
+                        row(10, "v10", 1000L, 10000));
 
         if (isPkTable) {
             if (!testPkLog) {
@@ -336,11 +314,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                 "create table mix_snapshot_log_test (a int not null primary key not enforced, b varchar)");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "mix_snapshot_log_test");
 
-        List<InternalRow> rows =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         // write records
         writeRows(tablePath, rows, false);
@@ -399,30 +373,23 @@ class FlinkTableSourceITCase extends FlinkTestBase {
             // just pick one partition
             partitionName = partitionNameById.values().iterator().next();
         }
-        Table table = conn.getTable(tablePath);
-
-        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows1 =
                 Arrays.asList(
-                        row(dataType, rowValues(new Object[] {1, "v1", 100L, 1000}, partitionName)),
-                        row(dataType, rowValues(new Object[] {2, "v2", 200L, 2000}, partitionName)),
-                        row(dataType, rowValues(new Object[] {3, "v3", 300L, 3000}, partitionName)),
-                        row(dataType, rowValues(new Object[] {4, "v4", 400L, 4000}, partitionName)),
-                        row(
-                                dataType,
-                                rowValues(new Object[] {5, "v5", 500L, 5000}, partitionName)));
+                        rowWithPartition(new Object[] {1, "v1", 100L, 1000}, partitionName),
+                        rowWithPartition(new Object[] {2, "v2", 200L, 2000}, partitionName),
+                        rowWithPartition(new Object[] {3, "v3", 300L, 3000}, partitionName),
+                        rowWithPartition(new Object[] {4, "v4", 400L, 4000}, partitionName),
+                        rowWithPartition(new Object[] {5, "v5", 500L, 5000}, partitionName));
 
         writeRows(tablePath, rows1, true);
 
         List<InternalRow> rows2 =
                 Arrays.asList(
-                        row(dataType, rowValues(new Object[] {6, "v6", 600L, 6000}, partitionName)),
-                        row(dataType, rowValues(new Object[] {7, "v7", 700L, 7000}, partitionName)),
-                        row(dataType, rowValues(new Object[] {8, "v8", 800L, 8000}, partitionName)),
-                        row(dataType, rowValues(new Object[] {9, "v9", 900L, 9000}, partitionName)),
-                        row(
-                                dataType,
-                                rowValues(new Object[] {10, "v10", 1000L, 10000}, partitionName)));
+                        rowWithPartition(new Object[] {6, "v6", 600L, 6000}, partitionName),
+                        rowWithPartition(new Object[] {7, "v7", 700L, 7000}, partitionName),
+                        rowWithPartition(new Object[] {8, "v8", 800L, 8000}, partitionName),
+                        rowWithPartition(new Object[] {9, "v9", 900L, 9000}, partitionName),
+                        rowWithPartition(new Object[] {10, "v10", 1000L, 10000}, partitionName));
         // for second batch, we don't wait snapshot finish.
         writeRows(tablePath, rows2, true);
 
@@ -464,21 +431,13 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "read_initial_test");
 
         List<InternalRow> rows1 =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v33"}));
+                Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"), row(3, "v33"));
 
         // write records and wait generate snapshot.
         writeRows(tablePath, rows1, false);
         waitUtilAllBucketFinishSnapshot(admin, tablePath);
 
-        List<InternalRow> rows2 =
-                Arrays.asList(
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v11"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v22"}),
-                        compactedRow(DATA1_ROW_TYPE, new Object[] {4, "v4"}));
+        List<InternalRow> rows2 = Arrays.asList(row(1, "v11"), row(2, "v22"), row(4, "v4"));
 
         String options = " /*+ OPTIONS('scan.startup.mode' = 'initial') */";
         String query = "select a, b from read_initial_test " + options;
@@ -547,10 +506,10 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
         List<InternalRow> rows1 =
                 Arrays.asList(
-                        compactedRow(dataType, rowValues(new Object[] {1, "v1"}, partitionName)),
-                        compactedRow(dataType, rowValues(new Object[] {2, "v2"}, partitionName)),
-                        compactedRow(dataType, rowValues(new Object[] {3, "v3"}, partitionName)),
-                        compactedRow(dataType, rowValues(new Object[] {3, "v33"}, partitionName)));
+                        rowWithPartition(new Object[] {1, "v1"}, partitionName),
+                        rowWithPartition(new Object[] {2, "v2"}, partitionName),
+                        rowWithPartition(new Object[] {3, "v3"}, partitionName),
+                        rowWithPartition(new Object[] {3, "v33"}, partitionName));
 
         // write records and wait generate snapshot.
         writeRows(tablePath, rows1, false);
@@ -562,9 +521,9 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
         List<InternalRow> rows2 =
                 Arrays.asList(
-                        compactedRow(dataType, rowValues(new Object[] {1, "v11"}, partitionName)),
-                        compactedRow(dataType, rowValues(new Object[] {2, "v22"}, partitionName)),
-                        compactedRow(dataType, rowValues(new Object[] {4, "v4"}, partitionName)));
+                        rowWithPartition(new Object[] {1, "v11"}, partitionName),
+                        rowWithPartition(new Object[] {2, "v22"}, partitionName),
+                        rowWithPartition(new Object[] {4, "v4"}, partitionName));
         writeRows(tablePath, rows2, false);
 
         String options =
@@ -599,11 +558,6 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
     @Test
     void testReadPrimaryKeyPartitionedTable() throws Exception {
-        RowType rowType =
-                com.alibaba.fluss.types.DataTypes.ROW(
-                        new DataField("a", com.alibaba.fluss.types.DataTypes.INT()),
-                        new DataField("b", com.alibaba.fluss.types.DataTypes.STRING()),
-                        new DataField("c", com.alibaba.fluss.types.DataTypes.STRING()));
         tEnv.executeSql(
                 "create table partitioned_table"
                         + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) "
@@ -614,7 +568,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         Map<Long, String> partitionNameById =
                 waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
         List<String> expectedRowValues =
-                writeRowsToPartition(tablePath, rowType, partitionNameById.values());
+                writeRowsToPartition(tablePath, partitionNameById.values());
         waitUtilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
@@ -626,7 +580,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         FlinkTestBase.createPartitions(
                 FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, newPartitions);
         // write data to the new partitions
-        expectedRowValues = writeRowsToPartition(tablePath, rowType, newPartitions);
+        expectedRowValues = writeRowsToPartition(tablePath, newPartitions);
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
@@ -636,11 +590,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "timestamp_table");
 
         // write first bath records
-        List<InternalRow> rows =
-                Arrays.asList(
-                        row(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                        row(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                        row(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         writeRows(tablePath, rows, true);
         Thread.sleep(100);
@@ -669,11 +619,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         .collect()) {
             Thread.sleep(100);
             // write second batch record.
-            rows =
-                    Arrays.asList(
-                            row(DATA1_ROW_TYPE, new Object[] {4, "v4"}),
-                            row(DATA1_ROW_TYPE, new Object[] {5, "v5"}),
-                            row(DATA1_ROW_TYPE, new Object[] {6, "v6"}));
+            rows = Arrays.asList(row(4, "v4"), row(5, "v5"), row(6, "v6"));
             writeRows(tablePath, rows, true);
             List<String> expected = Arrays.asList("+I[4, v4]", "+I[5, v5]", "+I[6, v6]");
             int expectRecords = expected.size();
@@ -963,14 +909,6 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         DISABLE_CACHE
     }
 
-    private InternalRow genRow(boolean isPkTable, RowType rowType, Object[] objects) {
-        if (isPkTable) {
-            return compactedRow(rowType, objects);
-        } else {
-            return row(rowType, objects);
-        }
-    }
-
     /**
      * Creates dim table in Fluss and source table in Flink, and generates data for them.
      *
@@ -1049,13 +987,12 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         // prepare dim table data
         try (Table dimTable = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
-            RowType dimTableRowType = dimTable.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
                                 ? new Object[] {i, "address" + i, "name" + i % 4}
                                 : new Object[] {i, "address" + i, "name" + i % 4, partition1};
-                upsertWriter.upsert(compactedRow(dimTableRowType, values));
+                upsertWriter.upsert(row(values));
             }
             upsertWriter.flush();
         }
@@ -1148,14 +1085,14 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         }
     }
 
-    private Object[] rowValues(Object[] values, @Nullable String partition) {
+    private GenericRow rowWithPartition(Object[] values, @Nullable String partition) {
         if (partition == null) {
-            return values;
+            return row(values);
         } else {
             Object[] newValues = new Object[values.length + 1];
             System.arraycopy(values, 0, newValues, 0, values.length);
             newValues[values.length] = partition;
-            return newValues;
+            return row(newValues);
         }
     }
 }

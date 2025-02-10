@@ -22,7 +22,6 @@ import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.OutputView;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.MemoryAwareGetters;
 import com.alibaba.fluss.row.compacted.CompactedRow;
 import com.alibaba.fluss.row.compacted.CompactedRowWriter;
 import com.alibaba.fluss.row.decode.RowDecoder;
@@ -97,7 +96,7 @@ public class DefaultKvRecord implements KvRecord {
         return MurmurHashUtils.hashBytes(segment, offset, sizeInBytes);
     }
 
-    public static int writeTo(OutputView outputView, byte[] key, @Nullable InternalRow row)
+    public static int writeTo(OutputView outputView, byte[] key, @Nullable BinaryRow row)
             throws IOException {
         // bytes for key length + bytes for key + bytes for row
         int sizeInBytes = sizeWithoutLength(key, row);
@@ -130,15 +129,14 @@ public class DefaultKvRecord implements KvRecord {
     }
 
     /** Calculate the size of the kv record write to batch, including {@link #LENGTH_LENGTH}. */
-    public static int sizeOf(byte[] key, @Nullable InternalRow row) {
+    public static int sizeOf(byte[] key, @Nullable BinaryRow row) {
         return sizeWithoutLength(key, row) + LENGTH_LENGTH;
     }
 
-    private static int sizeWithoutLength(byte[] key, @Nullable InternalRow row) {
+    private static int sizeWithoutLength(byte[] key, @Nullable BinaryRow row) {
         return VarLengthUtils.sizeOfUnsignedVarInt(key.length)
                 + key.length
-                // TODO currently, we only support indexed row.
-                + (row == null ? 0 : ((MemoryAwareGetters) row).getSizeInBytes());
+                + (row == null ? 0 : row.getSizeInBytes());
     }
 
     private void readKeyAndRow() throws IOException {

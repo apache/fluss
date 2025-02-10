@@ -26,7 +26,6 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.exception.RecordTooLargeException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
@@ -76,7 +75,6 @@ public class WriterClient {
 
     private final Configuration conf;
     private final int maxRequestSize;
-    private final long totalMemorySize;
     private final RecordAccumulator accumulator;
     private final Sender sender;
     private final ExecutorService ioThreadPool;
@@ -94,8 +92,6 @@ public class WriterClient {
             this.metadataUpdater = metadataUpdater;
             this.maxRequestSize =
                     (int) conf.get(ConfigOptions.CLIENT_WRITER_REQUEST_MAX_SIZE).getBytes();
-            this.totalMemorySize =
-                    conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes();
             this.idempotenceManager = buildIdempotenceManager();
             this.writerMetricGroup = new WriterMetricGroup(clientMetricGroup);
 
@@ -151,8 +147,6 @@ public class WriterClient {
         try {
             throwIfWriterClosed();
 
-            ensureValidRecordSize(record.getEstimatedSizeInBytes());
-
             // maybe create bucket assigner.
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
             Cluster cluster = metadataUpdater.getCluster();
@@ -191,19 +185,6 @@ public class WriterClient {
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
-        }
-    }
-
-    /** Validate that the record size isn't too large. */
-    private void ensureValidRecordSize(int size) {
-        if (size > totalMemorySize) {
-            throw new RecordTooLargeException(
-                    "The message is "
-                            + size
-                            + " bytes when serialized which is larger than the total memory buffer "
-                            + "you have configured with the "
-                            + ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key()
-                            + " configuration.");
         }
     }
 

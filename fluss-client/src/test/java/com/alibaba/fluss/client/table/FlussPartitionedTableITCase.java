@@ -32,6 +32,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
@@ -51,9 +52,9 @@ import java.util.concurrent.CompletableFuture;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertRowValueEquals;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -72,8 +73,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Map<Long, List<InternalRow>> expectPutRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow row =
-                        compactedRow(schema.getRowType(), new Object[] {i, "a" + i, partition});
+                InternalRow row = row(i, "a" + i, partition);
                 upsertWriter.upsert(row);
                 expectPutRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
@@ -86,13 +86,12 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         // now, let's lookup the written data by look up
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow actualRow =
-                        compactedRow(schema.getRowType(), new Object[] {i, "a" + i, partition});
+                InternalRow actualRow = row(i, "a" + i, partition);
                 InternalRow lookupRow =
                         lookuper.lookup(keyRow(schema, new Object[] {i, null, partition}))
                                 .get()
                                 .getSingletonRow();
-                assertThat(lookupRow).isEqualTo(actualRow);
+                assertThatRow(lookupRow).withSchema(schema.getRowType()).isEqualTo(actualRow);
             }
         }
 
@@ -132,8 +131,8 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
 
         Table table = conn.getTable(tablePath);
         for (String partition : partitionIdByNames.keySet()) {
-            verifyPutAndLookup(table, schema, new Object[] {1, partition, 1L, "value1"});
-            verifyPutAndLookup(table, schema, new Object[] {1, partition, 2L, "value2"});
+            verifyPutAndLookup(table, new Object[] {1, partition, 1L, "value1"});
+            verifyPutAndLookup(table, new Object[] {1, partition, 2L, "value2"});
         }
 
         for (int i = 0; i < 3; i++) {
@@ -152,8 +151,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                                 : i == 1
                                         ? new Object[] {1, partition, 1L}
                                         : new Object[] {1, 1L, partition};
-                CompletableFuture<LookupResult> result =
-                        prefixLookuper.lookup(compactedRow(prefixKeyRowType, lookupRow));
+                CompletableFuture<LookupResult> result = prefixLookuper.lookup(row(lookupRow));
                 LookupResult prefixLookupResult = result.get();
                 assertThat(prefixLookupResult).isNotNull();
                 List<InternalRow> rowList = prefixLookupResult.getRowList();
@@ -209,7 +207,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow row = row(schema.getRowType(), new Object[] {i, "a" + i, partition});
+                GenericRow row = row(i, "a" + i, partition);
                 appendWriter.append(row);
                 expectPartitionAppendRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
@@ -232,7 +230,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Table table = conn.getTable(tablePath);
 
         Map<Long, List<InternalRow>> expectPartitionAppendRows =
-                writeRows(table, schema, partitionIdByNames);
+                writeRows(table, partitionIdByNames);
 
         // then, let's verify the logs
         try (LogScanner logScanner = table.newScan().createLogScanner()) {
@@ -248,7 +246,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
             logScanner.unsubscribe(removedPartitionId, 0);
 
             // now, write some records again
-            expectPartitionAppendRows = writeRows(table, schema, partitionIdByNames);
+            expectPartitionAppendRows = writeRows(table, partitionIdByNames);
             // remove the removed partition
             expectPartitionAppendRows.remove(removedPartitionId);
             totalRecords = getRowsCount(expectPartitionAppendRows);
@@ -262,13 +260,13 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
     }
 
     private Map<Long, List<InternalRow>> writeRows(
-            Table table, Schema schema, Map<String, Long> partitionIdByNames) {
+            Table table, Map<String, Long> partitionIdByNames) {
         AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow row = row(schema.getRowType(), new Object[] {i, "a" + i, partition});
+                GenericRow row = row(i, "a" + i, partition);
                 appendWriter.append(row);
                 expectPartitionAppendRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
@@ -322,7 +320,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
 
         // test write to not exist partition
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
-        InternalRow row = row(schema.getRowType(), new Object[] {1, "a", "notExistPartition"});
+        GenericRow row = row(1, "a", "notExistPartition");
         assertThatThrownBy(() -> upsertWriter.upsert(row).get())
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)

@@ -33,7 +33,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -159,15 +158,14 @@ public class FlinkPaimonTestBase {
             TableDescriptor tableDescriptor,
             Map<Long, String> partitionNameByIds)
             throws Exception {
-        RowType rowType = tableDescriptor.getSchema().getRowType();
         List<InternalRow> rows = new ArrayList<>();
         Map<String, List<InternalRow>> writtenRowsByPartition = new HashMap<>();
         for (String partitionName : partitionNameByIds.values()) {
             List<InternalRow> partitionRows =
                     Arrays.asList(
-                            row(rowType, new Object[] {11, "v1", partitionName}),
-                            row(rowType, new Object[] {12, "v2", partitionName}),
-                            row(rowType, new Object[] {13, "v3", partitionName}));
+                            row(11, "v1", partitionName),
+                            row(12, "v2", partitionName),
+                            row(13, "v3", partitionName));
             rows.addAll(partitionRows);
             writtenRowsByPartition.put(partitionName, partitionRows);
         }

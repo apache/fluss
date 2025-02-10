@@ -23,7 +23,7 @@ import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
@@ -108,15 +108,15 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
      * Check if we have room for a new record containing the given row. If no records have been
      * appended, then this returns true.
      */
-    public boolean hasRoomFor(InternalRow row) {
+    public boolean hasRoomFor(IndexedRow row) {
         return sizeInBytes + DefaultLogRecord.sizeOf(row) <= writeLimit;
     }
 
-    public void append(RowKind rowKind, InternalRow row) throws Exception {
+    public void append(RowKind rowKind, IndexedRow row) throws Exception {
         appendRecord(rowKind, row);
     }
 
-    private void appendRecord(RowKind rowKind, InternalRow row) throws IOException {
+    private void appendRecord(RowKind rowKind, IndexedRow row) throws IOException {
         if (isClosed) {
             throw new IllegalStateException(
                     "Tried to append a record, but MemoryLogRecordsBuilder is closed for record appends");

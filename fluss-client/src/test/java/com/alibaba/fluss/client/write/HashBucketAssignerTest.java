@@ -17,8 +17,8 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.cluster.Cluster;
+import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
-import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
@@ -47,10 +47,10 @@ public class HashBucketAssignerTest {
         // Suppose a, b are primary keys.
         int[] pkIndices = {0, 1};
         KeyEncoder keyEncoder = new KeyEncoder(rowType, pkIndices);
-        IndexedRow row1 = row(rowType, new Object[] {1, 1, "2", 3L});
-        IndexedRow row2 = row(rowType, new Object[] {1, 1, "3", 4L});
-        IndexedRow row3 = row(rowType, new Object[] {1, 2, "4", 5L});
-        IndexedRow row4 = row(rowType, new Object[] {1, 1, "4", 5L});
+        InternalRow row1 = row(1, 1, "2", 3L);
+        InternalRow row2 = row(1, 1, "3", 4L);
+        InternalRow row3 = row(1, 2, "4", 5L);
+        InternalRow row4 = row(1, 1, "4", 5L);
 
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(3);
 
@@ -82,10 +82,7 @@ public class HashBucketAssignerTest {
         int[] pkIndices = {0, 1, 2};
         KeyEncoder keyEncoder = new KeyEncoder(rowType, pkIndices);
         for (int i = 0; i < rowCount; i++) {
-            IndexedRow row =
-                    row(
-                            rowType,
-                            new Object[] {i, rowCount - i, String.valueOf(rowCount - i), (long) i});
+            InternalRow row = row(i, rowCount - i, String.valueOf(rowCount - i), (long) i);
             keyList.add(keyEncoder.encode(row));
         }
 

@@ -20,7 +20,6 @@ import com.alibaba.fluss.record.RowKind;
 
 import org.junit.jupiter.api.Test;
 
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,19 +28,17 @@ public class ScanRecordTest {
 
     @Test
     void testBuildSnapshotReadScanRecord() {
-        ScanRecord record = new ScanRecord(row(DATA1_ROW_TYPE, new Object[] {1, "a"}));
+        ScanRecord record = new ScanRecord(row(1, "a"));
         assertThat(record.getRowKind()).isEqualTo(RowKind.INSERT);
         assertThat(record.logOffset()).isEqualTo(-1L);
-        assertThat(record.getRow()).isEqualTo(row(DATA1_ROW_TYPE, new Object[] {1, "a"}));
+        assertThat(record.getRow()).isEqualTo(row(1, "a"));
     }
 
     @Test
     void testBuildLogScanRecord() {
-        ScanRecord record =
-                new ScanRecord(
-                        1L, 1000L, RowKind.APPEND_ONLY, row(DATA1_ROW_TYPE, new Object[] {1, "a"}));
+        ScanRecord record = new ScanRecord(1L, 1000L, RowKind.APPEND_ONLY, row(1, "a"));
         assertThat(record.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
         assertThat(record.logOffset()).isEqualTo(1L);
-        assertThat(record.getRow()).isEqualTo(row(DATA1_ROW_TYPE, new Object[] {1, "a"}));
+        assertThat(record.getRow()).isEqualTo(row(1, "a"));
     }
 }

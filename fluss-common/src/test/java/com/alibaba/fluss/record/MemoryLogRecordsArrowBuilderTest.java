@@ -28,6 +28,7 @@ import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import com.alibaba.fluss.testutils.DataTestUtils;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -114,9 +115,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         List<RowKind> rowKinds =
                 DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
         List<InternalRow> rows =
-                DATA1.stream()
-                        .map(object -> row(DATA1_ROW_TYPE, object))
-                        .collect(Collectors.toList());
+                DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
         List<Object[]> expectedResult = new ArrayList<>();
         while (!builder.isFull()) {
             int rndIndex = RandomUtils.nextInt(0, DATA1.size());
@@ -169,7 +168,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer1, 10, 1024);
         for (Object[] data : dataSet) {
-            builder.append(RowKind.APPEND_ONLY, row(DATA1_ROW_TYPE, data));
+            builder.append(RowKind.APPEND_ONLY, row(data));
         }
         builder.close();
         MemoryLogRecords records1 = MemoryLogRecords.pointToBytesView(builder.build());
@@ -183,7 +182,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         MemoryLogRecordsArrowBuilder builder2 =
                 createMemoryLogRecordsArrowBuilder(0, writer2, 10, 1024);
         for (Object[] data : dataSet) {
-            builder2.append(RowKind.APPEND_ONLY, row(DATA1_ROW_TYPE, data));
+            builder2.append(RowKind.APPEND_ONLY, row(data));
         }
         builder2.close();
         MemoryLogRecords records2 = MemoryLogRecords.pointToBytesView(builder2.build());
@@ -229,9 +228,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         List<RowKind> rowKinds =
                 DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
         List<InternalRow> rows =
-                DATA1.stream()
-                        .map(object -> row(DATA1_ROW_TYPE, object))
-                        .collect(Collectors.toList());
+                DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
         while (!builder.isFull()) {
             int rndIndex = RandomUtils.nextInt(0, DATA1.size());
             builder.append(rowKinds.get(rndIndex), rows.get(rndIndex));
@@ -341,9 +338,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         List<RowKind> rowKinds =
                 DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
         List<InternalRow> rows =
-                DATA1.stream()
-                        .map(object -> row(DATA1_ROW_TYPE, object))
-                        .collect(Collectors.toList());
+                DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
         List<Object[]> expectedResult = new ArrayList<>();
         while (!builder.isFull()) {
             int rndIndex = RandomUtils.nextInt(0, DATA1.size());

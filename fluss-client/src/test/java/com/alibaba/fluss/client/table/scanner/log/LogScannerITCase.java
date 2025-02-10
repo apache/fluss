@@ -26,8 +26,8 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 
@@ -43,11 +43,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.apache.commons.lang3.RandomStringUtils.randomAlphanumeric;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,25 +59,24 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
         // append a batch of data.
         int recordSize = 10;
-        List<IndexedRow> expectedRows = new ArrayList<>();
+        List<GenericRow> expectedRows = new ArrayList<>();
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
-                IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {i, "a"});
+                GenericRow row = row(i, "a");
                 expectedRows.add(row);
                 appendWriter.append(row).get();
             }
 
             LogScanner logScanner = createLogScanner(table);
             subscribeFromBeginning(logScanner, table);
-            List<InternalRow> rowList = new ArrayList<>();
+            List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
-                    rowList.add(
-                            row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                    rowList.add(row(row.getInt(0), row.getString(1)));
                 }
             }
             assertThat(rowList).hasSize(recordSize);
@@ -97,25 +94,24 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
         // append a batch of data.
         int recordSize = 10;
-        List<IndexedRow> expectedRows = new ArrayList<>();
+        List<GenericRow> expectedRows = new ArrayList<>();
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
-                IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {i, "a"});
+                GenericRow row = row(i, "a");
                 expectedRows.add(row);
                 appendWriter.append(row).get();
             }
 
             LogScanner logScanner = createLogScanner(table);
             subscribeFromBeginning(logScanner, table);
-            List<IndexedRow> rowList = new ArrayList<>();
+            List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
-                    rowList.add(
-                            row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                    rowList.add(row(row.getInt(0), row.getString(1)));
                 }
             }
             assertThat(rowList).hasSize(recordSize);
@@ -129,11 +125,11 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
         // append a batch of data.
         int recordSize = 10;
-        List<IndexedRow> expectedRows = new ArrayList<>();
+        List<GenericRow> expectedRows = new ArrayList<>();
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
-                IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {i, "a"});
+                GenericRow row = row(i, "a");
                 expectedRows.add(row);
                 appendWriter.append(row).get();
             }
@@ -148,14 +144,13 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             executor.submit(() -> logScanner.subscribeFromBeginning(2)).get();
 
             // should be able to poll data from all buckets
-            List<InternalRow> rowList = new ArrayList<>();
+            List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
-                    rowList.add(
-                            row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                    rowList.add(row(row.getInt(0), row.getString(1)));
                 }
             }
             assertThat(rowList).hasSize(recordSize);
@@ -192,7 +187,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             for (long i = 0; i < recordSize; i++) {
                 final Object[] columns =
                         new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
-                appendWriter.append(row(rowType, columns));
+                appendWriter.append(row(columns));
                 if (i % 100 == 0) {
                     appendWriter.flush();
                 }
@@ -248,7 +243,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             for (long i = 0; i < recordSize; i++) {
                 final Object[] columns =
                         new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
-                upsertWriter.upsert(compactedRow(rowType, columns));
+                upsertWriter.upsert(row(columns));
                 if (i % 100 == 0) {
                     upsertWriter.flush();
                 }
@@ -307,15 +302,12 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
         long firstStartTimestamp = System.currentTimeMillis();
         int batchRecordSize = 10;
-        List<IndexedRow> expectedRows = new ArrayList<>();
+        List<GenericRow> expectedRows = new ArrayList<>();
         try (Table table = conn.getTable(tablePath)) {
             // 1. first write one batch of data.
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < batchRecordSize; i++) {
-                IndexedRow row =
-                        row(
-                                DATA1_ROW_TYPE,
-                                new Object[] {i, partitionName == null ? "a" : partitionName});
+                GenericRow row = row(i, partitionName == null ? "a" : partitionName);
                 expectedRows.add(row);
                 appendWriter.append(row).get();
             }
@@ -333,26 +325,22 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // timestamp.
             subscribeFromTimestamp(
                     physicalTablePath, partitionId, table, logScanner, admin, firstStartTimestamp);
-            List<InternalRow> rowList = new ArrayList<>();
+            List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
-                    rowList.add(
-                            row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                    rowList.add(row(row.getInt(0), row.getString(1)));
                 }
             }
             assertThat(rowList).hasSize(batchRecordSize);
             assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
 
             // 2. write the second batch.
-            List<IndexedRow> nextExpectedRows = new ArrayList<>();
+            List<GenericRow> nextExpectedRows = new ArrayList<>();
             for (int i = 0; i < batchRecordSize; i++) {
-                IndexedRow row =
-                        row(
-                                DATA1_ROW_TYPE,
-                                new Object[] {i, partitionName == null ? "a" : partitionName});
+                GenericRow row = row(i, partitionName == null ? "a" : partitionName);
                 nextExpectedRows.add(row);
                 appendWriter.append(row).get();
             }
@@ -367,8 +355,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
-                    rowList.add(
-                            row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                    rowList.add(row(row.getInt(0), row.getString(1)));
                 }
             }
             assertThat(rowList).hasSize(batchRecordSize);
@@ -407,14 +394,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // 1. first write one batch of data.
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < batchRecordSize; i++) {
-                appendWriter
-                        .append(
-                                row(
-                                        DATA1_ROW_TYPE,
-                                        new Object[] {
-                                            i, partitionName == null ? "a" : partitionName
-                                        }))
-                        .get();
+                appendWriter.append(row(i, partitionName == null ? "a" : partitionName)).get();
             }
 
             LogScanner logScanner = createLogScanner(table);
@@ -423,12 +403,9 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             assertThat(logScanner.poll(Duration.ofSeconds(1)).isEmpty()).isTrue();
 
             // 2. write the second batch.
-            List<IndexedRow> expectedRows = new ArrayList<>();
+            List<GenericRow> expectedRows = new ArrayList<>();
             for (int i = 0; i < batchRecordSize; i++) {
-                IndexedRow row =
-                        row(
-                                DATA1_ROW_TYPE,
-                                new Object[] {i, partitionName == null ? "a" : partitionName});
+                GenericRow row = row(i, partitionName == null ? "a" : partitionName);
                 expectedRows.add(row);
                 appendWriter.append(row).get();
             }
@@ -439,8 +416,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
-                    rowList.add(
-                            row(DATA1_ROW_TYPE, new Object[] {row.getInt(0), row.getString(1)}));
+                    rowList.add(row(row.getInt(0), row.getString(1)));
                 }
             }
             assertThat(rowList).hasSize(batchRecordSize);

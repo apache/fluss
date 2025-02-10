@@ -20,14 +20,13 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link LakeTableBucketAssigner} . */
@@ -52,12 +51,10 @@ class LakeTableBucketAssignerTest {
                                         : Collections.emptyList())
                         .build();
 
-        RowType rowType = schema.getRowType();
-        InternalRow row1 = compactedRow(rowType, new Object[] {1, "2", "a"});
-        InternalRow row2 = compactedRow(rowType, new Object[] {1, "3", "b"});
-
-        InternalRow row3 = compactedRow(rowType, new Object[] {2, "4", "a"});
-        InternalRow row4 = compactedRow(rowType, new Object[] {2, "4", "b"});
+        InternalRow row1 = row(1, "2", "a");
+        InternalRow row2 = row(1, "3", "b");
+        InternalRow row3 = row(2, "4", "a");
+        InternalRow row4 = row(2, "4", "b");
 
         LakeTableBucketAssigner lakeTableBucketAssigner =
                 new LakeTableBucketAssigner(
@@ -106,12 +103,10 @@ class LakeTableBucketAssignerTest {
                         tableDescriptor.getBucketKeys(),
                         3);
 
-        RowType rowType = schema.getRowType();
-        InternalRow row1 = compactedRow(rowType, new Object[] {1, "2", "a"});
-        InternalRow row2 = compactedRow(rowType, new Object[] {1, "2", "b"});
-
-        InternalRow row3 = compactedRow(rowType, new Object[] {2, "4", "a"});
-        InternalRow row4 = compactedRow(rowType, new Object[] {2, "4", "b"});
+        InternalRow row1 = row(1, "2", "a");
+        InternalRow row2 = row(1, "2", "b");
+        InternalRow row3 = row(2, "4", "a");
+        InternalRow row4 = row(2, "4", "b");
 
         int row1Bucket = lakeTableBucketAssigner.assignBucket(null, row1, null);
         int row2Bucket = lakeTableBucketAssigner.assignBucket(null, row2, null);

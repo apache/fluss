@@ -29,7 +29,7 @@ import com.alibaba.fluss.record.DefaultKvRecord;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordReadContext;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.types.DataType;
 
@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link KvWriteBatch}. */
 public class KvWriteBatchTest {
-    private InternalRow row;
+    private BinaryRow row;
     private byte[] key;
     private int estimatedSizeInBytes;
     private MemorySegmentPool memoryPool;
@@ -147,8 +147,8 @@ public class KvWriteBatchTest {
     }
 
     protected WriteRecord createWriteRecord() {
-        return new WriteRecord(
-                PhysicalTablePath.of(DATA1_TABLE_PATH_PK), WriteKind.PUT, key, key, row, null);
+        return WriteRecord.forUpsert(
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK), row, key, key, null);
     }
 
     private KvWriteBatch createKvWriteBatch(TableBucket tb) throws Exception {

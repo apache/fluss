@@ -40,7 +40,6 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.types.Row;
 import org.junit.jupiter.api.AfterAll;
@@ -57,7 +56,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -266,13 +265,13 @@ public class FlinkTestBase {
         }
     }
 
-    protected List<String> writeRowsToPartition(
-            TablePath tablePath, RowType rowType, Collection<String> partitions) throws Exception {
+    protected List<String> writeRowsToPartition(TablePath tablePath, Collection<String> partitions)
+            throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
         for (String partition : partitions) {
             for (int i = 0; i < 10; i++) {
-                rows.add(compactedRow(rowType, new Object[] {i, "v1", partition}));
+                rows.add(row(i, "v1", partition));
                 expectedRowValues.add(String.format("+I[%d, v1, %s]", i, partition));
             }
         }

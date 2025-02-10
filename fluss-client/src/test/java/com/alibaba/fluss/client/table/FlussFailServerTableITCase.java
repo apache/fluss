@@ -22,8 +22,8 @@ import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.indexed.IndexedRow;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,7 +37,6 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowListAssert.assertThatRows;
 
@@ -59,7 +58,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
         createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
-            IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+            GenericRow row = row(1, "a");
 
             // append a row
             appendWriter.append(row).get();
@@ -84,7 +83,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
         // put one row
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+            InternalRow row = row(1, "a");
             upsertWriter.upsert(row).get();
 
             // kill first tablet server
@@ -94,8 +93,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
                 // append some rows again, should success
                 for (int i = 0; i < 10; i++) {
                     // mock a row
-                    row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "a" + i});
-                    upsertWriter.upsert(row).get();
+                    upsertWriter.upsert(row(i, "a" + i)).get();
                 }
             } finally {
                 // todo: try to get value when get is re-triable in FLUSS-56857409
@@ -108,7 +106,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
     void testLogScan() throws Exception {
         createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         // append one row.
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        GenericRow row = row(1, "a");
         try (Table table = conn.getTable(DATA1_TABLE_PATH);
                 LogScanner logScanner = createLogScanner(table)) {
             subscribeFromBeginning(logScanner, table);
@@ -123,7 +121,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
             int rowCount = 10;
             // append some rows
-            List<IndexedRow> expectRows = new ArrayList<>(rowCount);
+            List<GenericRow> expectRows = new ArrayList<>(rowCount);
             for (int i = 0; i < rowCount; i++) {
                 appendWriter.append(row).get();
                 expectRows.add(row);

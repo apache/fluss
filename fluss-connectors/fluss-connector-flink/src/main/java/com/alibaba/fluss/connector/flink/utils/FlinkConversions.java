@@ -39,6 +39,7 @@ import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
+import org.apache.flink.types.RowKind;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -296,6 +297,22 @@ public class FlinkConversions {
         option.withDescription(flussOption.description());
         // TODO: support fallback keys in the future.
         return (org.apache.flink.configuration.ConfigOption<T>) option;
+    }
+
+    public static RowKind toFlinkRowKind(com.alibaba.fluss.record.RowKind rowKind) {
+        switch (rowKind) {
+            case APPEND_ONLY:
+            case INSERT:
+                return RowKind.INSERT;
+            case UPDATE_BEFORE:
+                return RowKind.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return RowKind.UPDATE_AFTER;
+            case DELETE:
+                return RowKind.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported row kind: " + rowKind);
+        }
     }
 
     private static Map<String, String> convertFlinkOptionsToFlussTableProperties(

@@ -28,9 +28,9 @@ import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
@@ -99,12 +99,11 @@ public class LogScannerBenchmark {
         admin.createTable(TablePath.of("benchmark_db", "benchmark_table"), descriptor, false).get();
 
         // produce logs
-        RowType rowType = descriptor.getSchema().getRowType();
         this.table = conn.getTable(TablePath.of("benchmark_db", "benchmark_table"));
         AppendWriter appendWriter = table.newAppend().createWriter();
         for (long i = 0; i < RECORDS_SIZE; i++) {
-            Object[] columns = new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
-            appendWriter.append(row(rowType, columns));
+            GenericRow row = row(randomAlphanumeric(10), i, randomAlphanumeric(1000));
+            appendWriter.append(row);
         }
         appendWriter.flush();
     }

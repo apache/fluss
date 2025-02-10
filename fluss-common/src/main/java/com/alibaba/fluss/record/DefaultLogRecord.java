@@ -20,8 +20,8 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.OutputView;
 import com.alibaba.fluss.metadata.LogFormat;
+import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.MemoryAwareGetters;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.row.indexed.IndexedRowWriter;
 import com.alibaba.fluss.types.DataType;
@@ -132,7 +132,7 @@ public class DefaultLogRecord implements LogRecord {
     }
 
     /** Write the record to input `target` and return its size. */
-    public static int writeTo(OutputView outputView, RowKind rowKind, InternalRow row)
+    public static int writeTo(OutputView outputView, RowKind rowKind, IndexedRow row)
             throws IOException {
         int sizeInBytes = calculateSizeInBytes(row);
 
@@ -161,27 +161,20 @@ public class DefaultLogRecord implements LogRecord {
         return logRecord;
     }
 
-    public static int sizeOf(InternalRow row) {
+    public static int sizeOf(BinaryRow row) {
         int sizeInBytes = calculateSizeInBytes(row);
         return sizeInBytes + LENGTH_LENGTH;
     }
 
-    private static int calculateSizeInBytes(InternalRow row) {
+    private static int calculateSizeInBytes(BinaryRow row) {
         int size = 1; // always one byte for attributes
-        size += ((MemoryAwareGetters) row).getSizeInBytes();
+        size += row.getSizeInBytes();
         return size;
     }
 
-    private static void serializeInternalRow(OutputView outputView, InternalRow internalRow)
+    private static void serializeInternalRow(OutputView outputView, IndexedRow row)
             throws IOException {
-        if (internalRow instanceof IndexedRow) {
-            IndexedRow indexedRow = (IndexedRow) internalRow;
-            IndexedRowWriter.serializeIndexedRow(indexedRow, outputView);
-        } else {
-            throw new IllegalArgumentException(
-                    "No such internal row serializer for: "
-                            + internalRow.getClass().getSimpleName());
-        }
+        IndexedRowWriter.serializeIndexedRow(row, outputView);
     }
 
     private static InternalRow deserializeInternalRow(

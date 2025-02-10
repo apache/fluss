@@ -26,7 +26,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.table.api.TableResult;
@@ -46,7 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for primary key table. */
@@ -279,25 +278,18 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     private void writeRowsToPkTable(
             TablePath tablePath, boolean isPartitioned, List<Object[]> rowsValue) throws Exception {
         if (isPartitioned) {
-            RowType rowType =
-                    RowType.of(
-                            DataTypes.STRING(),
-                            DataTypes.INT(),
-                            DataTypes.STRING(),
-                            DataTypes.STRING());
             List<InternalRow> rows = new ArrayList<>();
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
             for (String partition : partitionNameById.values()) {
                 for (Object[] values : rowsValue) {
-                    rows.add(compactedRow(rowType, rowValues(values, partition)));
+                    rows.add(row(rowValues(values, partition)));
                 }
                 writeRows(tablePath, rows, false);
             }
         } else {
             List<InternalRow> rows = new ArrayList<>();
-            RowType rowType = RowType.of(DataTypes.STRING(), DataTypes.INT(), DataTypes.STRING());
             for (Object[] values : rowsValue) {
-                rows.add(compactedRow(rowType, values));
+                rows.add(row(values));
             }
             writeRows(tablePath, rows, false);
         }
@@ -332,26 +324,19 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
     private List<InternalRow> generateKvRows(@Nullable String partition) {
         if (partition == null) {
-            RowType rowType = RowType.of(DataTypes.STRING(), DataTypes.INT(), DataTypes.STRING());
             return Arrays.asList(
-                    compactedRow(rowType, new Object[] {"f0", 0, "v0"}),
-                    compactedRow(rowType, new Object[] {"f1", 1, "v1"}),
-                    compactedRow(rowType, new Object[] {"f2", 2, "v2"}),
-                    compactedRow(rowType, new Object[] {"f3", 3, "v3"}),
-                    compactedRow(rowType, new Object[] {"f2222", 2222, "v2222"}));
+                    row("f0", 0, "v0"),
+                    row("f1", 1, "v1"),
+                    row("f2", 2, "v2"),
+                    row("f3", 3, "v3"),
+                    row("f2222", 2222, "v2222"));
         } else {
-            RowType rowType =
-                    RowType.of(
-                            DataTypes.STRING(),
-                            DataTypes.INT(),
-                            DataTypes.STRING(),
-                            DataTypes.STRING());
             return Arrays.asList(
-                    compactedRow(rowType, new Object[] {"f0", 0, "v0", partition}),
-                    compactedRow(rowType, new Object[] {"f1", 1, "v1", partition}),
-                    compactedRow(rowType, new Object[] {"f2", 2, "v2", partition}),
-                    compactedRow(rowType, new Object[] {"f3", 3, "v3", partition}),
-                    compactedRow(rowType, new Object[] {"f2222", 2222, "v2222", partition}));
+                    row("f0", 0, "v0", partition),
+                    row("f1", 1, "v1", partition),
+                    row("f2", 2, "v2", partition),
+                    row("f3", 3, "v3", partition),
+                    row("f2222", 2222, "v2222", partition));
         }
     }
 }

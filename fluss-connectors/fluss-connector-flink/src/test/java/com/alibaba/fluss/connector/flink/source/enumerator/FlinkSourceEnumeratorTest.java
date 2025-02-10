@@ -59,8 +59,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for {@link FlinkSourceEnumerator}. */
@@ -651,7 +650,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rowsNum; i++) {
-                InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
+                InternalRow row = row(i, "v" + i);
                 upsertWriter.upsert(row);
 
                 byte[] key = keyEncoder.encode(row);

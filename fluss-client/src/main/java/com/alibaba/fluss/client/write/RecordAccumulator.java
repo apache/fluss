@@ -28,7 +28,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
-import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -171,7 +170,6 @@ public final class RecordAccumulator {
         // abortIncompleteBatches().
         appendsInProgress.incrementAndGet();
         List<MemorySegment> memorySegments = Collections.emptyList();
-        WriteBatch.WriteBatchType writeBatchType;
         try {
             // check if we have an in-progress batch
             Deque<WriteBatch> dq =
@@ -191,8 +189,7 @@ public final class RecordAccumulator {
             }
 
             TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
-            writeBatchType = getWriteBatchType(writeRecord, tableInfo);
-            memorySegments = allocateMemorySegments(writeRecord, writeBatchType);
+            memorySegments = allocateMemorySegments(writeRecord);
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
@@ -200,7 +197,6 @@ public final class RecordAccumulator {
                                 callback,
                                 bucketId,
                                 tableInfo,
-                                writeBatchType,
                                 dq,
                                 memorySegments,
                                 cluster);
@@ -364,25 +360,8 @@ public final class RecordAccumulator {
         return bucketAndWriteBatches.batches.get(tableBucket.getBucket());
     }
 
-    private WriteBatch.WriteBatchType getWriteBatchType(
-            WriteRecord writeRecord, TableInfo tableInfo) {
-        if (writeRecord.getKey() != null) {
-            return WriteBatch.WriteBatchType.KV;
-        } else {
-            LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
-            if (logFormat == LogFormat.ARROW) {
-                return WriteBatch.WriteBatchType.ARROW_LOG;
-            } else if (logFormat == LogFormat.INDEXED) {
-                return WriteBatch.WriteBatchType.INDEXED_LOG;
-            } else {
-                throw new IllegalArgumentException("Unsupported log format: " + logFormat);
-            }
-        }
-    }
-
-    private List<MemorySegment> allocateMemorySegments(
-            WriteRecord writeRecord, WriteBatch.WriteBatchType writeBatchType) throws IOException {
-        if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
+    private List<MemorySegment> allocateMemorySegments(WriteRecord writeRecord) throws IOException {
+        if (writeRecord.getWriteFormat() == WriteFormat.ARROW_LOG) {
             // pre-allocate a batch memory size for Arrow, if it is not sufficient during batching,
             // it will allocate memory from heap
             return writerBufferPool.allocatePages(pagesPerBatch);
@@ -500,7 +479,6 @@ public final class RecordAccumulator {
             WriteCallback callback,
             int bucketId,
             TableInfo tableInfo,
-            WriteBatch.WriteBatchType writeBatchType,
             Deque<WriteBatch> deque,
             List<MemorySegment> segments,
             Cluster cluster)
@@ -516,9 +494,10 @@ public final class RecordAccumulator {
         TableBucket tb = cluster.getTableBucket(physicalTablePath, bucketId);
         PreAllocatedPagedOutputView outputView = new PreAllocatedPagedOutputView(segments);
         int schemaId = tableInfo.getSchemaId();
+        WriteFormat writeFormat = writeRecord.getWriteFormat();
         // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
         final WriteBatch batch;
-        if (writeBatchType == WriteBatch.WriteBatchType.KV) {
+        if (writeFormat == WriteFormat.KV) {
             batch =
                     new KvWriteBatch(
                             tb,
@@ -529,7 +508,7 @@ public final class RecordAccumulator {
                             outputView,
                             writeRecord.getTargetColumns(),
                             clock.milliseconds());
-        } else if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
+        } else if (writeFormat == WriteFormat.ARROW_LOG) {
             ArrowWriter arrowWriter =
                     arrowWriterPool.getOrCreateWriter(
                             tableInfo.getTableId(),

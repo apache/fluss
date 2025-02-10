@@ -23,8 +23,11 @@ import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.indexed.IndexedRow;
 
 import java.io.IOException;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** A {@link WalBuilder} that builds a {@link MemoryLogRecords} with Indexed log format. */
 public class IndexWalBuilder implements WalBuilder {
@@ -43,7 +46,10 @@ public class IndexWalBuilder implements WalBuilder {
 
     @Override
     public void append(RowKind rowKind, InternalRow row) throws Exception {
-        recordsBuilder.append(rowKind, row);
+        checkArgument(
+                row instanceof IndexedRow,
+                "IndexWalBuilder requires the log row to be IndexedRow.");
+        recordsBuilder.append(rowKind, (IndexedRow) row);
     }
 
     @Override

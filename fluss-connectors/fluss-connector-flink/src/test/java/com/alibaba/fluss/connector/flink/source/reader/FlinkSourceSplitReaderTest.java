@@ -58,8 +58,6 @@ import java.util.Set;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.connector.flink.source.testutils.RecordAndPosAssert.assertThatRecordAndPos;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -410,12 +408,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
-                InternalRow compactedRow = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
-                upsertWriter.upsert(compactedRow);
-                TableBucket tableBucket = new TableBucket(tableId, getBucketId(compactedRow));
-                rowsByBuckets
-                        .computeIfAbsent(tableBucket, k -> new ArrayList<>())
-                        .add(compactedRow);
+                InternalRow row = row(i, "v" + i);
+                upsertWriter.upsert(row);
+                TableBucket tableBucket = new TableBucket(tableId, getBucketId(row));
+                rowsByBuckets.computeIfAbsent(tableBucket, k -> new ArrayList<>()).add(row);
             }
             upsertWriter.flush();
         }
@@ -427,7 +423,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < rows; i++) {
-                InternalRow row = row(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
+                InternalRow row = row(i, "v" + i);
                 appendWriter.append(row);
                 internalRows.add(row);
             }
