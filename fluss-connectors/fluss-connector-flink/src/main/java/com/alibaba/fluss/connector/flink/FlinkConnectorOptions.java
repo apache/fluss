@@ -76,9 +76,11 @@ public class FlinkConnectorOptions {
     public static final ConfigOption<ScanStartupMode> SCAN_STARTUP_MODE =
             ConfigOptions.key("scan.startup.mode")
                     .enumType(ScanStartupMode.class)
-                    .defaultValue(ScanStartupMode.INITIAL)
+                    .defaultValue(ScanStartupMode.FULL)
                     .withDescription(
-                            "Optional startup mode for Fluss source. Default is 'initial'.");
+                            String.format(
+                                    "Optional startup mode for Fluss source. Default is '%s'.",
+                                    ScanStartupMode.FULL.value));
 
     public static final ConfigOption<String> SCAN_STARTUP_TIMESTAMP =
             ConfigOptions.key("scan.startup.timestamp")
@@ -122,14 +124,14 @@ public class FlinkConnectorOptions {
 
     /** Startup mode for the fluss scanner, see {@link #SCAN_STARTUP_MODE}. */
     public enum ScanStartupMode implements DescribedEnum {
-        INITIAL(
-                "initial",
+        FULL(
+                "full",
                 text(
-                        "Performs an initial snapshot n the table upon first startup, "
-                                + "ans continue to read the latest changelog with exactly once guarantee. "
-                                + "If the table to read is a log table, the initial snapshot means "
+                        "Performs a full snapshot on the table upon first startup, "
+                                + "and continue to read the latest changelog with exactly once guarantee. "
+                                + "If the table to read is a log table, the full snapshot means "
                                 + "reading from earliest log offset. If the table to read is a primary key table, "
-                                + "the initial snapshot means reading a latest snapshot which "
+                                + "the full snapshot means reading a latest snapshot which "
                                 + "materializes all changes on the table.")),
         EARLIEST("earliest", text("Start reading logs from the earliest offset.")),
         LATEST("latest", text("Start reading logs from the latest offset.")),

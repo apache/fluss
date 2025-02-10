@@ -426,8 +426,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         // for second batch, we don't wait snapshot finish.
         writeRows(tablePath, rows2, true);
 
-        // 1. read log table with scan.startup.mode='initial'
-        String options = " /*+ OPTIONS('scan.startup.mode' = 'initial') */";
+        // 1. read log table with scan.startup.mode='full'
+        String options = " /*+ OPTIONS('scan.startup.mode' = 'full') */";
         String query = "select a, b, c, d from " + tableName + options;
         List<String> expected =
                 Arrays.asList(
@@ -458,10 +458,10 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     }
 
     @Test
-    void testReadKvTableWithScanStartupModeEqualsInitial() throws Exception {
+    void testReadKvTableWithScanStartupModeEqualsFull() throws Exception {
         tEnv.executeSql(
-                "create table read_initial_test (a int not null primary key not enforced, b varchar)");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "read_initial_test");
+                "create table read_full_test (a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "read_full_test");
 
         List<InternalRow> rows1 =
                 Arrays.asList(
@@ -480,8 +480,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v22"}),
                         compactedRow(DATA1_ROW_TYPE, new Object[] {4, "v4"}));
 
-        String options = " /*+ OPTIONS('scan.startup.mode' = 'initial') */";
-        String query = "select a, b from read_initial_test " + options;
+        String options = " /*+ OPTIONS('scan.startup.mode' = 'full') */";
+        String query = "select a, b from read_full_test " + options;
         List<String> expected =
                 Arrays.asList(
                         "+I[1, v1]",

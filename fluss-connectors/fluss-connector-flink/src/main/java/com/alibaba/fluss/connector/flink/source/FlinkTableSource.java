@@ -239,7 +239,7 @@ public class FlinkTableSource
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
                 break;
-            case INITIAL:
+            case FULL:
                 offsetsInitializer = OffsetsInitializer.initial();
                 break;
             case TIMESTAMP:
@@ -378,11 +378,11 @@ public class FlinkTableSource
     public Result applyFilters(List<ResolvedExpression> filters) {
         // only apply pk equal filters when all the condition satisfied:
         // (1) batch execution mode,
-        // (2) default (initial) startup mode,
+        // (2) default (full) startup mode,
         // (3) the table is a pk table,
         // (4) all filters are pk field equal expression
         if (streaming
-                || startupOptions.startupMode != FlinkConnectorOptions.ScanStartupMode.INITIAL
+                || startupOptions.startupMode != FlinkConnectorOptions.ScanStartupMode.FULL
                 || !hasPrimaryKey()
                 || filters.size() != primaryKeyIndexes.length) {
             return Result.of(Collections.emptyList(), filters);
