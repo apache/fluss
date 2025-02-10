@@ -174,9 +174,8 @@ public class KvPreWriteBuffer implements AutoCloseable {
      * @param targetLogSequenceNumber the lower bound of the log sequence number truncated to.
      * @param truncateReason the reason to truncate
      */
-    public void truncateTo(
-            long targetLogSequenceNumber, KvPreWriteBufferTruncateReason truncateReason) {
-        if (truncateReason == KvPreWriteBufferTruncateReason.DUPLICATED) {
+    public void truncateTo(long targetLogSequenceNumber, TruncateReason truncateReason) {
+        if (truncateReason == TruncateReason.DUPLICATED) {
             truncateAsDuplicatedCount.inc();
         } else {
             truncateAsErrorCount.inc();
@@ -464,7 +463,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
     }
 
     /** The reason why we truncate the kv pre-write buffer. */
-    public enum KvPreWriteBufferTruncateReason {
+    public enum TruncateReason {
         DUPLICATED,
         ERROR,
     }

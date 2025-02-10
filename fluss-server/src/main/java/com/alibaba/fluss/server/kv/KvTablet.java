@@ -41,7 +41,7 @@ import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
 import com.alibaba.fluss.row.encode.ValueDecoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer;
-import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.KvPreWriteBufferTruncateReason;
+import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -373,8 +373,7 @@ public final class KvTablet {
                         // already written.
                         if (logAppendInfo.duplicated()) {
                             kvPreWriteBuffer.truncateTo(
-                                    logEndOffsetOfPrevBatch,
-                                    KvPreWriteBufferTruncateReason.DUPLICATED);
+                                    logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
                         }
                         return logAppendInfo;
                     } catch (Throwable t) {
@@ -384,8 +383,7 @@ public final class KvTablet {
                         // retry-send batch will produce incorrect CDC logs.
                         // TODO for some errors, the cdc logs may already be written to disk, for
                         //  those errors, we should not truncate the kvPreWriteBuffer.
-                        kvPreWriteBuffer.truncateTo(
-                                logEndOffsetOfPrevBatch, KvPreWriteBufferTruncateReason.ERROR);
+                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
                         throw t;
                     } finally {
                         // deallocate the memory and arrow writer used by the wal builder

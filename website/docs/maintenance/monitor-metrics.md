@@ -629,12 +629,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="5">table_bucket_kv_snapshot</td>
-      <td>latestSnapshotSize</td>
-      <td>The latest kv snapshot size in bytes for this table bucket.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
+      <td rowspan="4">table_bucket_kv</td>
       <td>preWriteBufferFlushPerSecond</td>
       <td>The kv pre-write buffer flush count per second.</td>
       <td>Meter</td>
@@ -653,6 +648,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>preWriteBufferTruncateAsErrorPerSecond</td>
       <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
       <td>Meter</td>
+    </tr>
+    <tr>
+      <td rowspan="1">table_bucket_kv_snapshot</td>
+      <td>latestSnapshotSize</td>
+      <td>The latest kv snapshot size in bytes for this table bucket.</td>
+      <td>Gauge</td>
     </tr>
   </tbody>
 </table>
