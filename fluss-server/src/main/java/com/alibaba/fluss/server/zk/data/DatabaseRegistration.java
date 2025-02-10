@@ -54,11 +54,12 @@ public class DatabaseRegistration {
     }
 
     public static DatabaseRegistration of(DatabaseDescriptor databaseDescriptor) {
+        final long currentMillis = System.currentTimeMillis();
         return new DatabaseRegistration(
                 databaseDescriptor.getComment().orElse(null),
                 databaseDescriptor.getCustomProperties(),
-                System.currentTimeMillis(),
-                System.currentTimeMillis());
+                currentMillis,
+                currentMillis);
     }
 
     @Override

@@ -108,6 +108,7 @@ class TableChangeWatcherTest {
             long tableId =
                     metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
+            long currentMillis = System.currentTimeMillis();
             expectedCreateTableEvents.add(
                     new CreateTableEvent(
                             TableInfo.of(
@@ -115,8 +116,8 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
-                                    System.currentTimeMillis(),
-                                    System.currentTimeMillis()),
+                                    currentMillis,
+                                    currentMillis),
                             tableAssignment));
         }
 
@@ -165,6 +166,7 @@ class TableChangeWatcherTest {
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
+        long currentMillis = System.currentTimeMillis();
         expectedEvents.add(
                 new CreateTableEvent(
                         TableInfo.of(
@@ -172,8 +174,8 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 partitionedTable,
-                                System.currentTimeMillis(),
-                                System.currentTimeMillis()),
+                                currentMillis,
+                                currentMillis),
                         TableAssignment.builder().build()));
 
         // register partition

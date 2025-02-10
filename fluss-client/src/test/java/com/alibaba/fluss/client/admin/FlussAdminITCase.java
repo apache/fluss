@@ -126,6 +126,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 false);
         DatabaseInfo databaseInfo = admin.getDatabaseInfo("test_db_2").get();
         long timestampAfterCreate = System.currentTimeMillis();
+        assertThat(databaseInfo.getCreatedTime()).isEqualTo(databaseInfo.getModifiedTime());
         assertThat(databaseInfo.getDatabaseName()).isEqualTo("test_db_2");
         assertThat(databaseInfo.getDatabaseDescriptor().getComment().get())
                 .isEqualTo("test comment");
@@ -150,6 +151,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(tableInfo.toTableDescriptor())
                 .isEqualTo(DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
+        assertThat(tableInfo.getCreatedTime()).isEqualTo(tableInfo.getModifiedTime());
         assertThat(tableInfo.getCreatedTime()).isLessThan(timestampAfterCreate);
 
         // unknown table

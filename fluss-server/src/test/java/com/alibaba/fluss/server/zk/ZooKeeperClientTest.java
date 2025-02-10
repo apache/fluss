@@ -163,6 +163,7 @@ class ZooKeeperClientTest {
         Map<String, String> options = new HashMap<>();
         options.put("option-1", "100");
         options.put("option-2", "200");
+        long currentMillis = System.currentTimeMillis();
         TableRegistration tableReg =
                 new TableRegistration(
                         11,
@@ -171,8 +172,8 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
                         Collections.singletonMap("custom-1", "100"),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+                        currentMillis,
+                        currentMillis);
 
         zookeeperClient.registerTable(tablePath, tableReg);
         Optional<TableRegistration> optionalTable = zookeeperClient.getTable(tablePath);
@@ -180,6 +181,7 @@ class ZooKeeperClientTest {
         assertThat(optionalTable.get()).isEqualTo(tableReg);
 
         // update table.
+        currentMillis = System.currentTimeMillis();
         tableReg =
                 new TableRegistration(
                         22,
@@ -188,8 +190,8 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
                         Collections.singletonMap("custom-2", "200"),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+                        currentMillis,
+                        currentMillis);
         zookeeperClient.updateTable(tablePath, tableReg);
         optionalTable = zookeeperClient.getTable(tablePath);
         assertThat(optionalTable.isPresent()).isTrue();
@@ -329,6 +331,7 @@ class ZooKeeperClientTest {
         // first create a table
         TablePath tablePath = TablePath.of("db", "tb");
         long tableId = 12;
+        long currentMillis = System.currentTimeMillis();
         TableRegistration tableReg =
                 new TableRegistration(
                         tableId,
@@ -337,8 +340,8 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+                        currentMillis,
+                        currentMillis);
         zookeeperClient.registerTable(tablePath, tableReg);
 
         Set<String> partitions = zookeeperClient.getPartitions(tablePath);

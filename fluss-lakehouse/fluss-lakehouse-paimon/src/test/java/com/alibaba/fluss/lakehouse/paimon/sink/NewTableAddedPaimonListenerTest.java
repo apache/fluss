@@ -116,29 +116,18 @@ class NewTableAddedPaimonListenerTest {
         Identifier paimonPkTableId = Identifier.create(DATABASE, pkTablePath.getTableName());
 
         // then, add the two tables
+        long currentMillis = System.currentTimeMillis();
         newTableAddedPaimonListener.onNewTablesAdded(
                 Arrays.asList(
-                        TableInfo.of(
-                                logTablePath,
-                                1L,
-                                1,
-                                logTable,
-                                System.currentTimeMillis(),
-                                System.currentTimeMillis()),
-                        TableInfo.of(
-                                pkTablePath,
-                                2L,
-                                1,
-                                pkTable,
-                                System.currentTimeMillis(),
-                                System.currentTimeMillis()),
+                        TableInfo.of(logTablePath, 1L, 1, logTable, currentMillis, currentMillis),
+                        TableInfo.of(pkTablePath, 2L, 1, pkTable, currentMillis, currentMillis),
                         TableInfo.of(
                                 logNoBucketKeyTablePath,
                                 3L,
                                 1,
                                 logNoBucketKeyTable,
-                                System.currentTimeMillis(),
-                                System.currentTimeMillis())));
+                                currentMillis,
+                                currentMillis)));
 
         Table paimonPkTable = paimonCatalog.getTable(paimonPkTableId);
         // check the gotten pk table
@@ -220,8 +209,8 @@ class NewTableAddedPaimonListenerTest {
                                 4L,
                                 1,
                                 partitionedTableDescriptor,
-                                System.currentTimeMillis(),
-                                System.currentTimeMillis())));
+                                currentMillis,
+                                currentMillis)));
 
         Identifier paimonPartitionedTableId =
                 Identifier.create(DATABASE, partitionedTablePath.getTableName());

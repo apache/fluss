@@ -82,14 +82,16 @@ public final class TestData {
             TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build();
     public static final PhysicalTablePath DATA1_PHYSICAL_TABLE_PATH =
             PhysicalTablePath.of(DATA1_TABLE_PATH);
+
+    private static final long currentMillis = System.currentTimeMillis();
     public static final TableInfo DATA1_TABLE_INFO =
             TableInfo.of(
                     DATA1_TABLE_PATH,
                     DATA1_TABLE_ID,
                     1,
                     DATA1_TABLE_DESCRIPTOR,
-                    System.currentTimeMillis(),
-                    System.currentTimeMillis());
+                    currentMillis,
+                    currentMillis);
 
     // for log table / partition table
     public static final TableDescriptor DATA1_PARTITIONED_TABLE_DESCRIPTOR =
@@ -104,14 +106,6 @@ public final class TestData {
                     .build();
     public static final PhysicalTablePath DATA1_PHYSICAL_TABLE_PATH_PA_2024 =
             PhysicalTablePath.of(DATA1_TABLE_PATH, "2024");
-    public static final TableInfo DATA1_PARTITIONED_TABLE_INFO =
-            TableInfo.of(
-                    DATA1_TABLE_PATH,
-                    DATA1_TABLE_ID,
-                    1,
-                    DATA1_PARTITIONED_TABLE_DESCRIPTOR,
-                    System.currentTimeMillis(),
-                    System.currentTimeMillis());
 
     // for pk table
     public static final RowType DATA1_KEY_TYPE = DataTypes.ROW(new DataField("a", DataTypes.INT()));
@@ -137,8 +131,8 @@ public final class TestData {
                     DATA1_TABLE_ID_PK,
                     1,
                     DATA1_TABLE_DESCRIPTOR_PK,
-                    System.currentTimeMillis(),
-                    System.currentTimeMillis());
+                    currentMillis,
+                    currentMillis);
 
     public static final PhysicalTablePath DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024 =
             PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "2024");

@@ -95,7 +95,7 @@ public class TableRegistration {
         checkArgument(
                 tableDescriptor.getTableDistribution().isPresent(),
                 "Table distribution is required for table registration.");
-        long now = System.currentTimeMillis();
+        final long currentMillis = System.currentTimeMillis();
         return new TableRegistration(
                 tableId,
                 tableDescriptor.getComment().orElse(null),
@@ -103,8 +103,8 @@ public class TableRegistration {
                 tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
                 tableDescriptor.getCustomProperties(),
-                now,
-                now);
+                currentMillis,
+                currentMillis);
     }
 
     @Override

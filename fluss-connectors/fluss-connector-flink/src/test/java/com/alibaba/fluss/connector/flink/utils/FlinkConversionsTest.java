@@ -192,14 +192,15 @@ class FlinkConversionsTest {
 
         // test convert fluss table to flink table
         TablePath tablePath = TablePath.of("db", "table");
+        long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =
                 TableInfo.of(
                         tablePath,
                         1L,
                         1,
                         flussTable.withBucketCount(1),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+                        currentMillis,
+                        currentMillis);
         // get the converted flink table
         CatalogTable convertedFlinkTable = FlinkConversions.toFlinkTable(tableInfo);
 
