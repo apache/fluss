@@ -75,18 +75,6 @@ public class TableRegistration {
         this.modifiedTime = modifiedTime;
     }
 
-    public TableDescriptor toTableDescriptor(Schema schema) {
-        TableDescriptor.Builder builder =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .comment(comment)
-                        .partitionedBy(partitionKeys)
-                        .distributedBy(bucketCount, bucketKeys);
-        properties.forEach(builder::property);
-        customProperties.forEach(builder::customProperty);
-        return builder.build();
-    }
-
     public TableInfo toTableInfo(TablePath tablePath, SchemaInfo schemaInfo) {
         return new TableInfo(
                 tablePath,
