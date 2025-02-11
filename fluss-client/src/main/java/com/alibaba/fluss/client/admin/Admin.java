@@ -134,13 +134,37 @@ public interface Admin extends AutoCloseable {
      *       false.
      * </ul>
      *
+     * @param databaseName The name of the database to drop.
+     * @param ignoreIfNotExists Flag to specify behavior when a database with the given name does
+     *     not exist: if set to false, throw a DatabaseNotExistException, if set to true, do
+     *     nothing.
+     * @param cascade Flag to specify whether to drop all tables in the database.
+     * @deprecated use {@link #dropDatabase(String databaseName, boolean ignoreIfNotExists, boolean
+     *     cascade)} instead.
+     */
+    @Deprecated
+    CompletableFuture<Void> deleteDatabase(
+            String databaseName, boolean ignoreIfNotExists, boolean cascade);
+
+    /**
+     * Drop the database with the given name asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} if the database does not exist and {@code
+     *       ignoreIfNotExists} is false.
+     *   <li>{@link DatabaseNotEmptyException} if the database is not empty and {@code cascade} is
+     *       false.
+     * </ul>
+     *
      * @param databaseName The name of the database to delete.
      * @param ignoreIfNotExists Flag to specify behavior when a database with the given name does
      *     not exist: if set to false, throw a DatabaseNotExistException, if set to true, do
      *     nothing.
      * @param cascade Flag to specify whether to delete all tables in the database.
      */
-    CompletableFuture<Void> deleteDatabase(
+    CompletableFuture<Void> dropDatabase(
             String databaseName, boolean ignoreIfNotExists, boolean cascade);
 
     /**
@@ -191,7 +215,25 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<TableInfo> getTableInfo(TablePath tablePath);
 
     /**
-     * Delete the table with the given table path asynchronously.
+     * Drop the table with the given table path asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist and {@code
+     *       ignoreIfNotExists} is false.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param ignoreIfNotExists Flag to specify behavior when a table with the given name does not
+     *     exist: if set to false, throw a TableNotExistException, if set to true, do nothing.
+     * @deprecated use {@link #dropTable(TablePath tablePath, boolean ignoreIfNotExists)} instead.
+     */
+    @Deprecated
+    CompletableFuture<Void> deleteTable(TablePath tablePath, boolean ignoreIfNotExists);
+
+    /**
+     * Drop the table with the given table path asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
@@ -204,7 +246,7 @@ public interface Admin extends AutoCloseable {
      * @param ignoreIfNotExists Flag to specify behavior when a table with the given name does not
      *     exist: if set to false, throw a TableNotExistException, if set to true, do nothing.
      */
-    CompletableFuture<Void> deleteTable(TablePath tablePath, boolean ignoreIfNotExists);
+    CompletableFuture<Void> dropTable(TablePath tablePath, boolean ignoreIfNotExists);
 
     /**
      * Get whether table exists asynchronously.

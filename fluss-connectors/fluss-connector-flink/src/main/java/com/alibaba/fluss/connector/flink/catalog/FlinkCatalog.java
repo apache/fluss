@@ -193,7 +193,7 @@ public class FlinkCatalog implements Catalog {
     public void dropDatabase(String databaseName, boolean ignoreIfNotExists, boolean cascade)
             throws DatabaseNotExistException, DatabaseNotEmptyException, CatalogException {
         try {
-            admin.deleteDatabase(databaseName, ignoreIfNotExists, cascade).get();
+            admin.dropDatabase(databaseName, ignoreIfNotExists, cascade).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isDatabaseNotExist(t)) {
@@ -316,7 +316,7 @@ public class FlinkCatalog implements Catalog {
             throws TableNotExistException, CatalogException {
         TablePath tablePath = toTablePath(objectPath);
         try {
-            admin.deleteTable(tablePath, ignoreIfNotExists).get();
+            admin.dropTable(tablePath, ignoreIfNotExists).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isTableNotExist(t)) {

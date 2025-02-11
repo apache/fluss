@@ -187,6 +187,17 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> dropDatabase(
+            String databaseName, boolean ignoreIfNotExists, boolean cascade) {
+        DropDatabaseRequest request = new DropDatabaseRequest();
+
+        request.setIgnoreIfNotExists(ignoreIfNotExists)
+                .setCascade(cascade)
+                .setDatabaseName(databaseName);
+        return gateway.dropDatabase(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<Boolean> databaseExists(String databaseName) {
         DatabaseExistsRequest request = new DatabaseExistsRequest();
         request.setDatabaseName(databaseName);
@@ -233,6 +244,16 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Void> deleteTable(TablePath tablePath, boolean ignoreIfNotExists) {
+        DropTableRequest request = new DropTableRequest();
+        request.setIgnoreIfNotExists(ignoreIfNotExists)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.dropTable(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> dropTable(TablePath tablePath, boolean ignoreIfNotExists) {
         DropTableRequest request = new DropTableRequest();
         request.setIgnoreIfNotExists(ignoreIfNotExists)
                 .setTablePath()

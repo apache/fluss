@@ -404,21 +404,21 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testDropDatabaseAndTable() throws Exception {
         // drop not existed database with ignoreIfNotExists false.
-        assertThatThrownBy(() -> admin.deleteDatabase("unknown_db", false, true).get())
+        assertThatThrownBy(() -> admin.dropDatabase("unknown_db", false, true).get())
                 .cause()
                 .isInstanceOf(DatabaseNotExistException.class);
 
         // drop not existed database with ignoreIfNotExists true.
-        admin.deleteDatabase("unknown_db", true, true).get();
+        admin.dropDatabase("unknown_db", true, true).get();
 
         // drop existed database with table exist in db.
-        assertThatThrownBy(() -> admin.deleteDatabase("test_db", false, false).get())
+        assertThatThrownBy(() -> admin.dropDatabase("test_db", false, false).get())
                 .cause()
                 .isInstanceOf(DatabaseNotEmptyException.class);
 
         // drop existed database with table exist in db.
         assertThat(admin.databaseExists("test_db").get()).isTrue();
-        admin.deleteDatabase("test_db", true, true).get();
+        admin.dropDatabase("test_db", true, true).get();
         assertThat(admin.databaseExists("test_db").get()).isFalse();
 
         // re-create.
@@ -427,17 +427,17 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // drop not existed table with ignoreIfNotExists false.
         assertThatThrownBy(
                         () ->
-                                admin.deleteTable(TablePath.of("test_db", "unknown_table"), false)
+                                admin.dropTable(TablePath.of("test_db", "unknown_table"), false)
                                         .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class);
 
         // drop not existed table with ignoreIfNotExists true.
-        admin.deleteTable(TablePath.of("test_db", "unknown_table"), true).get();
+        admin.dropTable(TablePath.of("test_db", "unknown_table"), true).get();
 
         // drop existed table.
         assertThat(admin.tableExists(DEFAULT_TABLE_PATH).get()).isTrue();
-        admin.deleteTable(DEFAULT_TABLE_PATH, true).get();
+        admin.dropTable(DEFAULT_TABLE_PATH, true).get();
         assertThat(admin.tableExists(DEFAULT_TABLE_PATH).get()).isFalse();
     }
 
