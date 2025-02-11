@@ -41,7 +41,7 @@ cd fluss-quickstart-flink
  but MIND differences in the manifests -->
 ```yaml
 services:
-  #begin Flink cluster
+  #begin Fluss cluster
   coordinator-server:
     image: fluss/fluss:0.5.0
     command: coordinatorServer

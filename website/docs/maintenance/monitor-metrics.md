@@ -785,7 +785,7 @@ You can simply copy the manifest below into your `docker-compose.yml`
 <!-- TODO: based on manifest in Flink quickstart guide + additions (see enumeration above) -->
 ```yaml
 services:
-  #begin Flink cluster
+  #begin Fluss cluster
   coordinator-server:
     image: fluss/fluss:0.5.0
     command: coordinatorServer
