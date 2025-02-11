@@ -99,6 +99,7 @@ import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.clock.Clock;
+import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -118,7 +119,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -145,7 +145,8 @@ public class ReplicaManager {
     private final OffsetCheckpointFile highWatermarkCheckpoint;
 
     @GuardedBy("replicaStateChangeLock")
-    private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
+    private final Map<TableBucket, HostedReplica> allReplicas =
+            ConcurrentHashMapUtils.newConcurrentHashMap();
 
     private final ServerMetadataCache metadataCache;
     private final Lock replicaStateChangeLock = new ReentrantLock();
