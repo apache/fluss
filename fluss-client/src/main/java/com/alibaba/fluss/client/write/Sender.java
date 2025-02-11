@@ -27,7 +27,7 @@ import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -203,9 +203,10 @@ public class Sender implements Runnable {
         Set<ServerNode> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
-            // will cause the CPU to be occupied. Currently, we just sleep 1 second to avoid this.
+            // will cause the CPU to be occupied.
             // In the future, we need to introduce delay logic to deal with it.
-            Thread.sleep(1);
+            // TODO: condition waiter
+            Thread.sleep(readyCheckResult.nextReadyCheckDelayMs);
         }
 
         // get the list of batches prepare to send.
@@ -331,10 +332,8 @@ public class Sender implements Runnable {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         writeBatchByTable.forEach(
                 (tableId, writeBatches) -> {
-                    TableDescriptor tableDescriptor =
-                            metadataUpdater.getTableDescriptorOrElseThrow(tableId);
-
-                    if (tableDescriptor.hasPrimaryKey()) {
+                    TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
+                    if (tableInfo.hasPrimaryKey()) {
                         sendPutKvRequestAndHandleResponse(
                                 gateway,
                                 makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),

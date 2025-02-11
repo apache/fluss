@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.lakehouse.paimon.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Decimal;

@@ -102,28 +102,29 @@ class LookupSender implements Runnable {
 
     /** Run a single iteration of sending. */
     private void runOnce(boolean drainAll) throws Exception {
-        List<AbstractLookup<?>> lookups = drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
+        List<AbstractLookupQuery<?>> lookups =
+                drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
         sendLookups(lookups);
     }
 
-    private void sendLookups(List<AbstractLookup<?>> lookups) {
+    private void sendLookups(List<AbstractLookupQuery<?>> lookups) {
         if (lookups.isEmpty()) {
             return;
         }
         // group by <leader, lookup type> to lookup batches
-        Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> lookupBatches =
+        Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
                 groupByLeaderAndType(lookups);
         // now, send the batches
         lookupBatches.forEach(
                 (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch));
     }
 
-    private Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> groupByLeaderAndType(
-            List<AbstractLookup<?>> lookups) {
+    private Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> groupByLeaderAndType(
+            List<AbstractLookupQuery<?>> lookups) {
         // <leader, LookupType> -> lookup batches
-        Map<Tuple2<Integer, LookupType>, List<AbstractLookup<?>>> lookupBatchesByLeader =
+        Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatchesByLeader =
                 new HashMap<>();
-        for (AbstractLookup<?> lookup : lookups) {
+        for (AbstractLookupQuery<?> lookup : lookups) {
             int leader;
             // lookup the leader node
             TableBucket tb = lookup.tableBucket();
@@ -143,7 +144,7 @@ class LookupSender implements Runnable {
     }
 
     private void sendLookups(
-            int destination, LookupType lookupType, List<AbstractLookup<?>> lookupBatches) {
+            int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
 
         if (lookupType == LookupType.LOOKUP) {
@@ -155,11 +156,12 @@ class LookupSender implements Runnable {
         }
     }
 
-    private void sendLookupRequest(TabletServerGateway gateway, List<AbstractLookup<?>> lookups) {
+    private void sendLookupRequest(
+            TabletServerGateway gateway, List<AbstractLookupQuery<?>> lookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
-        for (AbstractLookup<?> abstractLookup : lookups) {
-            Lookup lookup = (Lookup) abstractLookup;
+        for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
+            LookupQuery lookup = (LookupQuery) abstractLookupQuery;
             TableBucket tb = lookup.tableBucket();
             long tableId = tb.getTableId();
             lookupByTableId
@@ -178,11 +180,11 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequest(
-            TabletServerGateway gateway, List<AbstractLookup<?>> prefixLookups) {
+            TabletServerGateway gateway, List<AbstractLookupQuery<?>> prefixLookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
-        for (AbstractLookup<?> abstractLookup : prefixLookups) {
-            PrefixLookup prefixLookup = (PrefixLookup) abstractLookup;
+        for (AbstractLookupQuery<?> abstractLookupQuery : prefixLookups) {
+            PrefixLookupQuery prefixLookup = (PrefixLookupQuery) abstractLookupQuery;
             TableBucket tb = prefixLookup.tableBucket();
             long tableId = tb.getTableId();
             lookupByTableId

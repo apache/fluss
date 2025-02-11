@@ -52,13 +52,13 @@ public class FlinkRecordEmitter
             HybridSnapshotLogSplitState hybridSnapshotLogSplitState =
                     (HybridSnapshotLogSplitState) splitState;
             if (cdcRecord.getOffset() >= 0) {
-                hybridSnapshotLogSplitState.setOffset(cdcRecord.getOffset() + 1);
+                hybridSnapshotLogSplitState.setNextOffset(cdcRecord.getOffset() + 1);
             } else {
                 hybridSnapshotLogSplitState.setRecordsToSkip(recordAndPos.readRecordsCount());
             }
             sourceOutput.collect(cdcRecord);
         } else if (splitState.isLogSplitState()) {
-            splitState.asLogSplitState().setOffset(recordAndPos.record().getOffset() + 1);
+            splitState.asLogSplitState().setNextOffset(recordAndPos.record().getOffset() + 1);
             sourceOutput.collect(recordAndPos.record());
         } else {
             LOG.warn("Unknown split state type: {}", splitState.getClass());

@@ -23,9 +23,8 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.sink.FlinkTableSink;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
@@ -77,16 +76,15 @@ public class TestingDatabaseSyncSink extends RichSinkFunction<MultiplexCdcRecord
         TablePath tablePath = record.getTablePath();
         SinkFunction<RowData> sinkFunction = sinkByTablePath.get(tablePath);
         if (sinkFunction == null) {
-            TableDescriptor tableDescriptor = admin.getTable(tablePath).get().getTableDescriptor();
-            RowType rowType = tableDescriptor.getSchema().toRowType();
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
 
             FlinkTableSink flinkTableSink =
                     new FlinkTableSink(
                             // write to the sink database
                             new TablePath(sinkDataBase, tablePath.getTableName()),
                             flussConfig,
-                            FlinkConversions.toFlinkRowType(rowType),
-                            tableDescriptor.getSchema().getPrimaryKeyIndexes(),
+                            FlinkConversions.toFlinkRowType(tableInfo.getRowType()),
+                            tableInfo.getSchema().getPrimaryKeyIndexes(),
                             true,
                             null,
                             false);

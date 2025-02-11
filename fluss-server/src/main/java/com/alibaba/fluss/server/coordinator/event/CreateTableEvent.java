@@ -41,7 +41,7 @@ public class CreateTableEvent implements CoordinatorEvent {
     }
 
     public boolean isAutoPartitionTable() {
-        return tableInfo.getTableDescriptor().getAutoPartitionStrategy().isAutoPartitionEnabled();
+        return tableInfo.isAutoPartitioned();
     }
 
     @Override

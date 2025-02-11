@@ -21,7 +21,7 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.metadata.MergeEngine;
+import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.utils.ArrayUtils;
 
 import java.time.Duration;
@@ -1004,11 +1004,24 @@ public class ConfigOptions {
                                     + "When this option is set to ture and the datalake tiering service is up,"
                                     + " the table will be tiered and compacted into datalake format stored on lakehouse storage.");
 
-    public static final ConfigOption<MergeEngine> TABLE_MERGE_ENGINE =
+    public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
-                    .enumType(MergeEngine.class)
+                    .enumType(MergeEngineType.class)
                     .noDefaultValue()
-                    .withDescription("The merge engine for the primary key table.");
+                    .withDescription(
+                            "Defines the merge engine for the primary key table. By default, primary key table doesn't have merge engine. "
+                                    + "The supported merge engines are 'first_row' and 'versioned'. "
+                                    + "The 'first_row' merge engine will keep the first row of the same primary key. "
+                                    + "The 'versioned' merge engine will keep the row with the largest version of the same primary key.");
+
+    public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
+            // we may need to introduce "del-column" in the future to support delete operation
+            key("table.merge-engine.versioned.ver-column")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The column name of the version column for the 'versioned' merge engine. "
+                                    + "If the merge engine is set to 'versioned', the version column must be set.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv

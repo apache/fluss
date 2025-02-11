@@ -18,7 +18,6 @@ package com.alibaba.fluss.lakehouse.paimon.sink;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lakehouse.paimon.source.NewTablesAddedListener;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -34,7 +33,6 @@ import org.apache.paimon.types.DataTypes;
 
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 /** A paimon Listener for discovering new tables added to be synced. */
@@ -90,40 +88,23 @@ public class NewTablesAddedPaimonListener implements NewTablesAddedListener {
             paimonCatalog.createDatabase(identifier.getDatabaseName(), true);
         }
 
-        TableDescriptor.TableDistribution tableDistribution =
-                tableInfo
-                        .getTableDescriptor()
-                        .getTableDistribution()
-                        .orElseThrow(
-                                () -> new IllegalStateException("Table distribution is not set."));
-        int bucketCount =
-                tableDistribution
-                        .getBucketCount()
-                        .orElseThrow(() -> new IllegalStateException("Bucket count is not set."));
-
-        List<String> bucketKeys = tableDistribution.getBucketKeys();
-
         // then, create the table
-        paimonCatalog.createTable(
-                identifier,
-                toPaimonSchema(tableInfo.getTableDescriptor(), bucketCount, bucketKeys),
-                true);
+        paimonCatalog.createTable(identifier, toPaimonSchema(tableInfo), true);
     }
 
     private Identifier toPaimonIdentifier(TablePath tablePath) {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    private Schema toPaimonSchema(
-            TableDescriptor flussTable, int bucketNum, List<String> bucketKeys) {
+    private Schema toPaimonSchema(TableInfo flussTable) {
         Schema.Builder schemaBuilder = Schema.newBuilder();
         Options options = new Options();
 
         // only bucket exists, we set bucket num in paimon
         // otherwise, it will be considered as dynamic bucket in paimon
-        if (!bucketKeys.isEmpty()) {
-            options.set(CoreOptions.BUCKET, bucketNum);
-            options.set(CoreOptions.BUCKET_KEY, String.join(",", bucketKeys));
+        options.set(CoreOptions.BUCKET, flussTable.getNumBuckets());
+        if (flussTable.hasBucketKey()) {
+            options.set(CoreOptions.BUCKET_KEY, String.join(",", flussTable.getBucketKeys()));
         }
 
         // set schema
@@ -151,7 +132,7 @@ public class NewTablesAddedPaimonListener implements NewTablesAddedListener {
         schemaBuilder.partitionKeys(flussTable.getPartitionKeys());
 
         // set custom properties to paimon schema
-        flussTable.getCustomProperties().forEach(options::set);
+        flussTable.getCustomProperties().toMap().forEach(options::set);
         schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }

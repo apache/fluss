@@ -19,18 +19,20 @@ package com.alibaba.fluss.server.kv;
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.metadata.MergeEngine;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.TabletManagerBase;
+import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -43,7 +45,6 @@ import com.alibaba.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
@@ -144,14 +145,14 @@ public final class KvManager extends TabletManagerBase {
      * @param tableBucket the table bucket
      * @param logTablet the cdc log tablet of the kv tablet
      * @param kvFormat the kv format
-     * @param mergeEngine the merge engine
      */
     public KvTablet getOrCreateKv(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
             LogTablet logTablet,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine,
+            Schema schema,
+            TableConfig tableConfig,
             ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
         return inLock(
@@ -163,6 +164,7 @@ public final class KvManager extends TabletManagerBase {
 
                     File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
 
+                    RowMerger merger = RowMerger.create(tableConfig, schema, kvFormat);
                     KvTablet tablet =
                             KvTablet.create(
                                     logTablet,
@@ -171,7 +173,8 @@ public final class KvManager extends TabletManagerBase {
                                     arrowBufferAllocator,
                                     memorySegmentPool,
                                     kvFormat,
-                                    mergeEngine,
+                                    schema,
+                                    merger,
                                     arrowCompressionInfo);
                     currentKvs.put(tableBucket, tablet);
 
@@ -262,8 +265,12 @@ public final class KvManager extends TabletManagerBase {
 
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
-        TableDescriptor tableDescriptor =
-                getTableDescriptor(zkClient, tablePath, tableBucket, tabletDir);
+        TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+        RowMerger rowMerger =
+                RowMerger.create(
+                        tableInfo.getTableConfig(),
+                        tableInfo.getSchema(),
+                        tableInfo.getTableConfig().getKvFormat());
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,
@@ -273,9 +280,10 @@ public final class KvManager extends TabletManagerBase {
                         conf,
                         arrowBufferAllocator,
                         memorySegmentPool,
-                        tableDescriptor.getKvFormat(),
-                        tableDescriptor.getMergeEngine(),
-                        tableDescriptor.getArrowCompressionInfo());
+                        tableInfo.getTableConfig().getKvFormat(),
+                        tableInfo.getSchema(),
+                        rowMerger,
+                        tableInfo.getTableConfig().getArrowCompressionInfo());
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

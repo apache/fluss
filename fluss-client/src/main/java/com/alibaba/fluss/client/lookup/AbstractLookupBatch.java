@@ -26,7 +26,7 @@ import java.util.List;
 @Internal
 public abstract class AbstractLookupBatch<T> {
 
-    protected final List<AbstractLookup<T>> lookups;
+    protected final List<AbstractLookupQuery<T>> lookups;
     private final TableBucket tableBucket;
 
     public AbstractLookupBatch(TableBucket tableBucket) {
@@ -37,11 +37,11 @@ public abstract class AbstractLookupBatch<T> {
     /** Complete the lookup operations using given values . */
     public abstract void complete(List<T> values);
 
-    public void addLookup(AbstractLookup<T> lookup) {
+    public void addLookup(AbstractLookupQuery<T> lookup) {
         lookups.add(lookup);
     }
 
-    public List<AbstractLookup<T>> lookups() {
+    public List<AbstractLookupQuery<T>> lookups() {
         return lookups;
     }
 
@@ -51,7 +51,7 @@ public abstract class AbstractLookupBatch<T> {
 
     /** Complete the get operations with given exception. */
     public void completeExceptionally(Exception exception) {
-        for (AbstractLookup<T> lookup : lookups) {
+        for (AbstractLookupQuery<T> lookup : lookups) {
             lookup.future().completeExceptionally(exception);
         }
     }

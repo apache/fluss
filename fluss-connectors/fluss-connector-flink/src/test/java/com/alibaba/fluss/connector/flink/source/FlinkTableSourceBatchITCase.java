@@ -236,7 +236,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.executeSql(
                                         String.format(
                                                 "SELECT id, name FROM %s limit 10000", tableName)))
-                .hasMessageContaining("LIMIT statement doesn't support greater than 1024");
+                .hasMessageContaining("LIMIT statement doesn't support greater than 2048");
     }
 
     @Test
@@ -365,8 +365,8 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
         // prepare table data
         try (Table dimTable = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = dimTable.getUpsertWriter();
-            RowType dimTableRowType = dimTable.getDescriptor().getSchema().toRowType();
+            UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
+            RowType dimTableRowType = dimTable.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
@@ -398,8 +398,8 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
         // prepare table data
         try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.getAppendWriter();
-            RowType rowType = table.getDescriptor().getSchema().toRowType();
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            RowType rowType = table.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values = new Object[] {i, "address" + i, "name" + i};
                 appendWriter.append(compactedRow(rowType, values));
@@ -434,8 +434,8 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
         // prepare table data
         try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.getAppendWriter();
-            RowType rowType = table.getDescriptor().getSchema().toRowType();
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            RowType rowType = table.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 for (String partition : partitions) {
                     Object[] values = new Object[] {i, "address" + i, "name" + i, partition};

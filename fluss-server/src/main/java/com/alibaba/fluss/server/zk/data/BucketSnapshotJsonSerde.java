@@ -31,15 +31,19 @@ public class BucketSnapshotJsonSerde
 
     public static final BucketSnapshotJsonSerde INSTANCE = new BucketSnapshotJsonSerde();
 
-    private static final String PATH = "path";
+    private static final String SNAPSHOT_ID = "snapshot_id";
+    private static final String LOG_OFFSET = "log_offset";
+    private static final String METADATA_PATH = "metadata_path";
 
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 1;
 
     @Override
     public BucketSnapshot deserialize(JsonNode node) {
-        String path = node.get(PATH).asText();
-        return new BucketSnapshot(path);
+        long snapshotId = node.get(SNAPSHOT_ID).asLong();
+        long logOffset = node.get(LOG_OFFSET).asLong();
+        String metadataPath = node.get(METADATA_PATH).asText();
+        return new BucketSnapshot(snapshotId, logOffset, metadataPath);
     }
 
     @Override
@@ -49,7 +53,9 @@ public class BucketSnapshotJsonSerde
 
         // serialize data version.
         generator.writeNumberField(VERSION_KEY, VERSION);
-        generator.writeStringField(PATH, bucketSnapshot.getPath());
+        generator.writeNumberField(SNAPSHOT_ID, bucketSnapshot.getSnapshotId());
+        generator.writeNumberField(LOG_OFFSET, bucketSnapshot.getLogOffset());
+        generator.writeStringField(METADATA_PATH, bucketSnapshot.getMetadataPath());
 
         generator.writeEndObject();
     }

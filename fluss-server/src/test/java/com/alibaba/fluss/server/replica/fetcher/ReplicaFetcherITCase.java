@@ -20,7 +20,6 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
@@ -52,8 +51,6 @@ import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
@@ -94,27 +91,14 @@ public class ReplicaFetcherITCase {
     @Test
     void testProduceLogNeedAck() throws Exception {
         // set bucket count to 1 to easy for debug.
-        TableInfo data1NonPkTableInfo =
-                new TableInfo(
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_ID,
-                        TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA)
-                                .distributedBy(1, "a")
-                                .build(),
-                        1,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
 
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
-        long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        data1NonPkTableInfo.getTableDescriptor());
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -184,18 +168,13 @@ public class ReplicaFetcherITCase {
 
     @Test
     void testPutKvNeedAck() throws Exception {
-        // set bucket count to 1 to easy for debug.
-        TableInfo data1PkTableInfo = createPkTable();
-
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        data1PkTableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, createPkTableDescriptor());
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -266,14 +245,10 @@ public class ReplicaFetcherITCase {
 
     @Test
     void testFlushForPutKvNeedAck() throws Exception {
-        TableInfo data1PkTableInfo = createPkTable();
-
         // create a table and wait all replica ready
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        data1PkTableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, createPkTableDescriptor());
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -340,14 +315,8 @@ public class ReplicaFetcherITCase {
         }
     }
 
-    private TableInfo createPkTable() {
-        return new TableInfo(
-                DATA1_TABLE_PATH_PK,
-                DATA1_TABLE_ID_PK,
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
-                1,
-                System.currentTimeMillis(),
-                System.currentTimeMillis());
+    private TableDescriptor createPkTableDescriptor() {
+        return TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
     }
 
     private static Configuration initConfig() {

@@ -24,27 +24,28 @@ import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.metadata.MergeEngine;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metrics.MeterView;
+import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordReadContext;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.BinaryRow;
-import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
 import com.alibaba.fluss.row.encode.ValueDecoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
-import com.alibaba.fluss.server.kv.partialupdate.PartialUpdater;
-import com.alibaba.fluss.server.kv.partialupdate.PartialUpdaterCache;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer;
+import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBResourceContainer;
+import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
 import com.alibaba.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import com.alibaba.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
@@ -53,6 +54,7 @@ import com.alibaba.fluss.server.kv.wal.IndexWalBuilder;
 import com.alibaba.fluss.server.kv.wal.WalBuilder;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogTablet;
+import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.types.DataType;
@@ -97,13 +99,14 @@ public final class KvTablet {
     private final long writeBatchSize;
     private final RocksDBKv rocksDBKv;
     private final KvPreWriteBuffer kvPreWriteBuffer;
-    private final PartialUpdaterCache partialUpdaterCache;
 
     // A lock that guards all modifications to the kv.
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
     private final LogFormat logFormat;
     private final KvFormat kvFormat;
-    private final @Nullable MergeEngine mergeEngine;
+    private final Schema schema;
+    // defines how to merge rows on the same primary key
+    private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
 
     /**
@@ -126,7 +129,8 @@ public final class KvTablet {
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine,
+            Schema schema,
+            RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -138,21 +142,21 @@ public final class KvTablet {
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
-        // TODO: [FLUSS-58674883] share cache in server level when PartialUpdater is thread-safe
-        this.partialUpdaterCache = new PartialUpdaterCache();
         this.kvFormat = kvFormat;
-        this.mergeEngine = mergeEngine;
+        this.schema = schema;
+        this.rowMerger = rowMerger;
         this.arrowCompressionInfo = arrowCompressionInfo;
     }
 
     public static KvTablet create(
             LogTablet logTablet,
             File kvTabletDir,
-            Configuration conf,
+            Configuration serverConf,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine,
+            Schema schema,
+            RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
@@ -162,11 +166,12 @@ public final class KvTablet {
                 tablePathAndBucket.f1,
                 logTablet,
                 kvTabletDir,
-                conf,
+                serverConf,
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
-                mergeEngine,
+                schema,
+                rowMerger,
                 arrowCompressionInfo);
     }
 
@@ -175,26 +180,28 @@ public final class KvTablet {
             TableBucket tableBucket,
             LogTablet logTablet,
             File kvTabletDir,
-            Configuration conf,
+            Configuration serverConf,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            @Nullable MergeEngine mergeEngine,
+            Schema schema,
+            RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo)
             throws IOException {
-        RocksDBKv kv = buildRocksDBKv(conf, kvTabletDir);
+        RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir);
         return new KvTablet(
                 tablePath,
                 tableBucket,
                 logTablet,
                 kvTabletDir,
                 kv,
-                conf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
+                serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
                 logTablet.getLogFormat(),
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
-                mergeEngine,
+                schema,
+                rowMerger,
                 arrowCompressionInfo);
     }
 
@@ -235,32 +242,39 @@ public final class KvTablet {
         return flushedLogOffset;
     }
 
+    public void registerMetrics(BucketMetricGroup bucketMetricGroup) {
+        MetricGroup metricGroup = bucketMetricGroup.addGroup("kv");
+
+        // about pre-write buffer.
+        metricGroup.meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_RATE,
+                new MeterView(kvPreWriteBuffer.getFlushCount()));
+        metricGroup.histogram(
+                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS,
+                kvPreWriteBuffer.getFlushLatencyHistogram());
+        metricGroup.meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE,
+                new MeterView(kvPreWriteBuffer.getTruncateAsDuplicatedCount()));
+        metricGroup.meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE,
+                new MeterView(kvPreWriteBuffer.getTruncateAsErrorCount()));
+    }
+
     /**
      * Put the KvRecordBatch into the kv storage, and return the appended wal log info.
      *
      * @param kvRecords the kv records to put into
      * @param targetColumns the target columns to put, null if put all columns
-     * @param schema the schema of the kv tablet to store records
      */
-    public LogAppendInfo putAsLeader(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, Schema schema)
+    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
             throws Exception {
         return inWriteLock(
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
                     short schemaId = kvRecords.schemaId();
-                    // this also sanity checks the validity of the partial update
-                    PartialUpdater partialUpdater =
-                            targetColumns == null
-                                    ? null
-                                    : partialUpdaterCache.getOrCreatePartialUpdater(
-                                            tableBucket.getTableId(),
-                                            schemaId,
-                                            kvFormat,
-                                            schema,
-                                            targetColumns);
-                    RowType rowType = schema.toRowType();
+                    RowMerger currentMerger = rowMerger.configureTargetColumns(targetColumns);
+                    RowType rowType = schema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(schemaId, rowType);
                     walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
                     // get offset to track the offset corresponded to the kv record
@@ -274,11 +288,14 @@ public final class KvTablet {
                                 KvRecordReadContext.createReadContext(kvFormat, fieldTypes);
                         ValueDecoder valueDecoder =
                                 new ValueDecoder(readContext.getRowDecoder(schemaId));
-
                         for (KvRecord kvRecord : kvRecords.records(readContext)) {
                             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
                             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
                             if (kvRecord.getRow() == null) {
+                                if (!rowMerger.supportsDelete()) {
+                                    // skip delete rows if the merger doesn't support yet
+                                    continue;
+                                }
                                 // it's for deletion
                                 byte[] oldValue = getFromBufferOrKv(key);
                                 if (oldValue == null) {
@@ -287,12 +304,8 @@ public final class KvTablet {
                                             "The specific key can't be found in kv tablet although the kv record is for deletion, "
                                                     + "ignore it directly as it doesn't exist in the kv tablet yet.");
                                 } else {
-                                    if (mergeEngine == MergeEngine.FIRST_ROW) {
-                                        // if the merge engine is first row, skip the deletion
-                                        continue;
-                                    }
                                     BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
-                                    BinaryRow newRow = deleteRow(oldRow, partialUpdater);
+                                    BinaryRow newRow = currentMerger.delete(oldRow);
                                     // if newRow is null, it means the row should be deleted
                                     if (newRow == null) {
                                         walBuilder.append(RowKind.DELETE, oldRow);
@@ -313,13 +326,14 @@ public final class KvTablet {
                                 byte[] oldValue = getFromBufferOrKv(key);
                                 // it's update
                                 if (oldValue != null) {
-                                    if (mergeEngine == MergeEngine.FIRST_ROW) {
-                                        // if the merge engine is first row, skip the update
-                                        continue;
-                                    }
                                     BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
                                     BinaryRow newRow =
-                                            updateRow(oldRow, kvRecord.getRow(), partialUpdater);
+                                            currentMerger.merge(oldRow, kvRecord.getRow());
+                                    if (newRow == oldRow) {
+                                        // newRow is the same to oldRow, means nothing
+                                        // happens (no update/delete), and input should be ignored
+                                        continue;
+                                    }
                                     walBuilder.append(RowKind.UPDATE_BEFORE, oldRow);
                                     walBuilder.append(RowKind.UPDATE_AFTER, newRow);
                                     // logOffset is for -U, logOffset + 1 is for +U, we need to use
@@ -345,7 +359,7 @@ public final class KvTablet {
 
                         // There will be a situation that these batches of kvRecordBatch have not
                         // generated any CDC logs, for example, when client attempts to delete
-                        // some non-existent keys or MergeEngine set to FIRST_ROW. In this case,
+                        // some non-existent keys or MergeEngineType set to FIRST_ROW. In this case,
                         // we cannot simply return, as doing so would cause a
                         // OutOfOrderSequenceException problem. Therefore, here we will build an
                         // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
@@ -353,7 +367,15 @@ public final class KvTablet {
                         // put a batch into file with recordCount 0 and offset plus 1L, it will
                         // update the batchSequence corresponding to the writerId and also increment
                         // the CDC log offset by 1.
-                        return logTablet.appendAsLeader(walBuilder.build());
+                        LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+
+                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
+                        // already written.
+                        if (logAppendInfo.duplicated()) {
+                            kvPreWriteBuffer.truncateTo(
+                                    logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
+                        }
+                        return logAppendInfo;
                     } catch (Throwable t) {
                         // While encounter error here, the CDC logs may fail writing to disk,
                         // and the client probably will resend the batch. If we do not remove the
@@ -361,7 +383,7 @@ public final class KvTablet {
                         // retry-send batch will produce incorrect CDC logs.
                         // TODO for some errors, the cdc logs may already be written to disk, for
                         //  those errors, we should not truncate the kvPreWriteBuffer.
-                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, t.getMessage());
+                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
                         throw t;
                     } finally {
                         // deallocate the memory and arrow writer used by the wal builder
@@ -397,24 +419,6 @@ public final class KvTablet {
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }
-    }
-
-    private @Nullable BinaryRow deleteRow(
-            InternalRow oldRow, @Nullable PartialUpdater partialUpdater) {
-        if (partialUpdater == null) {
-            return null;
-        }
-        return partialUpdater.deleteRow(oldRow);
-    }
-
-    private BinaryRow updateRow(
-            BinaryRow oldRow, BinaryRow updateRow, @Nullable PartialUpdater partialUpdater) {
-        // if is not partial update, return the update row
-        if (partialUpdater == null) {
-            return updateRow;
-        }
-        // otherwise, do partial update
-        return partialUpdater.updateRow(oldRow, updateRow);
     }
 
     public void flush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {

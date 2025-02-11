@@ -18,7 +18,7 @@ package com.alibaba.fluss.connector.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.table.api.DataTypes;
@@ -163,7 +163,7 @@ class FlinkCatalogITCase {
                 .cause()
                 .isInstanceOf(CatalogException.class)
                 .cause()
-                .isInstanceOf(InvalidTableException.class)
+                .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("Currently, partitioned table must enable auto partition");
 
         // test invalid property
@@ -176,8 +176,7 @@ class FlinkCatalogITCase {
                                                 + " 'table.log.arrow.compression.type' = 'zstd',"
                                                 + " 'table.log.arrow.compression.zstd.level' = '0')"))
                 .cause()
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
+                .hasRootCauseMessage(
                         "Invalid ZSTD compression level: 0. Expected a value between 1 and 22.");
     }
 
@@ -316,6 +315,7 @@ class FlinkCatalogITCase {
     private static void assertOptionsEqual(
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
+        actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }

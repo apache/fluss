@@ -52,8 +52,9 @@ public class ArrowLogWriteBatch extends WriteBatch {
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
-            AbstractPagedOutputView outputView) {
-        super(tableBucket, physicalTablePath);
+            AbstractPagedOutputView outputView,
+            long createdMs) {
+        super(tableBucket, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView);

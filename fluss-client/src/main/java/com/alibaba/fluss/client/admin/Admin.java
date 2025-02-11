@@ -17,9 +17,9 @@
 package com.alibaba.fluss.client.admin;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.PartitionSnapshotInfo;
+import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
+import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
@@ -27,6 +27,8 @@ import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidReplicationFactorException;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.KvSnapshotNotExistException;
+import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
@@ -38,6 +40,7 @@ import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -96,28 +99,6 @@ public interface Admin extends AutoCloseable {
      * </ul>
      *
      * @param databaseName The name of the database to create.
-     * @param ignoreIfExists Flag to specify behavior when a database with the given name already
-     *     exists: if set to false, throw a DatabaseAlreadyExistException, if set to true, do
-     *     nothing.
-     * @throws InvalidDatabaseException if the database name is invalid, e.g., contains illegal
-     *     characters, or exceeds the maximum length.
-     * @deprecated use {@link #createDatabase(String, DatabaseDescriptor, boolean)} instead.
-     */
-    @Deprecated
-    CompletableFuture<Void> createDatabase(String databaseName, boolean ignoreIfExists)
-            throws InvalidDatabaseException;
-
-    /**
-     * Create a new database asynchronously.
-     *
-     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
-     *
-     * <ul>
-     *   <li>{@link DatabaseAlreadyExistException} if the database already exists and {@code
-     *       ignoreIfExists} is false.
-     * </ul>
-     *
-     * @param databaseName The name of the database to create.
      * @param databaseDescriptor The descriptor of the database to create.
      * @param ignoreIfExists Flag to specify behavior when a database with the given name already
      *     exists: if set to false, throw a DatabaseAlreadyExistException, if set to true, do
@@ -139,7 +120,7 @@ public interface Admin extends AutoCloseable {
      *
      * @param databaseName The database name of the database.
      */
-    CompletableFuture<DatabaseInfo> getDatabase(String databaseName);
+    CompletableFuture<DatabaseInfo> getDatabaseInfo(String databaseName);
 
     /**
      * Delete the database with the given name asynchronously.
@@ -207,7 +188,7 @@ public interface Admin extends AutoCloseable {
      *
      * @param tablePath The table path of the table.
      */
-    CompletableFuture<TableInfo> getTable(TablePath tablePath);
+    CompletableFuture<TableInfo> getTableInfo(TablePath tablePath);
 
     /**
      * Delete the table with the given table path asynchronously.
@@ -260,19 +241,62 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath);
 
     /**
-     * Get table kv snapshot info of the given table asynchronously.
-     *
-     * <p>It'll get the latest snapshot for all the buckets of the table.
+     * Get the latest kv snapshots of the given table asynchronously. A kv snapshot is a snapshot of
+     * a bucket of a primary key table at a certain point in time. Therefore, there are at-most
+     * {@code N} snapshots for a primary key table, {@code N} is the number of buckets.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
      * <ul>
      *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link NonPrimaryKeyTableException} if the table is not a primary key table.
+     *   <li>{@link PartitionNotExistException} if the table is partitioned, use {@link
+     *       #getLatestKvSnapshots(TablePath, String)} instead to get the latest kv snapshot of a
+     *       partition of a partitioned table.
+     *   <li>
      * </ul>
      *
      * @param tablePath the table path of the table.
      */
-    CompletableFuture<KvSnapshotInfo> getKvSnapshot(TablePath tablePath);
+    CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath tablePath);
+
+    /**
+     * Get the latest kv snapshots of the given table partition asynchronously. A kv snapshot is a
+     * snapshot of a bucket of a primary key table at a certain point in time. Therefore, there are
+     * at-most {@code N} snapshots for a partition of a primary key table, {@code N} is the number
+     * of buckets.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link NonPrimaryKeyTableException} if the table is not a primary key table.
+     *   <li>{@link PartitionNotExistException} if the partition does not exist
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned, use {@link
+     *       #getLatestKvSnapshots(TablePath)} instead to get the latest kv snapshots for a
+     *       non-partitioned table.
+     * </ul>
+     *
+     * @param tablePath the table path of the table.
+     */
+    CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath tablePath, String partitionName);
+
+    /**
+     * Get the kv snapshot metadata of the given kv snapshot asynchronously. The kv snapshot
+     * metadata including the snapshot files for the kv tablet and the log offset for the changelog
+     * at the snapshot time.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link KvSnapshotNotExistException} if the snapshot does not exist.
+     * </ul>
+     *
+     * @param bucket the table bucket of the kv snapshot.
+     * @param snapshotId the snapshot id.
+     */
+    CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(
+            TableBucket bucket, long snapshotId);
 
     /**
      * Get table lake snapshot info of the given table asynchronously.
@@ -287,7 +311,7 @@ public interface Admin extends AutoCloseable {
      *
      * @param tablePath the table path of the table.
      */
-    CompletableFuture<LakeTableSnapshotInfo> getLakeTableSnapshot(TablePath tablePath);
+    CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath);
 
     /**
      * List offset for the specified buckets. This operation enables to find the beginning offset,
@@ -301,24 +325,6 @@ public interface Admin extends AutoCloseable {
             PhysicalTablePath physicalTablePath,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec);
-
-    /**
-     * Get a partition's snapshot info of the given partition in the given table asynchronously.
-     *
-     * <p>It'll get the latest snapshot for the given partition of the table.
-     *
-     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
-     *
-     * <ul>
-     *   <li>{@link TableNotExistException} if the table does not exist.
-     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
-     *   <li>{@link PartitionNotExistException} if the given partition does not exist.
-     * </ul>
-     *
-     * @param tablePath the table path of the table.
-     */
-    CompletableFuture<PartitionSnapshotInfo> getPartitionSnapshot(
-            TablePath tablePath, String partitionName);
 
     /** Describe the lake used for lakehouse storage. */
     CompletableFuture<LakeStorageInfo> describeLakeStorage();

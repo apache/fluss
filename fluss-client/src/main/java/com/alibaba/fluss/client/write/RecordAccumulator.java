@@ -41,6 +41,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
 import com.alibaba.fluss.utils.MathUtils;
 import com.alibaba.fluss.utils.Preconditions;
+import com.alibaba.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -106,6 +107,7 @@ public final class RecordAccumulator {
     private final Map<Integer, Integer> nodesDrainIndex;
 
     private final IdempotenceManager idempotenceManager;
+    private final Clock clock;
 
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
@@ -114,7 +116,8 @@ public final class RecordAccumulator {
     RecordAccumulator(
             Configuration conf,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup) {
+            WriterMetricGroup writerMetricGroup,
+            Clock clock) {
         this.closed = false;
         this.flushesInProgress = new AtomicInteger(0);
         this.appendsInProgress = new AtomicInteger(0);
@@ -127,12 +130,13 @@ public final class RecordAccumulator {
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
-        this.pagesPerBatch = Math.max(1, batchSize / writerBufferPool.pageSize());
+        this.pagesPerBatch = Math.max(1, MathUtils.ceilDiv(batchSize, writerBufferPool.pageSize()));
         this.bufferAllocator = new RootAllocator(Long.MAX_VALUE);
         this.arrowWriterPool = new ArrowWriterPool(bufferAllocator);
         this.incomplete = new IncompleteBatches();
         this.nodesDrainIndex = new HashMap<>();
         this.idempotenceManager = idempotenceManager;
+        this.clock = clock;
         registerMetrics(writerMetricGroup);
     }
 
@@ -233,21 +237,26 @@ public final class RecordAccumulator {
      */
     public ReadyCheckResult ready(Cluster cluster) {
         Set<ServerNode> readyNodes = new HashSet<>();
+        long nextReadyCheckDelayMs = batchTimeoutMs;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
-        writeBatches.forEach(
-                (tablePath, bucketAndWriteBatches) ->
-                        bucketReady(
-                                tablePath,
-                                bucketAndWriteBatches,
-                                readyNodes,
-                                unknownLeaderTables,
-                                cluster));
+
+        for (Map.Entry<PhysicalTablePath, BucketAndWriteBatches> writeBatchesEntry :
+                writeBatches.entrySet()) {
+            nextReadyCheckDelayMs =
+                    bucketReady(
+                            writeBatchesEntry.getKey(),
+                            writeBatchesEntry.getValue(),
+                            readyNodes,
+                            unknownLeaderTables,
+                            cluster,
+                            nextReadyCheckDelayMs);
+        }
 
         // TODO and the earliest time at which any non-send-able bucket will be ready;
 
-        return new ReadyCheckResult(readyNodes, unknownLeaderTables);
+        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
     }
 
     /**
@@ -360,7 +369,7 @@ public final class RecordAccumulator {
         if (writeRecord.getKey() != null) {
             return WriteBatch.WriteBatchType.KV;
         } else {
-            LogFormat logFormat = tableInfo.getTableDescriptor().getLogFormat();
+            LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
             if (logFormat == LogFormat.ARROW) {
                 return WriteBatch.WriteBatchType.ARROW_LOG;
             } else if (logFormat == LogFormat.INDEXED) {
@@ -393,66 +402,88 @@ public final class RecordAccumulator {
     }
 
     /** Check whether there are bucket ready for input table. */
-    private void bucketReady(
+    private long bucketReady(
             PhysicalTablePath physicalTablePath,
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<ServerNode> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
-            Cluster cluster) {
+            Cluster cluster,
+            long nextReadyCheckDelayMs) {
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
 
         boolean exhausted = writerBufferPool.queued() > 0;
-        batches.forEach(
-                (bucketId, deque) -> {
-                    TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
-                    ServerNode leader = cluster.leaderFor(tableBucket);
-                    final long waitedTimeMs;
-                    final int dequeSize;
-                    final boolean full;
+        for (Map.Entry<Integer, Deque<WriteBatch>> entry : batches.entrySet()) {
+            int bucketId = entry.getKey();
+            Deque<WriteBatch> deque = entry.getValue();
 
-                    // Note: this loop is especially hot with large bucket counts.
-                    // We are careful to only perform the minimum required inside the synchronized
-                    // block, as this lock is also used to synchronize writer threads
-                    // attempting to append() to a bucket/batch.
-                    synchronized (deque) {
-                        // Deque are often empty in this path, esp with large bucket counts,
-                        // so we exit early if we can.
-                        WriteBatch batch = deque.peekFirst();
-                        if (batch == null) {
-                            return;
-                        }
+            TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
+            ServerNode leader = cluster.leaderFor(tableBucket);
+            final long waitedTimeMs;
+            final int dequeSize;
+            final boolean full;
 
-                        waitedTimeMs = batch.waitedTimeMs(System.currentTimeMillis());
-                        dequeSize = deque.size();
-                        full = dequeSize > 1 || batch.isClosed();
-                    }
+            // Note: this loop is especially hot with large bucket counts.
+            // We are careful to only perform the minimum required inside the synchronized
+            // block, as this lock is also used to synchronize writer threads
+            // attempting to append() to a bucket/batch.
+            synchronized (deque) {
+                // Deque are often empty in this path, esp with large bucket counts,
+                // so we exit early if we can.
+                WriteBatch batch = deque.peekFirst();
+                if (batch == null) {
+                    continue;
+                }
 
-                    if (leader == null) {
-                        // This is a bucket for which leader is not known, but messages are
-                        // available to send. Note that entries are currently not removed from
-                        // batches when deque is empty.
-                        unknownLeaderTables.add(physicalTablePath);
-                    } else {
-                        batchReady(exhausted, leader, waitedTimeMs, full, readyNodes);
-                    }
-                });
+                waitedTimeMs = batch.waitedTimeMs(clock.milliseconds());
+                dequeSize = deque.size();
+                full = dequeSize > 1 || batch.isClosed();
+            }
+
+            if (leader == null) {
+                // This is a bucket for which leader is not known, but messages are
+                // available to send. Note that entries are currently not removed from
+                // batches when deque is empty.
+                unknownLeaderTables.add(physicalTablePath);
+            } else {
+                nextReadyCheckDelayMs =
+                        batchReady(
+                                exhausted,
+                                leader,
+                                waitedTimeMs,
+                                full,
+                                readyNodes,
+                                nextReadyCheckDelayMs);
+            }
+        }
+
+        return nextReadyCheckDelayMs;
     }
 
-    private void batchReady(
+    private long batchReady(
             boolean exhausted,
             ServerNode leader,
             long waitedTimeMs,
             boolean full,
-            Set<ServerNode> readyNodes) {
+            Set<ServerNode> readyNodes,
+            long nextReadyCheckDelayMs) {
         if (!readyNodes.contains(leader)) {
             // if the wait time larger than lingerMs, we can send this batch even if it is not full.
             boolean expired = waitedTimeMs >= (long) batchTimeoutMs;
             boolean sendAble = full || expired || exhausted || closed || flushInProgress();
             if (sendAble) {
                 readyNodes.add(leader);
+            } else {
+                long timeLeftMs = Math.max(batchTimeoutMs - waitedTimeMs, 0);
+                // Note that this results in a conservative estimate since an un-sendable bucket may
+                // have
+                // a leader that will later be found to have sendable data. However, this is good
+                // enough
+                // since we'll just wake up and then sleep again for the remaining time.
+                nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, timeLeftMs);
             }
         }
+        return nextReadyCheckDelayMs;
     }
 
     /**
@@ -493,21 +524,27 @@ public final class RecordAccumulator {
                             tb,
                             physicalTablePath,
                             schemaId,
-                            tableInfo.getTableDescriptor().getKvFormat(),
+                            tableInfo.getTableConfig().getKvFormat(),
                             outputView.getPreAllocatedSize(),
                             outputView,
-                            writeRecord.getTargetColumns());
+                            writeRecord.getTargetColumns(),
+                            clock.milliseconds());
         } else if (writeBatchType == WriteBatch.WriteBatchType.ARROW_LOG) {
             ArrowWriter arrowWriter =
                     arrowWriterPool.getOrCreateWriter(
                             tableInfo.getTableId(),
                             schemaId,
                             outputView.getPreAllocatedSize(),
-                            tableInfo.getTableDescriptor().getSchema().toRowType(),
-                            tableInfo.getTableDescriptor().getArrowCompressionInfo());
+                            tableInfo.getRowType(),
+                            tableInfo.getTableConfig().getArrowCompressionInfo());
             batch =
                     new ArrowLogWriteBatch(
-                            tb, physicalTablePath, schemaId, arrowWriter, outputView);
+                            tb,
+                            physicalTablePath,
+                            schemaId,
+                            arrowWriter,
+                            outputView,
+                            clock.milliseconds());
         } else {
             batch =
                     new IndexedLogWriteBatch(
@@ -515,7 +552,8 @@ public final class RecordAccumulator {
                             physicalTablePath,
                             schemaId,
                             outputView.getPreAllocatedSize(),
-                            outputView);
+                            outputView,
+                            clock.milliseconds());
         }
 
         batch.tryAppend(writeRecord, callback);
@@ -779,11 +817,15 @@ public final class RecordAccumulator {
     /** The set of nodes that have at leader one complete record batch in the accumulator. */
     public static final class ReadyCheckResult {
         public final Set<ServerNode> readyNodes;
+        public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
 
         public ReadyCheckResult(
-                Set<ServerNode> readyNodes, Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<ServerNode> readyNodes,
+                long nextReadyCheckDelayMs,
+                Set<PhysicalTablePath> unknownLeaderTables) {
             this.readyNodes = readyNodes;
+            this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
         }
     }

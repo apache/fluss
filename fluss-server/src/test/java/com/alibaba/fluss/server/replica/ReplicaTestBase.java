@@ -92,14 +92,15 @@ import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_202
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA2_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA2_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_PATH;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
@@ -223,13 +224,12 @@ public class ReplicaTestBase {
         zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
-                TableRegistration.newTable(
-                        DATA1_TABLE_ID_PK, DATA1_TABLE_INFO_PK.getTableDescriptor()));
+                TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
-                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_INFO.getTableDescriptor()));
+                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
@@ -440,7 +440,7 @@ public class ReplicaTestBase {
                 serverMetadataCache,
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build(),
+                DATA1_TABLE_INFO,
                 manualClock);
     }
 

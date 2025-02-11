@@ -17,9 +17,8 @@
 package com.alibaba.fluss.connector.flink.source;
 
 import com.alibaba.fluss.client.admin.Admin;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
@@ -202,7 +201,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         tableName, logFormat));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Table table = conn.getTable(tablePath);
-        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows =
                 Arrays.asList(
                         genRow(false, dataType, new Object[] {1, "v1", 100L, 1000, 100, 1000L}),
@@ -268,7 +267,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Table table = conn.getTable(tablePath);
 
-        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows =
                 Arrays.asList(
                         genRow(isPkTable, dataType, new Object[] {1, "v1", 100L, 1000}),
@@ -402,7 +401,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         }
         Table table = conn.getTable(tablePath);
 
-        RowType dataType = table.getDescriptor().getSchema().toRowType();
+        RowType dataType = table.getTableInfo().getRowType();
         List<InternalRow> rows1 =
                 Arrays.asList(
                         row(dataType, rowValues(new Object[] {1, "v1", 100L, 1000}, partitionName)),
@@ -427,8 +426,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         // for second batch, we don't wait snapshot finish.
         writeRows(tablePath, rows2, true);
 
-        // 1. read log table with scan.startup.mode='initial'
-        String options = " /*+ OPTIONS('scan.startup.mode' = 'initial') */";
+        // 1. read log table with scan.startup.mode='full'
+        String options = " /*+ OPTIONS('scan.startup.mode' = 'full') */";
         String query = "select a, b, c, d from " + tableName + options;
         List<String> expected =
                 Arrays.asList(
@@ -459,10 +458,10 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     }
 
     @Test
-    void testReadKvTableWithScanStartupModeEqualsInitial() throws Exception {
+    void testReadKvTableWithScanStartupModeEqualsFull() throws Exception {
         tEnv.executeSql(
-                "create table read_initial_test (a int not null primary key not enforced, b varchar)");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "read_initial_test");
+                "create table read_full_test (a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "read_full_test");
 
         List<InternalRow> rows1 =
                 Arrays.asList(
@@ -481,8 +480,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
                         compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v22"}),
                         compactedRow(DATA1_ROW_TYPE, new Object[] {4, "v4"}));
 
-        String options = " /*+ OPTIONS('scan.startup.mode' = 'initial') */";
-        String query = "select a, b from read_initial_test " + options;
+        String options = " /*+ OPTIONS('scan.startup.mode' = 'full') */";
+        String query = "select a, b from read_full_test " + options;
         List<String> expected =
                 Arrays.asList(
                         "+I[1, v1]",
@@ -544,7 +543,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
             partitionName = partitionNameById.values().iterator().next();
         }
 
-        RowType dataType = conn.getTable(tablePath).getDescriptor().getSchema().toRowType();
+        RowType dataType = conn.getTable(tablePath).getTableInfo().getRowType();
 
         List<InternalRow> rows1 =
                 Arrays.asList(
@@ -910,6 +909,27 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
     @ParameterizedTest
     @MethodSource("lookupArgs")
+    void testPrefixLookupPartitionedTable(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        caching,
+                        async,
+                        new String[] {"name", "id"},
+                        new String[] {"name"},
+                        "p_date");
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name AND src.p_date = h.p_date",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected = Arrays.asList("+I[1, name1, address1]", "+I[1, name1, address5]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
     void testPrefixLookupWithCondition(Caching caching, boolean async) throws Exception {
         String dim =
                 prepareDimTableAndSourceTable(
@@ -1028,8 +1048,8 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
         // prepare dim table data
         try (Table dimTable = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = dimTable.getUpsertWriter();
-            RowType dimTableRowType = dimTable.getDescriptor().getSchema().toRowType();
+            UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
+            RowType dimTableRowType = dimTable.getTableInfo().getRowType();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
@@ -1083,10 +1103,9 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     private void waitUtilAllBucketFinishSnapshot(Admin admin, TablePath tablePath) {
         waitUtil(
                 () -> {
-                    KvSnapshotInfo kvSnapshotInfo = admin.getKvSnapshot(tablePath).get();
-                    BucketsSnapshotInfo bucketsSnapshotInfo = kvSnapshotInfo.getBucketsSnapshots();
-                    for (int bucketId : bucketsSnapshotInfo.getBucketIds()) {
-                        if (!bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).isPresent()) {
+                    KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
+                    for (int bucketId : snapshots.getBucketIds()) {
+                        if (!snapshots.getSnapshotId(bucketId).isPresent()) {
                             return false;
                         }
                     }
@@ -1101,12 +1120,10 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         waitUtil(
                 () -> {
                     for (String partition : partitions) {
-                        BucketsSnapshotInfo bucketsSnapshotInfo =
-                                admin.getPartitionSnapshot(tablePath, partition)
-                                        .get()
-                                        .getBucketsSnapshotInfo();
-                        for (int bucketId : bucketsSnapshotInfo.getBucketIds()) {
-                            if (!bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).isPresent()) {
+                        KvSnapshots snapshots =
+                                admin.getLatestKvSnapshots(tablePath, partition).get();
+                        for (int bucketId : snapshots.getBucketIds()) {
+                            if (!snapshots.getSnapshotId(bucketId).isPresent()) {
                                 return false;
                             }
                         }

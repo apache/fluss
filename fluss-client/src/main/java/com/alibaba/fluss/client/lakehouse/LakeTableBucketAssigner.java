@@ -19,7 +19,6 @@ package com.alibaba.fluss.client.lakehouse;
 import com.alibaba.fluss.client.lakehouse.paimon.PaimonBucketAssigner;
 import com.alibaba.fluss.client.write.BucketAssigner;
 import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.RowType;
 
@@ -34,14 +33,6 @@ public class LakeTableBucketAssigner implements BucketAssigner {
     // that paimon assign to align with paimon when data lake is enabled
     // todo: make it pluggable
     private final PaimonBucketAssigner paimonBucketAssigner;
-
-    public LakeTableBucketAssigner(TableDescriptor tableDescriptor, int bucketNum) {
-        this.paimonBucketAssigner =
-                new PaimonBucketAssigner(
-                        tableDescriptor.getSchema().toRowType(),
-                        tableDescriptor.getBucketKey(),
-                        bucketNum);
-    }
 
     public LakeTableBucketAssigner(RowType rowType, List<String> bucketKey, int bucketNum) {
         this.paimonBucketAssigner = new PaimonBucketAssigner(rowType, bucketKey, bucketNum);

@@ -27,12 +27,12 @@ import com.alibaba.fluss.metadata.TablePath;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * An immutable representation of a subset of the server nodes, tables, and buckets and schemas in
@@ -122,12 +122,19 @@ public final class Cluster {
         this.pathByTableId = Collections.unmodifiableMap(tempPathByTableId);
     }
 
-    public Cluster invalidPhysicalTableBucketMeta(
-            Collection<PhysicalTablePath> physicalTablesToInvalid) {
+    public Cluster invalidPhysicalTableBucketMeta(Set<PhysicalTablePath> physicalTablesToInvalid) {
+        // should remove invalid tables from current availableLocationsByPath
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocationsByPath =
-                new HashMap<>(availableLocationsByPath);
-        for (PhysicalTablePath path : physicalTablesToInvalid) {
-            newBucketLocationsByPath.remove(path);
+                new HashMap<>(availableLocationsByPath.size() - physicalTablesToInvalid.size());
+        // copy the metadata from current availableLocationsByPath to newBucketLocationsByPath
+        // except for the tables in physicalTablesToInvalid
+        for (Map.Entry<PhysicalTablePath, List<BucketLocation>> tablePathAndBucketLocations :
+                availableLocationsByPath.entrySet()) {
+            if (!physicalTablesToInvalid.contains(tablePathAndBucketLocations.getKey())) {
+                newBucketLocationsByPath.put(
+                        tablePathAndBucketLocations.getKey(),
+                        new ArrayList<>(tablePathAndBucketLocations.getValue()));
+            }
         }
         return new Cluster(
                 new HashMap<>(aliveTabletServersById),
@@ -179,23 +186,7 @@ public final class Cluster {
     }
 
     public int getBucketCount(TablePath tablePath) {
-        return tableInfoByPath
-                .get(tablePath)
-                .getTableDescriptor()
-                .getTableDistribution()
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        "table distribution is null for table: "
-                                                + tablePath
-                                                + " in cluster"))
-                .getBucketCount()
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        "bucket count is null for table: "
-                                                + tablePath
-                                                + " in cluster"));
+        return tableInfoByPath.get(tablePath).getNumBuckets();
     }
 
     /** Get the bucket location for this table-bucket. */
@@ -289,11 +280,7 @@ public final class Cluster {
     /** Get the latest schema for the given table. */
     public Optional<SchemaInfo> getSchema(TablePath tablePath) {
         return getTable(tablePath)
-                .map(
-                        tableInfo ->
-                                new SchemaInfo(
-                                        tableInfo.getTableDescriptor().getSchema(),
-                                        tableInfo.getSchemaId()));
+                .map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
     }
 
     /** Get the table path to table id map. */

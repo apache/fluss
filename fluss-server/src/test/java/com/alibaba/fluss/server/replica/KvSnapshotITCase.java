@@ -46,7 +46,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecords;
@@ -85,9 +85,7 @@ class KvSnapshotITCase {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId =
                     RpcMessageTestUtils.createTable(
-                            FLUSS_CLUSTER_EXTENSION,
-                            tablePath,
-                            DATA1_TABLE_INFO_PK.getTableDescriptor());
+                            FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
             for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
             }

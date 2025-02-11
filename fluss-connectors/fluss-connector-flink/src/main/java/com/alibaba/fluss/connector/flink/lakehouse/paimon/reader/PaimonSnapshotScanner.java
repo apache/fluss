@@ -16,8 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.lakehouse.paimon.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.connector.flink.source.reader.SplitScanner;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.paimon.data.InternalRow;
@@ -33,7 +32,7 @@ import java.time.Duration;
 import java.util.Objects;
 
 /** A scanner for reading paimon split. Most logic is copied from paimon. */
-public class PaimonSnapshotScanner implements SplitScanner {
+public class PaimonSnapshotScanner implements BatchScanner {
 
     private final TableRead tableRead;
     @Nullable private LazyRecordReader currentReader;
@@ -45,7 +44,7 @@ public class PaimonSnapshotScanner implements SplitScanner {
 
     @Override
     @Nullable
-    public CloseableIterator<ScanRecord> poll(Duration timeout) {
+    public CloseableIterator<com.alibaba.fluss.row.InternalRow> pollBatch(Duration timeout) {
         try {
             RecordReader.RecordIterator<InternalRow> nextBatch =
                     Objects.requireNonNull(currentReader).recordReader().readBatch();
@@ -59,7 +58,7 @@ public class PaimonSnapshotScanner implements SplitScanner {
         }
     }
 
-    public void close() throws Exception {
+    public void close() throws IOException {
         LazyRecordReader recordReader = currentReader;
         if (recordReader != null) {
             if (recordReader.lazyRecordReader != null) {
@@ -69,7 +68,8 @@ public class PaimonSnapshotScanner implements SplitScanner {
         }
     }
 
-    private static class PaimonRowIteratorWrapper implements CloseableIterator<ScanRecord> {
+    private static class PaimonRowIteratorWrapper
+            implements CloseableIterator<com.alibaba.fluss.row.InternalRow> {
         private final RecordReader.RecordIterator<InternalRow> recordBatch;
         private @Nullable InternalRow paimonRow;
 
@@ -91,10 +91,10 @@ public class PaimonSnapshotScanner implements SplitScanner {
         }
 
         @Override
-        public ScanRecord next() {
-            ScanRecord scanRecord = new ScanRecord(new PaimonRowWrapper(paimonRow));
+        public com.alibaba.fluss.row.InternalRow next() {
+            PaimonRowWrapper wrapper = new PaimonRowWrapper(paimonRow);
             paimonRow = null;
-            return scanRecord;
+            return wrapper;
         }
 
         @Override

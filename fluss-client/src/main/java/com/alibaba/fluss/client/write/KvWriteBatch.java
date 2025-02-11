@@ -55,8 +55,9 @@ public class KvWriteBatch extends WriteBatch {
             KvFormat kvFormat,
             int writeLimit,
             AbstractPagedOutputView outputView,
-            @Nullable int[] targetColumns) {
-        super(tableBucket, physicalTablePath);
+            @Nullable int[] targetColumns,
+            long createdMs) {
+        super(tableBucket, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);

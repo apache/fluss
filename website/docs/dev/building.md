@@ -34,3 +34,7 @@ The build script will be:
 ```bash
 mvn clean install -DskipTests -T 1C
 ```
+
+**NOTE**:
+- For local testing, it's recommend to use directory `${project}/build-target` in project.
+- For deploying distributed cluster, it's recommend to use binary file named `fluss-xxx-bin.tgz`, the file is in directory `${project}/fluss-dist/target`.

@@ -215,18 +215,16 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void registerCoordinatorLeader() throws Exception {
-        // set server id
-        String serverId = UUID.randomUUID().toString();
         CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress(serverId, rpcServer.getHostname(), rpcServer.getPort());
+                new CoordinatorAddress(this.serverId, rpcServer.getHostname(), rpcServer.getPort());
         zkClient.registerCoordinatorLeader(coordinatorAddress);
     }
 
     private void createDefaultDatabase() {
-        MetaDataManager metaDataManager = new MetaDataManager(zkClient);
-        List<String> databases = metaDataManager.listDatabases();
+        MetadataManager metadataManager = new MetadataManager(zkClient);
+        List<String> databases = metadataManager.listDatabases();
         if (databases.isEmpty()) {
-            metaDataManager.createDatabase(
+            metadataManager.createDatabase(
                     DEFAULT_DATABASE, DatabaseDescriptor.builder().build(), true);
             LOG.info("Created default database '{}' because no database exists.", DEFAULT_DATABASE);
         }

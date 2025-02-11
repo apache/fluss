@@ -91,6 +91,19 @@ public final class RowType extends DataType {
         return new RowType(this.isNullable(), projectedFields);
     }
 
+    public RowType project(List<String> projectFields) {
+        List<DataField> projectedFields = new ArrayList<>();
+        for (String projectField : projectFields) {
+            int index = getFieldIndex(projectField);
+            if (index == -1) {
+                throw new IllegalArgumentException(
+                        String.format("Field %s does not exist in the row type.", projectField));
+            }
+            projectedFields.add(this.fields.get(index));
+        }
+        return new RowType(this.isNullable(), projectedFields);
+    }
+
     @Override
     public DataType copy(boolean isNullable) {
         return new RowType(

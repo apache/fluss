@@ -15,9 +15,8 @@
 ################################################################################
 
 name: Feature Request 🚀
-description: Add new feature, improve code, and more
-title: "[Feature] "
-labels: [ "feature" ]
+description: Add new feature, improvement, and more
+type: "feature"
 body:
   - type: markdown
     attributes:

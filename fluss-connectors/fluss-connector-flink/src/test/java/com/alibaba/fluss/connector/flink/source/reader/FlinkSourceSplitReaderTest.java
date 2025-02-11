@@ -16,11 +16,9 @@
 
 package com.alibaba.fluss.connector.flink.source.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.client.write.HashBucketAssigner;
@@ -55,9 +53,10 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.connector.flink.source.testutils.RecordAndPosAssert.assertThatRecordAndPos;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
@@ -121,7 +120,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-only-snapshot-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.toRowType())) {
+                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
 
             // no any records
             List<SourceSplitBase> hybridSnapshotLogSplits = new ArrayList<>();
@@ -130,7 +129,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                     splitReader,
                     hybridSnapshotLogSplits,
                     expectedRecords,
-                    DEFAULT_PK_TABLE_SCHEMA.toRowType());
+                    DEFAULT_PK_TABLE_SCHEMA.getRowType());
 
             // now, write some records into the table
             Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
@@ -146,7 +145,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                     splitReader,
                     hybridSnapshotLogSplits,
                     expectedRecords,
-                    DEFAULT_PK_TABLE_SCHEMA.toRowType());
+                    DEFAULT_PK_TABLE_SCHEMA.getRowType());
         }
     }
 
@@ -181,13 +180,13 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         long tableId = createTable(tablePath1, tableDescriptor);
 
         try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath1, schema.toRowType())) {
+                createSplitReader(tablePath1, schema.getRowType())) {
 
             // no any records
             List<SourceSplitBase> logSplits = new ArrayList<>();
             Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
             assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader, logSplits, expectedRecords, schema.toRowType());
+                    splitReader, logSplits, expectedRecords, schema.getRowType());
 
             // now, write some records into the table
             List<InternalRow> internalRows = appendRows(tablePath1, 5);
@@ -205,7 +204,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             logSplits.add(new LogSplit(tableBucket, null, 0L));
 
             assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader, logSplits, expectedRecords, schema.toRowType());
+                    splitReader, logSplits, expectedRecords, schema.getRowType());
         }
     }
 
@@ -215,7 +214,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
 
         try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.toRowType())) {
+                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
 
             // now, write some records into the table
             Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
@@ -266,7 +265,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             }
 
             assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader, totalSplits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.toRowType());
+                    splitReader,
+                    totalSplits,
+                    expectedRecords,
+                    DEFAULT_PK_TABLE_SCHEMA.getRowType());
         }
     }
 
@@ -283,7 +285,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         createTable(tablePath, tableDescriptor);
 
         try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, schema.toRowType())) {
+                createSplitReader(tablePath, schema.getRowType())) {
             // fetch shouldn't throw exception
             RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
             assertThat(records.nextSplit()).isNull();
@@ -310,7 +312,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         List<SourceSplitBase> subscribeSplits = Arrays.asList(split1, split2, split3);
 
         try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, schema.toRowType())) {
+                createSplitReader(tablePath, schema.getRowType())) {
             splitReader.handleSplitsChanges(new SplitsAddition<>(subscribeSplits));
 
             // fetch records
@@ -406,7 +408,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             throws Exception {
         Map<TableBucket, List<InternalRow>> rowsByBuckets = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
                 InternalRow compactedRow = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
                 upsertWriter.upsert(compactedRow);
@@ -423,7 +425,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     private List<InternalRow> appendRows(TablePath tablePath, int rows) throws Exception {
         List<InternalRow> internalRows = new ArrayList<>(rows);
         try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.getAppendWriter();
+            AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < rows; i++) {
                 InternalRow row = row(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
                 appendWriter.append(row);
@@ -440,13 +442,14 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     private static String toHybridSnapshotLogSplitId(TableBucket tableBucket) {
-        return new HybridSnapshotLogSplit(tableBucket, null, Collections.emptyList(), 0).splitId();
+        // snapshotId and logOffset doesn't affect splitId, use mocked 0 value.
+        return new HybridSnapshotLogSplit(tableBucket, null, 0, 0).splitId();
     }
 
     private static int getBucketId(InternalRow row) {
         KeyEncoder keyEncoder =
                 new KeyEncoder(
-                        DEFAULT_PK_TABLE_SCHEMA.toRowType(),
+                        DEFAULT_PK_TABLE_SCHEMA.getRowType(),
                         DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
         byte[] key = keyEncoder.encode(row);
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
@@ -454,20 +457,16 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     private List<SourceSplitBase> getHybridSnapshotLogSplits(TablePath tablePath) throws Exception {
-        KvSnapshotInfo kvSnapshotInfo = admin.getKvSnapshot(tablePath).get();
+        KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
         List<SourceSplitBase> hybridSnapshotLogSplits = new ArrayList<>();
-        BucketsSnapshotInfo bucketsSnapshotInfo = kvSnapshotInfo.getBucketsSnapshots();
-        for (Integer bucketId : bucketsSnapshotInfo.getBucketIds()) {
-            TableBucket tableBucket = new TableBucket(kvSnapshotInfo.getTableId(), bucketId);
-            if (bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).isPresent()) {
-                BucketSnapshotInfo bucketSnapshotInfo =
-                        bucketsSnapshotInfo.getBucketSnapshotInfo(bucketId).get();
+        for (Integer bucketId : snapshots.getBucketIds()) {
+            TableBucket tableBucket = new TableBucket(snapshots.getTableId(), bucketId);
+            OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
+            OptionalLong logOffset = snapshots.getLogOffset(bucketId);
+            if (snapshotId.isPresent() && logOffset.isPresent()) {
                 hybridSnapshotLogSplits.add(
                         new HybridSnapshotLogSplit(
-                                tableBucket,
-                                null,
-                                bucketSnapshotInfo.getSnapshotFiles(),
-                                bucketSnapshotInfo.getLogOffset()));
+                                tableBucket, null, snapshotId.getAsLong(), logOffset.getAsLong()));
             }
         }
         return hybridSnapshotLogSplits;

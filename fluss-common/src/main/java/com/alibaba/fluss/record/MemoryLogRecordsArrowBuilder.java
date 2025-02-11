@@ -60,6 +60,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private int recordCount;
     private boolean isClosed;
     private boolean reCalculateSizeInBytes = false;
+    private boolean resetBatchHeader = false;
 
     private MemoryLogRecordsArrowBuilder(
             long baseLogOffset,
@@ -111,6 +112,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
     public MultiBytesView build() throws IOException {
         if (bytesView != null) {
+            if (resetBatchHeader) {
+                writeBatchHeader();
+                resetBatchHeader = false;
+            }
             return bytesView;
         }
 
@@ -162,8 +167,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     }
 
     public void resetWriterState(long writerId, int batchSequence) {
-        // trigger to rewrite batch header
-        this.bytesView = null;
+        // trigger to rewrite batch header when next build.
+        this.resetBatchHeader = true;
         this.writerId = writerId;
         this.batchSequence = batchSequence;
     }
@@ -187,15 +192,16 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
     public int estimatedSizeInBytes() {
         if (bytesView != null) {
-            // accurate total size in bytes
+            // accurate total size in bytes (compressed if compression is enabled)
             return bytesView.getBytesLength();
         }
 
         if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
-            // TODO: consider the compression ratio
             estimatedSizeInBytes =
-                    ARROW_ROWKIND_OFFSET + rowKindWriter.sizeInBytes() + arrowWriter.sizeInBytes();
+                    ARROW_ROWKIND_OFFSET
+                            + rowKindWriter.sizeInBytes()
+                            + arrowWriter.estimatedSizeInBytes();
         }
 
         reCalculateSizeInBytes = false;

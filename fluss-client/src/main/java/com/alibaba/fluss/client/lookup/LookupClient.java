@@ -77,15 +77,13 @@ public class LookupClient {
     }
 
     public CompletableFuture<byte[]> lookup(TableBucket tableBucket, byte[] keyBytes) {
-        Lookup lookup = new Lookup(tableBucket, keyBytes);
+        LookupQuery lookup = new LookupQuery(tableBucket, keyBytes);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
-    public CompletableFuture<List<byte[]>> prefixLookup(
-            long tableId, int bucketId, byte[] keyBytes) {
-        // TODO prefix lookup support partition table (#266)
-        PrefixLookup prefixLookup = new PrefixLookup(new TableBucket(tableId, bucketId), keyBytes);
+    public CompletableFuture<List<byte[]>> prefixLookup(TableBucket tableBucket, byte[] keyBytes) {
+        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tableBucket, keyBytes);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

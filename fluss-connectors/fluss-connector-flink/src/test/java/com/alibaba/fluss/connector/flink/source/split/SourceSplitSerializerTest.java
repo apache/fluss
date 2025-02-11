@@ -16,15 +16,10 @@
 
 package com.alibaba.fluss.connector.flink.source.split;
 
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-
-import java.util.Arrays;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,17 +37,13 @@ class SourceSplitSerializerTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testHybridSnapshotLogSplitSerde(boolean isPartitioned) throws Exception {
+        int snapshotId = 100;
         int recordsToSkip = 3;
-        List<FsPathAndFileName> snapshotFiles =
-                Arrays.asList(
-                        new FsPathAndFileName(new FsPath("oss://bucket/path/f1"), "fname1"),
-                        new FsPathAndFileName(new FsPath("oss://bucket/path/f2"), "fname2"));
-
         TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
         String partitionName = isPartitioned ? "2024" : null;
 
         HybridSnapshotLogSplit split =
-                new HybridSnapshotLogSplit(bucket, partitionName, snapshotFiles, recordsToSkip);
+                new HybridSnapshotLogSplit(bucket, partitionName, snapshotId, recordsToSkip);
         byte[] serialized = serializer.serialize(split);
 
         SourceSplitBase deserializedSplit =
@@ -61,7 +52,7 @@ class SourceSplitSerializerTest {
 
         split =
                 new HybridSnapshotLogSplit(
-                        bucket, partitionName, snapshotFiles, recordsToSkip, true, 5);
+                        bucket, partitionName, snapshotId, recordsToSkip, true, 5);
         serialized = serializer.serialize(split);
         deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(split);

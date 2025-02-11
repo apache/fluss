@@ -26,7 +26,7 @@ import com.alibaba.fluss.connector.flink.utils.FlinkConnectorOptionsUtils;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils.ValueConversion;
-import com.alibaba.fluss.metadata.MergeEngine;
+import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
@@ -105,7 +105,7 @@ public class FlinkTableSource
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
-    @Nullable private final MergeEngine mergeEngine;
+    @Nullable private final MergeEngineType mergeEngineType;
 
     // output type after projection pushdown
     private LogicalType producedDataType;
@@ -137,7 +137,7 @@ public class FlinkTableSource
             @Nullable LookupCache cache,
             long scanPartitionDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
-            @Nullable MergeEngine mergeEngine) {
+            @Nullable MergeEngineType mergeEngineType) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -154,7 +154,7 @@ public class FlinkTableSource
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
-        this.mergeEngine = mergeEngine;
+        this.mergeEngineType = mergeEngineType;
     }
 
     @Override
@@ -164,7 +164,7 @@ public class FlinkTableSource
         } else {
             if (hasPrimaryKey()) {
                 // pk table
-                if (mergeEngine == MergeEngine.FIRST_ROW) {
+                if (mergeEngineType == MergeEngineType.FIRST_ROW) {
                     return ChangelogMode.insertOnly();
                 } else {
                     return ChangelogMode.all();
@@ -239,7 +239,7 @@ public class FlinkTableSource
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
                 break;
-            case INITIAL:
+            case FULL:
                 offsetsInitializer = OffsetsInitializer.initial();
                 break;
             case TIMESTAMP:
@@ -350,7 +350,7 @@ public class FlinkTableSource
                         cache,
                         scanPartitionDiscoveryIntervalMs,
                         isDataLakeEnabled,
-                        mergeEngine);
+                        mergeEngineType);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
@@ -378,11 +378,11 @@ public class FlinkTableSource
     public Result applyFilters(List<ResolvedExpression> filters) {
         // only apply pk equal filters when all the condition satisfied:
         // (1) batch execution mode,
-        // (2) default (initial) startup mode,
+        // (2) default (full) startup mode,
         // (3) the table is a pk table,
         // (4) all filters are pk field equal expression
         if (streaming
-                || startupOptions.startupMode != FlinkConnectorOptions.ScanStartupMode.INITIAL
+                || startupOptions.startupMode != FlinkConnectorOptions.ScanStartupMode.FULL
                 || !hasPrimaryKey()
                 || filters.size() != primaryKeyIndexes.length) {
             return Result.of(Collections.emptyList(), filters);

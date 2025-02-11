@@ -53,11 +53,11 @@ import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA2_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA2_TABLE_INFO;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -105,12 +105,10 @@ final class LogManagerTest extends LogTestBase {
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
-                tablePath1,
-                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_INFO.getTableDescriptor()));
+                tablePath1, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerSchema(tablePath1, DATA1_SCHEMA);
         zkClient.registerTable(
-                tablePath2,
-                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_INFO.getTableDescriptor()));
+                tablePath2, TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerSchema(tablePath2, DATA2_SCHEMA);
     }
 

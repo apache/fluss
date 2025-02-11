@@ -1,0 +1,49 @@
+################################################################################
+# Copyright (c) 2024 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+name: Task 📌
+description: A specific piece of work
+type: "task"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you very much for your work!
+  - type: checkboxes
+    attributes:
+      label: Search before asking
+      description: >
+        Please search [issues](https://github.com/alibaba/fluss/issues) to check if your issue has already been reported.
+      options:
+        - label: >
+            I searched in the [issues](https://github.com/alibaba/fluss/issues) and found nothing similar.
+          required: true
+  - type: textarea
+    attributes:
+      label: Description
+      description: Please describe the task and the purpose of the work.
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: Willingness to contribute
+      description: >
+        We look forward to the community of developers or users helping develop Fluss together. If you are willing to submit a PR to implement the task, please check the box.
+      options:
+        - label: I'm willing to submit a PR!
+  - type: markdown
+    attributes:
+      value: "Thanks for completing our form!"

@@ -28,7 +28,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
@@ -103,16 +102,12 @@ public class MetadataUpdater {
         return cluster.getBucketLocation(tableBucket);
     }
 
-    public int getBucketCount(TablePath tablePath) {
-        return cluster.getBucketCount(tablePath);
+    private Optional<TableInfo> getTableInfo(TablePath tablePath) {
+        return cluster.getTable(tablePath);
     }
 
-    private Optional<TableDescriptor> getTableDescriptor(TablePath tablePath) {
-        return cluster.getTable(tablePath).map(TableInfo::getTableDescriptor);
-    }
-
-    public TableDescriptor getTableDescriptorOrElseThrow(long tableId) {
-        return getTableDescriptor(cluster.getTablePathOrElseThrow(tableId))
+    public TableInfo getTableInfoOrElseThrow(long tableId) {
+        return getTableInfo(cluster.getTablePathOrElseThrow(tableId))
                 .orElseThrow(
                         () ->
                                 new FlussRuntimeException(
@@ -124,7 +119,15 @@ public class MetadataUpdater {
         if (serverNode == null) {
             for (int i = 0; i < MAX_RETRY_TIMES; i++) {
                 TablePath tablePath = cluster.getTablePathOrElseThrow(tableBucket.getTableId());
-                updateMetadata(Collections.singleton(tablePath), null, null);
+                // check if bucket is for a partition
+                if (tableBucket.getPartitionId() != null) {
+                    updateMetadata(
+                            Collections.singleton(tablePath),
+                            null,
+                            Collections.singleton(tableBucket.getPartitionId()));
+                } else {
+                    updateMetadata(Collections.singleton(tablePath), null, null);
+                }
                 serverNode = cluster.leaderFor(tableBucket);
                 if (serverNode != null) {
                     break;
@@ -314,15 +317,14 @@ public class MetadataUpdater {
     }
 
     /** Invalid the bucket metadata for the given physical table paths. */
-    public void invalidPhysicalTableBucketMeta(
-            Collection<PhysicalTablePath> physicalTablesToInvalid) {
+    public void invalidPhysicalTableBucketMeta(Set<PhysicalTablePath> physicalTablesToInvalid) {
         if (!physicalTablesToInvalid.isEmpty()) {
             cluster = cluster.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
         }
     }
 
     /** Get the table physical paths by table ids and partition ids. */
-    public Collection<PhysicalTablePath> getPhysicalTablePathByIds(
+    public Set<PhysicalTablePath> getPhysicalTablePathByIds(
             @Nullable Collection<Long> tableId,
             @Nullable Collection<TablePartition> tablePartitions) {
         Set<PhysicalTablePath> physicalTablePaths = new HashSet<>();

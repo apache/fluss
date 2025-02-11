@@ -118,25 +118,25 @@ class NewTableAddedPaimonListenerTest {
         // then, add the two tables
         newTableAddedPaimonListener.onNewTablesAdded(
                 Arrays.asList(
-                        new TableInfo(
+                        TableInfo.of(
                                 logTablePath,
                                 1L,
-                                logTable,
                                 1,
+                                logTable,
                                 System.currentTimeMillis(),
                                 System.currentTimeMillis()),
-                        new TableInfo(
+                        TableInfo.of(
                                 pkTablePath,
                                 2L,
-                                pkTable,
                                 1,
+                                pkTable,
                                 System.currentTimeMillis(),
                                 System.currentTimeMillis()),
-                        new TableInfo(
+                        TableInfo.of(
                                 logNoBucketKeyTablePath,
                                 3L,
-                                logNoBucketKeyTable,
                                 1,
+                                logNoBucketKeyTable,
                                 System.currentTimeMillis(),
                                 System.currentTimeMillis())));
 
@@ -192,7 +192,7 @@ class NewTableAddedPaimonListenerTest {
                             "log_c1", "log_c2", OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME
                         }),
                 null,
-                -1,
+                BUCKET_NUM,
                 customProperties);
 
         // create partitioned table
@@ -215,11 +215,11 @@ class NewTableAddedPaimonListenerTest {
         // then, add the partitioned table
         newTableAddedPaimonListener.onNewTablesAdded(
                 Collections.singletonList(
-                        new TableInfo(
+                        TableInfo.of(
                                 partitionedTablePath,
                                 4L,
-                                partitionedTableDescriptor,
                                 1,
+                                partitionedTableDescriptor,
                                 System.currentTimeMillis(),
                                 System.currentTimeMillis())));
 

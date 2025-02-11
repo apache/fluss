@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.lakehouse;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplitState;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplitState;
 import com.alibaba.fluss.connector.flink.source.reader.RecordAndPos;

@@ -53,9 +53,10 @@ public abstract class WriteBatch {
     protected int recordCount;
     private long drainedMs;
 
-    public WriteBatch(TableBucket tableBucket, PhysicalTablePath physicalTablePath) {
+    public WriteBatch(
+            TableBucket tableBucket, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
-        this.createdMs = System.currentTimeMillis();
+        this.createdMs = createdMs;
         this.tableBucket = tableBucket;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;

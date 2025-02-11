@@ -18,11 +18,12 @@ package com.alibaba.fluss.server.kv.prewrite;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.memory.MemorySegment;
+import com.alibaba.fluss.metrics.Counter;
+import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
+import com.alibaba.fluss.metrics.Histogram;
+import com.alibaba.fluss.metrics.SimpleCounter;
 import com.alibaba.fluss.server.kv.KvBatchWriter;
 import com.alibaba.fluss.utils.MurmurHashUtils;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -85,9 +86,6 @@ import static com.alibaba.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  */
 @NotThreadSafe
 public class KvPreWriteBuffer implements AutoCloseable {
-
-    private static final Logger LOG = LoggerFactory.getLogger(KvPreWriteBuffer.class);
-
     private final KvBatchWriter kvBatchWriter;
 
     // a mapping from the key to the kv-entry
@@ -96,11 +94,23 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // a linked list for all kv entries
     private final LinkedList<KvEntry> allKvEntries = new LinkedList<>();
 
+    // metrics related.
+    private final Counter flushCount;
+    private final Histogram flushLatencyHistogram;
+    private final Counter truncateAsDuplicatedCount;
+    private final Counter truncateAsErrorCount;
+
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
 
     public KvPreWriteBuffer(KvBatchWriter kvBatchWriter) {
         this.kvBatchWriter = kvBatchWriter;
+
+        flushCount = new SimpleCounter();
+        // consider won't flush frequently, we set a small window size
+        flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
+        truncateAsDuplicatedCount = new SimpleCounter();
+        truncateAsErrorCount = new SimpleCounter();
     }
 
     /**
@@ -164,11 +174,12 @@ public class KvPreWriteBuffer implements AutoCloseable {
      * @param targetLogSequenceNumber the lower bound of the log sequence number truncated to.
      * @param truncateReason the reason to truncate
      */
-    public void truncateTo(long targetLogSequenceNumber, String truncateReason) {
-        LOG.info(
-                "Truncate the kv pre-write buffer to {} because we encounter error while building cdc logs: {}",
-                targetLogSequenceNumber,
-                truncateReason);
+    public void truncateTo(long targetLogSequenceNumber, TruncateReason truncateReason) {
+        if (truncateReason == TruncateReason.DUPLICATED) {
+            truncateAsDuplicatedCount.inc();
+        } else {
+            truncateAsErrorCount.inc();
+        }
 
         Iterator<KvEntry> descIter = allKvEntries.descendingIterator();
         while (descIter.hasNext()) {
@@ -196,6 +207,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
      *     be flushed
      */
     public void flush(long exclusiveUpToLogSequenceNumber) throws IOException {
+        int flushedCount = 0;
         for (Iterator<KvEntry> it = allKvEntries.iterator(); it.hasNext(); ) {
             KvEntry entry = it.next();
             // if find one entry whose sequence number is greater than the given sequence number,
@@ -210,8 +222,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
             // then write data using write batch writer
             Value value = entry.getValue();
             if (value.value != null) {
+                flushedCount += 1;
                 kvBatchWriter.put(entry.getKey().key, value.value);
             } else {
+                flushedCount += 1;
                 kvBatchWriter.delete(entry.getKey().key);
             }
 
@@ -221,7 +235,12 @@ public class KvPreWriteBuffer implements AutoCloseable {
             kvEntryMap.remove(entry.getKey(), entry);
         }
         // flush to underlying kv tablet
-        kvBatchWriter.flush();
+        if (flushedCount > 0) {
+            long start = System.nanoTime();
+            kvBatchWriter.flush();
+            flushCount.inc();
+            flushLatencyHistogram.update((System.nanoTime() - start) / 1_000_000);
+        }
     }
 
     @VisibleForTesting
@@ -244,6 +263,22 @@ public class KvPreWriteBuffer implements AutoCloseable {
         if (kvBatchWriter != null) {
             kvBatchWriter.close();
         }
+    }
+
+    public Histogram getFlushLatencyHistogram() {
+        return flushLatencyHistogram;
+    }
+
+    public Counter getFlushCount() {
+        return flushCount;
+    }
+
+    public Counter getTruncateAsDuplicatedCount() {
+        return truncateAsDuplicatedCount;
+    }
+
+    public Counter getTruncateAsErrorCount() {
+        return truncateAsErrorCount;
     }
 
     /**
@@ -425,5 +460,11 @@ public class KvPreWriteBuffer implements AutoCloseable {
         public String toString() {
             return value == null ? "null" : "[" + Base64.getEncoder().encodeToString(value) + "]";
         }
+    }
+
+    /** The reason why we truncate the kv pre-write buffer. */
+    public enum TruncateReason {
+        DUPLICATED,
+        ERROR,
     }
 }

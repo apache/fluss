@@ -29,18 +29,18 @@ import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
 import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
-import com.alibaba.fluss.rpc.messages.GetDatabaseRequest;
-import com.alibaba.fluss.rpc.messages.GetDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaResponse;
 import com.alibaba.fluss.rpc.messages.InitWriterRequest;
@@ -123,7 +123,14 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetKvSnapshotResponse> getKvSnapshot(GetKvSnapshotRequest request) {
+    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
+            GetLatestKvSnapshotsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
+            GetKvSnapshotMetadataRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -140,20 +147,14 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetPartitionSnapshotResponse> getPartitionSnapshot(
-            GetPartitionSnapshotRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
     public CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
             DescribeLakeStorageRequest request) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public CompletableFuture<GetLakeTableSnapshotResponse> getLakeTableSnapshot(
-            GetLakeTableSnapshotRequest request) {
+    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
+            GetLatestLakeSnapshotRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -213,7 +214,8 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetDatabaseResponse> getDatabase(GetDatabaseRequest request) {
+    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
+            GetDatabaseInfoRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -228,7 +230,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetTableResponse> getTable(GetTableRequest request) {
+    public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
         throw new UnsupportedOperationException();
     }
 

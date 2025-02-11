@@ -52,7 +52,7 @@ class LakeTableBucketAssignerTest {
                                         : Collections.emptyList())
                         .build();
 
-        RowType rowType = schema.toRowType();
+        RowType rowType = schema.getRowType();
         InternalRow row1 = compactedRow(rowType, new Object[] {1, "2", "a"});
         InternalRow row2 = compactedRow(rowType, new Object[] {1, "3", "b"});
 
@@ -60,7 +60,10 @@ class LakeTableBucketAssignerTest {
         InternalRow row4 = compactedRow(rowType, new Object[] {2, "4", "b"});
 
         LakeTableBucketAssigner lakeTableBucketAssigner =
-                new LakeTableBucketAssigner(tableDescriptor, 3);
+                new LakeTableBucketAssigner(
+                        tableDescriptor.getSchema().getRowType(),
+                        tableDescriptor.getBucketKeys(),
+                        3);
 
         int row1Bucket = lakeTableBucketAssigner.assignBucket(null, row1, null);
         int row2Bucket = lakeTableBucketAssigner.assignBucket(null, row2, null);
@@ -98,9 +101,12 @@ class LakeTableBucketAssignerTest {
                         .distributedBy(3, "a", "b")
                         .build();
         LakeTableBucketAssigner lakeTableBucketAssigner =
-                new LakeTableBucketAssigner(tableDescriptor, 3);
+                new LakeTableBucketAssigner(
+                        tableDescriptor.getSchema().getRowType(),
+                        tableDescriptor.getBucketKeys(),
+                        3);
 
-        RowType rowType = schema.toRowType();
+        RowType rowType = schema.getRowType();
         InternalRow row1 = compactedRow(rowType, new Object[] {1, "2", "a"});
         InternalRow row2 = compactedRow(rowType, new Object[] {1, "2", "b"});
 

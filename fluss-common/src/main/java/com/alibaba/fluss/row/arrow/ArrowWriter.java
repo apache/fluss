@@ -17,7 +17,9 @@
 package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.compression.ArrowCompressionInfo;
+import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.writers.ArrowFieldWriter;
@@ -59,7 +61,7 @@ public class ArrowWriter implements AutoCloseable {
      * The buffer usage ratio which is used to determine whether the writer is full. The writer is
      * full if the buffer usage ratio exceeds the threshold.
      */
-    public static final double BUFFER_USAGE_RATIO = 0.96;
+    public static final float BUFFER_USAGE_RATIO = 0.95f;
 
     /**
      * The identifier of the writer which is used to identify the writer in the {@link
@@ -87,11 +89,15 @@ public class ArrowWriter implements AutoCloseable {
     private final RowType schema;
 
     private final CompressionCodec compressionCodec;
+    private final ArrowCompressionRatioEstimator compressionRatioEstimator;
 
     private int writeLimitInBytes;
 
     private int estimatedMaxRecordsCount;
     private int recordsCount;
+
+    /** The latest estimated compression ratio for this ArrowWriter. */
+    private float estimatedCompressionRatio;
 
     /** identify the number of used times of the writer, used for idempotent recycle() invoking. */
     private long epoch;
@@ -102,12 +108,15 @@ public class ArrowWriter implements AutoCloseable {
             RowType schema,
             BufferAllocator allocator,
             ArrowWriterProvider provider,
-            ArrowCompressionInfo compressionInfo) {
+            ArrowCompressionInfo compressionInfo,
+            ArrowCompressionRatioEstimator compressionRatioEstimator) {
         this.writerKey = writerKey;
         this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
         this.provider = Preconditions.checkNotNull(provider);
         this.compressionCodec = compressionInfo.createCompressionCodec();
+        this.compressionRatioEstimator = compressionRatioEstimator;
+        this.estimatedCompressionRatio = compressionRatioEstimator.estimation();
 
         this.metadataLength =
                 ArrowUtils.estimateArrowMetadataLength(
@@ -137,8 +146,8 @@ public class ArrowWriter implements AutoCloseable {
         if (recordsCount > 0 && recordsCount >= estimatedMaxRecordsCount) {
             root.setRowCount(recordsCount);
             int metadataLength = getMetadataLength();
-            int bodyLength = getBodyLength();
-            int currentSize = metadataLength + bodyLength;
+            int estimatedBodyLength = estimatedBytesWritten(getBodyLength());
+            int currentSize = metadataLength + estimatedBodyLength;
             if (currentSize >= writeLimitInBytes) {
                 return true;
             } else {
@@ -147,7 +156,7 @@ public class ArrowWriter implements AutoCloseable {
                         (int)
                                 Math.ceil(
                                         (writeLimitInBytes - metadataLength)
-                                                / (bodyLength / (recordsCount * 1.0)));
+                                                / (estimatedBodyLength / (recordsCount * 1.0)));
                 return false;
             }
         } else {
@@ -158,7 +167,17 @@ public class ArrowWriter implements AutoCloseable {
     }
 
     public void reset(int bufferSizeInBytes) {
-        this.writeLimitInBytes = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
+        int newWriteLimit = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
+        if (newWriteLimit == writeLimitInBytes) {
+            // write limit is not changed, estimate from half records
+            // for better performance and accuracy.
+            estimatedMaxRecordsCount = recordsCount / 2;
+        } else {
+            // initial estimated count from -1 for new write limit,
+            // so estimate the count from the first row
+            estimatedMaxRecordsCount = -1;
+        }
+        writeLimitInBytes = newWriteLimit;
         for (int i = 0; i < fieldWriters.length; i++) {
             FieldVector fieldVector = root.getVector(i);
             initFieldVector(fieldVector);
@@ -166,8 +185,8 @@ public class ArrowWriter implements AutoCloseable {
         }
         root.setRowCount(0);
         recordsCount = 0;
-        // initial estimated count should < 0, so that we can estimate the count after the first row
-        estimatedMaxRecordsCount = -1;
+        // reset the compression ratio.
+        estimatedCompressionRatio = compressionRatioEstimator.estimation();
     }
 
     /** Writes the specified row which is serialized into Arrow format. */
@@ -205,11 +224,13 @@ public class ArrowWriter implements AutoCloseable {
 
     /**
      * Gets the total size in bytes of each serialized {@link ArrowRecordBatch} generated by this
-     * root.
+     * root. Return the estimated compressed size if compression is enabled.
      */
-    public int sizeInBytes() {
+    public int estimatedSizeInBytes() {
         root.setRowCount(recordsCount);
-        return getMetadataLength() + getBodyLength();
+        int metadataLength = getMetadataLength();
+        int estimatedBodyLength = estimatedBytesWritten(getBodyLength());
+        return metadataLength + estimatedBodyLength;
     }
 
     /** Serializes the current row batch to Arrow format and returns the written size in bytes. */
@@ -224,11 +245,22 @@ public class ArrowWriter implements AutoCloseable {
 
         // update row count only when we try to write records to the output.
         root.setRowCount(recordsCount);
+
+        // update the uncompressed body size.
+        int uncompressedBodySizeInBytes = getBodyLength();
         try (ArrowRecordBatch arrowBatch =
                 new VectorUnloader(root, true, compressionCodec, true).getRecordBatch()) {
             PagedMemorySegmentWritableChannel channel =
                     new PagedMemorySegmentWritableChannel(outputView);
             ArrowBlock block = MessageSerializer.serialize(new WriteChannel(channel), arrowBatch);
+
+            checkState(
+                    uncompressedBodySizeInBytes > 0,
+                    "uncompressedRecordsSizeInBytes is 0 or negative");
+            float actualCompressionRatio =
+                    (float) block.getBodyLength() / uncompressedBodySizeInBytes;
+            compressionRatioEstimator.updateEstimation(actualCompressionRatio);
+
             return (int) (block.getMetadataLength() + block.getBodyLength());
         }
     }
@@ -272,5 +304,18 @@ public class ArrowWriter implements AutoCloseable {
         } else {
             fieldVector.allocateNew();
         }
+    }
+
+    private int estimatedBytesWritten(int currentBytes) {
+        if (compressionCodec.getCodecType() == CompressionUtil.CodecType.NO_COMPRESSION) {
+            return currentBytes;
+        } else {
+            return (int) (currentBytes * estimatedCompressionRatio);
+        }
+    }
+
+    @VisibleForTesting
+    public ArrowCompressionRatioEstimator getCompressionRatioEstimator() {
+        return compressionRatioEstimator;
     }
 }

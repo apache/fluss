@@ -26,13 +26,14 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.server.coordinator.MetaDataManager;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -143,7 +144,7 @@ public class FlinkTestBase {
 
     @BeforeEach
     void beforeEach() throws Exception {
-        admin.createDatabase(DEFAULT_DB, true).get();
+        admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 
     @AfterAll
@@ -162,7 +163,7 @@ public class FlinkTestBase {
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     public static void assertResultsIgnoreOrder(
@@ -233,21 +234,16 @@ public class FlinkTestBase {
     public static Map<Long, String> createPartitions(
             ZooKeeperClient zkClient, TablePath tablePath, List<String> partitionsToCreate)
             throws Exception {
-        MetaDataManager metaDataManager = new MetaDataManager(zkClient);
-        TableInfo tableInfo = metaDataManager.getTable(tablePath);
+        MetadataManager metadataManager = new MetadataManager(zkClient);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
         Map<Long, String> newPartitionIds = new HashMap<>();
         for (String partition : partitionsToCreate) {
             long partitionId = zkClient.getPartitionIdAndIncrement();
             newPartitionIds.put(partitionId, partition);
             TableAssignment assignment =
                     TableAssignmentUtils.generateAssignment(
-                            tableInfo
-                                    .getTableDescriptor()
-                                    .getTableDistribution()
-                                    .get()
-                                    .getBucketCount()
-                                    .get(),
-                            tableInfo.getTableDescriptor().getReplicationFactor(3),
+                            tableInfo.getNumBuckets(),
+                            tableInfo.getTableConfig().getReplicationFactor(),
                             new int[] {0, 1, 2});
 
             // register partition assignments
@@ -290,9 +286,9 @@ public class FlinkTestBase {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
-                tableWriter = table.getAppendWriter();
+                tableWriter = table.newAppend().createWriter();
             } else {
-                tableWriter = table.getUpsertWriter();
+                tableWriter = table.newUpsert().createWriter();
             }
             for (InternalRow row : rows) {
                 if (tableWriter instanceof AppendWriter) {

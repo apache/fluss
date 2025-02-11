@@ -19,6 +19,7 @@ package com.alibaba.fluss.connector.flink.sink;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -49,7 +50,7 @@ public class FlinkSinkFunctionTest extends FlinkTestBase {
     @ValueSource(strings = {"", "1"})
     void testSinkMetrics(String clientId) throws Exception {
         TablePath tablePath = TablePath.of("test_sink_function_db", "test_sink_function_table");
-        admin.createDatabase(tablePath.getDatabaseName(), false);
+        admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false);
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(

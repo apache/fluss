@@ -16,15 +16,21 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
+import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableDescriptor.TableDistribution;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * The registration information of table in {@link ZkData.TableZNode}. It is used to store the table
@@ -39,7 +45,8 @@ public class TableRegistration {
     public final long tableId;
     public final @Nullable String comment;
     public final List<String> partitionKeys;
-    public final @Nullable TableDescriptor.TableDistribution tableDistribution;
+    public final List<String> bucketKeys;
+    public final int bucketCount;
     public final Map<String, String> properties;
     public final Map<String, String> customProperties;
     public final long createdTime;
@@ -49,44 +56,51 @@ public class TableRegistration {
             long tableId,
             @Nullable String comment,
             List<String> partitionKeys,
-            @Nullable TableDescriptor.TableDistribution tableDistribution,
+            TableDistribution tableDistribution,
             Map<String, String> properties,
             Map<String, String> customProperties,
             long createdTime,
             long modifiedTime) {
+        checkArgument(
+                tableDistribution.getBucketCount().isPresent(),
+                "Bucket count is required for table registration.");
         this.tableId = tableId;
         this.comment = comment;
         this.partitionKeys = partitionKeys;
-        this.tableDistribution = tableDistribution;
+        this.bucketCount = tableDistribution.getBucketCount().get();
+        this.bucketKeys = tableDistribution.getBucketKeys();
         this.properties = properties;
         this.customProperties = customProperties;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
     }
 
-    public TableDescriptor toTableDescriptor(Schema schema) {
-        TableDescriptor.Builder builder =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .comment(comment)
-                        .partitionedBy(partitionKeys);
-        if (tableDistribution != null) {
-            builder.distributedBy(
-                    tableDistribution.getBucketCount().orElse(null),
-                    tableDistribution.getBucketKeys());
-        }
-        properties.forEach(builder::property);
-        customProperties.forEach(builder::customProperty);
-        return builder.build();
+    public TableInfo toTableInfo(TablePath tablePath, SchemaInfo schemaInfo) {
+        return new TableInfo(
+                tablePath,
+                this.tableId,
+                schemaInfo.getSchemaId(),
+                schemaInfo.getSchema(),
+                this.bucketKeys,
+                this.partitionKeys,
+                this.bucketCount,
+                Configuration.fromMap(this.properties),
+                Configuration.fromMap(this.customProperties),
+                this.comment,
+                this.createdTime,
+                this.modifiedTime);
     }
 
     public static TableRegistration newTable(long tableId, TableDescriptor tableDescriptor) {
+        checkArgument(
+                tableDescriptor.getTableDistribution().isPresent(),
+                "Table distribution is required for table registration.");
         long now = System.currentTimeMillis();
         return new TableRegistration(
                 tableId,
                 tableDescriptor.getComment().orElse(null),
                 tableDescriptor.getPartitionKeys(),
-                tableDescriptor.getTableDistribution().orElse(null),
+                tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
                 tableDescriptor.getCustomProperties(),
                 now,
@@ -108,7 +122,8 @@ public class TableRegistration {
                 && modifiedTime == that.modifiedTime
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(partitionKeys, that.partitionKeys)
-                && Objects.equals(tableDistribution, that.tableDistribution)
+                && Objects.equals(bucketCount, that.bucketCount)
+                && Objects.equals(bucketKeys, that.bucketKeys)
                 && Objects.equals(properties, that.properties)
                 && Objects.equals(customProperties, that.customProperties);
     }
@@ -119,7 +134,8 @@ public class TableRegistration {
                 tableId,
                 comment,
                 partitionKeys,
-                tableDistribution,
+                bucketCount,
+                bucketKeys,
                 properties,
                 customProperties,
                 createdTime,
@@ -136,8 +152,10 @@ public class TableRegistration {
                 + '\''
                 + ", partitionKeys="
                 + partitionKeys
-                + ", tableDistribution="
-                + tableDistribution
+                + ", bucketCount="
+                + bucketCount
+                + ", bucketKeys="
+                + bucketKeys
                 + ", properties="
                 + properties
                 + ", customProperties="

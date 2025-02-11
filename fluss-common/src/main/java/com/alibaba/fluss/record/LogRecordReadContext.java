@@ -18,7 +18,6 @@ package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.InternalRow.FieldGetter;
@@ -61,9 +60,8 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
      */
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo, boolean readFromRemote, @Nullable Projection projection) {
-        TableDescriptor desc = tableInfo.getTableDescriptor();
-        RowType rowType = desc.getSchema().toRowType();
-        LogFormat logFormat = desc.getLogFormat();
+        RowType rowType = tableInfo.getRowType();
+        LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
         // only for arrow log format, the projection can be push downed to the server side
         boolean projectionPushDowned = projection != null && logFormat == LogFormat.ARROW;
         int schemaId = tableInfo.getSchemaId();

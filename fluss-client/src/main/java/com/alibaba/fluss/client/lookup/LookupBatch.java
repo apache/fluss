@@ -30,18 +30,18 @@ public class LookupBatch {
     /** The table bucket that the lookup operations should fall into. */
     private final TableBucket tableBucket;
 
-    private final List<Lookup> lookups;
+    private final List<LookupQuery> lookups;
 
     public LookupBatch(TableBucket tableBucket) {
         this.tableBucket = tableBucket;
         this.lookups = new ArrayList<>();
     }
 
-    public void addLookup(Lookup lookup) {
+    public void addLookup(LookupQuery lookup) {
         lookups.add(lookup);
     }
 
-    public List<Lookup> lookups() {
+    public List<LookupQuery> lookups() {
         return lookups;
     }
 
@@ -62,7 +62,7 @@ public class LookupBatch {
                                     values.size(), lookups.size())));
         } else {
             for (int i = 0; i < values.size(); i++) {
-                AbstractLookup<byte[]> lookup = lookups.get(i);
+                AbstractLookupQuery<byte[]> lookup = lookups.get(i);
                 // single value.
                 lookup.future().complete(values.get(i));
             }
@@ -71,7 +71,7 @@ public class LookupBatch {
 
     /** Complete the lookup operations with given exception. */
     public void completeExceptionally(Exception exception) {
-        for (Lookup lookup : lookups) {
+        for (LookupQuery lookup : lookups) {
             lookup.future().completeExceptionally(exception);
         }
     }

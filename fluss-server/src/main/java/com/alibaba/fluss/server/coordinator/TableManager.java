@@ -40,17 +40,17 @@ import java.util.Set;
 public class TableManager {
     private static final Logger LOG = LoggerFactory.getLogger(TableManager.class);
 
-    private final MetaDataManager metaDataManager;
+    private final MetadataManager metadataManager;
     private final CoordinatorContext coordinatorContext;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
 
     public TableManager(
-            MetaDataManager metaDataManager,
+            MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
             ReplicaStateMachine replicaStateMachine,
             TableBucketStateMachine tableBucketStateMachine) {
-        this.metaDataManager = metaDataManager;
+        this.metadataManager = metadataManager;
         this.coordinatorContext = coordinatorContext;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
@@ -243,7 +243,7 @@ public class TableManager {
         Set<TableBucketReplica> replicas = coordinatorContext.getAllReplicasForTable(tableId);
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
         try {
-            metaDataManager.completeDeleteTable(tableId);
+            metadataManager.completeDeleteTable(tableId);
         } catch (Exception e) {
             LOG.error("Fail to complete table deletion for table {}.", tableId, e);
         }
@@ -256,7 +256,7 @@ public class TableManager {
                         tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
         try {
-            metaDataManager.completeDeletePartition(tablePartition.getPartitionId());
+            metadataManager.completeDeletePartition(tablePartition.getPartitionId());
         } catch (Exception e) {
             LOG.error("Fail to complete partition {} deletion.", tablePartition, e);
         }

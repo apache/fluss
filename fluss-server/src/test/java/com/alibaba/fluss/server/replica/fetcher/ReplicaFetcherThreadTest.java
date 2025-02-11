@@ -67,8 +67,8 @@ import java.util.function.Consumer;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -166,7 +166,7 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_INFO.getTableDescriptor()));
+                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 

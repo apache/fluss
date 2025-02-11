@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.config.ConfigOptions.TABLE_REPLICATION_FACTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Utils related to catalog table for test purpose. */
@@ -77,7 +78,7 @@ public class CatalogTableTestUtils {
     private static void assertOptionsEqual(
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(BOOTSTRAP_SERVERS.key());
-        assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());
+        actualOptions.remove(TABLE_REPLICATION_FACTOR.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

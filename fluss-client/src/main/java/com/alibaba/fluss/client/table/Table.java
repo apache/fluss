@@ -18,24 +18,14 @@ package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.lookup.LookupResult;
-import com.alibaba.fluss.client.lookup.PrefixLookupResult;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScan;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
+import com.alibaba.fluss.client.lookup.Lookup;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.table.scanner.Scan;
+import com.alibaba.fluss.client.table.writer.Append;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
-import com.alibaba.fluss.client.table.writer.UpsertWrite;
+import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.row.InternalRow;
-
-import javax.annotation.Nullable;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import com.alibaba.fluss.metadata.TableInfo;
 
 /**
  * Used to communicate with a single Fluss table. Obtain an instance from a {@link Connection}.
@@ -48,91 +38,37 @@ import java.util.concurrent.CompletableFuture;
 public interface Table extends AutoCloseable {
 
     /**
-     * Get the {@link TableDescriptor} for this table.
+     * Get the {@link TableInfo} for this table.
      *
      * <p>Note: the table info of this {@link Table} is set during the creation of this {@link
      * Table} and will not be updated after that, even if the table info of the table has been
      * changed. Therefore, if there are any changes to the table info, it may be necessary to
      * reconstruct the {@link Table}.
      */
-    TableDescriptor getDescriptor();
+    TableInfo getTableInfo();
 
     /**
-     * Lookups certain row from the given table primary keys.
-     *
-     * @param key the given table primary keys.
-     * @return the result of get.
+     * Creates a new {@link Scan} for this table to configure and create a scanner to scan data for
+     * this table. The scanner can be a log scanner to continuously read streaming log data or a
+     * batch scanner to read batch data.
      */
-    CompletableFuture<LookupResult> lookup(InternalRow key);
+    Scan newScan();
 
     /**
-     * Prefix lookup certain rows from the given table by prefix key.
-     *
-     * <p>Only available for Primary Key Table. Will throw exception when the table isn't a Primary
-     * Key Table.
-     *
-     * <p>Note: Currently, if you want to use prefix lookup, the table you created must both define
-     * the primary key and the bucket key, in addition, the bucket key needs to be part of the
-     * primary key and must be a prefix of the primary key. For example, if a table has fields
-     * [a,b,c,d], and the primary key is set to [a, b, c], with the bucket key set to [a, b], then
-     * the prefix schema would also be [a, b]. This pattern can use PrefixLookup to lookup by prefix
-     * scan.
-     *
-     * <p>TODO: currently, the interface only support bucket key as the prefix key to lookup.
-     * Generalize the prefix lookup to support any prefix key including bucket key.
-     *
-     * @param bucketKey the given bucket key to do prefix lookup.
-     * @return the result of prefix lookup.
+     * Creates a new {@link Lookup} for this table to configure and create a {@link Lookuper} to
+     * lookup data for this table by primary key or a prefix of primary key.
      */
-    CompletableFuture<PrefixLookupResult> prefixLookup(InternalRow bucketKey);
+    Lookup newLookup();
 
     /**
-     * Extracts limit number of rows from the given table bucket.
-     *
-     * @param tableBucket the target table bucket to scan.
-     * @param limit the given limit number.
-     * @param projectedFields the projection fields.
-     * @return the result of get.
+     * Creates a new {@link Append} to build a {@link AppendWriter} to append data to this table
+     * (requires to be a Log Table).
      */
-    CompletableFuture<List<ScanRecord>> limitScan(
-            TableBucket tableBucket, int limit, @Nullable int[] projectedFields);
+    Append newAppend();
 
     /**
-     * Get a {@link AppendWriter} to write data to the table. Only available for Log Table. Will
-     * throw exception when the table is a primary key table.
-     *
-     * @return the {@link AppendWriter} to write data to the table.
+     * Creates a new {@link Upsert} to build a {@link UpsertWriter} to upsert and delete data to
+     * this table (requires to be a Primary Key Table).
      */
-    AppendWriter getAppendWriter();
-
-    /**
-     * Get a {@link UpsertWriter} to write data to the table. Only available for Primary Key Table.
-     * Will throw exception when the table isn't a Primary Key Table.
-     *
-     * @return the {@link UpsertWriter} to write data to the table.
-     */
-    UpsertWriter getUpsertWriter(UpsertWrite upsertWrite);
-
-    /**
-     * Get a {@link UpsertWriter} to write data to the table. Only available for Primary Key Table.
-     * Will throw exception when the table isn't a Primary Key Table.
-     *
-     * @return the {@link UpsertWriter} to write data to the table.
-     */
-    UpsertWriter getUpsertWriter();
-
-    /**
-     * Get a {@link LogScanner} to scan log data from this table.
-     *
-     * @return the {@link LogScanner} to scan log data from this table.
-     */
-    LogScanner getLogScanner(LogScan logScan);
-
-    /**
-     * Get a {@link SnapshotScanner} to scan data from this table according to provided {@link
-     * SnapshotScan}.
-     *
-     * @return the {@link SnapshotScanner} to scan data from this table.
-     */
-    SnapshotScanner getSnapshotScanner(SnapshotScan snapshotScan);
+    Upsert newUpsert();
 }

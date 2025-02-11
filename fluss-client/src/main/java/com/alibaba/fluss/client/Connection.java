@@ -54,4 +54,8 @@ public interface Connection extends AutoCloseable {
 
     /** Retrieve a new Table client to operate data in table. */
     Table getTable(TablePath tablePath);
+
+    /** Close the connection and release all resources. */
+    @Override
+    void close() throws Exception;
 }

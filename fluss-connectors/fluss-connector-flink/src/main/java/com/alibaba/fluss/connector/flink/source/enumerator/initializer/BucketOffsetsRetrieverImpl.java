@@ -31,7 +31,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 
 /** The default implementation for offsets retriever. */
 public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {

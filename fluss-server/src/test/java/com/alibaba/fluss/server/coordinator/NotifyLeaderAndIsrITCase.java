@@ -34,7 +34,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -60,9 +60,7 @@ public class NotifyLeaderAndIsrITCase {
     void testNotifyLeaderAndIsr() throws Exception {
         long tableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_INFO.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         LeaderAndIsr leaderAndIsr =

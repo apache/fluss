@@ -16,6 +16,9 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.fs.FsPath;
+import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+
 import java.util.Objects;
 
 /**
@@ -25,30 +28,45 @@ import java.util.Objects;
  */
 public class BucketSnapshot {
 
-    private final String path;
+    private final long snapshotId;
+    private final long logOffset;
+    private final String metadataPath;
 
-    public BucketSnapshot(String path) {
-        this.path = path;
+    public BucketSnapshot(long snapshotId, long logOffset, String metadataPath) {
+        this.snapshotId = snapshotId;
+        this.metadataPath = metadataPath;
+        this.logOffset = logOffset;
     }
 
-    public String getPath() {
-        return path;
+    public long getSnapshotId() {
+        return snapshotId;
+    }
+
+    public String getMetadataPath() {
+        return metadataPath;
+    }
+
+    public long getLogOffset() {
+        return logOffset;
+    }
+
+    public CompletedSnapshotHandle toCompletedSnapshotHandle() {
+        return new CompletedSnapshotHandle(new FsPath(metadataPath), logOffset);
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         BucketSnapshot that = (BucketSnapshot) o;
-        return Objects.equals(path, that.path);
+        return snapshotId == that.snapshotId
+                && logOffset == that.logOffset
+                && Objects.equals(metadataPath, that.metadataPath);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(path);
+        return Objects.hash(snapshotId, logOffset, metadataPath);
     }
 }

@@ -18,7 +18,6 @@ package com.alibaba.fluss.metadata;
 
 import com.alibaba.fluss.config.ConfigBuilder;
 import com.alibaba.fluss.config.ConfigOption;
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -224,7 +223,7 @@ class TableDescriptorTest {
     }
 
     @Test
-    void testCopy() {
+    void testWithProperties() {
         final TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(SCHEMA_1)
@@ -233,7 +232,7 @@ class TableDescriptorTest {
                         .property(OPTION_A, true)
                         .build();
 
-        final TableDescriptor copy = descriptor.copy(new HashMap<>());
+        final TableDescriptor copy = descriptor.withProperties(new HashMap<>());
         assertThat(copy.isPartitioned()).isEqualTo(descriptor.isPartitioned());
         assertThat(copy.getTableDistribution()).isEqualTo(descriptor.getTableDistribution());
         assertThat(copy.getComment()).isEqualTo(descriptor.getComment());
@@ -284,22 +283,6 @@ class TableDescriptorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Partitioned Primary Key Table requires partition key [dt] is a subset of the primary key [id].");
-
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(
-                                                Schema.newBuilder()
-                                                        .column("a", DataTypes.INT())
-                                                        .column("b", DataTypes.STRING())
-                                                        .primaryKey("a")
-                                                        .build())
-                                        .kvFormat(KvFormat.COMPACTED)
-                                        .logFormat(LogFormat.INDEXED)
-                                        .build())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "For Primary Key Table, if kv format is compacted, log format must be arrow.");
     }
 
     @Test
@@ -331,17 +314,5 @@ class TableDescriptorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
-    }
-
-    @Test
-    void testAutoPartitionForNonPartitionedTableShouldThrowException() {
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(SCHEMA_1)
-                                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                                        .build())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Auto partition is only supported when table is partitioned.");
     }
 }

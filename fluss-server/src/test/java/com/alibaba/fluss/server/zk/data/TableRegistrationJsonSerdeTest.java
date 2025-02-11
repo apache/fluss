@@ -16,17 +16,52 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableDescriptor.TableDistribution;
+import com.alibaba.fluss.record.TestData;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Maps;
 import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.Arrays;
 import java.util.Collections;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link com.alibaba.fluss.server.zk.data.TableRegistrationJsonSerde}. */
 class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration> {
     TableRegistrationJsonSerdeTest() {
         super(TableRegistrationJsonSerde.INSTANCE);
+    }
+
+    @Test
+    void testInvalidTableRegistration() {
+        // null bucket count
+        assertThatThrownBy(
+                        () ->
+                                new TableRegistration(
+                                        1234L,
+                                        "first-table",
+                                        Arrays.asList("a", "b"),
+                                        new TableDistribution(null, Arrays.asList("b", "c")),
+                                        Maps.newHashMap(),
+                                        Collections.singletonMap("custom-3", "\"300\""),
+                                        1735538268L,
+                                        1735538268L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Bucket count is required for table registration.");
+
+        // null distribution
+        assertThatThrownBy(
+                        () ->
+                                TableRegistration.newTable(
+                                        11,
+                                        TableDescriptor.builder()
+                                                .schema(TestData.DATA1_SCHEMA)
+                                                .build()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Table distribution is required for table registration.");
     }
 
     @Override
@@ -49,7 +84,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         1234L,
                         "second-table",
                         Collections.emptyList(),
-                        null,
+                        new TableDistribution(32, Collections.emptyList()),
                         Collections.singletonMap("option-3", "300"),
                         Maps.newHashMap(),
                         -1,
@@ -63,7 +98,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
         return new String[] {
             "{\"version\":1,\"table_id\":1234,\"comment\":\"first-table\",\"partition_key\":[\"a\",\"b\"],"
                     + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"created_time\":1735538268,\"modified_time\":1735538268}",
-            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"partition_key\":[],\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
+            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
         };
     }
 }

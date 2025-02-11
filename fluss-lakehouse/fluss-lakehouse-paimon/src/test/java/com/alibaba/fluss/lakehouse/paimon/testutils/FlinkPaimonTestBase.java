@@ -26,6 +26,7 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -98,7 +99,7 @@ public class FlinkPaimonTestBase {
 
     @BeforeEach
     void beforeEach() throws Exception {
-        admin.createDatabase(DEFAULT_DB, true).get();
+        admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 
     protected static Map<String, String> getPaimonCatalogConf() {
@@ -123,7 +124,7 @@ public class FlinkPaimonTestBase {
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
@@ -138,9 +139,9 @@ public class FlinkPaimonTestBase {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
-                tableWriter = table.getAppendWriter();
+                tableWriter = table.newAppend().createWriter();
             } else {
-                tableWriter = table.getUpsertWriter();
+                tableWriter = table.newUpsert().createWriter();
             }
             for (InternalRow row : rows) {
                 if (tableWriter instanceof AppendWriter) {
@@ -158,7 +159,7 @@ public class FlinkPaimonTestBase {
             TableDescriptor tableDescriptor,
             Map<Long, String> partitionNameByIds)
             throws Exception {
-        RowType rowType = tableDescriptor.getSchema().toRowType();
+        RowType rowType = tableDescriptor.getSchema().getRowType();
         List<InternalRow> rows = new ArrayList<>();
         Map<String, List<InternalRow>> writtenRowsByPartition = new HashMap<>();
         for (String partitionName : partitionNameByIds.values()) {

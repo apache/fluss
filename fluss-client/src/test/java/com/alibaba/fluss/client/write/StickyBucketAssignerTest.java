@@ -210,14 +210,14 @@ public class StickyBucketAssignerTest {
                             bucketLocation.getTableBucket().getTableId());
                     tableInfoByPath.put(
                             physicalTablePath.getTablePath(),
-                            new TableInfo(
+                            TableInfo.of(
                                     physicalTablePath.getTablePath(),
                                     bucketLocation.getTableBucket().getTableId(),
+                                    1,
                                     TableDescriptor.builder()
                                             .schema(DATA1_SCHEMA)
                                             .distributedBy(3)
                                             .build(),
-                                    1,
                                     System.currentTimeMillis(),
                                     System.currentTimeMillis()));
                 });

@@ -49,7 +49,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table");
         prepareData(tablePath, 3);
 
-        RowType flinkRowType = FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.toRowType());
+        RowType flinkRowType =
+                FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
         FlinkLookupFunction lookupFunction =
                 new FlinkLookupFunction(
                         clientConf,
@@ -86,7 +87,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         int rows = 3;
         prepareData(tablePath, rows);
 
-        RowType flinkRowType = FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.toRowType());
+        RowType flinkRowType =
+                FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
         AsyncLookupFunction asyncLookupFunction =
                 new FlinkAsyncLookupFunction(
                         clientConf,
@@ -136,11 +138,11 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
     private void prepareData(TablePath tablePath, int rows) throws Exception {
         createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
 
-        com.alibaba.fluss.types.RowType rowType = DEFAULT_PK_TABLE_SCHEMA.toRowType();
+        com.alibaba.fluss.types.RowType rowType = DEFAULT_PK_TABLE_SCHEMA.getRowType();
 
         // first write some data to the table
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
                 upsertWriter.upsert(compactedRow(rowType, new Object[] {i, "name" + i}));
             }

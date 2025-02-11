@@ -46,12 +46,12 @@ class AppendSinkFunction extends FlinkSinkFunction {
     @Override
     public void open(org.apache.flink.configuration.Configuration config) {
         super.open(config);
-        appendWriter = table.getAppendWriter();
+        appendWriter = table.newAppend().createWriter();
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
 
     @Override
-    CompletableFuture<Void> writeRow(RowKind rowKind, InternalRow internalRow) {
+    CompletableFuture<?> writeRow(RowKind rowKind, InternalRow internalRow) {
         return appendWriter.append(internalRow);
     }
 

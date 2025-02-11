@@ -454,7 +454,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="35"><strong>tabletserver</strong></th>
+      <th rowspan="39"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table</td>
@@ -627,6 +627,27 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
       <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="4">table_bucket_kv</td>
+      <td>preWriteBufferFlushPerSecond</td>
+      <td>The kv pre-write buffer flush count per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>preWriteBufferFlushLatencyMs</td>
+      <td>The kv pre-write buffer latency in ms.</td>
+      <td>Histogram</td>
+    </tr>
+     <tr>
+      <td>preWriteBufferTruncateAsDuplicatedPerSecond</td>
+      <td>The number of kv pre-write buffer truncate due to the batch duplicated per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>preWriteBufferTruncateAsErrorPerSecond</td>
+      <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
+      <td>Meter</td>
     </tr>
     <tr>
       <td rowspan="1">table_bucket_kv_snapshot</td>

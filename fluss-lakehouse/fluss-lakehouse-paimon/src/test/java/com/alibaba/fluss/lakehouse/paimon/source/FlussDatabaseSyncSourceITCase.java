@@ -20,6 +20,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
 import com.alibaba.fluss.lakehouse.paimon.testutils.TestingDatabaseSyncSink;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -156,7 +157,7 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
 
     private List<String> writeRowsIntoPartitionedTable(
             TablePath tablePath, Map<Long, String> partitionNameByIds) throws Exception {
-        RowType rowType = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR.getSchema().toRowType();
+        RowType rowType = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR.getSchema().getRowType();
         List<String> expected = new ArrayList<>();
         List<InternalRow> rows = new ArrayList<>();
         for (String partitionName : partitionNameByIds.values()) {
@@ -282,6 +283,6 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
     }
 
     protected void createDatabase(String database) throws Exception {
-        admin.createDatabase(database, true).get();
+        admin.createDatabase(database, DatabaseDescriptor.EMPTY, true).get();
     }
 }

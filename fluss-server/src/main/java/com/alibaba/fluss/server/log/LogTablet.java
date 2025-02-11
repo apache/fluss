@@ -632,6 +632,7 @@ public final class LogTablet {
                 appendInfo.setLastOffset(duplicatedBatch.lastOffset);
                 appendInfo.setMaxTimestamp(duplicatedBatch.timestamp);
                 appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
+                appendInfo.setDuplicated(true);
             } else {
                 // Append the records, and increment the local log end offset immediately after
                 // append because write to the transaction index below may fail, and we want to

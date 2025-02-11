@@ -17,10 +17,11 @@
 package com.alibaba.fluss.client.table;
 
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
+import com.alibaba.fluss.client.lookup.LookupResult;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
@@ -33,17 +34,23 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static com.alibaba.fluss.testutils.DataTestUtils.assertRowValueEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
@@ -59,14 +66,14 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH_PK);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        UpsertWriter upsertWriter = table.getUpsertWriter();
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
         int recordsPerPartition = 5;
         // now, put some data to the partitions
         Map<Long, List<InternalRow>> expectPutRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
                 InternalRow row =
-                        compactedRow(schema.toRowType(), new Object[] {i, "a" + i, partition});
+                        compactedRow(schema.getRowType(), new Object[] {i, "a" + i, partition});
                 upsertWriter.upsert(row);
                 expectPutRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
@@ -75,21 +82,120 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         }
         upsertWriter.flush();
 
+        Lookuper lookuper = table.newLookup().createLookuper();
         // now, let's lookup the written data by look up
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
                 InternalRow actualRow =
-                        compactedRow(schema.toRowType(), new Object[] {i, "a" + i, partition});
+                        compactedRow(schema.getRowType(), new Object[] {i, "a" + i, partition});
                 InternalRow lookupRow =
-                        table.lookup(keyRow(schema, new Object[] {i, null, partition}))
+                        lookuper.lookup(keyRow(schema, new Object[] {i, null, partition}))
                                 .get()
-                                .getRow();
+                                .getSingletonRow();
                 assertThat(lookupRow).isEqualTo(actualRow);
             }
         }
 
         // then, let's scan and check the cdc log
-        verifyPartitionLogs(table, schema.toRowType(), expectPutRows);
+        verifyPartitionLogs(table, schema.getRowType(), expectPutRows);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPartitionedTablePrefixLookup(boolean isDataLakeEnabled) throws Exception {
+        // This case partition key 'b' in both pk and bucket key (prefix key).
+        TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "a", "c")
+                        .partitionedBy("b")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        // test data lake bucket assigner for prefix lookup
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, isDataLakeEnabled)
+                        .build();
+        RowType rowType = schema.getRowType();
+        createTable(tablePath, descriptor, false);
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+
+        Table table = conn.getTable(tablePath);
+        for (String partition : partitionIdByNames.keySet()) {
+            verifyPutAndLookup(table, schema, new Object[] {1, partition, 1L, "value1"});
+            verifyPutAndLookup(table, schema, new Object[] {1, partition, 2L, "value2"});
+        }
+
+        for (int i = 0; i < 3; i++) {
+            // test prefix lookups with partition field (b) in different
+            // position of the lookup columns
+            List<String> lookupColumns =
+                    i == 0
+                            ? Arrays.asList("b", "a", "c")
+                            : i == 1 ? Arrays.asList("a", "b", "c") : Arrays.asList("a", "c", "b");
+            RowType prefixKeyRowType = rowType.project(schema.getColumnIndexes(lookupColumns));
+            Lookuper prefixLookuper = table.newLookup().lookupBy(lookupColumns).createLookuper();
+            for (String partition : partitionIdByNames.keySet()) {
+                Object[] lookupRow =
+                        i == 0
+                                ? new Object[] {partition, 1, 1L}
+                                : i == 1
+                                        ? new Object[] {1, partition, 1L}
+                                        : new Object[] {1, 1L, partition};
+                CompletableFuture<LookupResult> result =
+                        prefixLookuper.lookup(compactedRow(prefixKeyRowType, lookupRow));
+                LookupResult prefixLookupResult = result.get();
+                assertThat(prefixLookupResult).isNotNull();
+                List<InternalRow> rowList = prefixLookupResult.getRowList();
+                assertThat(rowList.size()).isEqualTo(1);
+                assertRowValueEquals(
+                        rowType, rowList.get(0), new Object[] {1, partition, 1L, "value1"});
+            }
+        }
+    }
+
+    @Test
+    void testInvalidPrefixLookupForPartitionedTable() throws Exception {
+        // This case partition key 'c' only in pk but not in prefix key.
+        TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup2");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.BIGINT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "a", "b")
+                        .partitionedBy("c")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        .build();
+        createTable(tablePath, descriptor, false);
+
+        Table table = conn.getTable(tablePath);
+
+        // test prefix lookup with (a, b).
+        assertThatThrownBy(() -> table.newLookup().lookupBy("a", "b").createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_partitioned_table_prefix_lookup2', "
+                                + "because the lookup columns [a, b] must contain all partition fields [c].");
     }
 
     @Test
@@ -98,12 +204,12 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(DATA1_TABLE_PATH);
         Table table = conn.getTable(DATA1_TABLE_PATH);
-        AppendWriter appendWriter = table.getAppendWriter();
+        AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow row = row(schema.toRowType(), new Object[] {i, "a" + i, partition});
+                InternalRow row = row(schema.getRowType(), new Object[] {i, "a" + i, partition});
                 appendWriter.append(row);
                 expectPartitionAppendRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
@@ -113,7 +219,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
         appendWriter.flush();
 
         // then, let's verify the logs
-        verifyPartitionLogs(table, schema.toRowType(), expectPartitionAppendRows);
+        verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
     }
 
     @Test
@@ -129,13 +235,13 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                 writeRows(table, schema, partitionIdByNames);
 
         // then, let's verify the logs
-        try (LogScanner logScanner = table.getLogScanner(new LogScan())) {
+        try (LogScanner logScanner = table.newScan().createLogScanner()) {
             for (Long partitionId : expectPartitionAppendRows.keySet()) {
                 logScanner.subscribeFromBeginning(partitionId, 0);
             }
             int totalRecords = getRowsCount(expectPartitionAppendRows);
             Map<Long, List<InternalRow>> actualRows = pollRecords(logScanner, totalRecords);
-            verifyRows(schema.toRowType(), actualRows, expectPartitionAppendRows);
+            verifyRows(schema.getRowType(), actualRows, expectPartitionAppendRows);
 
             // now, unsubscribe some partitions
             long removedPartitionId = expectPartitionAppendRows.keySet().iterator().next();
@@ -147,7 +253,7 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
             expectPartitionAppendRows.remove(removedPartitionId);
             totalRecords = getRowsCount(expectPartitionAppendRows);
             actualRows = pollRecords(logScanner, totalRecords);
-            verifyRows(schema.toRowType(), actualRows, expectPartitionAppendRows);
+            verifyRows(schema.getRowType(), actualRows, expectPartitionAppendRows);
         }
     }
 
@@ -157,12 +263,12 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
 
     private Map<Long, List<InternalRow>> writeRows(
             Table table, Schema schema, Map<String, Long> partitionIdByNames) {
-        AppendWriter appendWriter = table.getAppendWriter();
+        AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
         for (String partition : partitionIdByNames.keySet()) {
             for (int i = 0; i < recordsPerPartition; i++) {
-                InternalRow row = row(schema.toRowType(), new Object[] {i, "a" + i, partition});
+                InternalRow row = row(schema.getRowType(), new Object[] {i, "a" + i, partition});
                 appendWriter.append(row);
                 expectPartitionAppendRows
                         .computeIfAbsent(partitionIdByNames.get(partition), k -> new ArrayList<>())
@@ -196,11 +302,12 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
     void testOperateNotExistPartitionShouldThrowException() throws Exception {
         Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        Lookuper lookuper = table.newLookup().createLookuper();
 
         // test get for a not exist partition
         assertThatThrownBy(
                         () ->
-                                table.lookup(
+                                lookuper.lookup(
                                                 keyRow(
                                                         schema,
                                                         new Object[] {
@@ -214,8 +321,8 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
 
         // test write to not exist partition
-        UpsertWriter upsertWriter = table.getUpsertWriter();
-        InternalRow row = row(schema.toRowType(), new Object[] {1, "a", "notExistPartition"});
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        InternalRow row = row(schema.getRowType(), new Object[] {1, "a", "notExistPartition"});
         assertThatThrownBy(() -> upsertWriter.upsert(row).get())
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
@@ -224,12 +331,12 @@ class FlussPartitionedTableITCase extends ClientToServerITCaseBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
 
         // test scan a not exist partition's log
-        LogScan logScan = new LogScan();
-        LogScanner logScanner = table.getLogScanner(logScan);
+        LogScanner logScanner = table.newScan().createLogScanner();
         assertThatThrownBy(() -> logScanner.subscribe(100L, 0, 0))
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining("Partition not exist for partition ids: [100]");
+        logScanner.close();
 
         // todo: test the case that client produce to a partition to a server, but
         // the server delete the partition at the time, the client should receive the

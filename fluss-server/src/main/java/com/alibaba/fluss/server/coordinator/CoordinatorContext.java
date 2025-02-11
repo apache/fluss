@@ -189,6 +189,21 @@ public class CoordinatorContext {
                                                         new TableBucket(tableId, bucket), server));
                                     }
                                 }));
+        // Iterate over partitioned tables
+        partitionAssignments.forEach(
+                (tablePartition, assignments) ->
+                        assignments.forEach(
+                                (bucket, replicas) -> {
+                                    if (replicas.contains(server)) {
+                                        replicasInServer.add(
+                                                new TableBucketReplica(
+                                                        new TableBucket(
+                                                                tablePartition.getTableId(),
+                                                                tablePartition.getPartitionId(),
+                                                                bucket),
+                                                        server));
+                                    }
+                                }));
         return replicasInServer;
     }
 

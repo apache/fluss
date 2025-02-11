@@ -32,6 +32,7 @@ import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.tablet.TestTabletServerGateway;
+import com.alibaba.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -586,7 +587,9 @@ final class SenderTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
-        accumulator = new RecordAccumulator(conf, idempotenceManager, writerMetricGroup);
+        accumulator =
+                new RecordAccumulator(
+                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
         return new Sender(
                 accumulator,
                 REQUEST_TIMEOUT,

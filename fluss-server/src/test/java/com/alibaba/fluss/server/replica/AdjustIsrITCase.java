@@ -20,7 +20,6 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
@@ -40,7 +39,6 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
@@ -223,21 +221,10 @@ public class AdjustIsrITCase {
 
     private long createLogTable() throws Exception {
         // Set bucket to 1 to easy for debug.
-        TableInfo data1NonPkTableInfo =
-                new TableInfo(
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_ID,
-                        TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA)
-                                .distributedBy(1, "a")
-                                .build(),
-                        1,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
         return RpcMessageTestUtils.createTable(
-                FLUSS_CLUSTER_EXTENSION,
-                DATA1_TABLE_PATH,
-                data1NonPkTableInfo.getTableDescriptor());
+                FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
     }
 
     private static Configuration initConfig() {

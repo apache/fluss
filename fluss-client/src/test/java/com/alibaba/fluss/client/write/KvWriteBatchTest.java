@@ -166,7 +166,8 @@ public class KvWriteBatchTest {
                 KvFormat.COMPACTED,
                 writeLimit,
                 outputView,
-                null);
+                null,
+                System.currentTimeMillis());
     }
 
     private WriteCallback newWriteCallback() {

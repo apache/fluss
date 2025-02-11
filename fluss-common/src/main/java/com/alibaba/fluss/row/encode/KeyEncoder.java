@@ -21,7 +21,6 @@ import com.alibaba.fluss.row.compacted.CompactedKeyWriter;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -35,22 +34,20 @@ public class KeyEncoder {
     private final CompactedKeyWriter compactedEncoder;
 
     /**
-     * Create a key encoder to encode the key of the row with given {@param rowType} in
-     * given @{@param primaryKeyIndexes} and {@param partitionKeys}.
+     * Create a key encoder to encode the key of the input row.
+     *
+     * @param rowType the row type of the input row
+     * @param keys the key fields to encode
      */
-    public static KeyEncoder createKeyEncoder(
-            RowType rowType, List<String> primaryKeys, List<String> partitionKeys) {
-
-        // to get the col used to encode the key, for partitioned table,
-        // we will remove the partition keys from primary keys
-        List<String> encodeCols = new ArrayList<>(primaryKeys);
-        encodeCols.removeAll(partitionKeys);
-
-        int[] encodeColIndexes = new int[encodeCols.size()];
-        for (int i = 0; i < encodeCols.size(); i++) {
-            encodeColIndexes[i] = rowType.getFieldIndex(encodeCols.get(i));
+    public static KeyEncoder createKeyEncoder(RowType rowType, List<String> keys) {
+        int[] encodeColIndexes = new int[keys.size()];
+        for (int i = 0; i < keys.size(); i++) {
+            encodeColIndexes[i] = rowType.getFieldIndex(keys.get(i));
+            if (encodeColIndexes[i] == -1) {
+                throw new IllegalArgumentException(
+                        "Field " + keys.get(i) + " not found in input row type " + rowType);
+            }
         }
-
         return new KeyEncoder(rowType, encodeColIndexes);
     }
 

@@ -19,20 +19,22 @@ package com.alibaba.fluss.lakehouse.paimon.source.split;
 /** The state of {@link LogSplit}. */
 public class LogSplitState extends SourceSplitState {
 
-    private long offset;
+    /** The next log offset to read. */
+    private long nextOffset;
 
     public LogSplitState(LogSplit split) {
         super(split);
+        this.nextOffset = split.getStartingOffset();
     }
 
-    public void setOffset(long offset) {
-        this.offset = offset;
+    public void setNextOffset(long nextOffset) {
+        this.nextOffset = nextOffset;
     }
 
     @Override
     public LogSplit toSourceSplit() {
         final LogSplit logSplit = (LogSplit) split;
         return new LogSplit(
-                logSplit.tablePath, logSplit.tableBucket, logSplit.getPartitionName(), offset);
+                logSplit.tablePath, logSplit.tableBucket, logSplit.getPartitionName(), nextOffset);
     }
 }
