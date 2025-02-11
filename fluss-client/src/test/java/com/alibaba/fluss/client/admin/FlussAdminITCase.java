@@ -581,6 +581,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAddAndDropPartitionsForStaticPartition() throws Exception {
+        // 1. test single-field partition key.
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
@@ -610,7 +611,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.dropPartition(
                         tablePath, new PartitionSpec(Collections.singletonMap("age", "10")), false)
                 .get();
-        assertPartitionInfo(admin.listPartitionInfos(tablePath).get(), Arrays.asList("11"));
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(), Collections.singletonList("11"));
 
         // test add partition already exists with ignoreIfNotExists = false.
         assertThatThrownBy(
@@ -653,10 +655,49 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(PartitionSpecInvalidException.class)
                 .hasMessageContaining(
                         "The value of partition key should not contains separator: '$'");
+
+        // 2. test multi-fields partition keys.
+        partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("city", DataTypes.STRING())
+                                        .column("age", DataTypes.INT())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("city", "age")
+                        .build();
+        TablePath multiFieldsTablePath =
+                TablePath.of(dbName, "test_add_and_drop_multi_fields_partitioned_table");
+        admin.createTable(multiFieldsTablePath, partitionedTable, true).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(), Collections.emptyList());
+        // add two partitions.
+        Map<String, String> partitionSpec = new HashMap<>();
+        partitionSpec.put("city", "beijing");
+        partitionSpec.put("age", "10");
+        admin.addPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        partitionSpec.put("city", "shanghai");
+        partitionSpec.put("age", "11");
+        admin.addPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Arrays.asList("beijing$10", "shanghai$11"));
+        // drop one partition.
+        partitionSpec = new HashMap<>();
+        partitionSpec.put("city", "beijing");
+        partitionSpec.put("age", "10");
+        admin.dropPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Collections.singletonList("shanghai$11"));
     }
 
     @Test
     void testAddAndDropPartitionsForAutoPartition() throws Exception {
+        // 1. test single-field partition key.
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
@@ -726,6 +767,101 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         String.valueOf(currentYear),
                         String.valueOf(currentYear + 2),
                         String.valueOf(currentYear + 3)));
+
+        // 2. test multi-fields partition keys.
+        partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("country", DataTypes.STRING())
+                                        .column("city", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("country", "city", "pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 2) // set to 2.
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_PARTITION_NAME_PREFIX,
+                                "China$Shanghai;China$Beijing")
+                        .build();
+        TablePath multiFieldsTablePath =
+                TablePath.of(dbName, "test_add_and_drop_multi_fields_partitioned_table_1");
+        admin.createTable(multiFieldsTablePath, partitionedTable, true).get();
+        // wait all auto partitions created.
+        FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(multiFieldsTablePath, 4);
+
+        // there are four auto created partitions.
+        currentYear = LocalDate.now().getYear();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Arrays.asList(
+                        "China$Shanghai$" + currentYear,
+                        "China$Shanghai$" + (currentYear + 1),
+                        "China$Beijing$" + currentYear,
+                        "China$Beijing$" + (currentYear + 1)));
+
+        // add one partition prefix "China$Hangzhou".
+        Map<String, String> partitionSpec = new HashMap<>();
+        partitionSpec.put("country", "China");
+        partitionSpec.put("city", "Hangzhou");
+        admin.addPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Arrays.asList(
+                        "China$Shanghai$" + currentYear,
+                        "China$Shanghai$" + (currentYear + 1),
+                        "China$Beijing$" + currentYear,
+                        "China$Beijing$" + (currentYear + 1),
+                        "China$Hangzhou$" + currentYear,
+                        "China$Hangzhou$" + (currentYear + 1)));
+
+        // delete one partition prefix "Shanghai".
+        partitionSpec = new HashMap<>();
+        partitionSpec.put("country", "China");
+        partitionSpec.put("city", "Shanghai");
+        admin.dropPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Arrays.asList(
+                        "China$Beijing$" + currentYear,
+                        "China$Beijing$" + (currentYear + 1),
+                        "China$Hangzhou$" + currentYear,
+                        "China$Hangzhou$" + (currentYear + 1)));
+
+        // add one partition "Hangzhou$1999"
+        partitionSpec = new HashMap<>();
+        partitionSpec.put("country", "China");
+        partitionSpec.put("city", "Hangzhou");
+        partitionSpec.put("pt", "1999");
+        admin.addPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Arrays.asList(
+                        "China$Beijing$" + currentYear,
+                        "China$Beijing$" + (currentYear + 1),
+                        "China$Hangzhou$" + currentYear,
+                        "China$Hangzhou$" + (currentYear + 1),
+                        "China$Hangzhou$1999"));
+
+        // delete one partition   "Beijing$" + currentYear.
+        partitionSpec = new HashMap<>();
+        partitionSpec.put("country", "China");
+        partitionSpec.put("city", "Beijing");
+        partitionSpec.put("pt", String.valueOf(currentYear));
+        admin.dropPartition(multiFieldsTablePath, new PartitionSpec(partitionSpec), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(multiFieldsTablePath).get(),
+                Arrays.asList(
+                        "China$Beijing$" + (currentYear + 1),
+                        "China$Hangzhou$" + currentYear,
+                        "China$Hangzhou$" + (currentYear + 1),
+                        "China$Hangzhou$1999"));
     }
 
     private void assertHasTabletServerNumber(int tabletServerNumber) {

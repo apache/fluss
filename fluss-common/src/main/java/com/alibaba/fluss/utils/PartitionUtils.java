@@ -26,8 +26,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
-
 /** Utils for partition. */
 public class PartitionUtils {
     public static final String PARTITION_SPEC_SEPARATOR = "$";
@@ -61,8 +59,7 @@ public class PartitionUtils {
      * <p>For example, if the partition keys are [a, b, c], and the partition spec is [1, 2, 3], the
      * partition name is "1$2$3".
      *
-     * <p>Currently, we only support one partition key. So the partition name is in the following
-     * format:
+     * <p>For the table with single partition key. The partition name is in the following format:
      *
      * <pre>
      * spec
@@ -71,19 +68,13 @@ public class PartitionUtils {
      * <p>For example, if the partition keys are [a], and the partition spec is [1], the partition
      * name is "1".
      *
-     * @param partitionKeys the partition keys
      * @param partitionSpecs the partition specs
      */
-    public static String getPartitionName(List<String> partitionKeys, List<String> partitionSpecs) {
-        return getPartitionName(partitionKeys, partitionSpecs, true);
+    public static String getPartitionName(List<String> partitionSpecs) {
+        return getPartitionName(partitionSpecs, true);
     }
 
-    public static String getPartitionName(
-            List<String> partitionKeys, List<String> partitionSpecs, boolean checkValid) {
-        checkArgument(
-                partitionKeys.size() == partitionSpecs.size(),
-                "The number of partition keys and partition specs should be the same.");
-
+    public static String getPartitionName(List<String> partitionSpecs, boolean checkValid) {
         for (String value : partitionSpecs) {
             if (checkValid && value.contains(PARTITION_SPEC_SEPARATOR)) {
                 throw new PartitionSpecInvalidException(
@@ -96,9 +87,8 @@ public class PartitionUtils {
     }
 
     /**
-     * Generate auto partition name in server. When we auto creating a partition, we need to
-     * generate a partition name. As we only support one partition key now, the partition name is in
-     * the following format:
+     * Generate auto spec name in server. When we auto creating a partition, we need to generate an
+     * auto spec first.
      *
      * <pre>
      * value
@@ -106,40 +96,45 @@ public class PartitionUtils {
      *
      * <p>The value is the formatted time with the specified time unit.
      *
-     * @param partitionKeys the partition keys
      * @param current the current time
      * @param offset the offset
      * @param timeUnit the time unit
      * @return the auto partition name
      */
-    public static String generateAutoPartitionName(
-            List<String> partitionKeys,
-            ZonedDateTime current,
-            int offset,
-            AutoPartitionTimeUnit timeUnit) {
-        String autoPartitionFieldSpec;
+    public static String generateAutoSpec(
+            ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
+        String autoSpec;
         switch (timeUnit) {
             case YEAR:
-                autoPartitionFieldSpec = getFormattedTime(current.plusYears(offset), YEAR_FORMAT);
+                autoSpec = getFormattedTime(current.plusYears(offset), YEAR_FORMAT);
                 break;
             case QUARTER:
-                autoPartitionFieldSpec =
-                        getFormattedTime(current.plusMonths(offset * 3L), QUARTER_FORMAT);
+                autoSpec = getFormattedTime(current.plusMonths(offset * 3L), QUARTER_FORMAT);
                 break;
             case MONTH:
-                autoPartitionFieldSpec = getFormattedTime(current.plusMonths(offset), MONTH_FORMAT);
+                autoSpec = getFormattedTime(current.plusMonths(offset), MONTH_FORMAT);
                 break;
             case DAY:
-                autoPartitionFieldSpec = getFormattedTime(current.plusDays(offset), DAY_FORMAT);
+                autoSpec = getFormattedTime(current.plusDays(offset), DAY_FORMAT);
                 break;
             case HOUR:
-                autoPartitionFieldSpec = getFormattedTime(current.plusHours(offset), HOUR_FORMAT);
+                autoSpec = getFormattedTime(current.plusHours(offset), HOUR_FORMAT);
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
         }
 
-        return getPartitionName(partitionKeys, Collections.singletonList(autoPartitionFieldSpec));
+        return autoSpec;
+    }
+
+    public static String extractAutoSpecFromPartitionName(String partitionName) {
+        String[] partitionSpec = partitionName.split("\\$");
+        return partitionSpec[partitionSpec.length - 1];
+    }
+
+    public static String generateAutoPartitionName(
+            String autoPartitionPrefix, String autoPartitionSpec) {
+        return autoPartitionPrefix + PARTITION_SPEC_SEPARATOR + autoPartitionSpec;
     }
 
     private static String getFormattedTime(ZonedDateTime zonedDateTime, String format) {

@@ -29,8 +29,6 @@ import static com.alibaba.fluss.utils.PartitionUtils.getPartitionName;
 /** A getter to get partition name from a row. */
 public class PartitionGetter {
 
-    // TODO currently, only support one partition key.
-    private final String partitionKeyName;
     private final InternalRow.FieldGetter partitionFieldGetter;
 
     public PartitionGetter(RowType rowType, List<String> partitionKeys) {
@@ -43,7 +41,8 @@ public class PartitionGetter {
 
         // check the partition column
         List<String> fieldNames = rowType.getFieldNames();
-        this.partitionKeyName = partitionKeys.get(0);
+        // TODO currently, only support one partition key.
+        String partitionKeyName = partitionKeys.get(0);
         int partitionColumnIndex = fieldNames.indexOf(partitionKeyName);
         Preconditions.checkArgument(
                 partitionColumnIndex >= 0,
@@ -60,9 +59,6 @@ public class PartitionGetter {
     public String getPartition(InternalRow row) {
         Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
         Preconditions.checkNotNull(partitionValue, "Partition value shouldn't be null.");
-        return getPartitionName(
-                Collections.singletonList(partitionKeyName),
-                Collections.singletonList(partitionValue.toString()),
-                false);
+        return getPartitionName(Collections.singletonList(partitionValue.toString()), false);
     }
 }

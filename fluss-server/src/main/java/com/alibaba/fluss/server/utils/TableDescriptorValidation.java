@@ -188,15 +188,6 @@ public class TableDescriptorValidation {
                         }
                     });
 
-            // TODO Currently, we only support one partition key, multi-partition keys will be
-            // supported in next pr.
-            if (partitionKeys.size() > 1) {
-                throw new InvalidTableException(
-                        String.format(
-                                "Currently, partitioned table only supports one partition key, but got partition keys %s.",
-                                partitionKeys));
-            }
-
             if (autoPartition.isAutoPartitionEnabled()) {
                 if (autoPartition.timeUnit() == null) {
                     throw new InvalidTableException(
@@ -204,6 +195,11 @@ public class TableDescriptorValidation {
                                     "Currently, auto partitioned table must set auto partition time unit when auto "
                                             + "partition is enabled, please set table property '%s'.",
                                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
+                }
+
+                String partitionNamePrefix = autoPartition.partitionNamePrefix();
+                if (partitionKeys.size() > 1 && partitionNamePrefix != null) {
+                    checkPartitionNamePrefix(partitionKeys, partitionNamePrefix);
                 }
 
                 for (String partitionKey : partitionKeys) {
@@ -235,6 +231,22 @@ public class TableDescriptorValidation {
                                         partitionDataType));
                     }
                 }
+            }
+        }
+    }
+
+    private static void checkPartitionNamePrefix(
+            List<String> partitionKeys, String partitionNamePrefix) {
+        List<String> partitionKeyPrefix = partitionKeys.subList(0, partitionKeys.size() - 1);
+        String[] partitionNamePrefixSet = partitionNamePrefix.split(";");
+        for (String partitionName : partitionNamePrefixSet) {
+            String[] partitionSpecPrefix = partitionName.split("\\$");
+            if (partitionSpecPrefix.length != partitionKeyPrefix.size()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Partition name prefix '%s' is not valid, it should have the same number of fields as "
+                                        + "partition keys: %s for each prefix.",
+                                partitionNamePrefix, partitionKeys));
             }
         }
     }

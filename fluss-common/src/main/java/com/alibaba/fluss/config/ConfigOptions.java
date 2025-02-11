@@ -978,6 +978,26 @@ public class ConfigOptions {
                                     + "configured as 3, then the history partitions 20241108, 20241109, 20241110 will be retained. "
                                     + "The partitions earlier than 20241108 will be deleted.");
 
+    public static final ConfigOption<String> TABLE_AUTO_PARTITION_PARTITION_NAME_PREFIX =
+            key("table.auto-partition.partition-name-prefix")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The partition name prefix for auto created partitions in each check for "
+                                    + "auto partition. This config is only effective for the table whose partition keys "
+                                    + "consist of multiple fields. When there are multiple fields in the partition keys, "
+                                    + "we will default use the last field to be the one used for creating the auto-partition, "
+                                    + "and user needs to specify values for other fields using this config. "
+                                    + "For example, if we have partition keys [country, city, dt], then 'dt' is the "
+                                    + "field for auto-partitioning, while [country, city] need to be specified. "
+                                    + "For instance, if this config set to 'China$Beijing;China$Shanghai', where "
+                                    + "multiple prefixes are separated by ';' and fields are separated by '$', fields "
+                                    + "are ordered by the partition keys. In this scenario, the auto partitioning will "
+                                    + "create multiple partitions with partition name as 'China$Beijing$20250211', "
+                                    + "'China$Beijing$20250212', 'China$Shanghai$20250211', 'China$Shanghai$20250212', "
+                                    + "and so on. This parameter can be set during table creation or added "
+                                    + "after table created through the addPartition API.");
+
     public static final ConfigOption<Duration> TABLE_LOG_TTL =
             key("table.log.ttl")
                     .durationType()

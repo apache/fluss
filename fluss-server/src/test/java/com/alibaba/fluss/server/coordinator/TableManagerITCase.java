@@ -49,6 +49,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.utils.PartitionUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -88,7 +89,6 @@ import static com.alibaba.fluss.server.utils.RpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
-import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartitionName;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -369,8 +369,7 @@ class TableManagerITCase {
                         Duration.ofMinutes(1),
                         "partition is not created");
         // check the created partitions
-        List<String> expectAddedPartitions =
-                getExpectAddedPartitions(tableDescriptor.getPartitionKeys(), now, timeUnit, 1);
+        List<String> expectAddedPartitions = getExpectAddedPartitions(now, timeUnit, 1);
         assertThat(partitions).containsOnlyKeys(expectAddedPartitions);
 
         // let's drop the table
@@ -392,22 +391,6 @@ class TableManagerITCase {
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
-
-        TableDescriptor tableWithMultiPartKey =
-                newPartitionedTableBuilder(new Schema.Column("tttt", DataTypes.INT()))
-                        .partitionedBy("id", "dt")
-                        .build();
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableWithMultiPartKey, false))
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table only supports one partition key, but got partition keys [id, dt].");
 
         TableDescriptor tableWithIntPartKey =
                 newPartitionedTableBuilder(null).partitionedBy("id").build();
@@ -597,14 +580,11 @@ class TableManagerITCase {
     }
 
     public static List<String> getExpectAddedPartitions(
-            List<String> partitionKeys,
-            Instant addInstant,
-            AutoPartitionTimeUnit timeUnit,
-            int newPartitions) {
+            Instant addInstant, AutoPartitionTimeUnit timeUnit, int newPartitions) {
         ZonedDateTime addDateTime = ZonedDateTime.ofInstant(addInstant, ZoneId.systemDefault());
         List<String> partitions = new ArrayList<>();
         for (int i = 0; i < newPartitions; i++) {
-            partitions.add(generateAutoPartitionName(partitionKeys, addDateTime, i, timeUnit));
+            partitions.add(PartitionUtils.generateAutoSpec(addDateTime, i, timeUnit));
         }
         return partitions;
     }

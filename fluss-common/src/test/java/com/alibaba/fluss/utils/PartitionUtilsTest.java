@@ -27,7 +27,6 @@ import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartitionName;
 import static com.alibaba.fluss.utils.PartitionUtils.getPartitionName;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,22 +36,11 @@ class PartitionUtilsTest {
 
     @Test
     void testGetPartitionName() {
-        assertThat(getPartitionName(Collections.singletonList("a"), Collections.singletonList("1")))
-                .isEqualTo("1");
+        assertThat(getPartitionName(Collections.singletonList("1"))).isEqualTo("1");
 
-        assertThat(getPartitionName(Arrays.asList("a", "b"), Arrays.asList("1", "2")))
-                .isEqualTo("1$2");
+        assertThat(getPartitionName(Arrays.asList("1", "2"))).isEqualTo("1$2");
 
-        assertThatThrownBy(
-                        () ->
-                                getPartitionName(
-                                        Arrays.asList("a", "b", "c"), Arrays.asList("1", "2")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "The number of partition keys and partition specs should be the same.");
-
-        assertThatThrownBy(
-                        () -> getPartitionName(Arrays.asList("a", "b"), Arrays.asList("$1", "2")))
+        assertThatThrownBy(() -> getPartitionName(Arrays.asList("$1", "2")))
                 .isInstanceOf(PartitionSpecInvalidException.class)
                 .hasMessageContaining(
                         "The value of partition key should not contains separator: '$'");
@@ -117,11 +105,8 @@ class PartitionUtilsTest {
             String[] expected) {
         for (int i = 0; i < offsets.length; i++) {
             String partitionString =
-                    generateAutoPartitionName(
-                            Collections.singletonList("ds"),
-                            zonedDateTime,
-                            offsets[i],
-                            autoPartitionTimeUnit);
+                    PartitionUtils.generateAutoSpec(
+                            zonedDateTime, offsets[i], autoPartitionTimeUnit);
             assertThat(partitionString).isEqualTo(expected[i]);
         }
     }

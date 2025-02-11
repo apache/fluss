@@ -32,10 +32,10 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
-import com.alibaba.fluss.utils.PartitionUtils;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
+import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,8 +61,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.utils.PartitionUtils.extractAutoSpecFromPartitionName;
 import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartitionName;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.PartitionUtils.generateAutoSpec;
+import static com.alibaba.fluss.utils.PartitionUtils.getPartitionName;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
@@ -94,9 +96,38 @@ public class PartitionManager implements AutoCloseable {
     @GuardedBy("lock")
     private final Map<Long, TableInfo> autoPartitionTables = new HashMap<>();
 
-    /** A map from tableId to the set of partitions for auto partition tables. */
+    /**
+     * A map from tableId to the set of auto spec for auto partition tables. autoSpec is the field
+     * for auto partitioning. If the partition keys only contain one field. the autoSpec is this
+     * field. If the partition keys contain multiple fields, the autoSpec is the last field.
+     *
+     * <p>For example, if the partition keys are ["ds"], the autoSpec is "ds". If the partition keys
+     * are ["country", "city", "ds"], the autoSpec is "ds".
+     */
     @GuardedBy("lock")
-    private final Map<Long, TreeSet<String>> partitionsForAutoPartitionTable = new HashMap<>();
+    private final Map<Long, TreeSet<String>> autoSpecForAutoPartitionTable = new HashMap<>();
+
+    /**
+     * A map from 'tableId-autoSpec' to the set of partitions for auto partition table. This is used
+     * to trace the created partitions for auto partition table.
+     */
+    @GuardedBy("lock")
+    private final Map<String, Set<String>> partitionsForAutoPartitionTable = new HashMap<>();
+
+    /**
+     * A map from tableId to the set of autoPartitionNamePrefix for auto partition table.
+     * autoPartitionNamePrefix is the remaining parts exclude autoSpec.
+     *
+     * <p>For example, if one auto partition table with tableId '1' and partition keys are
+     * ["country", "city", "ds"], the autoPartitionNamePrefix is in format "country$city". If
+     * partitionSpecs are [country="China", city="Beijing", ds="20230101"] and [country="China",
+     * city="Shanghai", ds="20230101"], the value is 0 -> ["China$beijing", "China$Shanghai"].
+     *
+     * <p>This is used to create auto partitions when this manager generates one new autoSpec. The
+     * generated partition name is in format "autoPartitionNamePrefix$autoSpec".
+     */
+    @GuardedBy("lock")
+    private final Map<Long, Set<String>> autoPartitionNamePrefixMap = new HashMap<>();
 
     /** A map from tableId to the set of partitions for static partition tables. */
     @GuardedBy("lock")
@@ -141,27 +172,27 @@ public class PartitionManager implements AutoCloseable {
     public void addPartitionTable(TableInfo tableInfo) {
         checkNotClosed();
         long tableId = tableInfo.getTableId();
+        boolean isAuto = isAuto(tableInfo);
         inLock(
                 lock,
                 () -> {
-                    if (isAutoPartitionTable(tableInfo)) {
-                        autoPartitionTables.put(tableId, tableInfo);
-                    }
+                    Set<String> existsPartitions = getPartitionsFromZk(tableInfo.getTablePath());
+                    addPartitionsToLocal(tableInfo, existsPartitions);
 
-                    Set<String> partitionSet = getOrCreatePartitionSet(tableInfo);
-                    checkNotNull(partitionSet, "Partition set is null.");
-                    try {
-                        partitionSet.addAll(
-                                zooKeeperClient.getPartitions(tableInfo.getTablePath()));
-                    } catch (Exception e) {
-                        LOG.error(
-                                "Fail to get partitions from zookeeper for table {}.",
-                                tableInfo.getTablePath(),
-                                e);
+                    if (isAuto) {
+                        // add auto partition name prefix to autoPartitionNamePrefixSet.
+                        Set<String> namePrefixes =
+                                autoPartitionNamePrefixMap.computeIfAbsent(
+                                        tableId, k -> new HashSet<>());
+                        namePrefixes.addAll(
+                                tableInfo
+                                        .getTableConfig()
+                                        .getAutoPartitionStrategy()
+                                        .partitionNamePrefixSet());
                     }
                 });
 
-        if (isAutoPartitionTable(tableInfo)) {
+        if (isAuto) {
             // schedule auto partition for this table immediately
             periodicExecutor.schedule(() -> doAutoPartition(tableId), 0, TimeUnit.MILLISECONDS);
         }
@@ -174,7 +205,14 @@ public class PartitionManager implements AutoCloseable {
                 () -> {
                     if (isAutoPartitionTable) {
                         autoPartitionTables.remove(tableId);
-                        partitionsForAutoPartitionTable.remove(tableId);
+
+                        Set<String> autoSpecSet = autoSpecForAutoPartitionTable.get(tableId);
+                        for (String autoSpec : autoSpecSet) {
+                            partitionsForAutoPartitionTable.remove(tableId + "-" + autoSpec);
+                        }
+                        autoSpecForAutoPartitionTable.remove(tableId);
+
+                        autoPartitionNamePrefixMap.remove(tableId);
                     } else {
                         partitionsForStaticPartitionTable.remove(tableId);
                     }
@@ -184,14 +222,49 @@ public class PartitionManager implements AutoCloseable {
     public void addPartition(
             TableInfo tableInfo, PartitionSpec partitionSpec, boolean ignoreIfExists) {
         checkNotClosed();
+        Tuple2<Boolean, String> tuple2 =
+                checkPartitionSpec(tableInfo, partitionSpec, tableInfo.isAutoPartitioned());
+        boolean isPartitionNamePrefix = tuple2.f0;
+        if (isPartitionNamePrefix) {
+            addAutoPartitionNamePrefix(tableInfo, tuple2.f1);
+        } else {
+            addPartition(tableInfo, tuple2.f1, ignoreIfExists);
+        }
+    }
 
+    public void dropPartition(
+            TableInfo tableInfo, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        checkNotClosed();
+        Tuple2<Boolean, String> tuple2 =
+                checkPartitionSpec(tableInfo, partitionSpec, tableInfo.isAutoPartitioned());
+        boolean isPartitionNamePrefix = tuple2.f0;
+        if (isPartitionNamePrefix) {
+            dropAutoPartitionNamePrefix(tableInfo, tuple2.f1);
+        } else {
+            dropPartition(tableInfo, tuple2.f1, ignoreIfNotExists);
+        }
+    }
+
+    private void checkNotClosed() {
+        if (isClosed.get()) {
+            throw new IllegalStateException("PartitionManager is already closed.");
+        }
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (isClosed.compareAndSet(false, true)) {
+            periodicExecutor.shutdownNow();
+        }
+    }
+
+    private void addPartition(TableInfo tableInfo, String partitionName, boolean ignoreIfExists) {
         long tableId = tableInfo.getTableId();
-        String partitionName = getPartitionName(tableInfo, partitionSpec);
         inLock(
                 lock,
                 () -> {
-                    Set<String> partitionSet = getOrCreatePartitionSet(tableInfo);
-                    if (partitionSet.contains(partitionName)) {
+                    if (containsPartition(
+                            tableInfo.getTableId(), isAuto(tableInfo), partitionName)) {
                         if (ignoreIfExists) {
                             return;
                         }
@@ -204,20 +277,18 @@ public class PartitionManager implements AutoCloseable {
 
                     registerPartitionToZk(
                             tableInfo.getTablePath(), tableId, tableInfo, partitionName);
-                    partitionSet.add(partitionName);
+
+                    addPartitionsToLocal(tableInfo, Collections.singleton(partitionName));
                 });
     }
 
-    public void dropPartition(
-            TableInfo tableInfo, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
-        checkNotClosed();
-
-        String partitionName = getPartitionName(tableInfo, partitionSpec);
+    private void dropPartition(
+            TableInfo tableInfo, String partitionName, boolean ignoreIfNotExists) {
         inLock(
                 lock,
                 () -> {
-                    Set<String> partitionSet = getOrCreatePartitionSet(tableInfo);
-                    if (!partitionSet.contains(partitionName)) {
+                    if (!containsPartition(
+                            tableInfo.getTableId(), isAuto(tableInfo), partitionName)) {
                         if (ignoreIfNotExists) {
                             return;
                         }
@@ -227,17 +298,181 @@ public class PartitionManager implements AutoCloseable {
                                         + "' does not exist for table "
                                         + tableInfo.getTablePath());
                     }
-                    try {
-                        zooKeeperClient.deletePartition(tableInfo.getTablePath(), partitionName);
-                    } catch (Exception e) {
-                        LOG.error(
-                                "Fail to delete partition '{}' from zookeeper for table {}.",
-                                partitionName,
-                                tableInfo.getTablePath(),
-                                e);
-                    }
-                    partitionSet.remove(partitionName);
+                    deletePartitionsFromZk(
+                            tableInfo.getTablePath(), Collections.singletonList(partitionName));
+                    removePartitionFromLocal(tableInfo, partitionName);
                 });
+    }
+
+    private void addAutoPartitionNamePrefix(TableInfo tableInfo, String autoPartitionNamePrefix) {
+        checkNotClosed();
+        long tableId = tableInfo.getTableId();
+        inLock(
+                lock,
+                () -> {
+                    Set<String> autoPartitionNamePrefixSet =
+                            autoPartitionNamePrefixMap.computeIfAbsent(
+                                    tableId, k -> new HashSet<>());
+                    if (!autoPartitionNamePrefixSet.contains(autoPartitionNamePrefix)) {
+                        autoPartitionNamePrefixSet.add(autoPartitionNamePrefix);
+
+                        // TODO, here we need to alter table config
+                        // 'TABLE_AUTO_PARTITION_PARTITION_NAME_PREFIX' while we add new
+                        // autoPartitionNamePrefix. See: https://github.com/alibaba/fluss/issues/380
+
+                        // For these existing auto spec, we need to create partitions.
+                        for (String autoSpec : autoSpecForAutoPartitionTable.get(tableId)) {
+                            addPartition(
+                                    tableInfo,
+                                    generateAutoPartitionName(autoPartitionNamePrefix, autoSpec),
+                                    true);
+                        }
+                    }
+                });
+    }
+
+    private void dropAutoPartitionNamePrefix(TableInfo tableInfo, String autoPartitionNamePrefix) {
+        checkNotClosed();
+        long tableId = tableInfo.getTableId();
+        inLock(
+                lock,
+                () -> {
+                    Set<String> autoPartitionNamePrefixSet =
+                            autoPartitionNamePrefixMap.computeIfAbsent(
+                                    tableId, k -> new HashSet<>());
+                    if (autoPartitionNamePrefixSet.contains(autoPartitionNamePrefix)) {
+                        autoPartitionNamePrefixSet.remove(autoPartitionNamePrefix);
+
+                        // TODO, here we need to alter table config
+                        // 'TABLE_AUTO_PARTITION_PARTITION_NAME_PREFIX' while we drop an exists
+                        // autoPartitionNamePrefix. See: https://github.com/alibaba/fluss/issues/380
+
+                        // For these existing auto spec, we need to drop these partitions.
+                        for (String autoSpec : autoSpecForAutoPartitionTable.get(tableId)) {
+                            dropPartition(
+                                    tableInfo,
+                                    generateAutoPartitionName(autoPartitionNamePrefix, autoSpec),
+                                    true);
+                        }
+                    }
+                });
+    }
+
+    /**
+     * Check if the table is auto partitioned.
+     *
+     * @param tableInfo the table info
+     * @return true if the table is auto partitioned, false otherwise
+     */
+    private boolean isAuto(TableInfo tableInfo) {
+        return tableInfo.isAutoPartitioned();
+    }
+
+    private boolean containsPartition(long tableId, boolean isAuto, String partitionName) {
+        if (isAuto) {
+            String specKey = tableId + "-" + extractAutoSpecFromPartitionName(partitionName);
+            if (partitionsForAutoPartitionTable.containsKey(specKey)) {
+                return partitionsForAutoPartitionTable.get(specKey).contains(partitionName);
+            } else {
+                return false;
+            }
+        } else {
+            Set<String> partitionSets =
+                    partitionsForStaticPartitionTable.computeIfAbsent(
+                            tableId, k -> new HashSet<>());
+            return partitionSets.contains(partitionName);
+        }
+    }
+
+    /**
+     * Add the partition names to local cache for static partition tables or auto partition tables.
+     */
+    private void addPartitionsToLocal(TableInfo tableInfo, Set<String> partitionNames) {
+        long tableId = tableInfo.getTableId();
+        if (isAuto(tableInfo)) {
+            autoPartitionTables.put(tableId, tableInfo);
+            Set<String> autoSpecSet =
+                    autoSpecForAutoPartitionTable.computeIfAbsent(
+                            tableInfo.getTableId(), k -> new TreeSet<>());
+            for (String partitionName : partitionNames) {
+                // 1. First add the auto spec to autoSpecForAutoPartitionTable.
+                String autoSpec = extractAutoSpecFromPartitionName(partitionName);
+                autoSpecSet.add(autoSpec);
+
+                // 2. Second add the partition to partitionsForAutoSpec.
+                Set<String> partitionSet =
+                        partitionsForAutoPartitionTable.computeIfAbsent(
+                                tableId + "-" + autoSpec, k -> new HashSet<>());
+                partitionSet.add(partitionName);
+            }
+        } else {
+            Set<String> partitionSet =
+                    partitionsForStaticPartitionTable.computeIfAbsent(
+                            tableInfo.getTableId(), k -> new HashSet<>());
+            partitionSet.addAll(partitionNames);
+        }
+    }
+
+    private void removePartitionFromLocal(TableInfo tableInfo, String partitionName) {
+        long tableId = tableInfo.getTableId();
+        if (isAuto(tableInfo)) {
+            String specKey = tableId + "-" + extractAutoSpecFromPartitionName(partitionName);
+            partitionsForAutoPartitionTable.get(specKey).remove(partitionName);
+        } else {
+            Set<String> partitionSet =
+                    partitionsForStaticPartitionTable.computeIfAbsent(
+                            tableInfo.getTableId(), k -> new HashSet<>());
+            partitionSet.remove(partitionName);
+        }
+    }
+
+    private Tuple2<Boolean, String> checkPartitionSpec(
+            TableInfo tableInfo, PartitionSpec partitionSpec, boolean isAuto) {
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+        Map<String, String> partitionSpecMap = partitionSpec.getPartitionSpec();
+
+        // check spec size.
+        boolean isPartitionNamePrefix = false;
+        if (partitionKeys.size() != partitionSpecMap.size()) {
+            if (!isAuto) {
+                throw new PartitionSpecInvalidException(
+                        String.format(
+                                "Partition spec size is not equal to partition keys size for static partitioned table %s.",
+                                tableInfo.getTablePath()));
+            } else {
+                if (partitionKeys.size() - 1 == partitionSpecMap.size()) {
+                    isPartitionNamePrefix = true;
+                } else {
+                    throw new PartitionSpecInvalidException(
+                            String.format(
+                                    "Partition spec is illegal for auto partitioned table %s. We only support partition "
+                                            + "spec matching as a prefix of the partition key or matching the "
+                                            + "partition key itself.",
+                                    tableInfo.getTablePath()));
+                }
+            }
+        }
+
+        List<String> reOrderedPartitionSpec = new ArrayList<>(partitionSpecMap.size());
+        List<String> keyList;
+        if (isPartitionNamePrefix) {
+            keyList = partitionKeys.subList(0, partitionKeys.size() - 1);
+        } else {
+            keyList = partitionKeys;
+        }
+        for (String partitionKey : keyList) {
+            if (!partitionSpecMap.containsKey(partitionKey)) {
+                throw new PartitionSpecInvalidException(
+                        String.format(
+                                "Partition spec does not contain partition key '"
+                                        + partitionKey
+                                        + "' for partitioned table %s.",
+                                tableInfo.getTablePath()));
+            } else {
+                reOrderedPartitionSpec.add(partitionSpecMap.get(partitionKey));
+            }
+        }
+        return Tuple2.of(isPartitionNamePrefix, getPartitionName(reOrderedPartitionSpec));
     }
 
     private void doAutoPartition() {
@@ -252,44 +487,134 @@ public class PartitionManager implements AutoCloseable {
         inLock(lock, () -> doAutoPartition(now, Collections.singleton(tableId)));
     }
 
-    private boolean isAutoPartitionTable(TableInfo tableInfo) {
-        return tableInfo.isAutoPartitioned();
-    }
-
-    private Set<String> getOrCreatePartitionSet(TableInfo tableInfo) {
-        if (isAutoPartitionTable(tableInfo)) {
-            return partitionsForAutoPartitionTable.computeIfAbsent(
-                    tableInfo.getTableId(), k -> new TreeSet<>());
-        } else {
-            return partitionsForStaticPartitionTable.computeIfAbsent(
-                    tableInfo.getTableId(), k -> new HashSet<>());
+    private void doAutoPartition(Instant now, Set<Long> tableIds) {
+        for (Long tableId : tableIds) {
+            TableInfo tableInfo = autoPartitionTables.get(tableId);
+            TreeSet<String> autoSpecs =
+                    autoSpecForAutoPartitionTable.computeIfAbsent(tableId, k -> new TreeSet<>());
+            autoDropPartitions(
+                    tableInfo.getPartitionKeys(),
+                    tableInfo.getTableId(),
+                    tableInfo.getTablePath(),
+                    now,
+                    tableInfo.getTableConfig().getAutoPartitionStrategy(),
+                    autoSpecs);
+            autoCreatePartitions(tableInfo, now, autoSpecs);
         }
     }
 
-    private String getPartitionName(TableInfo tableInfo, PartitionSpec partitionSpec) {
+    private void autoCreatePartitions(
+            TableInfo tableInfo, Instant currentInstant, TreeSet<String> currentAutoSpecs) {
+        // get the auto specs needed to create
+        List<String> autoSpecToPreCreate =
+                autoSpecsToPreCreate(
+                        currentInstant,
+                        tableInfo.getTableConfig().getAutoPartitionStrategy(),
+                        currentAutoSpecs);
+        if (autoSpecToPreCreate.isEmpty()) {
+            return;
+        }
+
+        long tableId = tableInfo.getTableId();
         List<String> partitionKeys = tableInfo.getPartitionKeys();
-        Map<String, String> partitionSpecMap = partitionSpec.getPartitionSpec();
-        if (partitionKeys.size() != partitionSpecMap.size()) {
-            throw new PartitionSpecInvalidException(
-                    String.format(
-                            "Partition spec size is not equal to partition keys size for partitioned table %s.",
-                            tableInfo.getTablePath()));
-        }
-        List<String> reOrderedPartitionValue = new ArrayList<>(partitionKeys.size());
-        for (String partitionKey : partitionKeys) {
-            if (!partitionSpecMap.containsKey(partitionKey)) {
-                throw new PartitionSpecInvalidException(
-                        String.format(
-                                "Partition spec does not contain partition key '"
-                                        + partitionKey
-                                        + "' for partitioned table %s.",
-                                tableInfo.getTablePath()));
+
+        TablePath tablePath = tableInfo.getTablePath();
+        List<String> partitionNames = new ArrayList<>();
+        Set<String> partitionNamePrefixSet = autoPartitionNamePrefixMap.get(tableId);
+        for (String autoSpec : autoSpecToPreCreate) {
+            Set<String> partitionSets =
+                    partitionsForAutoPartitionTable.computeIfAbsent(
+                            tableId + "-" + autoSpec, k -> new HashSet<>());
+            if (partitionKeys.size() > 1) {
+                for (String partitionNamePrefix : partitionNamePrefixSet) {
+                    String partitionName = generateAutoPartitionName(partitionNamePrefix, autoSpec);
+                    registerPartitionToZk(tablePath, tableId, tableInfo, partitionName);
+                    partitionSets.add(partitionName);
+                    partitionNames.add(partitionName);
+                }
             } else {
-                reOrderedPartitionValue.add(partitionSpecMap.get(partitionKey));
+                registerPartitionToZk(tablePath, tableId, tableInfo, autoSpec);
+                partitionSets.add(autoSpec);
+                partitionNames.add(autoSpec);
+            }
+            currentAutoSpecs.add(autoSpec);
+        }
+        LOG.info(
+                "Auto partitioning created partition {} for table [{}].",
+                partitionNames,
+                tablePath);
+    }
+
+    private List<String> autoSpecsToPreCreate(
+            Instant currentInstant,
+            AutoPartitionStrategy autoPartitionStrategy,
+            TreeSet<String> currentAutoSpecs) {
+        AutoPartitionTimeUnit autoPartitionTimeUnit = autoPartitionStrategy.timeUnit();
+        ZonedDateTime currentZonedDateTime =
+                ZonedDateTime.ofInstant(
+                        currentInstant, autoPartitionStrategy.timeZone().toZoneId());
+
+        int autoSpecToPreCreate = autoPartitionStrategy.numPreCreate();
+        List<String> autoSpecsToCreate = new ArrayList<>();
+        for (int idx = 0; idx < autoSpecToPreCreate; idx++) {
+            String autoSpec = generateAutoSpec(currentZonedDateTime, idx, autoPartitionTimeUnit);
+            // if the autoSpec already exists, we don't need to create it,
+            // otherwise, create it
+            if (!currentAutoSpecs.contains(autoSpec)) {
+                autoSpecsToCreate.add(autoSpec);
             }
         }
-        return PartitionUtils.getPartitionName(partitionKeys, reOrderedPartitionValue);
+        return autoSpecsToCreate;
     }
+
+    private void autoDropPartitions(
+            List<String> partitionKeys,
+            long tableId,
+            TablePath tablePath,
+            Instant currentInstant,
+            AutoPartitionStrategy autoPartitionStrategy,
+            NavigableSet<String> currentAutoSpecs) {
+        int numToRetain = autoPartitionStrategy.numToRetain();
+        // negative value means not to drop partitions
+        if (numToRetain < 0) {
+            return;
+        }
+
+        ZonedDateTime currentZonedDateTime =
+                ZonedDateTime.ofInstant(
+                        currentInstant, autoPartitionStrategy.timeZone().toZoneId());
+
+        // get the earliest one auto spec that need to retain
+        String lastRetainAutoSpec =
+                generateAutoSpec(
+                        currentZonedDateTime, -numToRetain, autoPartitionStrategy.timeUnit());
+
+        Iterator<String> autoSpecsToExpire =
+                currentAutoSpecs.headSet(lastRetainAutoSpec, false).iterator();
+
+        while (autoSpecsToExpire.hasNext()) {
+            String autoSpec = autoSpecsToExpire.next();
+            List<String> partitionNames = new ArrayList<>();
+            if (partitionKeys.size() > 1) {
+                partitionNames.addAll(
+                        partitionsForAutoPartitionTable.get(tableId + "-" + autoSpec));
+            } else {
+                partitionNames.add(autoSpec);
+            }
+
+            deletePartitionsFromZk(tablePath, partitionNames);
+            autoSpecsToExpire.remove();
+            partitionsForAutoPartitionTable.remove(tableId + "-" + autoSpec);
+            LOG.info(
+                    "Auto partitioning deleted partition {} for table [{}].",
+                    partitionNames,
+                    tablePath);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Zk related
+    // ------------------------------------------------------------------------------------------
 
     private void registerPartitionToZk(
             TablePath tablePath, long tableId, TableInfo tableInfo, String partitionName) {
@@ -325,137 +650,27 @@ public class PartitionManager implements AutoCloseable {
         zooKeeperClient.registerPartitionAssignment(partitionId, partitionAssignment);
     }
 
-    private void doAutoPartition(Instant now, Set<Long> tableIds) {
-        for (Long tableId : tableIds) {
-            TreeSet<String> currentPartitions =
-                    partitionsForAutoPartitionTable.computeIfAbsent(tableId, k -> new TreeSet<>());
-            TableInfo tableInfo = autoPartitionTables.get(tableId);
-            autoDropPartitions(
-                    tableInfo.getPartitionKeys(),
-                    tableInfo.getTablePath(),
-                    now,
-                    tableInfo.getTableConfig().getAutoPartitionStrategy(),
-                    currentPartitions);
-            autoCreatePartitions(tableInfo, now, currentPartitions);
+    private Set<String> getPartitionsFromZk(TablePath tablePath) {
+        Set<String> existsPartitions = new HashSet<>();
+        try {
+            existsPartitions.addAll(zooKeeperClient.getPartitions(tablePath));
+        } catch (Exception e) {
+            LOG.error("Fail to get partitions from zookeeper for table {}.", tablePath, e);
         }
+        return existsPartitions;
     }
 
-    private void autoCreatePartitions(
-            TableInfo tableInfo, Instant currentInstant, TreeSet<String> currentPartitions) {
-        // get the partitions needed to create
-        List<String> partitionsToPreCreate =
-                autoPartitionNamesToPreCreate(
-                        tableInfo.getPartitionKeys(),
-                        currentInstant,
-                        tableInfo.getTableConfig().getAutoPartitionStrategy(),
-                        currentPartitions);
-        if (partitionsToPreCreate.isEmpty()) {
-            return;
-        }
-
-        TablePath tablePath = tableInfo.getTablePath();
-        for (String partitionName : partitionsToPreCreate) {
-            long tableId = tableInfo.getTableId();
-            try {
-                registerPartitionToZk(tablePath, tableId, tableInfo, partitionName);
-                currentPartitions.add(partitionName);
-                LOG.info(
-                        "Auto partitioning created partition {} for table [{}].",
-                        partitionName,
-                        tablePath);
-            } catch (Exception e) {
-                LOG.error(
-                        "Auto partitioning failed to create partition {} for table [{}]",
-                        partitionName,
-                        tablePath,
-                        e);
-            }
-        }
-    }
-
-    private List<String> autoPartitionNamesToPreCreate(
-            List<String> partitionKeys,
-            Instant currentInstant,
-            AutoPartitionStrategy autoPartitionStrategy,
-            TreeSet<String> currentPartitions) {
-        AutoPartitionTimeUnit autoPartitionTimeUnit = autoPartitionStrategy.timeUnit();
-        ZonedDateTime currentZonedDateTime =
-                ZonedDateTime.ofInstant(
-                        currentInstant, autoPartitionStrategy.timeZone().toZoneId());
-
-        int partitionToPreCreate = autoPartitionStrategy.numPreCreate();
-        List<String> partitionsToCreate = new ArrayList<>();
-        for (int idx = 0; idx < partitionToPreCreate; idx++) {
-            String partition =
-                    generateAutoPartitionName(
-                            partitionKeys, currentZonedDateTime, idx, autoPartitionTimeUnit);
-            // if the partition already exists, we don't need to create it,
-            // otherwise, create it
-            if (!currentPartitions.contains(partition)) {
-                partitionsToCreate.add(partition);
-            }
-        }
-        return partitionsToCreate;
-    }
-
-    private void autoDropPartitions(
-            List<String> partitionKeys,
-            TablePath tablePath,
-            Instant currentInstant,
-            AutoPartitionStrategy autoPartitionStrategy,
-            NavigableSet<String> currentPartitions) {
-        int numToRetain = autoPartitionStrategy.numToRetain();
-        // negative value means not to drop partitions
-        if (numToRetain < 0) {
-            return;
-        }
-
-        ZonedDateTime currentZonedDateTime =
-                ZonedDateTime.ofInstant(
-                        currentInstant, autoPartitionStrategy.timeZone().toZoneId());
-
-        // get the earliest one partition that need to retain
-        String lastRetainPartitionName =
-                generateAutoPartitionName(
-                        partitionKeys,
-                        currentZonedDateTime,
-                        -numToRetain,
-                        autoPartitionStrategy.timeUnit());
-
-        Iterator<String> partitionsToExpire =
-                currentPartitions.headSet(lastRetainPartitionName, false).iterator();
-
-        while (partitionsToExpire.hasNext()) {
-            String partitionName = partitionsToExpire.next();
-            // drop the partition
+    private void deletePartitionsFromZk(TablePath tablePath, List<String> partitionNames) {
+        for (String partitionName : partitionNames) {
             try {
                 zooKeeperClient.deletePartition(tablePath, partitionName);
-                // only remove when zk success, this reflects to the partitionsByTable
-                partitionsToExpire.remove();
-                LOG.info(
-                        "Auto partitioning deleted partition {} for table [{}].",
-                        partitionName,
-                        tablePath);
             } catch (Exception e) {
                 LOG.error(
-                        "Auto partitioning failed to delete partition {} for table [{}]",
+                        "Fail to delete partition '{}' from zookeeper for table {}.",
                         partitionName,
                         tablePath,
                         e);
             }
-        }
-    }
-
-    private void checkNotClosed() {
-        if (isClosed.get()) {
-            throw new IllegalStateException("PartitionManager is already closed.");
-        }
-    }
-
-    @Override
-    public void close() throws Exception {
-        if (isClosed.compareAndSet(false, true)) {
-            periodicExecutor.shutdownNow();
         }
     }
 }

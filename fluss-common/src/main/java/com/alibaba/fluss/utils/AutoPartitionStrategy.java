@@ -20,7 +20,12 @@ import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 
+import javax.annotation.Nullable;
+
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 
 /** A class wrapping the strategy for auto partition. */
@@ -31,18 +36,21 @@ public class AutoPartitionStrategy {
     private final int numPreCreate;
     private final int numToRetain;
     private final TimeZone timeZone;
+    private @Nullable final String partitionNamePrefix;
 
     private AutoPartitionStrategy(
             boolean autoPartitionEnable,
             AutoPartitionTimeUnit autoPartitionTimeUnit,
             int numPreCreate,
             int numToRetain,
-            TimeZone timeZone) {
+            TimeZone timeZone,
+            @Nullable String partitionNamePrefix) {
         this.autoPartitionEnable = autoPartitionEnable;
         this.timeUnit = autoPartitionTimeUnit;
         this.numPreCreate = numPreCreate;
         this.numToRetain = numToRetain;
         this.timeZone = timeZone;
+        this.partitionNamePrefix = partitionNamePrefix;
     }
 
     public static AutoPartitionStrategy from(Map<String, String> options) {
@@ -55,7 +63,8 @@ public class AutoPartitionStrategy {
                 conf.get(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION),
-                TimeZone.getTimeZone(conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE)));
+                TimeZone.getTimeZone(conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE)),
+                conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_PARTITION_NAME_PREFIX, null));
     }
 
     public boolean isAutoPartitionEnabled() {
@@ -76,5 +85,18 @@ public class AutoPartitionStrategy {
 
     public TimeZone timeZone() {
         return timeZone;
+    }
+
+    public @Nullable String partitionNamePrefix() {
+        return partitionNamePrefix;
+    }
+
+    public Set<String> partitionNamePrefixSet() {
+        Set<String> partitionNamePrefixSet = new HashSet<>();
+        if (partitionNamePrefix != null) {
+            String[] partitionNamePrefixes = partitionNamePrefix.split(";");
+            partitionNamePrefixSet.addAll(Arrays.asList(partitionNamePrefixes));
+        }
+        return partitionNamePrefixSet;
     }
 }
