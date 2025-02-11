@@ -24,7 +24,7 @@ import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.ThreadSafeSimpleCounter;
 import com.alibaba.fluss.metrics.groups.AbstractMetricGroup;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 
 import java.util.Map;
 
@@ -34,7 +34,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private static final String NAME = "tabletserver";
 
     private final Map<PhysicalTablePath, PhysicalTableMetricGroup> metricGroupByPhysicalTable =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+            MapUtils.newConcurrentHashMap();
 
     protected final String clusterId;
     protected final String hostname;

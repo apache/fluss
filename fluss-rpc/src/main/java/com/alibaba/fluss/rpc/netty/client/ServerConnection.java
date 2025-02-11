@@ -35,7 +35,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,8 +59,7 @@ final class ServerConnection {
     private final ServerNode node;
 
     // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
-    private final Map<Integer, InflightRequest> inflightRequests =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+    private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
 

@@ -20,8 +20,8 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.local.LocalDataOutputStream;
 import com.alibaba.fluss.fs.local.LocalFileStatus;
 import com.alibaba.fluss.fs.local.LocalFileSystem;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.Preconditions;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
 
 import java.io.IOException;
 import java.net.URI;
@@ -41,7 +41,7 @@ public class TestFileSystem extends LocalFileSystem {
 
     // current number of created, unclosed (output) stream
     private static final Map<FsPath, Integer> currentUnclosedOutputStream =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+            MapUtils.newConcurrentHashMap();
 
     public static int getNumtimeStreamOpened() {
         return streamOpenCounter.get();

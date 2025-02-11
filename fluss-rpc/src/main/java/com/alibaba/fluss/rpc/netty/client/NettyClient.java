@@ -29,7 +29,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -72,7 +72,7 @@ public final class NettyClient implements RpcClient {
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
-        this.connections = ConcurrentHashMapUtils.newConcurrentHashMap();
+        this.connections = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
         this.eventGroup =

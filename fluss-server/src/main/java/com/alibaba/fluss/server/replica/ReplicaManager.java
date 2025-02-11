@@ -97,9 +97,9 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.clock.Clock;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -145,8 +145,7 @@ public class ReplicaManager {
     private final OffsetCheckpointFile highWatermarkCheckpoint;
 
     @GuardedBy("replicaStateChangeLock")
-    private final Map<TableBucket, HostedReplica> allReplicas =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
     private final ServerMetadataCache metadataCache;
     private final Lock replicaStateChangeLock = new ReentrantLock();

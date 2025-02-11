@@ -25,7 +25,7 @@ import com.alibaba.fluss.metrics.groups.AbstractMetricGroup;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
@@ -44,8 +44,7 @@ public class ConnectionMetricGroup extends AbstractMetricGroup {
     private final String serverId;
 
     /** Metrics for different request/response metrics with specify {@link ApiKeys}. */
-    private final Map<String, Metrics> metricsByRequestName =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+    private final Map<String, Metrics> metricsByRequestName = MapUtils.newConcurrentHashMap();
 
     public ConnectionMetricGroup(
             MetricRegistry registry, String serverId, ClientMetricGroup parent) {

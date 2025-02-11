@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.kv.snapshot;
 
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 
 import java.time.Duration;
 import java.util.Deque;
@@ -34,7 +34,7 @@ import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotCommitter {
 
     protected final Map<TableBucket, Deque<CompletedSnapshot>> snapshots =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+            MapUtils.newConcurrentHashMap();
 
     @Override
     public void commitKvSnapshot(

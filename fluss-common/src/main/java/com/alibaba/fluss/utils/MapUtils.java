@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils.concurrent;
+package com.alibaba.fluss.utils;
 
 import org.apache.commons.lang3.JavaVersion;
 import org.apache.commons.lang3.SystemUtils;
 
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
-/** Utilities that expand the usage of {@link ConcurrentHashMap}. */
-public class ConcurrentHashMapUtils {
+/** Utilities that expand the usage of {@link Map}. */
+public class MapUtils {
 
     public static <K, V> ConcurrentHashMap<K, V> newConcurrentHashMap() {
         if (SystemUtils.isJavaVersionAtLeast(JavaVersion.JAVA_9)) {

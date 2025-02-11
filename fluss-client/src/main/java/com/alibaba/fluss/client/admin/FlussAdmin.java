@@ -61,7 +61,7 @@ import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
@@ -332,8 +332,7 @@ public class FlussAdmin implements Admin {
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
                         metadataUpdater, tableId, partitionId, buckets, offsetSpec);
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap =
-                ConcurrentHashMapUtils.newConcurrentHashMap();
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
         }

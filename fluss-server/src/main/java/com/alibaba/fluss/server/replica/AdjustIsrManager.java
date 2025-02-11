@@ -26,7 +26,7 @@ import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -60,7 +60,7 @@ public class AdjustIsrManager {
 
     /** Used to allow only one pending adjust Isr request per bucket (visible for testing). */
     protected final Map<TableBucket, AdjustIsrItem> unsentAdjustIsrMap =
-            ConcurrentHashMapUtils.newConcurrentHashMap();
+            MapUtils.newConcurrentHashMap();
 
     /** Used to allow only one in-flight request at a time. */
     private final AtomicBoolean inflightRequest = new AtomicBoolean(false);

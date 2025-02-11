@@ -21,8 +21,8 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.server.utils.timer.DefaultTimer;
 import com.alibaba.fluss.server.utils.timer.Timer;
 import com.alibaba.fluss.server.utils.timer.TimerTask;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.Preconditions;
-import com.alibaba.fluss.utils.concurrent.ConcurrentHashMapUtils;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -235,7 +235,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         private final Lock watcherLock;
 
         public WatcherList() {
-            this.watchersByKey = ConcurrentHashMapUtils.newConcurrentHashMap();
+            this.watchersByKey = MapUtils.newConcurrentHashMap();
             this.watcherLock = new ReentrantLock();
         }
 
