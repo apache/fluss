@@ -131,12 +131,11 @@ public class FlinkConversions {
         // deserialize watermark
         CatalogPropertiesUtils.deserializeWatermark(newOptions, schemaBuilder);
 
-        return CatalogTable.newBuilder()
-                .schema(schemaBuilder.build())
-                .comment(tableInfo.getComment().orElse(null))
-                .partitionKeys(tableInfo.getPartitionKeys())
-                .options(CatalogPropertiesUtils.deserializeOptions(newOptions))
-                .build();
+        return CatalogTable.of(
+                schemaBuilder.build(),
+                tableInfo.getComment().orElse(null),
+                tableInfo.getPartitionKeys(),
+                CatalogPropertiesUtils.deserializeOptions(newOptions));
     }
 
     /** Convert Flink's table to Fluss's table. */
