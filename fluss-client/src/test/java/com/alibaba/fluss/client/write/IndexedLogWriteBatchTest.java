@@ -19,8 +19,8 @@ package com.alibaba.fluss.client.write;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.DefaultLogRecord;
 import com.alibaba.fluss.record.DefaultLogRecordBatch;
+import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
@@ -52,7 +52,7 @@ public class IndexedLogWriteBatchTest {
     @BeforeEach
     void setup() {
         row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        estimatedSizeInBytes = DefaultLogRecord.sizeOf(row);
+        estimatedSizeInBytes = IndexedLogRecord.sizeOf(row);
     }
 
     @Test

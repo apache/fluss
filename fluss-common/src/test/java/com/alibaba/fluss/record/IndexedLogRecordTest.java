@@ -29,8 +29,8 @@ import java.io.IOException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link DefaultLogRecord}. */
-class DefaultLogRecordTest extends LogTestBase {
+/** Test for {@link IndexedLogRecord}. */
+class IndexedLogRecordTest extends LogTestBase {
 
     @Test
     void testBase() throws IOException {
@@ -43,10 +43,10 @@ class DefaultLogRecordTest extends LogTestBase {
         writer.writeString(BinaryString.fromString("abc"));
         row.pointTo(writer.segment(), 0, writer.position());
 
-        DefaultLogRecord.writeTo(outputView, RowKind.APPEND_ONLY, row);
+        IndexedLogRecord.writeTo(outputView, RowKind.APPEND_ONLY, row);
         // Test read from.
-        DefaultLogRecord defaultLogRecord =
-                DefaultLogRecord.readFrom(
+        IndexedLogRecord defaultLogRecord =
+                IndexedLogRecord.readFrom(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()),
                         0,
                         1000,
@@ -64,13 +64,13 @@ class DefaultLogRecordTest extends LogTestBase {
     void testWriteToAndReadFromWithRandomData() throws IOException {
         // Test write to.
         IndexedRow row = TestInternalRowGenerator.genIndexedRowForAllType();
-        DefaultLogRecord.writeTo(outputView, RowKind.APPEND_ONLY, row);
+        IndexedLogRecord.writeTo(outputView, RowKind.APPEND_ONLY, row);
         DataType[] allColTypes =
                 TestInternalRowGenerator.createAllRowType().getChildren().toArray(new DataType[0]);
 
         // Test read from.
         LogRecord defaultLogRecord =
-                DefaultLogRecord.readFrom(
+                IndexedLogRecord.readFrom(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()),
                         0,
                         1000,

@@ -36,7 +36,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
- * This class is an immutable kv record. Different from {@link DefaultLogRecord}, it isn't designed
+ * This class is an immutable kv record. Different from {@link IndexedLogRecord}, it isn't designed
  * for persistence. The schema is as follows:
  *
  * <ul>

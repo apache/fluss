@@ -54,8 +54,7 @@ import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
  * @since 0.1
  */
 @PublicEvolving
-// TODO: should rename to IndexedLogRecord as it only indexed row?
-public class DefaultLogRecord implements LogRecord {
+public class IndexedLogRecord implements LogRecord {
 
     private static final int ATTRIBUTES_LENGTH = 1;
 
@@ -67,7 +66,7 @@ public class DefaultLogRecord implements LogRecord {
     private int offset;
     private int sizeInBytes;
 
-    DefaultLogRecord(long logOffset, long timestamp, DataType[] fieldTypes) {
+    IndexedLogRecord(long logOffset, long timestamp, DataType[] fieldTypes) {
         this.logOffset = logOffset;
         this.fieldTypes = fieldTypes;
         this.timestamp = timestamp;
@@ -93,7 +92,7 @@ public class DefaultLogRecord implements LogRecord {
             return false;
         }
 
-        DefaultLogRecord that = (DefaultLogRecord) o;
+        IndexedLogRecord that = (IndexedLogRecord) o;
         return sizeInBytes == that.sizeInBytes
                 && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
     }
@@ -149,14 +148,14 @@ public class DefaultLogRecord implements LogRecord {
         return sizeInBytes + LENGTH_LENGTH;
     }
 
-    public static DefaultLogRecord readFrom(
+    public static IndexedLogRecord readFrom(
             MemorySegment segment,
             int position,
             long logOffset,
             long logTimestamp,
             DataType[] colTypes) {
         int sizeInBytes = segment.getInt(position);
-        DefaultLogRecord logRecord = new DefaultLogRecord(logOffset, logTimestamp, colTypes);
+        IndexedLogRecord logRecord = new IndexedLogRecord(logOffset, logTimestamp, colTypes);
         logRecord.pointTo(segment, position, sizeInBytes + LENGTH_LENGTH);
         return logRecord;
     }

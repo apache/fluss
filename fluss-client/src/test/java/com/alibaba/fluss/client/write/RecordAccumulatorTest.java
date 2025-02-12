@@ -31,7 +31,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.DefaultKvRecord;
-import com.alibaba.fluss.record.DefaultLogRecord;
+import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
@@ -391,7 +391,7 @@ public class RecordAccumulatorTest {
     void testPartialDrain() throws Exception {
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         RecordAccumulator accum = createTestRecordAccumulator(1024, 10L * 1024);
-        int appends = 1024 / DefaultLogRecord.sizeOf(row) + 1;
+        int appends = 1024 / IndexedLogRecord.sizeOf(row) + 1;
         List<TableBucket> buckets = Arrays.asList(tb1, tb2);
         for (TableBucket tb : buckets) {
             for (int i = 0; i < appends; i++) {
@@ -597,7 +597,7 @@ public class RecordAccumulatorTest {
         int size = RECORD_BATCH_HEADER_SIZE;
         int offsetDelta = 0;
         while (true) {
-            int recordSize = DefaultLogRecord.sizeOf(row);
+            int recordSize = IndexedLogRecord.sizeOf(row);
             if (size + recordSize > batchSize) {
                 return offsetDelta;
             }

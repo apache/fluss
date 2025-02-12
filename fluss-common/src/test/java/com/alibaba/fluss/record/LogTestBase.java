@@ -83,8 +83,8 @@ public abstract class LogTestBase {
                 CloseableIterator<LogRecord> expectIter = expected.records(readContext)) {
             int i = 0;
             while (actualIter.hasNext() && expectIter.hasNext()) {
-                DefaultLogRecord actualRecord = (DefaultLogRecord) actualIter.next();
-                DefaultLogRecord expectedRecord = (DefaultLogRecord) expectIter.next();
+                IndexedLogRecord actualRecord = (IndexedLogRecord) actualIter.next();
+                IndexedLogRecord expectedRecord = (IndexedLogRecord) expectIter.next();
                 assertIndexedRecordEquals(actualRecord, expectedRecord, rows.get(i), i);
                 i++;
             }

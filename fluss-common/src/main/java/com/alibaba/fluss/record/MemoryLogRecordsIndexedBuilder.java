@@ -109,7 +109,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
      * appended, then this returns true.
      */
     public boolean hasRoomFor(IndexedRow row) {
-        return sizeInBytes + DefaultLogRecord.sizeOf(row) <= writeLimit;
+        return sizeInBytes + IndexedLogRecord.sizeOf(row) <= writeLimit;
     }
 
     public void append(RowKind rowKind, IndexedRow row) throws Exception {
@@ -122,7 +122,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
                     "Tried to append a record, but MemoryLogRecordsBuilder is closed for record appends");
         }
 
-        int recordByteSizes = DefaultLogRecord.writeTo(pagedOutputView, rowKind, row);
+        int recordByteSizes = IndexedLogRecord.writeTo(pagedOutputView, rowKind, row);
         currentRecordNumber++;
         sizeInBytes += recordByteSizes;
     }

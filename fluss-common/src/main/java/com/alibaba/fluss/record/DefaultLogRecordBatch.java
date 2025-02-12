@@ -280,8 +280,8 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
             @Override
             protected LogRecord readNext(long baseOffset) {
-                DefaultLogRecord logRecord =
-                        DefaultLogRecord.readFrom(
+                IndexedLogRecord logRecord =
+                        IndexedLogRecord.readFrom(
                                 segment, position, baseOffset + rowId, timestamp, fieldTypes);
                 rowId++;
                 position += logRecord.getSizeInBytes();
