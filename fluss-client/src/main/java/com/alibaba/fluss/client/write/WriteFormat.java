@@ -16,7 +16,10 @@
 
 package com.alibaba.fluss.client.write;
 
+import com.alibaba.fluss.annotation.Internal;
+
 /** The format of the write record. */
+@Internal
 public enum WriteFormat {
     ARROW_LOG,
     INDEXED_LOG,
