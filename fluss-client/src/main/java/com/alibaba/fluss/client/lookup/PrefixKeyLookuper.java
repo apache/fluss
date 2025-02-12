@@ -54,8 +54,6 @@ class PrefixKeyLookuper implements Lookuper {
     /** Extract bucket key from prefix lookup key row. */
     private final KeyEncoder bucketKeyEncoder;
 
-    private final boolean isDataLakeEnable;
-
     private final int numBuckets;
 
     private final LakeTableBucketAssigner lakeTableBucketAssigner;
@@ -84,9 +82,15 @@ class PrefixKeyLookuper implements Lookuper {
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
         this.bucketKeyEncoder =
                 KeyEncoder.createKeyEncoder(lookupRowType, tableInfo.getBucketKeys());
-        this.isDataLakeEnable = tableInfo.getTableConfig().isDataLakeEnabled();
-        this.lakeTableBucketAssigner =
-                new LakeTableBucketAssigner(lookupRowType, tableInfo.getBucketKeys(), numBuckets);
+
+        if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+            this.lakeTableBucketAssigner =
+                    new LakeTableBucketAssigner(
+                            lookupRowType, tableInfo.getBucketKeys(), numBuckets);
+        } else {
+            this.lakeTableBucketAssigner = null;
+        }
+
         this.partitionGetter =
                 tableInfo.isPartitioned()
                         ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
@@ -154,7 +158,6 @@ class PrefixKeyLookuper implements Lookuper {
                         bucketKeyBytes,
                         prefixKey,
                         lakeTableBucketAssigner,
-                        isDataLakeEnable,
                         numBuckets,
                         metadataUpdater);
 
