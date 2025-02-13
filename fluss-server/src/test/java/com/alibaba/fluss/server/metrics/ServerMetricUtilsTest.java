@@ -42,10 +42,16 @@ import java.util.Map;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.MEMORY_COMMITTED;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.MEMORY_MAX;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.MEMORY_USED;
+import static com.alibaba.fluss.server.metrics.ServerMetricUtils.THREAD_COUNT;
+import static com.alibaba.fluss.server.metrics.ServerMetricUtils.THREAD_DAEMON_COUNT;
+import static com.alibaba.fluss.server.metrics.ServerMetricUtils.THREAD_DEADLOCK_COUNT;
+import static com.alibaba.fluss.server.metrics.ServerMetricUtils.THREAD_PEAK_COUNT;
+import static com.alibaba.fluss.server.metrics.ServerMetricUtils.THREAD_TOTAL_STARTED_COUNT;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.instantiateGarbageCollectorMetrics;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.instantiateHeapMemoryMetrics;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.instantiateMetaspaceMemoryMetrics;
 import static com.alibaba.fluss.server.metrics.ServerMetricUtils.instantiateNonHeapMemoryMetrics;
+import static com.alibaba.fluss.server.metrics.ServerMetricUtils.instantiateThreadMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 
@@ -192,6 +198,19 @@ public class ServerMetricUtilsTest {
         final Gauge<Long> used = (Gauge<Long>) nonHeapMetrics.get(MEMORY_USED);
 
         runUntilMetricChanged("Non-heap", 10, ServerMetricUtilsTest::redefineDummyClass, used);
+    }
+
+    @Test
+    void testThreadMetricsCompleteness() {
+        final InterceptingMetricGroup threadMetrics = new InterceptingMetricGroup();
+
+        instantiateThreadMetrics(threadMetrics);
+
+        assertThat(threadMetrics.get(THREAD_COUNT)).isNotNull();
+        assertThat(threadMetrics.get(THREAD_DAEMON_COUNT)).isNotNull();
+        assertThat(threadMetrics.get(THREAD_PEAK_COUNT)).isNotNull();
+        assertThat(threadMetrics.get(THREAD_TOTAL_STARTED_COUNT)).isNotNull();
+        assertThat(threadMetrics.get(THREAD_DEADLOCK_COUNT)).isNotNull();
     }
 
     // --------------- utility methods and classes ---------------
