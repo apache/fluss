@@ -28,7 +28,7 @@ import com.alibaba.fluss.server.exception.FlussParseException;
 import com.alibaba.fluss.server.tablet.TabletServer;
 import com.alibaba.fluss.server.utils.ConfigurationParserUtils;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.server.utils.ShutdownHookUtil;
+import com.alibaba.fluss.server.utils.ShutdownHookUtils;
 import com.alibaba.fluss.utils.AutoCloseableAsync;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
@@ -134,7 +134,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
 
     private void addShutDownHook() {
         shutDownHook =
-                ShutdownHookUtil.addShutdownHook(
+                ShutdownHookUtils.addShutdownHook(
                         () -> this.closeAsync(Result.JVM_SHUTDOWN).join(), getServerName(), LOG);
     }
 
@@ -161,7 +161,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
 
     @Override
     public CompletableFuture<Void> closeAsync() {
-        ShutdownHookUtil.removeShutdownHook(shutDownHook, getServerName(), LOG);
+        ShutdownHookUtils.removeShutdownHook(shutDownHook, getServerName(), LOG);
         return closeAsync(Result.SUCCESS).thenAccept(ignored -> {});
     }
 

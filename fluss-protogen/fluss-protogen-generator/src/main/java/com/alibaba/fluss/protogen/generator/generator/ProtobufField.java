@@ -32,7 +32,7 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
     protected ProtobufField(FieldType field, int index, boolean isErrorField) {
         this.field = field;
         this.index = index;
-        this.ccName = ProtoGenUtil.camelCase(field.getName());
+        this.ccName = ProtoGenUtils.camelCase(field.getName());
         this.isErrorField = isErrorField;
     }
 
@@ -111,7 +111,8 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
         if (isErrorField) {
             w.format("        @Override\n");
         }
-        w.format("        public boolean %s() {\n", ProtoGenUtil.camelCase("has", field.getName()));
+        w.format(
+                "        public boolean %s() {\n", ProtoGenUtils.camelCase("has", field.getName()));
         w.format("            return (_bitField%d & %s) != 0;\n", bitFieldIndex(), fieldMask());
         w.format("        }\n");
     }
@@ -124,7 +125,7 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
         }
         w.format(
                 "        public %s %s() {\n",
-                enclosingType, ProtoGenUtil.camelCase("clear", field.getName()));
+                enclosingType, ProtoGenUtils.camelCase("clear", field.getName()));
         w.format("            _bitField%d &= ~%s;\n", bitFieldIndex(), fieldMask());
         clear(w);
         w.format("            return this;\n");
@@ -156,15 +157,15 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
     protected abstract String typeTag();
 
     protected String tagName() {
-        return "_" + ProtoGenUtil.upperCase(field.getName(), "tag");
+        return "_" + ProtoGenUtils.upperCase(field.getName(), "tag");
     }
 
     protected String fieldNumber() {
-        return "_" + ProtoGenUtil.upperCase(field.getName(), "fieldNumber");
+        return "_" + ProtoGenUtils.upperCase(field.getName(), "fieldNumber");
     }
 
     protected String fieldMask() {
-        return "_" + ProtoGenUtil.upperCase(field.getName(), "mask");
+        return "_" + ProtoGenUtils.upperCase(field.getName(), "mask");
     }
 
     protected int bitFieldIndex() {

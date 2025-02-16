@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkConnectorOptionsUtils}. */
-class FlinkConnectorOptionsUtilTest {
+class FlinkConnectorOptionsUtilsTest {
     @Test
     void testParseTimestamp() {
         assertThat(

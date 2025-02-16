@@ -31,9 +31,9 @@ public class ProtobufBooleanField extends ProtobufNumberField {
     public void getter(PrintWriter w) {
         w.format(
                 "        public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("is", ccName));
+                field.getJavaType(), ProtoGenUtils.camelCase("is", ccName));
         if (!field.isDefaultValueSet()) {
-            w.format("            if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
+            w.format("            if (!%s()) {\n", ProtoGenUtils.camelCase("has", ccName));
             w.format(
                     "                throw new IllegalStateException(\"Field '%s' is not set\");\n",
                     field.getName());

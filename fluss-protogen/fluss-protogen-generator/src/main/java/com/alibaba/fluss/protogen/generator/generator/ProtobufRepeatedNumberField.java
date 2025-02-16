@@ -28,8 +28,8 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
 
     public ProtobufRepeatedNumberField(Field<?> field, int index) {
         super(field, index);
-        this.pluralName = ProtoGenUtil.plural(ccName);
-        this.singularName = ProtoGenUtil.singular(ccName);
+        this.pluralName = ProtoGenUtils.plural(ccName);
+        this.singularName = ProtoGenUtils.singular(ccName);
     }
 
     @Override
@@ -42,24 +42,24 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
     public void parse(PrintWriter w) {
         w.format(
                 "%s(%s);\n",
-                ProtoGenUtil.camelCase("add", singularName),
+                ProtoGenUtils.camelCase("add", singularName),
                 ProtobufNumberField.parseNumber(field));
     }
 
     public void parsePacked(PrintWriter w) {
         w.format(
                 "int _%s = ProtoCodecUtils.readVarInt(_buffer);\n",
-                ProtoGenUtil.camelCase(singularName, "size"));
+                ProtoGenUtils.camelCase(singularName, "size"));
         w.format(
                 "int _%s = _buffer.readerIndex() + _%s;\n",
-                ProtoGenUtil.camelCase(singularName, "endIdx"),
-                ProtoGenUtil.camelCase(singularName, "size"));
+                ProtoGenUtils.camelCase(singularName, "endIdx"),
+                ProtoGenUtils.camelCase(singularName, "size"));
         w.format(
                 "while (_buffer.readerIndex() < _%s) {\n",
-                ProtoGenUtil.camelCase(singularName, "endIdx"));
+                ProtoGenUtils.camelCase(singularName, "endIdx"));
         w.format(
                 "%s(%s);\n",
-                ProtoGenUtil.camelCase("add", singularName),
+                ProtoGenUtils.camelCase("add", singularName),
                 ProtobufNumberField.parseNumber(field));
         w.format("}\n");
     }
@@ -70,14 +70,14 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
                 "private static final int %s_PACKED = (%s << ProtoCodecUtils.TAG_TYPE_BITS) | ProtoCodecUtils.WIRETYPE_LENGTH_DELIMITED;\n",
                 tagName(), fieldNumber());
         // getCount
-        w.format("public int %s() {\n", ProtoGenUtil.camelCase("get", pluralName, "count"));
+        w.format("public int %s() {\n", ProtoGenUtils.camelCase("get", pluralName, "count"));
         w.format("    return _%sCount;\n", pluralName);
         w.format("}\n");
 
         // getAt(index)
         w.format(
                 "public %s %s(int idx) {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", singularName, "at"));
+                field.getJavaType(), ProtoGenUtils.camelCase("get", singularName, "at"));
         w.format("    if (idx < 0 || idx >= _%sCount) {\n", pluralName);
         w.format(
                 "        throw new IndexOutOfBoundsException(\"Index \" + idx + \" is out of the list size (\" + _%sCount + \") for field '%s'\");\n",
@@ -89,7 +89,7 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
         // getAll
         w.format(
                 "public %s[] %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", pluralName));
+                field.getJavaType(), ProtoGenUtils.camelCase("get", pluralName));
         w.format("    if (%s == null) {\n", pluralName);
         w.format("        return new %s[0];\n", field.getJavaType());
         w.format("    } else if (_%sCount == %s.length) {\n", pluralName, pluralName);
@@ -130,7 +130,7 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
         // add
         w.format(
                 "public void %s(%s %s) {\n",
-                ProtoGenUtil.camelCase("add", singularName), field.getJavaType(), singularName);
+                ProtoGenUtils.camelCase("add", singularName), field.getJavaType(), singularName);
         w.format("    if (%s == null) {\n", pluralName);
         w.format("        %s = new %s[4];\n", pluralName, field.getJavaType());
         w.format("    }\n");
@@ -147,7 +147,7 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
         w.format(
                 "public %s %s(%s[] %s) {\n",
                 enclosingType,
-                ProtoGenUtil.camelCase("set", pluralName),
+                ProtoGenUtils.camelCase("set", pluralName),
                 field.getJavaType(),
                 pluralName);
         w.format("    _cachedSize = -1;\n");
@@ -162,11 +162,11 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
     public void copy(PrintWriter w) {
         w.format(
                 "for (int i = 0; i < _other.%s(); i++) {\n",
-                ProtoGenUtil.camelCase("get", pluralName, "count"));
+                ProtoGenUtils.camelCase("get", pluralName, "count"));
         w.format(
                 "    %s(_other.%s(i));\n",
-                ProtoGenUtil.camelCase("add", singularName),
-                ProtoGenUtil.camelCase("get", singularName, "at"));
+                ProtoGenUtils.camelCase("add", singularName),
+                ProtoGenUtils.camelCase("get", singularName, "at"));
         w.format("}\n");
     }
 

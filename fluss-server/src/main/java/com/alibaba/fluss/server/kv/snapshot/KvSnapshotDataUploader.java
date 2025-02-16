@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.kv.snapshot;
 
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.server.utils.SnapshotUtil;
+import com.alibaba.fluss.server.utils.SnapshotUtils;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.IOUtils;
@@ -148,7 +148,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             }
             // tmp resource registry will be closed when the snapshot is not completed,
             // which will then discard the uploaded files
-            tmpResourcesRegistry.registerCloseable(() -> SnapshotUtil.discardKvFileQuietly(result));
+            tmpResourcesRegistry.registerCloseable(
+                    () -> SnapshotUtils.discardKvFileQuietly(result));
             return KvFileHandleAndLocalPath.of(result, filePath.getFileName().toString());
         } finally {
             if (closeableRegistry.unregisterCloseable(inputStream)) {

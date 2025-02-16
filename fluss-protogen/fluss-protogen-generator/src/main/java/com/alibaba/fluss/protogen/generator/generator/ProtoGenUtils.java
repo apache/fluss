@@ -37,7 +37,7 @@ import static com.alibaba.fluss.shaded.guava32.com.google.common.base.CaseFormat
 import static com.alibaba.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
 
 /** Utility class for String manipulation. */
-public class ProtoGenUtil {
+public class ProtoGenUtils {
     private static final String[] HEADER =
             new String[] {
                 "/*",

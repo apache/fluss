@@ -28,8 +28,8 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
 
     public ProtobufRepeatedBytesField(Field.Bytes field, int index) {
         super(field, index);
-        this.pluralName = ProtoGenUtil.plural(ccName);
-        this.singularName = ProtoGenUtil.singular(ccName);
+        this.pluralName = ProtoGenUtils.plural(ccName);
+        this.singularName = ProtoGenUtils.singular(ccName);
     }
 
     @Override
@@ -42,7 +42,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
     public void parse(PrintWriter w) {
         w.format(
                 "ProtoCodecUtils.BytesHolder _%sBh = _%sBytesHolder();\n",
-                ccName, ProtoGenUtil.camelCase("new", singularName));
+                ccName, ProtoGenUtils.camelCase("new", singularName));
         w.format("_%sBh.len = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
         w.format("_%sBh.b = new byte[_%sBh.len];\n", ccName, ccName);
         w.format("_buffer.readBytes(_%sBh.b);\n", ccName);
@@ -51,7 +51,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
     @Override
     public void getter(PrintWriter w) {
         // get count
-        w.format("public int %s() {\n", ProtoGenUtil.camelCase("get", pluralName, "count"));
+        w.format("public int %s() {\n", ProtoGenUtils.camelCase("get", pluralName, "count"));
         w.format("    return _%sCount;\n", pluralName);
         w.format("}\n");
         w.println();
@@ -59,7 +59,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         // get length at
         w.format(
                 "public int %s(int idx) {\n",
-                ProtoGenUtil.camelCase("get", singularName, "size", "at"));
+                ProtoGenUtils.camelCase("get", singularName, "size", "at"));
         w.format("    if (idx < 0 || idx >= _%sCount) {\n", pluralName);
         w.format(
                 "        throw new IndexOutOfBoundsException(\"Index \" + idx + \" is out of the list size (\" + _%sCount + \") for field '%s'\");\n",
@@ -71,7 +71,8 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
 
         // get at
         w.format(
-                "public byte[] %s(int idx) {\n", ProtoGenUtil.camelCase("get", singularName, "at"));
+                "public byte[] %s(int idx) {\n",
+                ProtoGenUtils.camelCase("get", singularName, "at"));
         w.format("    if (idx < 0 || idx >= _%sCount) {\n", pluralName);
         w.format(
                 "        throw new IndexOutOfBoundsException(\"Index \" + idx + \" is out of the list size (\" + _%sCount + \") for field '%s'\");\n",
@@ -96,7 +97,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         // add byte[]
         w.format(
                 "public void %s(byte[] %s) {\n",
-                ProtoGenUtil.camelCase("add", singularName), singularName);
+                ProtoGenUtils.camelCase("add", singularName), singularName);
         w.format("    if (%s == null) {\n", pluralName);
         w.format(
                 "        %s = new java.util.ArrayList<ProtoCodecUtils.BytesHolder>();\n",
@@ -104,7 +105,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         w.format("    }\n");
         w.format(
                 "    ProtoCodecUtils.BytesHolder _bh = _%sBytesHolder();\n",
-                ProtoGenUtil.camelCase("new", singularName));
+                ProtoGenUtils.camelCase("new", singularName));
         w.format("    _cachedSize = -1;\n");
         w.format("    _bh.b = %s;\n", singularName);
         w.format("    _bh.len = %s.length;\n", singularName);
@@ -114,7 +115,7 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
         // new BytesHolder
         w.format(
                 "private ProtoCodecUtils.BytesHolder _%sBytesHolder() {\n",
-                ProtoGenUtil.camelCase("new", singularName));
+                ProtoGenUtils.camelCase("new", singularName));
         w.format("    if (%s == null) {\n", pluralName);
         w.format(
                 "         %s = new java.util.ArrayList<ProtoCodecUtils.BytesHolder>();\n",
@@ -131,11 +132,11 @@ public class ProtobufRepeatedBytesField extends ProtobufAbstractRepeated<Field.B
     public void copy(PrintWriter w) {
         w.format(
                 "for (int i = 0; i < _other.%s(); i++) {\n",
-                ProtoGenUtil.camelCase("get", pluralName, "count"));
+                ProtoGenUtils.camelCase("get", pluralName, "count"));
         w.format(
                 "    %s(_other.%s(i));\n",
-                ProtoGenUtil.camelCase("add", singularName),
-                ProtoGenUtil.camelCase("get", singularName, "at"));
+                ProtoGenUtils.camelCase("add", singularName),
+                ProtoGenUtils.camelCase("get", singularName, "at"));
         w.format("}\n");
     }
 

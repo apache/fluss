@@ -39,7 +39,7 @@ public class ProtoCodeGenerator {
 
             String fileWithoutExtension = Splitter.on(".").splitToList(input.getName()).get(0);
             String outerClassName =
-                    ProtoGenUtil.camelCaseFirstUpper(classPrefix, fileWithoutExtension);
+                    ProtoGenUtils.camelCaseFirstUpper(classPrefix, fileWithoutExtension);
 
             String javaPackageName = proto.getJavaPackageName();
             String javaDir = Joiner.on('/').join(javaPackageName.split("\\."));

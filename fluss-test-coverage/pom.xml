@@ -194,7 +194,7 @@
                                         <exclude>com.alibaba.fluss.kv.*</exclude>
                                         <exclude>com.alibaba.fluss.io.*</exclude>
                                         <exclude>com.alibaba.fluss.server.ServerBase</exclude>
-                                        <exclude>com.alibaba.fluss.server.utils.ShutdownHookUtil
+                                        <exclude>com.alibaba.fluss.server.utils.ShutdownHookUtils
                                         </exclude>
                                         <exclude>com.alibaba.fluss.fs.FSData*StreamWrapper
                                         </exclude>

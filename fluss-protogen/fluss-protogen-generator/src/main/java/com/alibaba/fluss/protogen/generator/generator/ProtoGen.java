@@ -74,8 +74,8 @@ public class ProtoGen {
             File file = new File(outDirectory, e.getName() + ".java");
             StringWriter sw = new StringWriter();
             try (PrintWriter pw = new PrintWriter(sw)) {
-                ProtoGenUtil.printHeader(pw);
-                ProtoGenUtil.printPackageAndImports(pw, proto.getJavaPackageName());
+                ProtoGenUtils.printHeader(pw);
+                ProtoGenUtils.printPackageAndImports(pw, proto.getJavaPackageName());
                 e.generate(pw);
             }
 
@@ -88,8 +88,8 @@ public class ProtoGen {
             File file = new File(outDirectory, m.getName() + ".java");
             StringWriter sw = new StringWriter();
             try (PrintWriter pw = new PrintWriter(sw)) {
-                ProtoGenUtil.printHeader(pw);
-                ProtoGenUtil.printPackageAndImports(pw, proto.getJavaPackageName());
+                ProtoGenUtils.printHeader(pw);
+                ProtoGenUtils.printPackageAndImports(pw, proto.getJavaPackageName());
                 m.generate(pw);
             }
 
@@ -106,8 +106,8 @@ public class ProtoGen {
 
         StringWriter sw = new StringWriter();
         try (PrintWriter pw = new PrintWriter(sw)) {
-            ProtoGenUtil.printHeader(pw);
-            ProtoGenUtil.printPackageAndImports(pw, proto.getJavaPackageName());
+            ProtoGenUtils.printHeader(pw);
+            ProtoGenUtils.printPackageAndImports(pw, proto.getJavaPackageName());
             pw.format("public final class %s {\n", outerClassName);
             pw.format("   private %s() {}\n", outerClassName);
 
