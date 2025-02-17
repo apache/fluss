@@ -209,6 +209,7 @@ public class TabletServer extends ServerBase {
                             conf.getString(ConfigOptions.TABLET_SERVER_HOST),
                             conf.getString(ConfigOptions.TABLET_SERVER_PORT),
                             tabletService,
+                            tabletServerMetricGroup,
                             requestsMetrics);
             rpcServer.start();
 

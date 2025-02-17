@@ -156,6 +156,7 @@ public class CoordinatorServer extends ServerBase {
                             conf.getString(ConfigOptions.COORDINATOR_HOST),
                             conf.getString(ConfigOptions.COORDINATOR_PORT),
                             coordinatorService,
+                            serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
                                     serverMetricGroup));
             rpcServer.start();

@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import static com.alibaba.fluss.rpc.netty.NettyMemoryMetrics.createNettyMemoryMetrics;
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -82,14 +83,19 @@ public final class NettyClient implements RpcClient {
         int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
+        PooledByteBufAllocator pooledAllocator = PooledByteBufAllocator.DEFAULT;
         this.bootstrap =
                 new Bootstrap()
                         .group(eventGroup)
                         .channel(NettyUtils.getClientSocketChannelClass(eventGroup))
-                        .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                        .option(ChannelOption.ALLOCATOR, pooledAllocator)
                         .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
                         .handler(new ClientChannelInitializer(connectionMaxIdle));
         this.clientMetricGroup = clientMetricGroup;
+        createNettyMemoryMetrics(
+                clientMetricGroup,
+                pooledAllocator,
+                conf.getBoolean(ConfigOptions.NETTY_CLIENT_ENABLE_VERBOSE_METRICS));
     }
 
     /**
