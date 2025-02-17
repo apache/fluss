@@ -177,6 +177,14 @@ public class FileLogProjection {
                 return new BytesViewLogRecords(builder.build());
             }
 
+            // Skip empty batch. The empty batch was generated when build cdc log batch when there
+            // is no cdc log generated for this kv batch. See the comments about the field
+            // 'lastOffsetDelta' in DefaultLogRecordBatch.
+            if (batchSizeInBytes == RECORD_BATCH_HEADER_SIZE) {
+                position += batchSizeInBytes;
+                continue;
+            }
+
             int rowKindBytes = logHeaderBuffer.getInt(RECORDS_COUNT_OFFSET);
             long arrowHeaderOffset = position + RECORD_BATCH_HEADER_SIZE + rowKindBytes;
             // read arrow header

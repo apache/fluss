@@ -213,8 +213,5 @@ public final class TestData {
                     .withComment("b is second column")
                     .primaryKey("a")
                     .build();
-    public static final TablePath DATA3_TABLE_PATH_PK =
-            TablePath.of("test_db_3", "test_pk_table_3");
     // ---------------------------- data3 table info end ------------------------------
-
 }

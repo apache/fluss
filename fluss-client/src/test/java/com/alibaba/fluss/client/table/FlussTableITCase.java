@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
 import com.alibaba.fluss.client.lookup.LookupResult;
 import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.table.scanner.Scan;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
@@ -72,7 +73,6 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA3_SCHEMA_PK;
-import static com.alibaba.fluss.record.TestData.DATA3_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertRowValueEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
@@ -878,39 +878,59 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         "Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
     }
 
-    @Test
-    void testFirstRowMergeEngine() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFirstRowMergeEngine(boolean doProjection) throws Exception {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA_PK)
                         .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.FIRST_ROW)
                         .build();
         RowType rowType = DATA1_SCHEMA_PK.getRowType();
-        createTable(DATA1_TABLE_PATH_PK, tableDescriptor, false);
-
-        RowType lookupRowType = RowType.of(DataTypes.INT());
+        String tableName =
+                String.format(
+                        "test_first_row_merge_engine_with_%s",
+                        doProjection ? "projection" : "no_projection");
+        TablePath tablePath = TablePath.of("test_db_1", tableName);
+        createTable(tablePath, tableDescriptor, false);
 
         int rows = 5;
-        int duplicateNum = 3;
-        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
+        int duplicateNum = 10;
+        int batchSize = 3;
+        int count = 0;
+        try (Table table = conn.getTable(tablePath)) {
             // first, put rows
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            List<InternalRow> expectedRows = new ArrayList<>(rows);
+            List<InternalRow> expectedScanRows = new ArrayList<>(rows);
+            List<InternalRow> expectedLookupRows = new ArrayList<>(rows);
             for (int id = 0; id < rows; id++) {
                 for (int num = 0; num < duplicateNum; num++) {
                     upsertWriter.upsert(row(id, "value_" + num));
+                    if (count++ > batchSize) {
+                        upsertWriter.flush();
+                        count = 0;
+                    }
                 }
-                expectedRows.add(row(id, "value_0"));
+
+                expectedLookupRows.add(row(id, "value_0"));
+                expectedScanRows.add(doProjection ? row(id) : row(id, "value_0"));
             }
+
             upsertWriter.flush();
 
             Lookuper lookuper = table.newLookup().createLookuper();
             // now, get rows by lookup
             for (int id = 0; id < rows; id++) {
                 InternalRow gotRow = lookuper.lookup(row(id)).get().getSingletonRow();
-                assertThatRow(gotRow).withSchema(rowType).isEqualTo(expectedRows.get(id));
+                assertThatRow(gotRow).withSchema(rowType).isEqualTo(expectedLookupRows.get(id));
             }
-            LogScanner logScanner = table.newScan().createLogScanner();
+
+            Scan scan = table.newScan();
+            if (doProjection) {
+                scan = scan.project(new int[] {0}); // do projection.
+            }
+            LogScanner logScanner = scan.createLogScanner();
+
             logScanner.subscribeFromBeginning(0);
             List<ScanRecord> actualLogRecords = new ArrayList<>(0);
             while (actualLogRecords.size() < rows) {
@@ -923,8 +943,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 ScanRecord scanRecord = actualLogRecords.get(i);
                 assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.INSERT);
                 assertThatRow(scanRecord.getRow())
-                        .withSchema(rowType)
-                        .isEqualTo(expectedRows.get(i));
+                        .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
+                        .isEqualTo(expectedScanRows.get(i));
             }
         }
     }
@@ -1011,8 +1031,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testMergeEngineWithVersion() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testMergeEngineWithVersion(boolean doProjection) throws Exception {
         // Create table.
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -1021,32 +1042,58 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .property(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, "b")
                         .build();
         RowType rowType = DATA3_SCHEMA_PK.getRowType();
-        createTable(DATA3_TABLE_PATH_PK, tableDescriptor, false);
+        String tableName =
+                String.format(
+                        "test_merge_engine_with_version_with_%s",
+                        doProjection ? "projection" : "no_projection");
+        TablePath tablePath = TablePath.of("test_db_1", tableName);
+        createTable(tablePath, tableDescriptor, false);
 
         int rows = 3;
-        try (Table table = conn.getTable(DATA3_TABLE_PATH_PK)) {
+        try (Table table = conn.getTable(tablePath)) {
             // put rows.
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             List<ScanRecord> expectedScanRecords = new ArrayList<>(rows);
             // init rows.
-            for (int row = 0; row < rows; row++) {
-                upsertWriter.upsert(row(row, 1000L));
-                expectedScanRecords.add(new ScanRecord(row(row, 1000L)));
+            for (int id = 0; id < rows; id++) {
+                upsertWriter.upsert(row(id, 1000L));
+
+                expectedScanRecords.add(
+                        doProjection ? new ScanRecord(row(id)) : new ScanRecord(row(id, 1000L)));
             }
+            upsertWriter.flush();
+
             // update row if id=0 and version < 1000L, will not update
-            upsertWriter.upsert(row(0, 999L));
+            int oldVersionRecordCount = 20;
+            int batchSize = 3;
+            int count = 0;
+            for (int i = 0; i < oldVersionRecordCount; i++) {
+                upsertWriter.upsert(row(0, 999L));
+                if (count++ > batchSize) {
+                    upsertWriter.flush();
+                    count = 0;
+                }
+            }
 
             // update if version> 1000L
             upsertWriter.upsert(row(1, 1001L));
             // update_before record, don't care about offset/timestamp
-            expectedScanRecords.add(new ScanRecord(-1, -1, RowKind.UPDATE_BEFORE, row(1, 1000L)));
+            expectedScanRecords.add(
+                    new ScanRecord(
+                            -1, -1, RowKind.UPDATE_BEFORE, doProjection ? row(1) : row(1, 1000L)));
             // update_after record
-            expectedScanRecords.add(new ScanRecord(-1, -1, RowKind.UPDATE_AFTER, row(1, 1001L)));
+            expectedScanRecords.add(
+                    new ScanRecord(
+                            -1, -1, RowKind.UPDATE_AFTER, doProjection ? row(1) : row(1, 1001L)));
             rows = rows + 2;
 
             upsertWriter.flush();
 
-            LogScanner logScanner = table.newScan().createLogScanner();
+            Scan scan = table.newScan();
+            if (doProjection) {
+                scan = scan.project(new int[] {0}); // do projection.
+            }
+            LogScanner logScanner = scan.createLogScanner();
             logScanner.subscribeFromBeginning(0);
             List<ScanRecord> actualLogRecords = new ArrayList<>(rows);
             while (actualLogRecords.size() < rows) {
@@ -1061,7 +1108,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 ScanRecord expectedRecord = expectedScanRecords.get(i);
                 assertThat(actualScanRecord.getRowKind()).isEqualTo(expectedRecord.getRowKind());
                 assertThatRow(actualScanRecord.getRow())
-                        .withSchema(rowType)
+                        .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
                         .isEqualTo(expectedRecord.getRow());
             }
         }
