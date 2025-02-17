@@ -330,6 +330,7 @@ public final class Schema implements Serializable {
      */
     @PublicStable
     public static final class Column implements Serializable {
+        private static final long serialVersionUID = 1L;
         private final String columnName;
         private final DataType dataType;
         private final @Nullable String comment;
