@@ -37,6 +37,9 @@ import com.alibaba.fluss.rpc.messages.PbServerNode;
 import com.alibaba.fluss.rpc.messages.PbTableMetadata;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
@@ -52,6 +55,9 @@ import java.util.concurrent.TimeoutException;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
+    private static final Logger LOG = LoggerFactory.getLogger(MetadataUtils.class);
+
+    private static final int MAX_RETRY_TIMES = 5;
 
     private static final Random randOffset = new Random();
 
@@ -255,10 +261,30 @@ public class MetadataUtils {
     }
 
     public static ServerNode getOneAvailableTabletServerNode(Cluster cluster) {
-        List<ServerNode> aliveTabletServers = cluster.getAliveTabletServerList();
-        if (aliveTabletServers.isEmpty()) {
-            throw new FlussRuntimeException("no alive tablet server in cluster");
+        List<ServerNode> aliveTabletServers = null;
+        for (int retryTimes = 0; retryTimes <= MAX_RETRY_TIMES; retryTimes++) {
+            aliveTabletServers = cluster.getAliveTabletServerList();
+            if (aliveTabletServers.isEmpty()) {
+                LOG.error("Fluss create gateway proxy error, retry times = {}.", retryTimes);
+                if (retryTimes >= MAX_RETRY_TIMES) {
+                    String exceptionMsg =
+                            String.format(
+                                    "Execution of Fluss get one available tablet failed, no alive tablet server in cluster, retry times = %d.",
+                                    retryTimes);
+                    throw new FlussRuntimeException(exceptionMsg);
+                } else {
+                    try {
+                        Thread.sleep(1000L * retryTimes);
+                    } catch (InterruptedException interruptedException) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(interruptedException);
+                    }
+                }
+            } else {
+                break;
+            }
         }
+
         // just pick one random server node
         int offset = randOffset.nextInt(aliveTabletServers.size());
         return aliveTabletServers.get(offset);
