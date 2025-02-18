@@ -499,6 +499,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processDropTable(DropTableEvent dropTableEvent) {
+        // When drop a table, drop its snapshot store meanwhile.
+        Set<TableBucket> deleteTableBuckets =
+                coordinatorContext.getAllBucketsForTable(dropTableEvent.getTableId());
+        completedSnapshotStoreManager.onRemoveCompletedSnapshotStoreByTableBuckets(
+                deleteTableBuckets);
+
         coordinatorContext.queueTableDeletion(Collections.singleton(dropTableEvent.getTableId()));
         tableManager.onDeleteTable(dropTableEvent.getTableId());
         if (dropTableEvent.isAutoPartitionTable()) {
@@ -510,6 +516,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TablePartition tablePartition =
                 new TablePartition(
                         dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
+
+        // When drop a table partition, drop its snapshot store meanwhile.
+        Set<TableBucket> deleteTableBuckets =
+                coordinatorContext.getAllBucketsForPartition(
+                        dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
+        completedSnapshotStoreManager.onRemoveCompletedSnapshotStoreByTableBuckets(
+                deleteTableBuckets);
+
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
         tableManager.onDeletePartition(
                 dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
