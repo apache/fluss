@@ -137,4 +137,8 @@ public class CompletedSnapshotStoreManager {
                 completedSnapshotHandleStore,
                 ioExecutor);
     }
+
+    public Map<TableBucket, CompletedSnapshotStore> getBucketCompletedSnapshotStores() {
+        return bucketCompletedSnapshotStores;
+    }
 }

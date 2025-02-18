@@ -28,6 +28,7 @@ import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -35,10 +36,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -135,6 +133,28 @@ class CompletedSnapshotStoreManagerTest {
                                 .getOrCreateCompletedSnapshotStore(nonExistBucket)
                                 .getAllSnapshots())
                 .hasSize(0);
+    }
+
+    @Test
+    void testRemoveCompletedSnapshotStoreFromManager() throws Exception {
+        CompletedSnapshotStoreManager completedSnapshotStoreManager =
+                createCompletedSnapshotStoreManager(10);
+        Set<TableBucket> tableBuckets = createTableBuckets(1, 2);
+        int snapshotNum = 3;
+        for (TableBucket tableBucket : tableBuckets) {
+            // add some snapshots
+            for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
+                CompletedSnapshot completedSnapshot =
+                        KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
+            }
+        }
+        // before remove CompletedSnapshotStore
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
+                .isEqualTo(2);
+        // after remove CompletedSnapshotStore
+        completedSnapshotStoreManager.onRemoveCompletedSnapshotStoreByTableBuckets(tableBuckets);
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
     }
 
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
