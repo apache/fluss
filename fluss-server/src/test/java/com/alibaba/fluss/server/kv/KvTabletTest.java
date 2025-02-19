@@ -37,6 +37,7 @@ import com.alibaba.fluss.record.LogTestBase;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.TestData;
+import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
@@ -620,7 +621,7 @@ class KvTabletTest {
         kvTablet.putAsLeader(kvRecordBatch1, null);
         long endOffset = logTablet.localLogEndOffset();
         LogRecords actualLogRecords = readLogRecords(logTablet, 0L, logProjection);
-        LogRecords expectedLogs =
+        MemoryLogRecords expectedLogs =
                 logRecords(
                         readLogRowType,
                         0,
@@ -635,7 +636,7 @@ class KvTabletTest {
 
         // append some new batches which will not generate only cdc logs, but the endOffset will be
         // updated.
-        int emptyBatchCount = 10;
+        int emptyBatchCount = 3;
         long offsetBefore = endOffset;
         for (int i = 0; i < emptyBatchCount; i++) {
             List<KvRecord> kvData2 =
@@ -647,8 +648,31 @@ class KvTabletTest {
             kvTablet.putAsLeader(kvRecordBatch2, null);
             endOffset = logTablet.localLogEndOffset();
             assertThat(endOffset).isEqualTo(offsetBefore + i + 1);
-            actualLogRecords = readLogRecords(logTablet, endOffset);
-            assertThat(actualLogRecords.batches().iterator().hasNext()).isFalse();
+
+            // the empty batch will be read if no projection,
+            // the empty batch will not be read if has projection
+            if (!doProjection) {
+                MemoryLogRecords emptyLogs =
+                        logRecords(
+                                readLogRowType,
+                                offsetBefore + i,
+                                Collections.emptyList(),
+                                Collections.emptyList());
+                MultiBytesView bytesView =
+                        MultiBytesView.builder()
+                                .addBytes(
+                                        expectedLogs.getMemorySegment(),
+                                        0,
+                                        expectedLogs.sizeInBytes())
+                                .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
+                                .build();
+                expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
+            }
+            actualLogRecords = readLogRecords(logTablet, 0, logProjection);
+            assertThatLogRecords(actualLogRecords)
+                    .withSchema(readLogRowType)
+                    .assertCheckSum(!doProjection)
+                    .isEqualTo(expectedLogs);
         }
 
         List<KvRecord> kvData3 =
@@ -707,7 +731,7 @@ class KvTabletTest {
 
         long endOffset = logTablet.localLogEndOffset();
         LogRecords actualLogRecords = readLogRecords(logTablet, 0L, logProjection);
-        LogRecords expectedLogs =
+        MemoryLogRecords expectedLogs =
                 logRecords(
                         readLogRowType,
                         0,
@@ -734,7 +758,7 @@ class KvTabletTest {
 
         // append some new batches which will not generate only cdc logs, but the endOffset will be
         // updated.
-        int emptyBatchCount = 10;
+        int emptyBatchCount = 3;
         long offsetBefore = endOffset;
         for (int i = 0; i < emptyBatchCount; i++) {
             List<KvRecord> kvData2 =
@@ -745,8 +769,31 @@ class KvTabletTest {
             kvTablet.putAsLeader(kvRecordBatch2, null);
             endOffset = logTablet.localLogEndOffset();
             assertThat(endOffset).isEqualTo(offsetBefore + i + 1);
-            actualLogRecords = readLogRecords(logTablet, endOffset);
-            assertThat(actualLogRecords.batches().iterator().hasNext()).isFalse();
+
+            // the empty batch will be read if no projection,
+            // the empty batch will not be read if has projection
+            if (!doProjection) {
+                MemoryLogRecords emptyLogs =
+                        logRecords(
+                                readLogRowType,
+                                offsetBefore + i,
+                                Collections.emptyList(),
+                                Collections.emptyList());
+                MultiBytesView bytesView =
+                        MultiBytesView.builder()
+                                .addBytes(
+                                        expectedLogs.getMemorySegment(),
+                                        0,
+                                        expectedLogs.sizeInBytes())
+                                .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
+                                .build();
+                expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
+            }
+            actualLogRecords = readLogRecords(logTablet, 0, logProjection);
+            assertThatLogRecords(actualLogRecords)
+                    .withSchema(readLogRowType)
+                    .assertCheckSum(!doProjection)
+                    .isEqualTo(expectedLogs);
         }
 
         List<KvRecord> kvData3 =
