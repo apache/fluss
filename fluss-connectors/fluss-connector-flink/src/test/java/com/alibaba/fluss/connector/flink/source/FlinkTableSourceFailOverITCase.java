@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
@@ -34,6 +35,7 @@ import org.apache.flink.core.execution.RestoreMode;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
+import org.apache.flink.runtime.jobmaster.JobResult;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
@@ -52,6 +54,7 @@ import java.util.Collections;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.flink.runtime.testutils.CommonTestUtils.waitForAllTaskRunning;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for flink table source fail over. */
 class FlinkTableSourceFailOverITCase {
@@ -181,6 +184,15 @@ class FlinkTableSourceFailOverITCase {
             jobId = jobGraph.getJobID();
 
             waitForAllTaskRunning(cluster.getMiniCluster(), jobId, false);
+            JobResult jobResult = client.requestJobResult(jobId).get();
+            if (jobResult.getSerializedThrowable().isPresent()) {
+                assertThat(
+                                jobResult.getSerializedThrowable().get().getCause()
+                                        instanceof PartitionNotExistException)
+                        .isEqualTo(false);
+                System.out.println(
+                        jobResult.getSerializedThrowable().get().getFullStringifiedStackTrace());
+            }
         } finally {
             cluster.after();
         }
