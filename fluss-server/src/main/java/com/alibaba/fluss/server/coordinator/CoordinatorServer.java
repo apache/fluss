@@ -167,12 +167,6 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            CompletedSnapshotStoreManager bucketSnapshotManager =
-                    new CompletedSnapshotStoreManager(
-                            conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
-                            conf.getInt(ConfigOptions.COORDINATOR_IO_POOL_SIZE),
-                            zkClient);
-
             this.autoPartitionManager = new AutoPartitionManager(metadataCache, zkClient, conf);
             autoPartitionManager.start();
 
@@ -184,12 +178,11 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
                             zkClient,
-                            new RemoteStorageCleaner(conf),
                             metadataCache,
                             coordinatorChannelManager,
-                            bucketSnapshotManager,
                             autoPartitionManager,
-                            serverMetricGroup);
+                            serverMetricGroup,
+                            conf);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();

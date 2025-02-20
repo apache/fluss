@@ -35,6 +35,7 @@ import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +51,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -67,6 +70,7 @@ class TableManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static ExecutorService ioExecutor;
 
     private CoordinatorContext coordinatorContext;
     private TableManager tableManager;
@@ -79,6 +83,7 @@ class TableManagerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        ioExecutor = Executors.newFixedThreadPool(1);
     }
 
     @BeforeEach
@@ -93,7 +98,12 @@ class TableManagerTest {
         }
     }
 
-    private void initTableManager() throws IOException {
+    @AfterAll
+    static void afterAll() {
+        ioExecutor.shutdownNow();
+    }
+
+    private void initTableManager() {
         testingEventManager = new TestingEventManager();
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
@@ -113,7 +123,7 @@ class TableManagerTest {
                         coordinatorContext,
                         replicaStateMachine,
                         tableBucketStateMachine,
-                        new RemoteStorageCleaner(conf));
+                        new RemoteStorageCleaner(conf, ioExecutor));
         tableManager.startup();
 
         coordinatorContext.setLiveTabletServers(

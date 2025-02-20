@@ -17,8 +17,11 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.FlussPaths;
 
@@ -26,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.concurrent.ExecutorService;
 
 /** A cleaner for cleaning kv snapshots and log segments files of table. */
 public class RemoteStorageCleaner {
@@ -38,39 +42,47 @@ public class RemoteStorageCleaner {
 
     private final FileSystem remoteFileSystem;
 
-    public RemoteStorageCleaner(Configuration configuration) throws IOException {
+    private final ExecutorService ioExecutor;
+
+    public RemoteStorageCleaner(Configuration configuration, ExecutorService ioExecutor) {
         this.remoteKvDir = FlussPaths.remoteKvDir(configuration);
         this.remoteLogDir = FlussPaths.remoteLogDir(configuration);
-        this.remoteFileSystem = remoteKvDir.getFileSystem();
+        this.ioExecutor = ioExecutor;
+        try {
+            this.remoteFileSystem = remoteKvDir.getFileSystem();
+        } catch (IOException e) {
+            throw new FlussRuntimeException(
+                    "Fail to get remote file system for path " + remoteKvDir, e);
+        }
     }
 
     public void deleteTableRemoteDir(TablePath tablePath, boolean isKvTable, long tableId) {
         if (isKvTable) {
-            deleteDir(tableKvRemoteDir(tablePath, tableId));
+            asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
         }
-        deleteDir(tableLogRemoteDir(tablePath, tableId));
+        asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
     }
 
-    private void deleteDir(FsPath fsPath) {
-        try {
-            if (remoteFileSystem.exists(fsPath)) {
-                long startTs = System.currentTimeMillis();
-                remoteFileSystem.delete(fsPath, true);
-                LOG.info(
-                        "Delete table's remote data dir {} success, cost {} ms.",
-                        fsPath,
-                        System.currentTimeMillis() - startTs);
-            }
-        } catch (IOException e) {
-            LOG.error("Delete table's remote data dir {} failed.", fsPath, e);
+    public void deletePartitionRemoteDir(
+            PhysicalTablePath physicalTablePath, boolean isKvTable, TablePartition tablePartition) {
+        if (isKvTable) {
+            asyncDeleteDir(
+                    FlussPaths.remotePartitionDir(remoteKvDir, physicalTablePath, tablePartition));
         }
+        asyncDeleteDir(
+                FlussPaths.remotePartitionDir(remoteLogDir, physicalTablePath, tablePartition));
     }
 
-    private FsPath tableKvRemoteDir(TablePath tablePath, long tableId) {
-        return FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId);
-    }
-
-    private FsPath tableLogRemoteDir(TablePath tablePath, long tableId) {
-        return FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId);
+    private void asyncDeleteDir(FsPath fsPath) {
+        ioExecutor.submit(
+                () -> {
+                    try {
+                        if (remoteFileSystem.exists(fsPath)) {
+                            remoteFileSystem.delete(fsPath, true);
+                        }
+                    } catch (IOException e) {
+                        LOG.error("Delete remote data dir {} failed.", fsPath, e);
+                    }
+                });
     }
 }

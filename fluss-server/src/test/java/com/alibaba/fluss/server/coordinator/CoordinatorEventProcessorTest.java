@@ -120,10 +120,7 @@ class CoordinatorEventProcessorTest {
     private final String defaultDatabase = "db";
     private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
-    private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private AutoPartitionManager autoPartitionManager;
-
-    private RemoteStorageCleaner remoteStorageCleaner;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -144,21 +141,18 @@ class CoordinatorEventProcessorTest {
         serverMetadataCache = new ServerMetadataCacheImpl();
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-        completedSnapshotStoreManager = new CompletedSnapshotStoreManager(1, 1, zookeeperClient);
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
-        remoteStorageCleaner = new RemoteStorageCleaner(conf);
         eventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
-                        remoteStorageCleaner,
                         serverMetadataCache,
                         testCoordinatorChannelManager,
-                        completedSnapshotStoreManager,
                         autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
@@ -225,12 +219,11 @@ class CoordinatorEventProcessorTest {
         eventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
-                        remoteStorageCleaner,
                         serverMetadataCache,
                         testCoordinatorChannelManager,
-                        completedSnapshotStoreManager,
                         autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 testCoordinatorChannelManager,
                 Arrays.stream(zookeeperClient.getSortedTabletServerList())
@@ -416,12 +409,11 @@ class CoordinatorEventProcessorTest {
         eventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
-                        remoteStorageCleaner,
                         serverMetadataCache,
                         testCoordinatorChannelManager,
-                        completedSnapshotStoreManager,
                         autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
         CoordinatorContext newCoordinatorContext = eventProcessor.getCoordinatorContext();
 
         // in this test case, so make requests to gateway should always be
@@ -465,12 +457,11 @@ class CoordinatorEventProcessorTest {
         eventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
-                        remoteStorageCleaner,
                         serverMetadataCache,
                         testCoordinatorChannelManager,
-                        completedSnapshotStoreManager,
                         autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
         CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
         int failedServer = 0;
         CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext(
@@ -668,12 +659,11 @@ class CoordinatorEventProcessorTest {
         eventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
-                        remoteStorageCleaner,
                         serverMetadataCache,
                         testCoordinatorChannelManager,
-                        completedSnapshotStoreManager,
                         autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 testCoordinatorChannelManager,
                 Arrays.stream(zookeeperClient.getSortedTabletServerList())

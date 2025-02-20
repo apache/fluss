@@ -24,7 +24,6 @@ import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import com.alibaba.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,7 +36,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -59,18 +57,14 @@ public class CompletedSnapshotStoreManager {
 
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
-            int ioExecutorPoolSize,
+            Executor ioExecutor,
             ZooKeeperClient zooKeeperClient) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new HashMap<>();
-
-        checkArgument(ioExecutorPoolSize > 0, "ioExecutorPoolSize must be positive");
-        this.ioExecutor =
-                Executors.newFixedThreadPool(
-                        ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
+        this.ioExecutor = ioExecutor;
     }
 
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(TableBucket tableBucket) {

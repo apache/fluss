@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -246,12 +247,12 @@ public class TableManager {
     private void completeDeleteTable(long tableId) {
         Set<TableBucketReplica> replicas = coordinatorContext.getAllReplicasForTable(tableId);
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
+        // delete table remote dir
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        remoteStorageCleaner.deleteTableRemoteDir(
+                tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
         try {
             metadataManager.completeDeleteTable(tableId);
-            TablePath tablePath = coordinatorContext.getTablePathById(tableId);
-            TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-            remoteStorageCleaner.deleteTableRemoteDir(
-                    tablePath, tableInfo.getSchema().getPrimaryKey().isPresent(), tableId);
         } catch (Exception e) {
             LOG.error("Fail to complete table deletion for table {}.", tableId, e);
         }
@@ -263,6 +264,13 @@ public class TableManager {
                 coordinatorContext.getAllReplicasForPartition(
                         tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
+        // delete partition remote dir
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tablePartition.getTableId());
+        String partitionName = coordinatorContext.getPartitionName(tablePartition.getPartitionId());
+        remoteStorageCleaner.deletePartitionRemoteDir(
+                PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
+                tableInfo.hasPrimaryKey(),
+                tablePartition);
         try {
             metadataManager.completeDeletePartition(tablePartition.getPartitionId());
         } catch (Exception e) {

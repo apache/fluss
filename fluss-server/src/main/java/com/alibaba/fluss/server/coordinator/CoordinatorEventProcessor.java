@@ -19,6 +19,8 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
@@ -77,6 +79,8 @@ import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableIdsZNode;
+import com.alibaba.fluss.utils.ExecutorUtils;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -94,6 +98,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -102,6 +109,7 @@ import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.Off
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
 /** An implementation for {@link EventProcessor}. */
@@ -126,6 +134,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
+    private final ExecutorService ioExecutor;
 
     // in normal case, it won't be null, but from I can see, it'll only be null in unit test
     // since the we won't register a coordinator node in zk.
@@ -140,32 +149,29 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
-            RemoteStorageCleaner remoteStorageCleaner,
             ServerMetadataCache serverMetadataCache,
             CoordinatorChannelManager coordinatorChannelManager,
-            CompletedSnapshotStoreManager completedSnapshotStoreManager,
             AutoPartitionManager autoPartitionManager,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
+            CoordinatorMetricGroup coordinatorMetricGroup,
+            Configuration conf) {
         this(
                 zooKeeperClient,
-                remoteStorageCleaner,
                 serverMetadataCache,
                 coordinatorChannelManager,
                 new CoordinatorContext(),
-                completedSnapshotStoreManager,
                 autoPartitionManager,
-                coordinatorMetricGroup);
+                coordinatorMetricGroup,
+                conf);
     }
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
-            RemoteStorageCleaner remoteStorageCleaner,
             ServerMetadataCache serverMetadataCache,
             CoordinatorChannelManager coordinatorChannelManager,
             CoordinatorContext coordinatorContext,
-            CompletedSnapshotStoreManager completedSnapshotStoreManager,
             AutoPartitionManager autoPartitionManager,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
+            CoordinatorMetricGroup coordinatorMetricGroup,
+            Configuration conf) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -183,19 +189,29 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 coordinatorChannelManager, coordinatorEventManager),
                         zooKeeperClient);
         this.metadataManager = new MetadataManager(zooKeeperClient);
+
+        int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
+        checkArgument(ioExecutorPoolSize > 0, "ioExecutorPoolSize must be positive");
+        this.ioExecutor =
+                Executors.newFixedThreadPool(
+                        ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
         this.tableManager =
                 new TableManager(
                         metadataManager,
                         coordinatorContext,
                         replicaStateMachine,
                         tableBucketStateMachine,
-                        remoteStorageCleaner);
+                        new RemoteStorageCleaner(conf, ioExecutor));
         this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.coordinatorRequestBatch =
                 new CoordinatorRequestBatch(coordinatorChannelManager, coordinatorEventManager);
-        this.completedSnapshotStoreManager = completedSnapshotStoreManager;
+        this.completedSnapshotStoreManager =
+                new CompletedSnapshotStoreManager(
+                        conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
+                        ioExecutor,
+                        zooKeeperClient);
         this.autoPartitionManager = autoPartitionManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         registerMetric();
@@ -418,6 +434,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // then stop watchers
         tableChangeWatcher.stop();
         tabletServerChangeWatcher.stop();
+        // shutdown io executor
+        ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
     }
 
     @Override

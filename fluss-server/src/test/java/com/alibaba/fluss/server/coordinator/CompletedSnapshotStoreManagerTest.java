@@ -26,6 +26,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -56,6 +59,8 @@ class CompletedSnapshotStoreManagerTest {
 
     private @TempDir Path tempDir;
 
+    private static ExecutorService ioExecutor;
+
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
@@ -63,11 +68,17 @@ class CompletedSnapshotStoreManagerTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         completedSnapshotHandleStore = new ZooKeeperCompletedSnapshotHandleStore(zookeeperClient);
+        ioExecutor = Executors.newFixedThreadPool(1);
     }
 
     @AfterEach
     void afterEach() {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
+    }
+
+    @AfterAll
+    static void afterAll() {
+        ioExecutor.shutdownNow();
     }
 
     @ParameterizedTest
@@ -162,7 +173,8 @@ class CompletedSnapshotStoreManagerTest {
 
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain) {
-        return new CompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain, 1, zookeeperClient);
+        return new CompletedSnapshotStoreManager(
+                maxNumberOfSnapshotsToRetain, ioExecutor, zookeeperClient);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(

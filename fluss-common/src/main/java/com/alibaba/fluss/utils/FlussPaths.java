@@ -21,6 +21,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.utils.types.Tuple2;
@@ -611,8 +612,40 @@ public class FlussPaths {
         return new FsPath(
                 remoteKvOrLogBaseDir,
                 String.format(
-                        "%s/%s-%s",
+                        "%s/%s-%d",
                         tablePath.getDatabaseName(), tablePath.getTableName(), tableId));
+    }
+
+    /**
+     * Returns the remote directory path for storing kv snapshot files or log segments file of a
+     * single partition.
+     *
+     * <pre>
+     * Remote kv table dir
+     * {$remote.data.dir}/kv/{databaseName}/{tableName}-{tableId}/{partitionName}-p{partitionId}
+     *
+     * Remote log table dir.
+     * {$remote.data.dir}/log/{databaseName}/{tableName}-{tableId}/{partitionName}-p{partitionId}
+     *
+     * </pre>
+     *
+     * @param remoteKvOrLogBaseDir - the remote kv snapshots or log segments root dir of table.
+     * @param partitionPath - the partition path.
+     * @param tablePartition - table partition.
+     */
+    public static FsPath remotePartitionDir(
+            FsPath remoteKvOrLogBaseDir,
+            PhysicalTablePath partitionPath,
+            TablePartition tablePartition) {
+        return new FsPath(
+                remoteTableDir(
+                        remoteKvOrLogBaseDir,
+                        partitionPath.getTablePath(),
+                        tablePartition.getTableId()),
+                String.format(
+                        "%s-%s",
+                        partitionPath.getPartitionName(),
+                        PARTITION_DIR_PREFIX + tablePartition.getPartitionId()));
     }
 
     /**
@@ -659,26 +692,16 @@ public class FlussPaths {
      */
     private static FsPath remoteTabletParentDir(
             FsPath remoteDir, PhysicalTablePath physicalPath, TableBucket tableBucket) {
-        FsPath remoteTableDir =
-                new FsPath(
-                        remoteDir,
-                        String.format(
-                                "%s/%s-%d",
-                                physicalPath.getDatabaseName(),
-                                physicalPath.getTableName(),
-                                tableBucket.getTableId()));
-        if (physicalPath.getPartitionName() != null) {
+        if (physicalPath.getPartitionName() == null) {
+            return remoteTableDir(remoteDir, physicalPath.getTablePath(), tableBucket.getTableId());
+        } else {
             checkNotNull(
                     tableBucket.getPartitionId(),
                     "partition id shouldn't be null for partitioned table");
-            return new FsPath(
-                    remoteTableDir,
-                    String.format(
-                            "%s-%s",
-                            physicalPath.getPartitionName(),
-                            PARTITION_DIR_PREFIX + tableBucket.getPartitionId()));
-        } else {
-            return remoteTableDir;
+            return remotePartitionDir(
+                    remoteDir,
+                    physicalPath,
+                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
         }
     }
 }

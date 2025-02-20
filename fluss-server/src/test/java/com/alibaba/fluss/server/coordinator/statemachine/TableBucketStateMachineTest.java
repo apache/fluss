@@ -23,13 +23,11 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.server.coordinator.AutoPartitionManager;
-import com.alibaba.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import com.alibaba.fluss.server.coordinator.CoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorEventProcessor;
 import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
 import com.alibaba.fluss.server.coordinator.CoordinatorTestUtils;
-import com.alibaba.fluss.server.coordinator.RemoteStorageCleaner;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
@@ -46,8 +44,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -65,8 +61,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link TableBucketStateMachine}. */
 class TableBucketStateMachineTest {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TableBucketStateMachineTest.class);
-
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
@@ -76,9 +70,7 @@ class TableBucketStateMachineTest {
     private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
-    private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private AutoPartitionManager autoPartitionManager;
-    private RemoteStorageCleaner remoteStorageCleaner;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -102,10 +94,8 @@ class TableBucketStateMachineTest {
                             // do nothing
                         });
         serverMetadataCache = new ServerMetadataCacheImpl();
-        completedSnapshotStoreManager = new CompletedSnapshotStoreManager(1, 1, zookeeperClient);
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
-        remoteStorageCleaner = new RemoteStorageCleaner(conf);
     }
 
     @Test
@@ -232,16 +222,15 @@ class TableBucketStateMachineTest {
         CoordinatorEventProcessor coordinatorEventProcessor =
                 new CoordinatorEventProcessor(
                         zookeeperClient,
-                        remoteStorageCleaner,
                         serverMetadataCache,
                         new CoordinatorChannelManager(
                                 RpcClient.create(
                                         new Configuration(),
                                         TestingClientMetricGroup.newInstance())),
                         coordinatorContext,
-                        completedSnapshotStoreManager,
                         autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(coordinatorEventProcessor);
         coordinatorRequestBatch =

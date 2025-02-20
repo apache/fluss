@@ -23,7 +23,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.server.coordinator.CoordinatorService;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -49,6 +48,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecords;
 import static com.alibaba.fluss.testutils.DataTestUtils.getKeyValuePairs;
@@ -180,12 +180,9 @@ class KvSnapshotITCase {
             }
         }
         for (TablePath tablePath : tablePathMap.values()) {
-            DropTableRequest request = new DropTableRequest();
-            request.setIgnoreIfNotExists(true)
-                    .setTablePath()
-                    .setDatabaseName(tablePath.getDatabaseName())
-                    .setTableName(tablePath.getTableName());
-            coordinatorService.dropTable(request);
+            coordinatorService.dropTable(
+                    newDropTableRequest(
+                            tablePath.getDatabaseName(), tablePath.getTableName(), false));
         }
         checkDirsDeleted(bucketKvSnapshotDirs, tablePathMap);
     }
