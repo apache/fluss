@@ -97,9 +97,7 @@ public class CompletedSnapshotStoreManager {
                 });
     }
 
-    public void onRemoveCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
-        // Remove CompletedSnapshotStore is all we need to do, as remote KV files have already
-        // been cleaned up  when drop tables or partitions
+    public void removeCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
         for (TableBucket tableBucket : tableBuckets) {
             bucketCompletedSnapshotStores.remove(tableBucket);
         }

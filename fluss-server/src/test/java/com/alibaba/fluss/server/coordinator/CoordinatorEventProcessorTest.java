@@ -56,7 +56,6 @@ import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableIdsZNode;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -99,7 +98,11 @@ class CoordinatorEventProcessorTest {
 
     private static final TableDescriptor TEST_TABLE =
             TableDescriptor.builder()
-                    .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                    .schema(
+                            Schema.newBuilder()
+                                    .column("a", DataTypes.INT())
+                                    .primaryKey("a")
+                                    .build())
                     .distributedBy(3, "a")
                     .build()
                     .withReplicationFactor(REPLICATION_FACTOR);
@@ -183,10 +186,21 @@ class CoordinatorEventProcessorTest {
 
         verifyTableCreated(coordinatorContext, t2Id, tableAssignment, nBuckets, replicationFactor);
 
+        // mock CompletedSnapshotStore
+        Set<TableBucket> tableBuckets = coordinatorContext.getAllBucketsForTable(t1Id);
+        for (TableBucket tableBucket : tableBuckets) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                    new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
+        }
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
+
         // drop the table;
         metadataManager.dropTable(t1, false);
 
         verifyTableDropped(coordinatorContext, t1Id);
+
+        // verify CompleteSnapshotStore has been removed when the table is dropped
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
 
         // replicas and buckets for t2 should still be online
         verifyBucketForTableInState(coordinatorContext, t2Id, nBuckets, BucketState.OnlineBucket);
@@ -612,11 +626,44 @@ class CoordinatorEventProcessorTest {
                 nBuckets,
                 replicationFactor);
 
+        // mock CompletedSnapshotStore for partition1 and partition2
+        Set<TableBucket> tableBuckets4partition1 =
+                coordinatorContext.getAllBucketsForPartition(tableId, partition1Id);
+        Set<TableBucket> tableBuckets4partition2 =
+                coordinatorContext.getAllBucketsForPartition(tableId, partition2Id);
+        int sizeofCompletedSnapshotStore4partition1 = 0;
+        int sizeofCompletedSnapshotStore4partition2 = 0;
+        for (TableBucket tableBucket : tableBuckets4partition1) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                    new TableBucket(
+                            tableBucket.getTableId(),
+                            tableBucket.getPartitionId(),
+                            tableBucket.getBucket()));
+            sizeofCompletedSnapshotStore4partition1++;
+        }
+        for (TableBucket tableBucket : tableBuckets4partition2) {
+            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                    new TableBucket(
+                            tableBucket.getTableId(),
+                            tableBucket.getPartitionId(),
+                            tableBucket.getBucket()));
+            sizeofCompletedSnapshotStore4partition2++;
+        }
+
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
+                .isEqualTo(
+                        sizeofCompletedSnapshotStore4partition1
+                                + sizeofCompletedSnapshotStore4partition2);
+
         // drop the partition
         DropPartitionEvent dropPartitionEvent = new DropPartitionEvent(tableId, partition1Id);
         eventProcessor.process(dropPartitionEvent);
 
         verifyPartitionDropped(coordinatorContext, tableId, partition1Id);
+
+        // verify CompleteSnapshotStore has been removed when the table partition1 is dropped
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
+                .isEqualTo(sizeofCompletedSnapshotStore4partition2);
 
         // now, drop the table and restart the coordinator event processor,
         // the partition2 should be dropped
@@ -846,6 +893,7 @@ class CoordinatorEventProcessorTest {
                         Schema.newBuilder()
                                 .column("a", DataTypes.INT())
                                 .column("b", DataTypes.STRING())
+                                .primaryKey("a", "b")
                                 .build())
                 .distributedBy(3)
                 .partitionedBy("b")

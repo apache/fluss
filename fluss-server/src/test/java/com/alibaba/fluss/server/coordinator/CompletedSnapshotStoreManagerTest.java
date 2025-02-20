@@ -156,7 +156,7 @@ class CompletedSnapshotStoreManagerTest {
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
                 .isEqualTo(2);
         // after remove CompletedSnapshotStore
-        completedSnapshotStoreManager.onRemoveCompletedSnapshotStoreByTableBuckets(tableBuckets);
+        completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(tableBuckets);
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
     }
 

@@ -149,6 +149,11 @@ public final class TableInfo {
         return !primaryKeys.isEmpty();
     }
 
+    /** Check if the table is a primary key table or a log table. */
+    public boolean isPrimaryKeyTable() {
+        return hasPrimaryKey();
+    }
+
     /**
      * Returns the logical primary keys of the table. The logical primary keys are the defined
      * PRIMARY KEY clause when creating table.

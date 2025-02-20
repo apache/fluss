@@ -219,6 +219,10 @@ public class CoordinatorContext {
         this.partitionNameById.put(partitionId, partitionName);
     }
 
+    public TableInfo getTableInfoById(long tableId) {
+        return this.tableInfoById.get(tableId);
+    }
+
     public TablePath getTablePathById(long tableId) {
         return this.tablePathById.get(tableId);
     }

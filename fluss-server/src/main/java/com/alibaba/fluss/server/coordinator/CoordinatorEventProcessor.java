@@ -78,13 +78,11 @@ import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableIdsZNode;
 import com.alibaba.fluss.utils.types.Tuple2;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -499,11 +497,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processDropTable(DropTableEvent dropTableEvent) {
-        // When drop a table, drop its snapshot store meanwhile.
-        Set<TableBucket> deleteTableBuckets =
-                coordinatorContext.getAllBucketsForTable(dropTableEvent.getTableId());
-        completedSnapshotStoreManager.onRemoveCompletedSnapshotStoreByTableBuckets(
-                deleteTableBuckets);
+        // If this is a primary key table, drop the kv snapshot store.
+        TableInfo dropTableInfo = coordinatorContext.getTableInfoById(dropTableEvent.getTableId());
+        if (dropTableInfo.isPrimaryKeyTable()) {
+            Set<TableBucket> deleteTableBuckets =
+                    coordinatorContext.getAllBucketsForTable(dropTableEvent.getTableId());
+            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
+                    deleteTableBuckets);
+        }
 
         coordinatorContext.queueTableDeletion(Collections.singleton(dropTableEvent.getTableId()));
         tableManager.onDeleteTable(dropTableEvent.getTableId());
@@ -517,12 +518,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new TablePartition(
                         dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
 
-        // When drop a table partition, drop its snapshot store meanwhile.
-        Set<TableBucket> deleteTableBuckets =
-                coordinatorContext.getAllBucketsForPartition(
-                        dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
-        completedSnapshotStoreManager.onRemoveCompletedSnapshotStoreByTableBuckets(
-                deleteTableBuckets);
+        // If this is a primary key table partition, drop the kv snapshot store.
+        TableInfo dropTableInfo =
+                coordinatorContext.getTableInfoById(dropPartitionEvent.getTableId());
+        if (dropTableInfo.isPrimaryKeyTable()) {
+            Set<TableBucket> deleteTableBuckets =
+                    coordinatorContext.getAllBucketsForPartition(
+                            dropPartitionEvent.getTableId(), dropPartitionEvent.getPartitionId());
+            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
+                    deleteTableBuckets);
+        }
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
         tableManager.onDeletePartition(
