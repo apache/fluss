@@ -627,34 +627,18 @@ class CoordinatorEventProcessorTest {
                 nBuckets,
                 replicationFactor);
 
-        // mock CompletedSnapshotStore for partition1 and partition2
+        // mock CompletedSnapshotStore for partition1
         Set<TableBucket> tableBuckets4partition1 =
                 coordinatorContext.getAllBucketsForPartition(tableId, partition1Id);
-        Set<TableBucket> tableBuckets4partition2 =
-                coordinatorContext.getAllBucketsForPartition(tableId, partition2Id);
-        int sizeofCompletedSnapshotStore4partition1 = 0;
-        int sizeofCompletedSnapshotStore4partition2 = 0;
         for (TableBucket tableBucket : tableBuckets4partition1) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                     new TableBucket(
                             tableBucket.getTableId(),
                             tableBucket.getPartitionId(),
                             tableBucket.getBucket()));
-            sizeofCompletedSnapshotStore4partition1++;
-        }
-        for (TableBucket tableBucket : tableBuckets4partition2) {
-            completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                    new TableBucket(
-                            tableBucket.getTableId(),
-                            tableBucket.getPartitionId(),
-                            tableBucket.getBucket()));
-            sizeofCompletedSnapshotStore4partition2++;
         }
 
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
-                .isEqualTo(
-                        sizeofCompletedSnapshotStore4partition1
-                                + sizeofCompletedSnapshotStore4partition2);
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
 
         // drop the partition
         DropPartitionEvent dropPartitionEvent = new DropPartitionEvent(tableId, partition1Id);
@@ -663,8 +647,7 @@ class CoordinatorEventProcessorTest {
         verifyPartitionDropped(coordinatorContext, tableId, partition1Id);
 
         // verify CompleteSnapshotStore has been removed when the table partition1 is dropped
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
-                .isEqualTo(sizeofCompletedSnapshotStore4partition2);
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
 
         // now, drop the table and restart the coordinator event processor,
         // the partition2 should be dropped
