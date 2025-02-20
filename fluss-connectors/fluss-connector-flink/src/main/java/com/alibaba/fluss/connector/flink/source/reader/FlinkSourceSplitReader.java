@@ -36,6 +36,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
+import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -260,20 +261,15 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 }
             } catch (Exception e) {
                 // Traverse the exception chain to check for PartitionNotExistException.
-                Throwable cause = e;
-                boolean partitionNotExist = false;
-                while (cause != null) {
-                    if (cause instanceof PartitionNotExistException) {
-                        partitionNotExist = true;
-                        break;
-                    }
-                    cause = cause.getCause();
-                }
+                boolean partitionNotExist =
+                        ExceptionUtils.findThrowable(e, PartitionNotExistException.class)
+                                .isPresent();
                 if (partitionNotExist) {
                     LOG.warn(
                             "Partition {} does not exist when subscribing to log for split {}. Skipping subscription.",
                             partitionId,
                             split.splitId());
+                    return;
                 }
             }
 

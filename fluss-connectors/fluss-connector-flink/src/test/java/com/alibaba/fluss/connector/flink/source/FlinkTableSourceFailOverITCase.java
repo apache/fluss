@@ -18,48 +18,54 @@ package com.alibaba.fluss.connector.flink.source;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
+import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
-import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.client.program.ClusterClient;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.StateBackendOptions;
-import org.apache.flink.core.execution.RestoreMode;
+import org.apache.flink.configuration.StateRecoveryOptions;
 import org.apache.flink.core.execution.SavepointFormatType;
-import org.apache.flink.runtime.jobgraph.JobGraph;
-import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
-import org.apache.flink.runtime.jobmaster.JobResult;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.Table;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
-import org.junit.jupiter.api.BeforeAll;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.CloseableIterator;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.time.Duration;
+import java.time.Year;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-import static org.apache.flink.runtime.testutils.CommonTestUtils.waitForAllTaskRunning;
-import static org.assertj.core.api.Assertions.assertThat;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.createPartitions;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.dropPartitions;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.waitUntilPartitions;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 
 /** IT case for flink table source fail over. */
 class FlinkTableSourceFailOverITCase {
 
     private static final String CATALOG_NAME = "testcatalog";
+
+    @TempDir public static File checkpointDir;
+    @TempDir public static File savepointDir;
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -75,35 +81,25 @@ class FlinkTableSourceFailOverITCase {
                     .setNumOfTabletServers(3)
                     .build();
 
-    @TempDir File checkpointDir;
-    @TempDir File savepointDir;
+    com.alibaba.fluss.config.Configuration clientConf;
+    ZooKeeperClient zkClient;
+    Connection conn;
 
-    protected static Connection conn;
-    protected static Admin admin;
-
-    protected static com.alibaba.fluss.config.Configuration clientConf;
-
-    @BeforeAll
-    protected static void beforeAll() {
+    @BeforeEach
+    protected void beforeEach() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         conn = ConnectionFactory.createConnection(clientConf);
-        admin = conn.getAdmin();
     }
 
-    @Test
-    void testRestore() throws Exception {
-        final int numTaskManagers = 2;
-        final int numSlotsPerTaskManager = 2;
-        final int parallelism = numTaskManagers * numSlotsPerTaskManager;
+    @AfterEach
+    protected void afterEach() throws Exception {
+        conn.close();
+    }
 
-        final MiniClusterResourceFactory clusterFactory =
-                new MiniClusterResourceFactory(
-                        numTaskManagers,
-                        numSlotsPerTaskManager,
-                        getFileBasedCheckpointsConfig(savepointDir));
-
+    private StreamTableEnvironment initTableEnvironment() {
         StreamExecutionEnvironment execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        execEnv.setParallelism(parallelism);
+        execEnv.setParallelism(1);
         StreamTableEnvironment tEnv =
                 StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
@@ -113,123 +109,117 @@ class FlinkTableSourceFailOverITCase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
+        return tEnv;
+    }
 
-        tEnv.executeSql(
-                "create table test_partitioned("
-                        + "a int, b varchar"
-                        + ") partitioned by (b) "
-                        + "with ("
-                        + "'table.auto-partition.enabled' = 'true',"
-                        + "'table.auto-partition.time-unit' = 'year',"
-                        + "'scan.partition.discovery.interval' = '100ms',"
-                        + "'table.auto-partition.num-precreate' = '1')");
+    @Test
+    void testRestore() throws Exception {
+        final int numTaskManagers = 2;
+        final int numSlotsPerTaskManager = 2;
 
-        tEnv.executeSql(
-                "create temporary table test_partitioned_sink(a int, b varchar) with ('connector' = 'blackhole')");
+        // Start Flink
+        MiniClusterWithClientResource cluster =
+                new MiniClusterWithClientResource(
+                        new MiniClusterResourceConfiguration.Builder()
+                                .setConfiguration(getFileBasedCheckpointsConfig(savepointDir))
+                                .setNumberTaskManagers(numTaskManagers)
+                                .setNumberSlotsPerTaskManager(numSlotsPerTaskManager)
+                                .build());
 
-        Table table = tEnv.sqlQuery("select * from test_partitioned");
-        tEnv.toDataStream(table).addSink(new DiscardingSink<>());
-
-        JobGraph jobGraph = execEnv.getStreamGraph().getJobGraph();
-
-        JobID jobId = jobGraph.getJobID();
-
-        MiniClusterWithClientResource cluster = clusterFactory.get();
         cluster.before();
-        ClusterClient<?> client = cluster.getClusterClient();
-
-        String savePointPath;
 
         try {
-            client.submitJob(jobGraph).get();
-            waitForAllTaskRunning(cluster.getMiniCluster(), jobId, false);
+            StreamTableEnvironment tEnv = initTableEnvironment();
+            tEnv.executeSql(
+                    "create table test_partitioned ("
+                            + "a int, b varchar"
+                            + ") partitioned by (b) "
+                            + "with ("
+                            + "'table.auto-partition.enabled' = 'true',"
+                            + "'table.auto-partition.time-unit' = 'year',"
+                            + "'scan.partition.discovery.interval' = '100ms',"
+                            + "'table.auto-partition.num-precreate' = '1')");
+            tEnv.executeSql("create table result_table (a int, b varchar)");
+
+            TablePath tablePath = TablePath.of("fluss", "test_partitioned");
 
             // create a partition manually
-            FlinkTestBase.createPartitions(
-                    FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
-                    TablePath.of("fluss", "test_partitioned"),
-                    Collections.singletonList("2000"));
-            // wait from a while to wait the source discovery the partition changes.
-            Thread.sleep(3000);
+            createPartitions(zkClient, tablePath, Collections.singletonList("4000"));
+            waitUntilPartitions(zkClient, tablePath, 2);
 
-            // drop a partition manually,
-            FlinkTestBase.dropPartitions(
-                    FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
-                    TablePath.of("fluss", "test_partitioned"),
-                    Collections.singleton("2000"));
+            // append 3 records for each partition
+            Table table = conn.getTable(tablePath);
+            AppendWriter writer = table.newAppend().createWriter();
+            String thisYear = String.valueOf(Year.now().getValue());
+            List<String> expected = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                writer.append(row(i, thisYear));
+                writer.append(row(i, "4000"));
+                expected.add("+I[" + i + ", " + thisYear + "]");
+                expected.add("+I[" + i + ", 4000]");
+            }
+            writer.flush();
 
-            // wait from a while to wait the source unsubscribe the partition
-            Thread.sleep(3000);
+            // execute the query to fetch logs from the table
+            TableResult insertResult =
+                    tEnv.executeSql("insert into result_table select * from test_partitioned");
+            // we have to create a intermediate table to collect result,
+            // because CollectSink can't be restored from savepoint
+            CloseableIterator<Row> results =
+                    tEnv.executeSql("select * from result_table").collect();
+            assertResultsIgnoreOrder(results, expected, false);
+            expected.clear();
+
+            // drop the partition manually
+            dropPartitions(zkClient, tablePath, Collections.singleton("4000"));
+            waitUntilPartitions(zkClient, tablePath, 1);
+
+            // create a new partition again and append records into it
+            createPartitions(zkClient, tablePath, Collections.singletonList("5000"));
+            waitUntilPartitions(zkClient, tablePath, 2);
+            writer.append(row(4, "5000")).get();
+            expected.add("+I[4, 5000]");
+            // if the source subscribes the new partition successfully,
+            // it should have removed the old partition successfully
+            assertResultsIgnoreOrder(results, expected, false);
+            expected.clear();
 
             // now, stop the job with save point
-            savePointPath =
-                    client.cancelWithSavepoint(jobId, null, SavepointFormatType.CANONICAL).get();
+            String savepointPath =
+                    insertResult
+                            .getJobClient()
+                            .get()
+                            .stopWithSavepoint(
+                                    false,
+                                    savepointDir.getAbsolutePath(),
+                                    SavepointFormatType.CANONICAL)
+                            .get();
 
-            execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-            execEnv.setParallelism(parallelism);
-            tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
-            // crate catalog using sql
-            tEnv.executeSql(
-                    String.format(
-                            "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                            CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
-            tEnv.executeSql("use catalog " + CATALOG_NAME);
-            table = tEnv.sqlQuery("select * from test_partitioned");
-            tEnv.toDataStream(table).addSink(new DiscardingSink<>());
-            jobGraph = execEnv.getStreamGraph().getJobGraph();
-            SavepointRestoreSettings savepointRestoreSettings =
-                    SavepointRestoreSettings.forPath(savePointPath, false, RestoreMode.CLAIM.CLAIM);
-            jobGraph.setSavepointRestoreSettings(savepointRestoreSettings);
-            client.submitJob(jobGraph).get();
-            jobId = jobGraph.getJobID();
-
-            waitForAllTaskRunning(cluster.getMiniCluster(), jobId, false);
-            JobResult jobResult = client.requestJobResult(jobId).get();
-            if (jobResult.getSerializedThrowable().isPresent()) {
-                assertThat(
-                                jobResult.getSerializedThrowable().get().getCause()
-                                        instanceof PartitionNotExistException)
-                        .isEqualTo(false);
-                System.out.println(
-                        jobResult.getSerializedThrowable().get().getFullStringifiedStackTrace());
-            }
+            tEnv.getConfig().set(StateRecoveryOptions.SAVEPOINT_PATH, savepointPath);
+            insertResult =
+                    tEnv.executeSql("insert into result_table select * from test_partitioned");
+            // append a new row again to check if the source can restore the state correctly
+            writer.append(row(5, "5000")).get();
+            expected.add("+I[5, 5000]");
+            assertResultsIgnoreOrder(results, expected, true);
+            // cancel the insert job
+            insertResult.getJobClient().get().cancel().get();
         } finally {
+            // stop the cluster and thereby cancel the job
             cluster.after();
         }
     }
 
-    private Configuration getFileBasedCheckpointsConfig(File savepointDir) {
+    private static Configuration getFileBasedCheckpointsConfig(File savepointDir) {
         return getFileBasedCheckpointsConfig(savepointDir.toURI().toString());
     }
 
-    private Configuration getFileBasedCheckpointsConfig(final String savepointDir) {
+    private static Configuration getFileBasedCheckpointsConfig(final String savepointDir) {
         final Configuration config = new Configuration();
         config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
         config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, checkpointDir.toURI().toString());
         config.set(CheckpointingOptions.FS_SMALL_FILE_THRESHOLD, MemorySize.ZERO);
         config.set(CheckpointingOptions.SAVEPOINT_DIRECTORY, savepointDir);
         return config;
-    }
-
-    private static class MiniClusterResourceFactory {
-        private final int numTaskManagers;
-        private final int numSlotsPerTaskManager;
-        private final Configuration config;
-
-        private MiniClusterResourceFactory(
-                int numTaskManagers, int numSlotsPerTaskManager, Configuration config) {
-            this.numTaskManagers = numTaskManagers;
-            this.numSlotsPerTaskManager = numSlotsPerTaskManager;
-            this.config = config;
-        }
-
-        MiniClusterWithClientResource get() {
-            return new MiniClusterWithClientResource(
-                    new MiniClusterResourceConfiguration.Builder()
-                            .setConfiguration(config)
-                            .setNumberTaskManagers(numTaskManagers)
-                            .setNumberSlotsPerTaskManager(numSlotsPerTaskManager)
-                            .build());
-        }
     }
 }
