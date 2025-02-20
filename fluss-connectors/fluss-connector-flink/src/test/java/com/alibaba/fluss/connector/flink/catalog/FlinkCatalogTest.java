@@ -21,7 +21,6 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.ExceptionUtils;
-
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
@@ -124,6 +123,10 @@ class FlinkCatalogTest {
 
     @BeforeEach
     void beforeEach() throws Exception {
+        // First check if database exists, and drop it if it does
+        if (catalog.databaseExists(DEFAULT_DB)) {
+            catalog.dropDatabase(DEFAULT_DB, true, true);
+        }
         try {
             catalog.createDatabase(
                     DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
