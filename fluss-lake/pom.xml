@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>fluss-lake</artifactId>
-    <name>Fluss : Lake</name>
+    <name>Fluss : Lake :</name>
     <modules>
         <module>fluss-lake-common</module>
     </modules>

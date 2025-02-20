@@ -73,6 +73,7 @@
         <module>fluss-protogen</module>
         <module>fluss-benchmark</module>
         <module>fluss-lake</module>
+        <!-- fluss-lakehouse module is deprecated, will be removed once fluss-lake ready -->
         <module>fluss-lakehouse</module>
     </modules>
 
