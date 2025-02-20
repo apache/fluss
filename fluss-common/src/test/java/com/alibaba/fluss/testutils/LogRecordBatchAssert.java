@@ -33,6 +33,7 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
 
     private RowType rowType;
     private LogFormat logFormat;
+    private boolean assertCheckSum = true;
 
     /** Creates assertions for {@link LogRecordBatch}. */
     public static LogRecordBatchAssert assertThatLogRecordBatch(LogRecordBatch actual) {
@@ -45,6 +46,11 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
 
     public LogRecordBatchAssert withSchema(RowType rowType) {
         this.rowType = rowType;
+        return this;
+    }
+
+    public LogRecordBatchAssert assertCheckSum(boolean assertCheckSum) {
+        this.assertCheckSum = assertCheckSum;
         return this;
     }
 
@@ -95,9 +101,12 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
         assertThat(actual.sizeInBytes())
                 .as("LogRecordBatch#sizeInBytes()")
                 .isEqualTo(expected.sizeInBytes());
-        assertThat(actual.checksum())
-                .as("LogRecordBatch#checksum()")
-                .isEqualTo(expected.checksum());
+
+        if (assertCheckSum) {
+            assertThat(actual.checksum())
+                    .as("LogRecordBatch#checksum()")
+                    .isEqualTo(expected.checksum());
+        }
         return this;
     }
 

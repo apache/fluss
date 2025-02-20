@@ -123,7 +123,7 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<DatabaseInfo> getDatabaseInfo(String databaseName);
 
     /**
-     * Delete the database with the given name asynchronously.
+     * Drop the database with the given name asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
@@ -140,7 +140,7 @@ public interface Admin extends AutoCloseable {
      *     nothing.
      * @param cascade Flag to specify whether to delete all tables in the database.
      */
-    CompletableFuture<Void> deleteDatabase(
+    CompletableFuture<Void> dropDatabase(
             String databaseName, boolean ignoreIfNotExists, boolean cascade);
 
     /**
@@ -191,7 +191,7 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<TableInfo> getTableInfo(TablePath tablePath);
 
     /**
-     * Delete the table with the given table path asynchronously.
+     * Drop the table with the given table path asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
@@ -204,7 +204,7 @@ public interface Admin extends AutoCloseable {
      * @param ignoreIfNotExists Flag to specify behavior when a table with the given name does not
      *     exist: if set to false, throw a TableNotExistException, if set to true, do nothing.
      */
-    CompletableFuture<Void> deleteTable(TablePath tablePath, boolean ignoreIfNotExists);
+    CompletableFuture<Void> dropTable(TablePath tablePath, boolean ignoreIfNotExists);
 
     /**
      * Get whether table exists asynchronously.

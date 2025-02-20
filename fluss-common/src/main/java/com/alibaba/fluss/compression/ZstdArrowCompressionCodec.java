@@ -77,7 +77,7 @@ public class ZstdArrowCompressionCodec extends AbstractCompressionCodec {
         if (Zstd.isError(decompressedSize)) {
             uncompressedBuffer.close();
             throw new RuntimeException(
-                    "Error decompressing: " + Zstd.getErrorName(decompressedLength));
+                    "Error decompressing: " + Zstd.getErrorName(decompressedSize));
         }
         if (decompressedLength != decompressedSize) {
             uncompressedBuffer.close();

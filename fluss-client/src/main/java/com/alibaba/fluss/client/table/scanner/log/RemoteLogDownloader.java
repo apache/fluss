@@ -28,6 +28,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.FlussPaths;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -101,7 +102,7 @@ public class RemoteLogDownloader implements Closeable {
             long pollTimeout) {
         this.segmentsToFetch = new LinkedBlockingQueue<>();
         this.segmentsToRecycle = new LinkedBlockingQueue<>();
-        this.fetchedFiles = new ConcurrentHashMap<>();
+        this.fetchedFiles = MapUtils.newConcurrentHashMap();
         this.remoteFileDownloader = remoteFileDownloader;
         this.scannerMetricGroup = scannerMetricGroup;
         this.pollTimeout = pollTimeout;

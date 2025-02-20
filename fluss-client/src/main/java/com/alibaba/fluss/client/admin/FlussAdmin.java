@@ -61,6 +61,7 @@ import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
@@ -71,7 +72,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
@@ -176,7 +176,7 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<Void> deleteDatabase(
+    public CompletableFuture<Void> dropDatabase(
             String databaseName, boolean ignoreIfNotExists, boolean cascade) {
         DropDatabaseRequest request = new DropDatabaseRequest();
 
@@ -232,7 +232,7 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<Void> deleteTable(TablePath tablePath, boolean ignoreIfNotExists) {
+    public CompletableFuture<Void> dropTable(TablePath tablePath, boolean ignoreIfNotExists) {
         DropTableRequest request = new DropTableRequest();
         request.setIgnoreIfNotExists(ignoreIfNotExists)
                 .setTablePath()
@@ -332,7 +332,7 @@ public class FlussAdmin implements Admin {
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
                         metadataUpdater, tableId, partitionId, buckets, offsetSpec);
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
         }

@@ -249,7 +249,11 @@ class NewTableAddedPaimonListenerTest {
 
         // check bucket num
         Options options = Options.fromMap(paimonTable.options());
-        assertThat(options.get(CoreOptions.BUCKET)).isEqualTo(bucketNum);
+        assertThat(options.get(CoreOptions.BUCKET))
+                .isEqualTo(
+                        expectedBucketKey == null
+                                ? CoreOptions.BUCKET.defaultValue().intValue()
+                                : bucketNum);
         assertThat(options.get(CoreOptions.BUCKET_KEY)).isEqualTo(expectedBucketKey);
 
         // check custom properties

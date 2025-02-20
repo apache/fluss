@@ -89,6 +89,7 @@ import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.IOUtils;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.types.Tuple2;
 
@@ -114,7 +115,6 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -181,7 +181,8 @@ public final class Replica {
      *
      * <p>followerId -> {@link FollowerReplica}.
      */
-    private final Map<Integer, FollowerReplica> followerReplicasMap = new ConcurrentHashMap<>();
+    private final Map<Integer, FollowerReplica> followerReplicasMap =
+            MapUtils.newConcurrentHashMap();
 
     private volatile IsrState isrState = new IsrState.CommittedIsrState(Collections.emptyList());
     private volatile int leaderEpoch = LeaderAndIsr.INITIAL_LEADER_EPOCH - 1;

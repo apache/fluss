@@ -40,6 +40,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -53,7 +54,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -70,7 +70,7 @@ public final class KvManager extends TabletManagerBase {
 
     private final ZooKeeperClient zkClient;
 
-    private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
+    private final Map<TableBucket, KvTablet> currentKvs = MapUtils.newConcurrentHashMap();
 
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of

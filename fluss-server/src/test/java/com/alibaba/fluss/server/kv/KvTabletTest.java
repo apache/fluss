@@ -28,6 +28,7 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.FileLogProjection;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordTestUtils;
@@ -36,6 +37,7 @@ import com.alibaba.fluss.record.LogTestBase;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.TestData;
+import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
@@ -57,6 +59,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import javax.annotation.Nullable;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -78,6 +84,7 @@ import static com.alibaba.fluss.record.TestData.DATA3_SCHEMA_PK;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
+import static com.alibaba.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Fail.fail;
@@ -114,10 +121,17 @@ class KvTabletTest {
 
     private void initLogTabletAndKvTablet(Schema schema, Map<String, String> tableConfig)
             throws Exception {
-        PhysicalTablePath tablePath = PhysicalTablePath.of(TablePath.of("testDb", "t1"));
-        logTablet = createLogTablet(tempLogDir, 0L, tablePath);
+        initLogTabletAndKvTablet(TablePath.of("testDb", "t1"), schema, tableConfig);
+    }
+
+    private void initLogTabletAndKvTablet(
+            TablePath tablePath, Schema schema, Map<String, String> tableConfig) throws Exception {
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
+        logTablet = createLogTablet(tempLogDir, 0L, physicalTablePath);
         TableBucket tableBucket = logTablet.getTableBucket();
-        kvTablet = createKvTablet(tablePath, tableBucket, logTablet, tmpKvDir, schema, tableConfig);
+        kvTablet =
+                createKvTablet(
+                        physicalTablePath, tableBucket, logTablet, tmpKvDir, schema, tableConfig);
     }
 
     private LogTablet createLogTablet(File tempLogDir, long tableId, PhysicalTablePath tablePath)
@@ -579,11 +593,24 @@ class KvTabletTest {
         assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(3);
     }
 
-    @Test
-    void testFirstRowMergeEngine() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFirstRowMergeEngine(boolean doProjection) throws Exception {
         Map<String, String> config = new HashMap<>();
         config.put("table.merge-engine", "first_row");
-        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, config);
+        String tableName =
+                "test_first_row_merge_engine_" + (doProjection ? "projection" : "no_projection");
+        TablePath tablePath = TablePath.of("testDb", tableName);
+        initLogTabletAndKvTablet(tablePath, DATA1_SCHEMA_PK, config);
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
+        FileLogProjection logProjection = null;
+        if (doProjection) {
+            logProjection = new FileLogProjection();
+            logProjection.setCurrentProjection(
+                    0L, rowType, ArrowCompressionInfo.NO_COMPRESSION, new int[] {0});
+        }
+
+        RowType readLogRowType = doProjection ? rowType.project(new int[] {0}) : rowType;
 
         List<KvRecord> kvData1 =
                 Arrays.asList(
@@ -593,44 +620,106 @@ class KvTabletTest {
         KvRecordBatch kvRecordBatch1 = kvRecordBatchFactory.ofRecords(kvData1);
         kvTablet.putAsLeader(kvRecordBatch1, null);
         long endOffset = logTablet.localLogEndOffset();
-        LogRecords actualLogRecords = readLogRecords(logTablet);
-        List<MemoryLogRecords> expectedLogs =
-                Collections.singletonList(
-                        logRecords(
-                                DATA1_SCHEMA_PK.getRowType(),
-                                0,
-                                Arrays.asList(RowKind.INSERT, RowKind.INSERT),
-                                Arrays.asList(new Object[] {1, "v11"}, new Object[] {2, "v21"})));
-        checkEqual(actualLogRecords, expectedLogs);
+        LogRecords actualLogRecords = readLogRecords(logTablet, 0L, logProjection);
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        readLogRowType,
+                        0,
+                        Arrays.asList(RowKind.INSERT, RowKind.INSERT),
+                        doProjection
+                                ? Arrays.asList(new Object[] {1}, new Object[] {2})
+                                : Arrays.asList(new Object[] {1, "v11"}, new Object[] {2, "v21"}));
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(readLogRowType)
+                .assertCheckSum(!doProjection)
+                .isEqualTo(expectedLogs);
 
-        List<KvRecord> kvData2 =
+        // append some new batches which will not generate only cdc logs, but the endOffset will be
+        // updated.
+        int emptyBatchCount = 3;
+        long offsetBefore = endOffset;
+        for (int i = 0; i < emptyBatchCount; i++) {
+            List<KvRecord> kvData2 =
+                    Arrays.asList(
+                            kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "v111"}),
+                            kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v222"}),
+                            kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v233"}));
+            KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData2);
+            kvTablet.putAsLeader(kvRecordBatch2, null);
+            endOffset = logTablet.localLogEndOffset();
+            assertThat(endOffset).isEqualTo(offsetBefore + i + 1);
+
+            // the empty batch will be read if no projection,
+            // the empty batch will not be read if has projection
+            if (!doProjection) {
+                MemoryLogRecords emptyLogs =
+                        logRecords(
+                                readLogRowType,
+                                offsetBefore + i,
+                                Collections.emptyList(),
+                                Collections.emptyList());
+                MultiBytesView bytesView =
+                        MultiBytesView.builder()
+                                .addBytes(
+                                        expectedLogs.getMemorySegment(),
+                                        0,
+                                        expectedLogs.sizeInBytes())
+                                .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
+                                .build();
+                expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
+            }
+            actualLogRecords = readLogRecords(logTablet, 0, logProjection);
+            assertThatLogRecords(actualLogRecords)
+                    .withSchema(readLogRowType)
+                    .assertCheckSum(!doProjection)
+                    .isEqualTo(expectedLogs);
+        }
+
+        List<KvRecord> kvData3 =
                 Arrays.asList(
                         kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v22"}),
                         kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "v21"}),
                         kvRecordFactory.ofRecord("k1".getBytes(), null),
                         kvRecordFactory.ofRecord("k3".getBytes(), new Object[] {3, "v31"}));
-        KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData2);
-        kvTablet.putAsLeader(kvRecordBatch2, null);
+        KvRecordBatch kvRecordBatch3 = kvRecordBatchFactory.ofRecords(kvData3);
+        kvTablet.putAsLeader(kvRecordBatch3, null);
 
         expectedLogs =
-                Collections.singletonList(
-                        logRecords(
-                                DATA1_SCHEMA_PK.getRowType(),
-                                endOffset,
-                                Collections.singletonList(RowKind.INSERT),
-                                Collections.singletonList(new Object[] {3, "v31"})));
-        actualLogRecords = readLogRecords(logTablet, endOffset);
-        checkEqual(actualLogRecords, expectedLogs);
+                logRecords(
+                        readLogRowType,
+                        endOffset,
+                        Collections.singletonList(RowKind.INSERT),
+                        Collections.singletonList(
+                                doProjection ? new Object[] {3} : new Object[] {3, "v31"}));
+        actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(readLogRowType)
+                .assertCheckSum(!doProjection)
+                .isEqualTo(expectedLogs);
     }
 
-    @Test
-    void testVersionRowMergeEngine() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testVersionRowMergeEngine(boolean doProjection) throws Exception {
         Map<String, String> config = new HashMap<>();
         config.put("table.merge-engine", "versioned");
         config.put("table.merge-engine.versioned.ver-column", "b");
-        initLogTabletAndKvTablet(DATA3_SCHEMA_PK, config);
+        String tableName =
+                "test_versioned_row_merge_engine_"
+                        + (doProjection ? "projection" : "no_projection");
+        TablePath tablePath = TablePath.of("testDb", tableName);
+        initLogTabletAndKvTablet(tablePath, DATA3_SCHEMA_PK, config);
+        RowType rowType = DATA3_SCHEMA_PK.getRowType();
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(DATA3_SCHEMA_PK.getRowType());
+                KvRecordTestUtils.KvRecordFactory.of(rowType);
+
+        FileLogProjection logProjection = null;
+        if (doProjection) {
+            logProjection = new FileLogProjection();
+            logProjection.setCurrentProjection(
+                    0L, rowType, ArrowCompressionInfo.NO_COMPRESSION, new int[] {0});
+        }
+        RowType readLogRowType = doProjection ? rowType.project(new int[] {0}) : rowType;
 
         List<KvRecord> kvData1 =
                 Arrays.asList(
@@ -641,25 +730,73 @@ class KvTabletTest {
         kvTablet.putAsLeader(kvRecordBatch1, null);
 
         long endOffset = logTablet.localLogEndOffset();
-        LogRecords actualLogRecords = readLogRecords(logTablet);
-        List<MemoryLogRecords> expectedLogs =
-                Collections.singletonList(
-                        logRecords(
-                                DATA3_SCHEMA_PK.getRowType(),
-                                0,
-                                Arrays.asList(
-                                        RowKind.INSERT,
-                                        RowKind.INSERT,
-                                        RowKind.UPDATE_BEFORE,
-                                        RowKind.UPDATE_AFTER),
-                                Arrays.asList(
+        LogRecords actualLogRecords = readLogRecords(logTablet, 0L, logProjection);
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        readLogRowType,
+                        0,
+                        Arrays.asList(
+                                RowKind.INSERT,
+                                RowKind.INSERT,
+                                RowKind.UPDATE_BEFORE,
+                                RowKind.UPDATE_AFTER),
+                        doProjection
+                                ? Arrays.asList(
+                                        new Object[] {1},
+                                        new Object[] {2},
+                                        new Object[] {2},
+                                        new Object[] {2})
+                                : Arrays.asList(
                                         new Object[] {1, 1000L},
                                         new Object[] {2, 1000L},
                                         new Object[] {2, 1000L},
-                                        new Object[] {2, 1001L})));
-        checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.getRowType());
+                                        new Object[] {2, 1001L}));
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(readLogRowType)
+                .assertCheckSum(!doProjection)
+                .isEqualTo(expectedLogs);
 
-        List<KvRecord> kvData2 =
+        // append some new batches which will not generate only cdc logs, but the endOffset will be
+        // updated.
+        int emptyBatchCount = 3;
+        long offsetBefore = endOffset;
+        for (int i = 0; i < emptyBatchCount; i++) {
+            List<KvRecord> kvData2 =
+                    Arrays.asList(
+                            kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, 999L}),
+                            kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, 998L}));
+            KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData2);
+            kvTablet.putAsLeader(kvRecordBatch2, null);
+            endOffset = logTablet.localLogEndOffset();
+            assertThat(endOffset).isEqualTo(offsetBefore + i + 1);
+
+            // the empty batch will be read if no projection,
+            // the empty batch will not be read if has projection
+            if (!doProjection) {
+                MemoryLogRecords emptyLogs =
+                        logRecords(
+                                readLogRowType,
+                                offsetBefore + i,
+                                Collections.emptyList(),
+                                Collections.emptyList());
+                MultiBytesView bytesView =
+                        MultiBytesView.builder()
+                                .addBytes(
+                                        expectedLogs.getMemorySegment(),
+                                        0,
+                                        expectedLogs.sizeInBytes())
+                                .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
+                                .build();
+                expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
+            }
+            actualLogRecords = readLogRecords(logTablet, 0, logProjection);
+            assertThatLogRecords(actualLogRecords)
+                    .withSchema(readLogRowType)
+                    .assertCheckSum(!doProjection)
+                    .isEqualTo(expectedLogs);
+        }
+
+        List<KvRecord> kvData3 =
                 Arrays.asList(
                         kvRecordFactory.ofRecord(
                                 "k2".getBytes(), new Object[] {2, 1000L}), // not update
@@ -667,24 +804,26 @@ class KvTabletTest {
                                 "k1".getBytes(), new Object[] {1, 1001L}), // -U , +U
                         kvRecordFactory.ofRecord("k1".getBytes(), null), // not update
                         kvRecordFactory.ofRecord("k3".getBytes(), new Object[] {3, 1000L})); // +I
-        KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData2);
-        kvTablet.putAsLeader(kvRecordBatch2, null);
+        KvRecordBatch kvRecordBatch3 = kvRecordBatchFactory.ofRecords(kvData3);
+        kvTablet.putAsLeader(kvRecordBatch3, null);
 
         expectedLogs =
-                Collections.singletonList(
-                        logRecords(
-                                DATA3_SCHEMA_PK.getRowType(),
-                                endOffset,
-                                Arrays.asList(
-                                        RowKind.UPDATE_BEFORE,
-                                        RowKind.UPDATE_AFTER,
-                                        RowKind.INSERT),
-                                Arrays.asList(
+                logRecords(
+                        readLogRowType,
+                        endOffset,
+                        Arrays.asList(RowKind.UPDATE_BEFORE, RowKind.UPDATE_AFTER, RowKind.INSERT),
+                        doProjection
+                                ? Arrays.asList(
+                                        new Object[] {1}, new Object[] {1}, new Object[] {3})
+                                : Arrays.asList(
                                         new Object[] {1, 1000L},
                                         new Object[] {1, 1001L},
-                                        new Object[] {3, 1000L})));
-        actualLogRecords = readLogRecords(logTablet, endOffset);
-        checkEqual(actualLogRecords, expectedLogs, DATA3_SCHEMA_PK.getRowType());
+                                        new Object[] {3, 1000L}));
+        actualLogRecords = readLogRecords(logTablet, endOffset, logProjection);
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(readLogRowType)
+                .assertCheckSum(!doProjection)
+                .isEqualTo(expectedLogs);
     }
 
     @Test
@@ -725,13 +864,15 @@ class KvTabletTest {
         return readLogRecords(logTablet, startOffset);
     }
 
-    private LogRecords readLogRecords(LogTablet logTablet) throws Exception {
-        return readLogRecords(logTablet, 0L);
+    private LogRecords readLogRecords(LogTablet logTablet, long startOffset) throws Exception {
+        return readLogRecords(logTablet, startOffset, null);
     }
 
-    private LogRecords readLogRecords(LogTablet logTablet, long startOffset) throws Exception {
+    private LogRecords readLogRecords(
+            LogTablet logTablet, long startOffset, @Nullable FileLogProjection projection)
+            throws Exception {
         return logTablet
-                .read(startOffset, Integer.MAX_VALUE, FetchIsolation.LOG_END, false, null)
+                .read(startOffset, Integer.MAX_VALUE, FetchIsolation.LOG_END, false, projection)
                 .getRecords();
     }
 

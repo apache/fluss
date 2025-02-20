@@ -53,11 +53,9 @@ class PrimaryKeyLookuper implements Lookuper {
      */
     private final KeyEncoder bucketKeyEncoder;
 
-    private final boolean isDataLakeEnable;
-
     private final int numBuckets;
 
-    private final LakeTableBucketAssigner lakeTableBucketAssigner;
+    private final @Nullable LakeTableBucketAssigner lakeTableBucketAssigner;
 
     /** a getter to extract partition from lookup key row, null when it's not a partitioned. */
     private @Nullable final PartitionGetter partitionGetter;
@@ -88,9 +86,15 @@ class PrimaryKeyLookuper implements Lookuper {
             this.bucketKeyEncoder =
                     KeyEncoder.createKeyEncoder(lookupRowType, tableInfo.getBucketKeys());
         }
-        this.isDataLakeEnable = tableInfo.getTableConfig().isDataLakeEnabled();
-        this.lakeTableBucketAssigner =
-                new LakeTableBucketAssigner(lookupRowType, tableInfo.getBucketKeys(), numBuckets);
+
+        if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+            this.lakeTableBucketAssigner =
+                    new LakeTableBucketAssigner(
+                            lookupRowType, tableInfo.getBucketKeys(), numBuckets);
+        } else {
+            this.lakeTableBucketAssigner = null;
+        }
+
         this.partitionGetter =
                 tableInfo.isPartitioned()
                         ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
@@ -121,12 +125,7 @@ class PrimaryKeyLookuper implements Lookuper {
                                 metadataUpdater);
         int bucketId =
                 getBucketId(
-                        bkBytes,
-                        lookupKey,
-                        lakeTableBucketAssigner,
-                        isDataLakeEnable,
-                        numBuckets,
-                        metadataUpdater);
+                        bkBytes, lookupKey, lakeTableBucketAssigner, numBuckets, metadataUpdater);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         return lookupClient
                 .lookup(tableBucket, pkBytes)

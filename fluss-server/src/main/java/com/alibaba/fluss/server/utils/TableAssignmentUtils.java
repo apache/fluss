@@ -87,8 +87,8 @@ public class TableAssignmentUtils {
      * <p>To achieve this goal for replica assignment, we:
      *
      * <ol>
-     *   <li>Assign the first replica of each bucket by round-bin, starting starting from a random
-     *       position in the tablet server list.
+     *   <li>Assign the first replica of each bucket by round-robin, starting from a random position
+     *       in the tablet server list.
      *   <li>Assign the remaining replicas of each bucket with an increasing shift.
      * </ol>
      *

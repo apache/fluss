@@ -125,7 +125,7 @@ public class CompletedSnapshotStore {
         findLowest(completedSnapshots)
                 .ifPresent(
                         id -> {
-                            // unregister the unused kv file, while will then cause the kv file
+                            // unregister the unused kv file, which will then cause the kv file
                             // deletion
                             sharedKvFileRegistry.unregisterUnusedKvFile(id);
                             snapshotsCleaner.cleanSubsumedSnapshots(
@@ -172,7 +172,7 @@ public class CompletedSnapshotStore {
     }
 
     private static boolean canSubsume(CompletedSnapshot next, CompletedSnapshot latest) {
-        // if the snapshot is not equal to the latest snapshot, it means it can't be subsumed
+        // if the snapshot is equal to the latest snapshot, it means it can't be subsumed
         if (next == latest) {
             return false;
         }

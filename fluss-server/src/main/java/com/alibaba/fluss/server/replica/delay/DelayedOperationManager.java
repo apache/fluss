@@ -21,6 +21,7 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.server.utils.timer.DefaultTimer;
 import com.alibaba.fluss.server.utils.timer.Timer;
 import com.alibaba.fluss.server.utils.timer.TimerTask;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
@@ -33,7 +34,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -235,7 +235,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         private final Lock watcherLock;
 
         public WatcherList() {
-            this.watchersByKey = new ConcurrentHashMap<>();
+            this.watchersByKey = MapUtils.newConcurrentHashMap();
             this.watcherLock = new ReentrantLock();
         }
 

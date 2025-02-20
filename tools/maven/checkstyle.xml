@@ -546,6 +546,12 @@ This file is based on the checkstyle file of Apache Beam.
             <property name="severity" value="error"/>
         </module>
 
+        <!-- Forbid the use of JDK ConcurrentHashMap -->
+        <module name="IllegalInstantiation">
+            <property name="classes" value="java.util.concurrent.ConcurrentHashMap"/>
+            <message key="instantiation.avoid"
+                     value="Instantiation of {0} should be avoided. Use Fluss MapUtils.newConcurrentMap() instead. See https://github.com/alibaba/fluss/issues/375"/>
+        </module>
     </module>
 </module>
 

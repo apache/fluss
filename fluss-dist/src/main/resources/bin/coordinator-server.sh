@@ -41,7 +41,7 @@ SERVICE=coordinator-server
 
 if [[ $STARTSTOP == "start" ]] || [[ $STARTSTOP == "start-foreground" ]]; then
     # Add coordinator-specific JVM options
-    export FLUSS_ENV_JAVA_OPTS="${FLUSS_ENV_JAVA_OPTS} ${FLUSS_ENV_JAVA_OPTS_JM}"
+    export FLUSS_ENV_JAVA_OPTS="${FLUSS_ENV_JAVA_OPTS} ${FLUSS_ENV_JAVA_OPTS_CS}"
 
     args=("--configDir" "${FLUSS_CONF_DIR}" "${args[@]}")
     if [ ! -z $HOST ]; then

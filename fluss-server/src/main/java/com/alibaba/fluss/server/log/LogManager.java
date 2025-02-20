@@ -31,6 +31,7 @@ import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 import com.alibaba.fluss.utils.types.Tuple2;
@@ -48,7 +49,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -77,7 +77,7 @@ public final class LogManager extends TabletManagerBase {
     private final Clock clock;
     private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
-    private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
+    private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
 
     private volatile OffsetCheckpointFile recoveryPointCheckpoint;
 

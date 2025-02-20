@@ -36,6 +36,7 @@ public class LogRecordsAssert extends AbstractAssert<LogRecordsAssert, LogRecord
     }
 
     private RowType rowType;
+    private boolean assertCheckSum = true;
 
     private LogRecordsAssert(LogRecords actual) {
         super(actual, LogRecordsAssert.class);
@@ -43,6 +44,11 @@ public class LogRecordsAssert extends AbstractAssert<LogRecordsAssert, LogRecord
 
     public LogRecordsAssert withSchema(RowType rowType) {
         this.rowType = rowType;
+        return this;
+    }
+
+    public LogRecordsAssert assertCheckSum(boolean assertCheckSum) {
+        this.assertCheckSum = assertCheckSum;
         return this;
     }
 
@@ -59,7 +65,10 @@ public class LogRecordsAssert extends AbstractAssert<LogRecordsAssert, LogRecord
         Iterator<LogRecordBatch> actualIter = actual.batches().iterator();
         for (LogRecordBatch expectedNext : expected.batches()) {
             assertThat(actualIter.hasNext()).isTrue();
-            assertThatLogRecordBatch(actualIter.next()).withSchema(rowType).isEqualTo(expectedNext);
+            assertThatLogRecordBatch(actualIter.next())
+                    .withSchema(rowType)
+                    .assertCheckSum(assertCheckSum)
+                    .isEqualTo(expectedNext);
         }
         assertThat(actualIter.hasNext()).isFalse();
         assertThat(actual.sizeInBytes())

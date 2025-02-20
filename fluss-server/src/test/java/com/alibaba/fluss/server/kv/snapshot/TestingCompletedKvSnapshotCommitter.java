@@ -17,12 +17,12 @@
 package com.alibaba.fluss.server.kv.snapshot;
 
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.utils.MapUtils;
 
 import java.time.Duration;
 import java.util.Deque;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingDeque;
 
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -34,7 +34,7 @@ import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotCommitter {
 
     protected final Map<TableBucket, Deque<CompletedSnapshot>> snapshots =
-            new ConcurrentHashMap<>();
+            MapUtils.newConcurrentHashMap();
 
     @Override
     public void commitKvSnapshot(
