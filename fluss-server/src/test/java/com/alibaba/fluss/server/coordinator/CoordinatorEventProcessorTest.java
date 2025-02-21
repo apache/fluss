@@ -121,6 +121,7 @@ class CoordinatorEventProcessorTest {
     private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private AutoPartitionManager autoPartitionManager;
+    private CompletedSnapshotStoreManager completedSnapshotStoreManager;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -156,6 +157,7 @@ class CoordinatorEventProcessorTest {
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
     }
 
     @AfterEach

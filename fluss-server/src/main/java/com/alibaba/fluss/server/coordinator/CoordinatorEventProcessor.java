@@ -1027,4 +1027,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 serverIds, coordinatorServer, aliveTabletServers);
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
+
+    @VisibleForTesting
+    CompletedSnapshotStoreManager completedSnapshotStoreManager() {
+        return completedSnapshotStoreManager;
+    }
 }

@@ -227,10 +227,6 @@ public class CoordinatorContext {
         return this.tablePathById.get(tableId);
     }
 
-    public TableInfo getTableInfoById(long tableId) {
-        return this.tableInfoById.get(tableId);
-    }
-
     public boolean containsTableId(long tableId) {
         return this.tablePathById.containsKey(tableId);
     }

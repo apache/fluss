@@ -247,10 +247,7 @@ public class TableManager {
     private void completeDeleteTable(long tableId) {
         Set<TableBucketReplica> replicas = coordinatorContext.getAllReplicasForTable(tableId);
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
-        // delete table remote dir
-        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-        remoteStorageCleaner.deleteTableRemoteDir(
-                tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
+        deleteRemoteDirectory(tableId);
         try {
             metadataManager.completeDeleteTable(tableId);
         } catch (Exception e) {
@@ -264,19 +261,39 @@ public class TableManager {
                 coordinatorContext.getAllReplicasForPartition(
                         tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
-        // delete partition remote dir
-        TableInfo tableInfo = coordinatorContext.getTableInfoById(tablePartition.getTableId());
-        String partitionName = coordinatorContext.getPartitionName(tablePartition.getPartitionId());
-        remoteStorageCleaner.deletePartitionRemoteDir(
-                PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
-                tableInfo.hasPrimaryKey(),
-                tablePartition);
+        deleteRemoteDirectory(tablePartition);
         try {
             metadataManager.completeDeletePartition(tablePartition.getPartitionId());
         } catch (Exception e) {
             LOG.error("Fail to complete partition {} deletion.", tablePartition, e);
         }
         coordinatorContext.removePartition(tablePartition);
+    }
+
+    private void deleteRemoteDirectory(long tableId) {
+        // delete table remote dir, when restore the coordinator, the table info will be null
+        // we can't delete the remote dir since we know tablePath now
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (tableInfo != null) {
+            remoteStorageCleaner.deleteTableRemoteDir(
+                    tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
+        }
+    }
+
+    private void deleteRemoteDirectory(TablePartition tablePartition) {
+        // delete partition remote dir, when restore the coordinator, the table info will be null
+        // we can't delete the remote dir since we know tablePath and partition name now
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tablePartition.getTableId());
+        if (tableInfo != null) {
+            String partitionName =
+                    coordinatorContext.getPartitionName(tablePartition.getPartitionId());
+            if (partitionName != null) {
+                remoteStorageCleaner.deletePartitionRemoteDir(
+                        PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
+                        tableInfo.hasPrimaryKey(),
+                        tablePartition);
+            }
+        }
     }
 
     private boolean isEligibleForDeletion(long tableId) {
