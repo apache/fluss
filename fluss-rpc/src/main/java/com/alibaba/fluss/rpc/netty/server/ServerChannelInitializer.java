@@ -20,6 +20,7 @@ import com.alibaba.fluss.rpc.netty.NettyLogger;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import com.alibaba.fluss.shaded.netty4.io.netty.handler.flush.FlushConsolidationHandler;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
@@ -47,6 +48,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
         if (nettyLogger.getLoggingHandler() != null) {
             ch.pipeline().addLast("loggingHandler", nettyLogger.getLoggingHandler());
         }
+        ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024, true));
         ch.pipeline()
                 .addLast(
                         "frameDecoder",
