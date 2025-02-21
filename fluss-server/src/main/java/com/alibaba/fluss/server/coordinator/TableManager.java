@@ -272,7 +272,7 @@ public class TableManager {
 
     private void deleteRemoteDirectory(long tableId) {
         // delete table remote dir, when restore the coordinator, the table info will be null
-        // we can't delete the remote dir since we know tablePath now
+        // we can't delete the remote dir since we don't know tablePath now
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null) {
             remoteStorageCleaner.deleteTableRemoteDir(
@@ -282,7 +282,7 @@ public class TableManager {
 
     private void deleteRemoteDirectory(TablePartition tablePartition) {
         // delete partition remote dir, when restore the coordinator, the table info will be null
-        // we can't delete the remote dir since we know tablePath and partition name now
+        // we can't delete the remote dir since we don't tablePath and partition name now
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tablePartition.getTableId());
         if (tableInfo != null) {
             String partitionName =
