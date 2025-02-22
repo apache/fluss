@@ -83,8 +83,9 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                         Arrays.asList(
                                 new RowType.RowField("id", DataTypes.INT().getLogicalType()),
                                 new RowType.RowField("name", DataTypes.STRING().getLogicalType())));
-        FlinkSinkFunction flinkSinkFunction =
-                new AppendSinkFunction(tablePath, flussConf, rowType, false);
+        FlinkSinkWriter flinkSinkWriter =
+                new AppendSinkWriter(tablePath, flussConf, rowType, false);
+
         InterceptingOperatorMetricGroup interceptingOperatorMetricGroup =
                 new InterceptingOperatorMetricGroup();
         MockStreamingRuntimeContext mockStreamingRuntimeContext =
@@ -97,10 +98,10 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
         MockWriterInitContext mockWriterInitContext =
                 new MockWriterInitContext(mockStreamingRuntimeContext);
 
-        flinkSinkFunction.initialize(mockWriterInitContext);
-        flinkSinkFunction.write(
+        flinkSinkWriter.initialize(mockWriterInitContext.metricGroup());
+        flinkSinkWriter.write(
                 GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
-        flinkSinkFunction.flush(false);
+        flinkSinkWriter.flush(false);
 
         Metric currentSendTime = interceptingOperatorMetricGroup.get(MetricNames.CURRENT_SEND_TIME);
         assertThat(currentSendTime).isInstanceOf(Gauge.class);
@@ -110,7 +111,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
         assertThat(numRecordSend).isInstanceOf(Counter.class);
         assertThat(((Counter) numRecordSend).getCount()).isGreaterThan(0);
 
-        flinkSinkFunction.close();
+        flinkSinkWriter.close();
     }
 
     static class MockSinkWriterContext implements SinkWriter.Context {

@@ -16,14 +16,13 @@
 
 package com.alibaba.fluss.connector.flink.sink.writer;
 
-import com.alibaba.fluss.client.table.writer.UpsertWrite;
+import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.connector.flink.utils.FlinkRowToFlussRowConverter;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
-import org.apache.flink.api.connector.sink2.WriterInitContext;
+import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 
@@ -47,8 +46,8 @@ public class UpsertSinkWriter extends FlinkSinkWriter {
     }
 
     @Override
-    public void initialize(WriterInitContext context) {
-        super.initialize(context);
+    public void initialize(SinkWriterMetricGroup metricGroup) {
+        super.initialize(metricGroup);
         Upsert upsert = table.newUpsert();
         if (targetColumnIndexes != null) {
             upsert = upsert.partialUpdate(targetColumnIndexes);

@@ -31,10 +31,8 @@ import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.row.InternalRow;
 
 import org.apache.flink.api.connector.sink2.SinkWriter;
-import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
-import org.apache.flink.runtime.metrics.groups.InternalSinkWriterMetricGroup;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
@@ -73,7 +71,8 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
     public FlinkSinkWriter(
             TablePath tablePath,
             Configuration flussConfig,
-            RowType tableRowType) {
+            RowType tableRowType,
+            boolean ignoreDelete) {
         this(tablePath, flussConfig, tableRowType, null, ignoreDelete);
     }
 
@@ -90,13 +89,13 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
         this.ignoreDelete = ignoreDelete;
     }
 
-    public void initialize(WriterInitContext context) {
+    public void initialize(SinkWriterMetricGroup metricGroup) {
         LOG.info(
                 "Opening Fluss {}, database: {} and table: {}",
                 this.getClass().getSimpleName(),
                 tablePath.getDatabaseName(),
                 tablePath.getTableName());
-        metricGroup = InternalSinkWriterMetricGroup.wrap(context.metricGroup());
+        this.metricGroup = metricGroup;
         flinkMetricRegistry =
                 new FlinkMetricRegistry(
                         metricGroup, Collections.singleton(MetricNames.WRITER_SEND_LATENCY_MS));
@@ -142,8 +141,6 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
 
     @Override
     public void close() throws Exception {
-        super.close();
-
         try {
             if (table != null) {
                 table.close();
@@ -174,7 +171,7 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
     }
 
     private void sanityCheck(TableInfo flussTableInfo) {
-        // when it's UpsertSinkFunction, it means it has primary key got from Flink's metadata
+        // when it's UpsertSinkWriter, it means it has primary key got from Flink's metadata
         boolean hasPrimaryKey = this instanceof UpsertSinkWriter;
         if (flussTableInfo.hasPrimaryKey() != hasPrimaryKey) {
             throw new ValidationException(

@@ -21,7 +21,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
-import org.apache.flink.api.connector.sink2.WriterInitContext;
+import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 
@@ -33,13 +33,17 @@ public class AppendSinkWriter extends FlinkSinkWriter {
 
     private transient AppendWriter appendWriter;
 
-    public AppendWriter(TablePath tablePath, Configuration flussConfig, RowType tableRowType, boolean ignoreDelete) {
+    public AppendSinkWriter(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            boolean ignoreDelete) {
         super(tablePath, flussConfig, tableRowType, ignoreDelete);
     }
 
     @Override
-    public void initialize(WriterInitContext context) {
-        super.initialize(context);
+    public void initialize(SinkWriterMetricGroup metricGroup) {
+        super.initialize(metricGroup);
         appendWriter = table.newAppend().createWriter();
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
@@ -47,11 +51,6 @@ public class AppendSinkWriter extends FlinkSinkWriter {
     @Override
     CompletableFuture<?> writeRow(RowKind rowKind, InternalRow internalRow) {
         return appendWriter.append(internalRow);
-    }
-
-    @Override
-    FlinkRowToFlussRowConverter createFlinkRowToFlussRowConverter() {
-        return FlinkRowToFlussRowConverter.create(tableRowType);
     }
 
     @Override

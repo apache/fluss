@@ -26,6 +26,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.api.connector.sink2.WriterInitContext;
+import org.apache.flink.runtime.metrics.groups.InternalSinkWriterMetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 
@@ -48,14 +49,15 @@ class FlinkSink implements Sink<RowData> {
     @Deprecated
     @Override
     public SinkWriter<RowData> createWriter(InitContext context) throws IOException {
-        throw new UnsupportedOperationException(
-                "Not supported. Use FlinkSink#createWriter(WriterInitContext context)");
+        FlinkSinkWriter flinkSinkWriter = builder.createWriter();
+        flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
+        return flinkSinkWriter;
     }
 
     @Override
     public SinkWriter<RowData> createWriter(WriterInitContext context) throws IOException {
         FlinkSinkWriter flinkSinkWriter = builder.createWriter();
-        flinkSinkWriter.initialize(context);
+        flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
@@ -72,17 +74,22 @@ class FlinkSink implements Sink<RowData> {
         private final TablePath tablePath;
         private final Configuration flussConfig;
         private final RowType tableRowType;
+        private final boolean ignoreDelete;
 
         public AppendSinkWriterBuilder(
-                TablePath tablePath, Configuration flussConfig, RowType tableRowType) {
+                TablePath tablePath,
+                Configuration flussConfig,
+                RowType tableRowType,
+                boolean ignoreDelete) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
+            this.ignoreDelete = ignoreDelete;
         }
 
         @Override
         public AppendSinkWriter createWriter() {
-            return new AppendSinkWriter(tablePath, flussConfig, tableRowType);
+            return new AppendSinkWriter(tablePath, flussConfig, tableRowType, ignoreDelete);
         }
     }
 
@@ -95,21 +102,25 @@ class FlinkSink implements Sink<RowData> {
         private final Configuration flussConfig;
         private final RowType tableRowType;
         private final @Nullable int[] targetColumnIndexes;
+        private final boolean ignoreDelete;
 
         UpsertSinkWriterBuilder(
                 TablePath tablePath,
                 Configuration flussConfig,
                 RowType tableRowType,
-                @Nullable int[] targetColumnIndexes) {
+                @Nullable int[] targetColumnIndexes,
+                boolean ignoreDelete) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
             this.targetColumnIndexes = targetColumnIndexes;
+            this.ignoreDelete = ignoreDelete;
         }
 
         @Override
         public UpsertSinkWriter createWriter() {
-            return new UpsertSinkWriter(tablePath, flussConfig, tableRowType, targetColumnIndexes);
+            return new UpsertSinkWriter(
+                    tablePath, flussConfig, tableRowType, targetColumnIndexes, ignoreDelete);
         }
     }
 }
