@@ -17,7 +17,7 @@
 package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.lang.reflect.Field;
 import java.nio.Buffer;
@@ -95,7 +95,7 @@ public class MemoryUtils {
      * @return native memory address wrapped by the given {@link ByteBuffer}
      */
     static long getByteBufferAddress(ByteBuffer buffer) {
-        Preconditions.checkNotNull(buffer, "buffer is null");
+        checkNotNull(buffer, "buffer is null");
         Preconditions.checkArgument(
                 buffer.isDirect(), "Can't get address of a non-direct ByteBuffer.");
 

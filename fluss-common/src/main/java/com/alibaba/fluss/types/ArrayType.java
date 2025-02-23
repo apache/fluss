@@ -17,7 +17,7 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.util.Collections;
 import java.util.List;
@@ -41,7 +41,7 @@ public final class ArrayType extends DataType {
     public ArrayType(boolean isNullable, DataType elementType) {
         super(isNullable, DataTypeRoot.ARRAY);
         this.elementType =
-                Preconditions.checkNotNull(elementType, "Element type must not be null.");
+                checkNotNull(elementType, "Element type must not be null.");
     }
 
     public ArrayType(DataType elementType) {

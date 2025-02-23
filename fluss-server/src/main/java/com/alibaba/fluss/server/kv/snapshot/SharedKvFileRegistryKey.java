@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
@@ -37,7 +37,7 @@ public class SharedKvFileRegistryKey implements Serializable {
 
     /** Protected constructor to enforce that subclassing. */
     protected SharedKvFileRegistryKey(String keyString) {
-        this.keyString = Preconditions.checkNotNull(keyString);
+        this.keyString = checkNotNull(keyString);
     }
 
     /** Create a unique key based on physical id. */

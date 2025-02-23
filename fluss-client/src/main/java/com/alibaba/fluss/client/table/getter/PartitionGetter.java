@@ -20,7 +20,7 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.util.List;
 
@@ -59,7 +59,7 @@ public class PartitionGetter {
 
     public String getPartition(InternalRow row) {
         Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
-        Preconditions.checkNotNull(partitionValue, "Partition value shouldn't be null.");
+        checkNotNull(partitionValue, "Partition value shouldn't be null.");
         return partitionValue.toString();
     }
 }

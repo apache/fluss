@@ -17,7 +17,7 @@
 package com.alibaba.fluss.fs;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.WrappingProxy;
 
 import java.io.IOException;
@@ -40,8 +40,8 @@ public class ClosingFSDataOutputStream extends FSDataOutputStreamWrapper
     private ClosingFSDataOutputStream(
             FSDataOutputStream delegate, SafetyNetCloseableRegistry registry, String debugString) {
         super(delegate);
-        this.registry = Preconditions.checkNotNull(registry);
-        this.debugString = Preconditions.checkNotNull(debugString);
+        this.registry = checkNotNull(registry);
+        this.debugString = checkNotNull(debugString);
         this.closed = false;
     }
 

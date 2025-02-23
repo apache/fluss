@@ -38,7 +38,7 @@ public class FileLock {
      * @param fullPath The path of the locking file
      */
     public FileLock(String fullPath) {
-        Preconditions.checkNotNull(fullPath, "fullPath should not be null");
+        checkNotNull(fullPath, "fullPath should not be null");
         Path path = Paths.get(fullPath);
         String normalizedFileName = normalizeFileName(path.getFileName().toString());
         if (normalizedFileName.isEmpty()) {

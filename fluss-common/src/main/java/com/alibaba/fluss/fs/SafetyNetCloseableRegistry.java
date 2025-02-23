@@ -20,7 +20,7 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.utils.AbstractAutoCloseableRegistry;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.WrappingProxy;
 import com.alibaba.fluss.utils.WrappingProxyUtils;
 
@@ -171,8 +171,8 @@ public class SafetyNetCloseableRegistry
 
             super(referent, q);
             this.innerCloseable =
-                    Preconditions.checkNotNull(WrappingProxyUtils.stripProxy(referent));
-            this.closeableRegistry = Preconditions.checkNotNull(closeableRegistry);
+                    checkNotNull(WrappingProxyUtils.stripProxy(referent));
+            this.closeableRegistry = checkNotNull(closeableRegistry);
             this.debugString = referent.toString();
         }
 

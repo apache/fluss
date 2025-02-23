@@ -56,7 +56,7 @@ public class TimeUtils {
      * @param text string to parse.
      */
     public static Duration parseDuration(String text) {
-        Preconditions.checkNotNull(text);
+        checkNotNull(text);
 
         final String trimmed = text.trim();
         Preconditions.checkArgument(

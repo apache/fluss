@@ -43,7 +43,7 @@ public class SerializedValue<T> implements java.io.Serializable {
     private final byte[] serializedData;
 
     protected SerializedValue(byte[] serializedData) {
-        Preconditions.checkNotNull(serializedData, "Serialized data must not be null");
+        checkNotNull(serializedData, "Serialized data must not be null");
         Preconditions.checkArgument(
                 serializedData.length != 0, "Serialized data must not be empty");
         this.serializedData = serializedData;
@@ -57,12 +57,12 @@ public class SerializedValue<T> implements java.io.Serializable {
      * @throws IOException exception during serialization
      */
     public SerializedValue(T value) throws IOException {
-        Preconditions.checkNotNull(value, "Value must not be null");
+        checkNotNull(value, "Value must not be null");
         this.serializedData = InstantiationUtils.serializeObject(value);
     }
 
     public T deserializeValue(ClassLoader loader) throws IOException, ClassNotFoundException {
-        Preconditions.checkNotNull(loader, "No classloader has been passed");
+        checkNotNull(loader, "No classloader has been passed");
         return InstantiationUtils.deserializeObject(serializedData, loader);
     }
 

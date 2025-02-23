@@ -22,7 +22,7 @@ import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.EncodingUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.StringUtils;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
 import com.alibaba.fluss.utils.json.SchemaJsonSerde;

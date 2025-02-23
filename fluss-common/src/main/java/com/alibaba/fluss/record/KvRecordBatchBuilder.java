@@ -27,7 +27,7 @@ import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.compacted.CompactedRow;
 import com.alibaba.fluss.row.indexed.IndexedRow;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
 import javax.annotation.Nullable;

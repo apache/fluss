@@ -17,7 +17,7 @@
 package com.alibaba.fluss.fs.hdfs.utils;
 
 import com.alibaba.fluss.config.ConfigBuilder;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.HdfsConfiguration;

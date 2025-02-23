@@ -17,7 +17,7 @@
 package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import javax.annotation.Nullable;
 
@@ -257,7 +257,7 @@ public final class MemorySegment {
                 return ByteBuffer.wrap(heapMemory, offset, length);
             } else {
                 try {
-                    ByteBuffer wrapper = Preconditions.checkNotNull(offHeapBuffer).duplicate();
+                    ByteBuffer wrapper = checkNotNull(offHeapBuffer).duplicate();
                     wrapper.limit(offset + length);
                     wrapper.position(offset);
                     return wrapper;

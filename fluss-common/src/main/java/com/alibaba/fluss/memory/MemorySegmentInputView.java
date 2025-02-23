@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.memory;
 
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.EOFException;
 import java.io.IOException;

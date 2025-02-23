@@ -17,7 +17,7 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
@@ -244,7 +244,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
      * @throws IllegalArgumentException Thrown, if the expression cannot be parsed.
      */
     public static long parseBytes(String text) throws IllegalArgumentException {
-        Preconditions.checkNotNull(text, "text");
+        checkNotNull(text, "text");
         if (!MemoryUnit.hasUnit(text)) {
             throw new IllegalArgumentException(
                     "The memory value '"
@@ -375,7 +375,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
         }
 
         public static boolean hasUnit(String text) {
-            Preconditions.checkNotNull(text, "text");
+            checkNotNull(text, "text");
 
             final String trimmed = text.trim();
             Preconditions.checkArgument(

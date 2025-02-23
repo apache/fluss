@@ -17,7 +17,7 @@
 package com.alibaba.fluss.lakehouse.paimon.sink.committable;
 
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.nio.ByteBuffer;
 import java.util.Collections;
@@ -47,7 +47,7 @@ class BucketOffsetsSerdeUtils {
         for (Map.Entry<TableBucket, Long> offsetEntry : logOffsets.entrySet()) {
             if (isPartitioned) {
                 Long partitionId = offsetEntry.getKey().getPartitionId();
-                Preconditions.checkNotNull(partitionId, "partitionId must be not null");
+                checkNotNull(partitionId, "partitionId must be not null");
                 buffer.putLong(offsetEntry.getKey().getPartitionId());
             }
             buffer.putInt(offsetEntry.getKey().getBucket());

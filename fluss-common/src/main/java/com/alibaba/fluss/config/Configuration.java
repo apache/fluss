@@ -18,7 +18,7 @@ package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.utils.CollectionUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -442,8 +442,8 @@ public class Configuration implements Serializable, ReadableConfig {
      */
     public <T extends Enum<T>> T getEnum(
             final Class<T> enumClass, final ConfigOption<String> configOption) {
-        Preconditions.checkNotNull(enumClass, "enumClass must not be null");
-        Preconditions.checkNotNull(configOption, "configOption must not be null");
+        checkNotNull(enumClass, "enumClass must not be null");
+        checkNotNull(configOption, "configOption must not be null");
 
         Object rawValue = getRawValueFromOption(configOption).orElseGet(configOption::defaultValue);
         try {

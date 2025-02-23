@@ -64,7 +64,7 @@ public abstract class AbstractAutoCloseableRegistry<
 
     public AbstractAutoCloseableRegistry(@Nonnull Map<R, T> closeableToRef) {
         this.lock = new Object();
-        this.closeableToRef = Preconditions.checkNotNull(closeableToRef);
+        this.closeableToRef = checkNotNull(closeableToRef);
         this.closed = false;
     }
 

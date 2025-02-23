@@ -29,7 +29,7 @@ import com.alibaba.fluss.metrics.reporter.MetricReporter;
 import com.alibaba.fluss.metrics.reporter.ScheduledMetricReporter;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.ExecutorUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.TimeUtils;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
@@ -308,8 +308,8 @@ public class MetricRegistryImpl implements MetricRegistry {
         private final ReporterScopedSettings settings;
 
         private ReporterAndSettings(MetricReporter reporter, ReporterScopedSettings settings) {
-            this.reporter = Preconditions.checkNotNull(reporter);
-            this.settings = Preconditions.checkNotNull(settings);
+            this.reporter = checkNotNull(reporter);
+            this.settings = checkNotNull(settings);
         }
 
         public ReporterScopedSettings getSettings() {

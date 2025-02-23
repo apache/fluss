@@ -17,7 +17,7 @@
 package com.alibaba.fluss.utils.concurrent;
 
 import com.alibaba.fluss.utils.FatalExitExceptionHandler;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import javax.annotation.Nullable;
 
@@ -102,7 +102,7 @@ public class ExecutorThreadFactory implements ThreadFactory {
             final int threadPriority,
             @Nullable final Thread.UncaughtExceptionHandler exceptionHandler,
             @Nullable final ClassLoader threadContextClassLoader) {
-        this.namePrefix = Preconditions.checkNotNull(poolName, "poolName") + "-thread-";
+        this.namePrefix = checkNotNull(poolName, "poolName") + "-thread-";
         this.threadPriority = threadPriority;
         this.exceptionHandler = exceptionHandler;
 

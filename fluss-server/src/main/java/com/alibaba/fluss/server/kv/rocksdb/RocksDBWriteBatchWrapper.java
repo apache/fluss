@@ -18,7 +18,7 @@ package com.alibaba.fluss.server.kv.rocksdb;
 
 import com.alibaba.fluss.server.kv.KvBatchWriter;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;

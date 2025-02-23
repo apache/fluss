@@ -18,7 +18,7 @@ package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.utils.EncodingUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import javax.annotation.Nullable;
 
@@ -46,8 +46,8 @@ public class DataField implements Serializable {
     private final @Nullable String description;
 
     public DataField(String name, DataType type, @Nullable String description) {
-        this.name = Preconditions.checkNotNull(name, "Field name must not be null.");
-        this.type = Preconditions.checkNotNull(type, "Field type must not be null.");
+        this.name = checkNotNull(name, "Field name must not be null.");
+        this.type = checkNotNull(type, "Field type must not be null.");
         this.description = description;
     }
 

@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.metrics.groups;
 
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Encapsulates all settings that are defined per reporter. */
 public class ReporterScopedSettings {

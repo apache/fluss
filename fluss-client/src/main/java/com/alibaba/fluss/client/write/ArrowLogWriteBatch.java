@@ -28,7 +28,7 @@ import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
@@ -68,8 +68,8 @@ public class ArrowLogWriteBatch extends WriteBatch {
                 "target columns must be null for log record");
         Preconditions.checkArgument(
                 writeRecord.getKey() == null, "key must be null for log record");
-        Preconditions.checkNotNull(row != null, "row must not be null for log record");
-        Preconditions.checkNotNull(callback, "write callback must be not null");
+        checkNotNull(row != null, "row must not be null for log record");
+        checkNotNull(callback, "write callback must be not null");
         if (recordsBuilder.isFull() || recordsBuilder.isClosed()) {
             return false;
         } else {

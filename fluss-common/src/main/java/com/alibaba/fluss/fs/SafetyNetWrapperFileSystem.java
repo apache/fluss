@@ -18,7 +18,7 @@ package com.alibaba.fluss.fs;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.WrappingProxy;
 
 import java.io.IOException;
@@ -44,8 +44,8 @@ public class SafetyNetWrapperFileSystem extends FileSystem implements WrappingPr
 
     public SafetyNetWrapperFileSystem(
             FileSystem unsafeFileSystem, SafetyNetCloseableRegistry registry) {
-        this.registry = Preconditions.checkNotNull(registry);
-        this.unsafeFileSystem = Preconditions.checkNotNull(unsafeFileSystem);
+        this.registry = checkNotNull(registry);
+        this.unsafeFileSystem = checkNotNull(unsafeFileSystem);
     }
 
     @Override

@@ -24,7 +24,7 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.indexed.IndexedRow;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;

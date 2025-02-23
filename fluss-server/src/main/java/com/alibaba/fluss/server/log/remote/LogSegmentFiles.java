@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.log.remote;
 
 import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import javax.annotation.Nullable;
 
@@ -42,9 +42,9 @@ public class LogSegmentFiles {
 
     public LogSegmentFiles(
             Path logSegment, Path offsetIndex, Path timeIndex, @Nullable Path writerIdIndex) {
-        this.logSegment = Preconditions.checkNotNull(logSegment, "logSegment can not be null");
-        this.offsetIndex = Preconditions.checkNotNull(offsetIndex, "offsetIndex can not be null");
-        this.timeIndex = Preconditions.checkNotNull(timeIndex, "timeIndex can not be null");
+        this.logSegment = checkNotNull(logSegment, "logSegment can not be null");
+        this.offsetIndex = checkNotNull(offsetIndex, "offsetIndex can not be null");
+        this.timeIndex = checkNotNull(timeIndex, "timeIndex can not be null");
         this.writerIdIndex = writerIdIndex;
     }
 

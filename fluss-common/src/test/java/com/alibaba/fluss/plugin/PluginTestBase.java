@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.plugin;
 
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.File;
 import java.net.MalformedURLException;

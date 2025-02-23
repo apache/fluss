@@ -17,7 +17,7 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -44,8 +44,8 @@ public final class MapType extends DataType {
 
     public MapType(boolean isNullable, DataType keyType, DataType valueType) {
         super(isNullable, DataTypeRoot.MAP);
-        this.keyType = Preconditions.checkNotNull(keyType, "Key type must not be null.");
-        this.valueType = Preconditions.checkNotNull(valueType, "Value type must not be null.");
+        this.keyType = checkNotNull(keyType, "Key type must not be null.");
+        this.valueType = checkNotNull(valueType, "Value type must not be null.");
     }
 
     public MapType(DataType keyType, DataType valueType) {

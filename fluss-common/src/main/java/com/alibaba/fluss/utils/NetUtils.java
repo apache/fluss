@@ -299,7 +299,7 @@ public class NetUtils {
         private final FileLock fileLock;
 
         public Port(int port, FileLock fileLock) throws IOException {
-            Preconditions.checkNotNull(fileLock, "FileLock should not be null");
+            checkNotNull(fileLock, "FileLock should not be null");
             Preconditions.checkState(fileLock.isValid(), "FileLock should be locked");
             this.port = port;
             this.fileLock = fileLock;

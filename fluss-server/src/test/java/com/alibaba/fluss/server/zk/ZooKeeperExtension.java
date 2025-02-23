@@ -19,7 +19,7 @@ package com.alibaba.fluss.server.zk;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.testutils.common.CustomExtension;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.apache.curator.test.TestingServer;
 import org.apache.zookeeper.server.ZooKeeperServer;

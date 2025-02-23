@@ -19,7 +19,7 @@ package com.alibaba.fluss.remote;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -56,9 +56,9 @@ public class RemoteLogSegment {
             long remoteLogEndOffset,
             long maxTimestamp,
             int segmentSizeInBytes) {
-        this.physicalTablePath = Preconditions.checkNotNull(physicalTablePath);
-        this.tableBucket = Preconditions.checkNotNull(tableBucket);
-        this.remoteLogSegmentId = Preconditions.checkNotNull(remoteLogSegmentId);
+        this.physicalTablePath = checkNotNull(physicalTablePath);
+        this.tableBucket = checkNotNull(tableBucket);
+        this.remoteLogSegmentId = checkNotNull(remoteLogSegmentId);
 
         if (remoteLogStartOffset < 0) {
             throw new IllegalArgumentException(

@@ -35,7 +35,7 @@ import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.server.utils.RpcGatewayManager;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

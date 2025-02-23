@@ -20,7 +20,7 @@ import com.alibaba.fluss.fs.FSDataInputStream;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -42,7 +42,7 @@ public class CompletedSnapshotHandle {
     private final long logOffset;
 
     public CompletedSnapshotHandle(FsPath metadataFilePath, long logOffset) {
-        Preconditions.checkNotNull(metadataFilePath);
+        checkNotNull(metadataFilePath);
         this.metadataFilePath = metadataFilePath;
         this.logOffset = logOffset;
     }

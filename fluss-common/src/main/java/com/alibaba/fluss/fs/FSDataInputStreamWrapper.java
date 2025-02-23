@@ -17,7 +17,7 @@
 package com.alibaba.fluss.fs;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.WrappingProxy;
 
 import java.io.IOException;
@@ -30,7 +30,7 @@ public class FSDataInputStreamWrapper extends FSDataInputStream
     protected final FSDataInputStream inputStream;
 
     public FSDataInputStreamWrapper(FSDataInputStream inputStream) {
-        this.inputStream = Preconditions.checkNotNull(inputStream);
+        this.inputStream = checkNotNull(inputStream);
     }
 
     @Override

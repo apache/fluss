@@ -37,7 +37,7 @@ import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -121,7 +121,7 @@ public class Sender implements Runnable {
         this.inFlightBatches = new HashMap<>();
 
         this.metadataUpdater = metadataUpdater;
-        Preconditions.checkNotNull(metadataUpdater.getCoordinatorServer());
+        checkNotNull(metadataUpdater.getCoordinatorServer());
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;

@@ -22,7 +22,7 @@ import com.alibaba.fluss.server.utils.timer.DefaultTimer;
 import com.alibaba.fluss.server.utils.timer.Timer;
 import com.alibaba.fluss.server.utils.timer.TimerTask;
 import com.alibaba.fluss.utils.MapUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;

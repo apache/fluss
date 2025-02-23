@@ -25,7 +25,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** {@link ArrowFieldWriter} for TimestampLtz. */
 @Internal

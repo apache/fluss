@@ -123,7 +123,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     @Nullable
     @Override
     public RecordAndPos nextRecordFromSplit() {
-        Preconditions.checkNotNull(
+        checkNotNull(
                 currentRecordIterator,
                 "Make sure nextSplit() did not return null before "
                         + "iterate over the records split.");

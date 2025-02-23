@@ -27,7 +27,7 @@ import com.alibaba.fluss.metrics.Meter;
 import com.alibaba.fluss.metrics.Metric;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.reporter.MetricReporter;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;

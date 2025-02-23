@@ -18,7 +18,7 @@ package com.alibaba.fluss.plugin;
 
 import com.alibaba.fluss.plugin.jar.pluginb.TestServiceB;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Lists;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

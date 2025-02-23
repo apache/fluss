@@ -17,7 +17,7 @@
 package com.alibaba.fluss.metadata;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.json.DatabaseDescriptorJsonSerde;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
 
@@ -103,8 +103,8 @@ public class DatabaseDescriptor {
          * database for users.
          */
         public Builder customProperty(String key, String value) {
-            Preconditions.checkNotNull(key, "Key must not be null.");
-            Preconditions.checkNotNull(value, "Value must not be null.");
+            checkNotNull(key, "Key must not be null.");
+            checkNotNull(value, "Value must not be null.");
             customProperties.put(key, value);
             return this;
         }
@@ -117,7 +117,7 @@ public class DatabaseDescriptor {
          * database for users.
          */
         public Builder customProperties(Map<String, String> properties) {
-            Preconditions.checkNotNull(properties, "customProperties must not be null.");
+            checkNotNull(properties, "customProperties must not be null.");
             this.customProperties.putAll(properties);
             return this;
         }

@@ -18,7 +18,7 @@ package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Base class for arrow field writer which is used to convert a field to an Arrow format.
@@ -35,7 +35,7 @@ public abstract class ArrowFieldWriter<IN> {
     private int count;
 
     public ArrowFieldWriter(ValueVector valueVector) {
-        this.valueVector = Preconditions.checkNotNull(valueVector);
+        this.valueVector = checkNotNull(valueVector);
     }
 
     /** Returns the underlying container which stores the sequence of values of a column. */

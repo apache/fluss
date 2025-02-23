@@ -40,7 +40,7 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.server.log.LocalLog.SegmentDeletionReason;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 import com.alibaba.fluss.utils.types.Either;

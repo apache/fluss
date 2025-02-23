@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.plugin;
 
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

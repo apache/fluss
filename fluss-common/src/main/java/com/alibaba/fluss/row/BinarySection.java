@@ -19,7 +19,7 @@ package com.alibaba.fluss.row;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;

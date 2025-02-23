@@ -18,7 +18,7 @@ package com.alibaba.fluss.rocksdb;
 
 import com.alibaba.fluss.utils.IOUtils;
 import com.alibaba.fluss.utils.OperatingSystem;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
@@ -68,15 +68,15 @@ public class RocksDBOperationUtils {
             if (isReadOnly) {
                 dbRef =
                         RocksDB.openReadOnly(
-                                Preconditions.checkNotNull(dbOptions),
-                                Preconditions.checkNotNull(path),
+                                checkNotNull(dbOptions),
+                                checkNotNull(path),
                                 columnFamilyDescriptors,
                                 columnFamilyHandles);
             } else {
                 dbRef =
                         RocksDB.open(
-                                Preconditions.checkNotNull(dbOptions),
-                                Preconditions.checkNotNull(path),
+                                checkNotNull(dbOptions),
+                                checkNotNull(path),
                                 columnFamilyDescriptors,
                                 columnFamilyHandles);
             }

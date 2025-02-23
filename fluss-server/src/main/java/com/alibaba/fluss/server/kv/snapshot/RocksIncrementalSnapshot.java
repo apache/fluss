@@ -20,7 +20,7 @@ import com.alibaba.fluss.server.utils.ResourceGuard;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.rocksdb.Checkpoint;
 import org.rocksdb.RocksDB;

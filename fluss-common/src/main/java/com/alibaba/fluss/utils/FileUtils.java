@@ -268,7 +268,7 @@ public class FileUtils {
      *     due to missing access/write permissions.
      */
     public static void deleteFileOrDirectory(File file) throws IOException {
-        Preconditions.checkNotNull(file, "file");
+        checkNotNull(file, "file");
 
         guardIfNotThreadSafe(FileUtils::deleteFileOrDirectoryInternal, file);
     }
@@ -306,7 +306,7 @@ public class FileUtils {
      *     not be deleted for some reason, for example due to missing access/write permissions.
      */
     public static void deleteDirectory(File directory) throws IOException {
-        Preconditions.checkNotNull(directory, "directory");
+        checkNotNull(directory, "directory");
 
         guardIfNotThreadSafe(FileUtils::deleteDirectoryInternal, directory);
     }
@@ -318,7 +318,7 @@ public class FileUtils {
      * @return The directories in the given directory.
      */
     public static File[] listDirectories(File directory) {
-        Preconditions.checkNotNull(directory, "directory should not be null");
+        checkNotNull(directory, "directory should not be null");
         File[] files = directory.listFiles();
         files = files != null ? files : new File[0];
         return Arrays.stream(files).filter(File::isDirectory).toArray(File[]::new);
@@ -331,7 +331,7 @@ public class FileUtils {
      * @return True, if the directory is empty, false otherwise.
      */
     public static boolean isDirectoryEmpty(File directory) {
-        Preconditions.checkNotNull(directory, "directory should not be null");
+        checkNotNull(directory, "directory should not be null");
         File[] files = directory.listFiles();
         return files == null || files.length == 0;
     }

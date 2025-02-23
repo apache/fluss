@@ -27,7 +27,7 @@ import com.alibaba.fluss.shaded.guava32.com.google.common.collect.ImmutableMulti
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Multimap;
 import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
 
 import org.slf4j.Logger;
@@ -301,7 +301,7 @@ public abstract class FileSystem {
     }
 
     public static FileSystem getUnguardedFileSystem(final URI fsUri) throws IOException {
-        Preconditions.checkNotNull(fsUri, "file system URI");
+        checkNotNull(fsUri, "file system URI");
         return inLock(
                 LOCK,
                 () -> {
@@ -600,7 +600,7 @@ public abstract class FileSystem {
          * @param authority The authority of the file system
          */
         public FSKey(String scheme, @Nullable String authority) {
-            this.scheme = Preconditions.checkNotNull(scheme, "scheme");
+            this.scheme = checkNotNull(scheme, "scheme");
             this.authority = authority;
         }
 

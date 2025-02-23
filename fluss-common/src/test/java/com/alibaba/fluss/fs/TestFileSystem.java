@@ -21,7 +21,7 @@ import com.alibaba.fluss.fs.local.LocalDataOutputStream;
 import com.alibaba.fluss.fs.local.LocalFileStatus;
 import com.alibaba.fluss.fs.local.LocalFileSystem;
 import com.alibaba.fluss.utils.MapUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.IOException;
 import java.net.URI;
@@ -125,7 +125,7 @@ public class TestFileSystem extends LocalFileSystem {
         @Override
         public void close() throws IOException {
             currentUnclosedOutputStream.compute(
-                    path, (k, v) -> Preconditions.checkNotNull(v) == 1 ? null : v - 1);
+                    path, (k, v) -> checkNotNull(v) == 1 ? null : v - 1);
             stream.close();
         }
     }

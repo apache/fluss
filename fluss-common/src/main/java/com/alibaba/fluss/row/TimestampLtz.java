@@ -18,7 +18,7 @@ package com.alibaba.fluss.row;
 
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.io.Serializable;
 import java.time.Instant;

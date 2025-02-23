@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.kv.snapshot;
 
 import com.alibaba.fluss.server.utils.SnapshotUtil;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -124,7 +124,7 @@ public class KvSnapshotHandle {
                 sharedKvFileRegistry != registry,
                 "The kv file handle has already registered its shared kv files to the given registry.");
 
-        sharedKvFileRegistry = Preconditions.checkNotNull(registry);
+        sharedKvFileRegistry = checkNotNull(registry);
 
         for (KvFileHandleAndLocalPath handleAndLocalPath : sharedFileHandles) {
             registry.registerReference(

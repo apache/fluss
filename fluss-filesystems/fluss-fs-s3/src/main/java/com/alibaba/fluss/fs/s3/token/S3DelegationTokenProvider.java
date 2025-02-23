@@ -18,7 +18,7 @@ package com.alibaba.fluss.fs.s3.token;
 
 import com.alibaba.fluss.fs.token.CredentialsJsonSerde;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -54,7 +54,7 @@ public class S3DelegationTokenProvider {
     public S3DelegationTokenProvider(String scheme, Configuration conf) {
         this.scheme = scheme;
         this.region = conf.get(REGION_KEY);
-        Preconditions.checkNotNull(region, "Region is not set.");
+        checkNotNull(region, "Region is not set.");
         this.accessKey = conf.get(ACCESS_KEY_ID);
         this.secretKey = conf.get(ACCESS_KEY_SECRET);
         this.additionInfos = new HashMap<>();

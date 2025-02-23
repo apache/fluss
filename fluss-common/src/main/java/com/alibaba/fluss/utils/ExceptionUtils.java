@@ -349,7 +349,7 @@ public final class ExceptionUtils {
      *     the new exception in the list of suppressed exceptions.
      */
     public static <T extends Throwable> T firstOrSuppressed(T newException, @Nullable T previous) {
-        Preconditions.checkNotNull(newException, "newException");
+        checkNotNull(newException, "newException");
 
         if (previous == null || previous == newException) {
             return newException;

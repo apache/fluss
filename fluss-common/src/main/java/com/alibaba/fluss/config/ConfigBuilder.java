@@ -17,7 +17,7 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -99,7 +99,7 @@ public class ConfigBuilder {
      * @return The builder for the config option with the given key.
      */
     public static ConfigBuilder key(String key) {
-        Preconditions.checkNotNull(key);
+        checkNotNull(key);
         return new ConfigBuilder(key);
     }
 

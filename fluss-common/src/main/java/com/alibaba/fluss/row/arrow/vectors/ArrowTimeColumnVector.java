@@ -23,7 +23,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for Time. */
 @Internal
@@ -33,7 +33,7 @@ public class ArrowTimeColumnVector implements IntColumnVector {
     private final ValueVector valueVector;
 
     public ArrowTimeColumnVector(ValueVector valueVector) {
-        this.valueVector = Preconditions.checkNotNull(valueVector);
+        this.valueVector = checkNotNull(valueVector);
         Preconditions.checkState(
                 valueVector instanceof TimeSecVector
                         || valueVector instanceof TimeMilliVector

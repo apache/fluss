@@ -39,7 +39,7 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
 import com.alibaba.fluss.utils.MathUtils;
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import com.alibaba.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
@@ -636,7 +636,7 @@ public final class RecordAccumulator {
             }
 
             // the rest of the work by processing outside the lock close() is particularly expensive
-            Preconditions.checkNotNull(batch, "batch should not be null");
+            checkNotNull(batch, "batch should not be null");
             batch.close();
             size += batch.estimatedSizeInBytes();
             ready.add(batch);
