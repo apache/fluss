@@ -50,6 +50,8 @@ After extracting the archive, the contents of the working directory should be as
 The container manifest below configures Fluss to use Logback and Loki4j. Save it to a file named `fluss-slf4j-logback.Dockerfile` in your working directory.
 
 ```dockerfile
+ARG FLUSS_VERSION
+
 FROM fluss/fluss:${FLUSS_VERSION}
 
 # remove default logging backend from classpath and add logback to classpath
@@ -84,6 +86,8 @@ services:
   coordinator-server:
     image: fluss-slf4j-logback:${FLUSS_VERSION}
     build:
+      args:
+        FLUSS_VERSION: ${FLUSS_VERSION}
       dockerfile: fluss-slf4j-logback.Dockerfile
     command: coordinatorServer
     depends_on:
@@ -104,6 +108,8 @@ services:
   tablet-server:
     image: fluss-slf4j-logback:${FLUSS_VERSION}
     build:
+      args:
+        FLUSS_VERSION: ${FLUSS_VERSION}
       dockerfile: fluss-slf4j-logback.Dockerfile
     command: tabletServer
     depends_on:
