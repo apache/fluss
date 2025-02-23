@@ -171,17 +171,21 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
                 FLUSS_CLUSTER_EXTENSION.stopTabletServer(serverNode.id());
             }
 
+            FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+
             try (Connection connNew = ConnectionFactory.createConnection(clientConf)) {
                 assertThatThrownBy(() -> connNew.getTable(DATA1_TABLE_PATH))
                         .cause()
                         .isInstanceOf(FlussRuntimeException.class)
                         .hasMessage(
-                                "Execution of Fluss get one available tablet failed, no alive tablet server in cluster, retry times = %d.",
+                                "Execution of Fluss get one available tablet server node failed, no alive tablet server in cluster, retry times = %d.",
                                 5);
             } finally {
+                // start all tablet server
                 for (ServerNode serverNode : serverNodes) {
                     FLUSS_CLUSTER_EXTENSION.startTabletServer(serverNode.id());
                 }
+                FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
             }
         }
     }

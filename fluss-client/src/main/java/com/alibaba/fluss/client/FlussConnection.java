@@ -143,10 +143,9 @@ public final class FlussConnection implements Connection {
                             GatewayClientProxy.createGatewayProxy(
                                     () ->
                                             getOneAvailableTabletServerNode(
-                                                    metadataUpdater.getCluster()),
+                                                    metadataUpdater.getCluster(), rpcClient, conf),
                                     rpcClient,
                                     AdminReadOnlyGateway.class);
-
                     SecurityTokenProvider securityTokenProvider =
                             new DefaultSecurityTokenProvider(gateway);
                     securityTokenManager =

@@ -61,15 +61,17 @@ public class MetadataUpdater {
 
     private static final int MAX_RETRY_TIMES = 5;
 
+    private final Configuration configuration;
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
 
     public MetadataUpdater(Configuration configuration, RpcClient rpcClient) {
-        this(rpcClient, initializeCluster(configuration, rpcClient));
+        this(configuration, rpcClient, initializeCluster(configuration, rpcClient));
     }
 
     @VisibleForTesting
-    public MetadataUpdater(RpcClient rpcClient, Cluster cluster) {
+    public MetadataUpdater(Configuration configuration, RpcClient rpcClient, Cluster cluster) {
+        this.configuration = configuration;
         this.rpcClient = rpcClient;
         this.cluster = cluster;
     }
@@ -255,6 +257,7 @@ public class MetadataUpdater {
                         sendMetadataRequestAndRebuildCluster(
                                 cluster,
                                 rpcClient,
+                                configuration,
                                 tablePaths,
                                 tablePartitionNames,
                                 tablePartitionIds);
