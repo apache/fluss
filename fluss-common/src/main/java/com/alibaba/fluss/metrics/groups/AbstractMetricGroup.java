@@ -367,11 +367,6 @@ public abstract class AbstractMetricGroup implements MetricGroup {
         return metrics;
     }
 
-    @VisibleForTesting
-    public Map<String, AbstractMetricGroup> getGroups() {
-        return groups;
-    }
-
     /**
      * Enum for indicating which child group should be created. `KEY` is used to create {@link
      * GenericKeyMetricGroup}. `VALUE` is used to create {@link GenericValueMetricGroup}. `GENERIC`

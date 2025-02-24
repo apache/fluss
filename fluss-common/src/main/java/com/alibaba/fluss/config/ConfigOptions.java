@@ -552,12 +552,6 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
 
-    public static final ConfigOption<Boolean> NETTY_SERVER_ENABLE_VERBOSE_METRICS =
-            key("netty.server.enable-verbose-metrics")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription("Enable verbose metrics for pooled allocator of the server.");
-
     public static final ConfigOption<Duration> NETTY_CONNECTION_MAX_IDLE_TIME =
             key("netty.connection.max-idle-time")
                     .durationType()
@@ -572,12 +566,6 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads that the client uses for sending requests to the "
                                     + "network and receiving responses from network. The default value is 1");
-
-    public static final ConfigOption<Boolean> NETTY_CLIENT_ENABLE_VERBOSE_METRICS =
-            key("netty.client.enable-verbose-metrics")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription("Enable verbose metrics for pooled allocator of the client.");
 
     // ------------------------------------------------------------------------
     //  Client Settings

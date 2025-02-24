@@ -22,6 +22,7 @@ import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.rpc.RpcGateway;
 import com.alibaba.fluss.rpc.RpcGatewayService;
 import com.alibaba.fluss.rpc.RpcServer;
+import com.alibaba.fluss.rpc.netty.NettyMetrics;
 import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
@@ -42,7 +43,6 @@ import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 
-import static com.alibaba.fluss.rpc.netty.NettyMemoryMetrics.createNettyMemoryMetrics;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.isBindFailure;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownChannel;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownGroup;
@@ -174,11 +174,7 @@ public final class NettyServer implements RpcServer {
                 bindAddress);
 
         isRunning = true;
-
-        createNettyMemoryMetrics(
-                serverMetricGroup,
-                pooledBufAllocator,
-                conf.getBoolean(ConfigOptions.NETTY_SERVER_ENABLE_VERBOSE_METRICS));
+        NettyMetrics.registerNettyMetrics(serverMetricGroup, pooledBufAllocator);
     }
 
     @Override

@@ -242,6 +242,44 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </tbody>
 </table>
 
+### Netty
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="1"><strong>coordinator/tabletserver/client</strong></th>
+      <td rowspan="1">netty</td>
+      <td>usedDirectMemory</td>
+      <td>The number of bytes of direct memory used by netty.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>numDirectArenas</td>
+      <td>The number of direct arenas in netty.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>numAllocationsPerSecond</td>
+      <td>The number of allocations done via the arena per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>numHugeAllocationsPerSecond</td>
+      <td>The number of huge allocations done via the arena per second.</td>
+      <td>Meter</td>
+    </tr>
+  </tbody>
+</table>
+
 ### Coordinator Server
 
 <table class="table table-bordered">

@@ -152,4 +152,11 @@ public class MetricNames {
     public static final String SCANNER_REMOTE_FETCH_BYTES_RATE = "remoteFetchBytesPerSecond";
     public static final String SCANNER_REMOTE_FETCH_RATE = "remoteFetchRequestsPerSecond";
     public static final String SCANNER_REMOTE_FETCH_ERROR_RATE = "remoteFetchErrorPerSecond";
+
+    // for netty
+    public static final String NETTY_USED_DIRECT_MEMORY = "usedDirectMemory";
+    public static final String NETTY_NUM_DIRECT_ARENAS = "numDirectArenas";
+    public static final String NETTY_NUM_ALLOCATIONS_PER_SECONDS = "numAllocationsPerSecond";
+    public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS =
+            "numHugeAllocationsPerSecond";
 }

@@ -23,6 +23,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
+import com.alibaba.fluss.rpc.netty.NettyMetrics;
 import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
@@ -43,7 +44,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import static com.alibaba.fluss.rpc.netty.NettyMemoryMetrics.createNettyMemoryMetrics;
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -92,10 +92,7 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
                         .handler(new ClientChannelInitializer(connectionMaxIdle));
         this.clientMetricGroup = clientMetricGroup;
-        createNettyMemoryMetrics(
-                clientMetricGroup,
-                pooledAllocator,
-                conf.getBoolean(ConfigOptions.NETTY_CLIENT_ENABLE_VERBOSE_METRICS));
+        NettyMetrics.registerNettyMetrics(clientMetricGroup, pooledAllocator);
     }
 
     /**
