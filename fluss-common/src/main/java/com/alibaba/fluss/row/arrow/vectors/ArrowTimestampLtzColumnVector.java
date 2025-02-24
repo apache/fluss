@@ -26,7 +26,9 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** Arrow column vector for TimestampLtz. */
 @Internal
@@ -39,8 +41,8 @@ public class ArrowTimestampLtzColumnVector implements TimestampLtzColumnVector {
     private final ValueVector valueVector;
 
     public ArrowTimestampLtzColumnVector(ValueVector valueVector) {
-        this.valueVector = Preconditions.checkNotNull(valueVector);
-        Preconditions.checkState(
+        this.valueVector = checkNotNull(valueVector);
+        checkState(
                 valueVector instanceof TimeStampVector
                         && ((ArrowType.Timestamp) valueVector.getField().getType()).getTimezone()
                                 == null);

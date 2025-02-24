@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.LongColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for BigInt. */
 @Internal
@@ -29,7 +30,7 @@ public class ArrowBigIntColumnVector implements LongColumnVector {
     private final BigIntVector bigIntVector;
 
     public ArrowBigIntColumnVector(BigIntVector bigIntVector) {
-        this.bigIntVector = Preconditions.checkNotNull(bigIntVector);
+        this.bigIntVector = checkNotNull(bigIntVector);
     }
 
     @Override

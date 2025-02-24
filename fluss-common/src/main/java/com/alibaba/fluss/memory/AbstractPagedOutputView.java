@@ -17,11 +17,12 @@
 package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -53,7 +54,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         if (initialSegment == null) {
             throw new NullPointerException("Initial Segment may not be null");
         }
-        Preconditions.checkArgument(
+        checkArgument(
                 initialSegment.size() == pageSize, "Initial segment size must match page size.");
         this.pageSize = pageSize;
         this.currentSegment = initialSegment;

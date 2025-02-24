@@ -20,12 +20,13 @@ import com.alibaba.fluss.fs.FSDataInputStream;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -42,7 +43,7 @@ public class CompletedSnapshotHandle {
     private final long logOffset;
 
     public CompletedSnapshotHandle(FsPath metadataFilePath, long logOffset) {
-        Preconditions.checkNotNull(metadataFilePath);
+        checkNotNull(metadataFilePath);
         this.metadataFilePath = metadataFilePath;
         this.logOffset = logOffset;
     }

@@ -21,7 +21,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
-import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -31,6 +30,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** An implementation of {@link RecordsWithSplitIds} which contains records from multiple splits. */
 public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPos> {
@@ -123,7 +124,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     @Nullable
     @Override
     public RecordAndPos nextRecordFromSplit() {
-        Preconditions.checkNotNull(
+        checkNotNull(
                 currentRecordIterator,
                 "Make sure nextSplit() did not return null before "
                         + "iterate over the records split.");

@@ -23,7 +23,6 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +34,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** The abstract write batch contains write callback object to wait write request feedback. */
 @Internal
@@ -161,7 +162,7 @@ public abstract class WriteBatch {
      * contained in the batch.
      */
     public boolean completeExceptionally(Exception exception) {
-        Preconditions.checkNotNull(exception);
+        checkNotNull(exception);
         return done(exception);
     }
 

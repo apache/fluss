@@ -16,11 +16,11 @@
 
 package com.alibaba.fluss.config;
 
-import com.alibaba.fluss.utils.Preconditions;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Helper class for splitting a string on a given delimiter with quoting logic. */
 class StructuredOptionsSplitter {
@@ -44,7 +44,7 @@ class StructuredOptionsSplitter {
      * @return a list of splits
      */
     static List<String> splitEscaped(String string, char delimiter) {
-        List<Token> tokens = tokenize(Preconditions.checkNotNull(string), delimiter);
+        List<Token> tokens = tokenize(checkNotNull(string), delimiter);
         return processTokens(tokens);
     }
 

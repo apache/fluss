@@ -95,7 +95,6 @@ import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,6 +115,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeGetLatestKvSnapshotsResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeKvSnapshotMetadataResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -495,12 +495,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     private PartitionMetadataInfo getPartitionMetadata(PhysicalTablePath partitionPath) {
         try {
-            Preconditions.checkNotNull(
+            checkNotNull(
                     partitionPath.getPartitionName(),
                     "partitionName must be not null, but get: " + partitionPath);
             AssignmentInfo assignmentInfo = getAssignmentInfo(null, partitionPath);
             List<BucketLocation> bucketLocations = new ArrayList<>();
-            Preconditions.checkNotNull(
+            checkNotNull(
                     assignmentInfo.partitionId,
                     "partition id must be not null for " + partitionPath);
             if (assignmentInfo.tableAssignment != null) {
@@ -634,7 +634,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     zkClient.getPartitionAssignment(partitionId).orElse(null),
                     partitionId);
         } else {
-            Preconditions.checkNotNull(tableId, "tableId must be not null");
+            checkNotNull(tableId, "tableId must be not null");
             return new AssignmentInfo(
                     tableId, zkClient.getTableAssignment(tableId).orElse(null), null);
         }

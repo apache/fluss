@@ -20,7 +20,6 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.utils.AbstractAutoCloseableRegistry;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.WrappingProxy;
 import com.alibaba.fluss.utils.WrappingProxyUtils;
 
@@ -37,6 +36,9 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -86,7 +88,7 @@ public class SafetyNetCloseableRegistry
 
         synchronized (REAPER_THREAD_LOCK) {
             if (0 == GLOBAL_SAFETY_NET_REGISTRY_COUNT) {
-                Preconditions.checkState(null == REAPER_THREAD);
+                checkState(null == REAPER_THREAD);
                 try {
                     REAPER_THREAD = reaperThreadSupplier.get();
                     REAPER_THREAD.start();
@@ -170,9 +172,8 @@ public class SafetyNetCloseableRegistry
                 ReferenceQueue<? super WrappingProxyCloseable<? extends Closeable>> q) {
 
             super(referent, q);
-            this.innerCloseable =
-                    Preconditions.checkNotNull(WrappingProxyUtils.stripProxy(referent));
-            this.closeableRegistry = Preconditions.checkNotNull(closeableRegistry);
+            this.innerCloseable = checkNotNull(WrappingProxyUtils.stripProxy(referent));
+            this.closeableRegistry = checkNotNull(closeableRegistry);
             this.debugString = referent.toString();
         }
 

@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.BooleanColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BitVector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for Boolean. */
 @Internal
@@ -29,7 +30,7 @@ public class ArrowBooleanColumnVector implements BooleanColumnVector {
     private final BitVector bitVector;
 
     public ArrowBooleanColumnVector(BitVector bitVector) {
-        this.bitVector = Preconditions.checkNotNull(bitVector);
+        this.bitVector = checkNotNull(bitVector);
     }
 
     @Override

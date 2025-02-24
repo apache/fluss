@@ -28,12 +28,14 @@ import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A batch of log records managed in ARROW format that is or will be sent to server by {@link
@@ -63,13 +65,12 @@ public class ArrowLogWriteBatch extends WriteBatch {
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
-        Preconditions.checkArgument(
+        checkArgument(
                 writeRecord.getTargetColumns() == null,
                 "target columns must be null for log record");
-        Preconditions.checkArgument(
-                writeRecord.getKey() == null, "key must be null for log record");
-        Preconditions.checkNotNull(row != null, "row must not be null for log record");
-        Preconditions.checkNotNull(callback, "write callback must be not null");
+        checkArgument(writeRecord.getKey() == null, "key must be null for log record");
+        checkNotNull(row != null, "row must not be null for log record");
+        checkNotNull(callback, "write callback must be not null");
         if (recordsBuilder.isFull() || recordsBuilder.isClosed()) {
             return false;
         } else {

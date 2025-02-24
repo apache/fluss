@@ -40,7 +40,6 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.server.log.LocalLog.SegmentDeletionReason;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 import com.alibaba.fluss.utils.types.Either;
@@ -66,6 +65,7 @@ import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 
 import static com.alibaba.fluss.utils.FileUtils.flushFileIfExists;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -147,7 +147,7 @@ public final class LogTablet {
                         writerExpirationCheckIntervalMs,
                         writerExpirationCheckIntervalMs);
         this.logFormat = logFormat;
-        Preconditions.checkArgument(
+        checkArgument(
                 tieredLogLocalSegments > 0,
                 "log segments to retain in local must be greater than 0");
         this.tieredLogLocalSegments = tieredLogLocalSegments;

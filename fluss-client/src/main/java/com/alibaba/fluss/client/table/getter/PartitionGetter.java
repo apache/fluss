@@ -20,9 +20,11 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** A getter to get partition name from a row. */
 public class PartitionGetter {
@@ -40,7 +42,7 @@ public class PartitionGetter {
         List<String> fieldNames = rowType.getFieldNames();
         String partitionColumnName = partitionKeys.get(0);
         int partitionColumnIndex = fieldNames.indexOf(partitionColumnName);
-        Preconditions.checkArgument(
+        checkArgument(
                 partitionColumnIndex >= 0,
                 "The partition column %s is not in the row %s.",
                 partitionColumnName,
@@ -48,7 +50,7 @@ public class PartitionGetter {
 
         // check the data type of the partition column
         DataType partitionColumnDataType = rowType.getTypeAt(partitionColumnIndex);
-        Preconditions.checkArgument(
+        checkArgument(
                 partitionColumnDataType.getTypeRoot() == DataTypeRoot.STRING,
                 "Currently, partitioned table only supports STRING type partition key, but got partition key '%s' with data type %s.",
                 partitionColumnName,
@@ -59,7 +61,7 @@ public class PartitionGetter {
 
     public String getPartition(InternalRow row) {
         Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
-        Preconditions.checkNotNull(partitionValue, "Partition value shouldn't be null.");
+        checkNotNull(partitionValue, "Partition value shouldn't be null.");
         return partitionValue.toString();
     }
 }

@@ -22,7 +22,6 @@ import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.EncodingUtils;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.StringUtils;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
 import com.alibaba.fluss.utils.json.SchemaJsonSerde;
@@ -41,7 +40,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * A schema represents the schema part of a {@code CREATE TABLE} DDL statement in SQL. It defines
@@ -215,7 +216,7 @@ public final class Schema implements Serializable {
                 List<String> fieldNames, List<? extends DataType> fieldDataTypes) {
             checkNotNull(fieldNames, "Field names must not be null.");
             checkNotNull(fieldDataTypes, "Field data types must not be null.");
-            Preconditions.checkArgument(
+            checkArgument(
                     fieldNames.size() == fieldDataTypes.size(),
                     "Field names and field data types must have the same length.");
             IntStream.range(0, fieldNames.size())
@@ -301,12 +302,11 @@ public final class Schema implements Serializable {
          * @param columnNames columns that form a unique primary key
          */
         public Builder primaryKeyNamed(String constraintName, List<String> columnNames) {
-            Preconditions.checkState(
-                    primaryKey == null, "Multiple primary keys are not supported.");
-            Preconditions.checkArgument(
+            checkState(primaryKey == null, "Multiple primary keys are not supported.");
+            checkArgument(
                     columnNames != null && !columnNames.isEmpty(),
                     "Primary key constraint must be defined for at least a single column.");
-            Preconditions.checkArgument(
+            checkArgument(
                     !StringUtils.isNullOrWhitespaceOnly(constraintName),
                     "Primary key constraint name must not be empty.");
             primaryKey = new PrimaryKey(constraintName, columnNames);
@@ -457,7 +457,7 @@ public final class Schema implements Serializable {
                 columns.stream().map(Column::getName).collect(Collectors.toList());
 
         Set<String> duplicateColumns = duplicate(columnNames);
-        Preconditions.checkState(
+        checkState(
                 duplicateColumns.isEmpty(),
                 "Table column %s must not contain duplicate fields. Found: %s",
                 columnNames,
@@ -470,12 +470,12 @@ public final class Schema implements Serializable {
 
         List<String> primaryKeyNames = primaryKey.getColumnNames();
         duplicateColumns = duplicate(primaryKeyNames);
-        Preconditions.checkState(
+        checkState(
                 duplicateColumns.isEmpty(),
                 "Primary key constraint %s must not contain duplicate columns. Found: %s",
                 primaryKey,
                 duplicateColumns);
-        Preconditions.checkState(
+        checkState(
                 allFields.containsAll(primaryKeyNames),
                 "Table column %s should include all primary key constraint %s",
                 columnNames,

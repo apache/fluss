@@ -22,7 +22,8 @@ import com.alibaba.fluss.row.columnar.ColumnVector;
 import com.alibaba.fluss.row.columnar.ColumnarRow;
 import com.alibaba.fluss.row.columnar.VectorizedColumnBatch;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** {@link ArrowReader} which read the underlying Arrow format data as {@link InternalRow}. */
 @Internal
@@ -42,7 +43,7 @@ public class ArrowReader {
 
     public ArrowReader(VectorSchemaRoot root, ColumnVector[] columnVectors) {
         this.root = root;
-        this.columnVectors = Preconditions.checkNotNull(columnVectors);
+        this.columnVectors = checkNotNull(columnVectors);
         this.rowCount = root.getRowCount();
     }
 

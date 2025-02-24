@@ -21,12 +21,13 @@ import com.alibaba.fluss.fs.local.LocalDataOutputStream;
 import com.alibaba.fluss.fs.local.LocalFileStatus;
 import com.alibaba.fluss.fs.local.LocalFileSystem;
 import com.alibaba.fluss.utils.MapUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A test file system. This also has a service entry in the test resources, to be loaded during
@@ -125,7 +126,7 @@ public class TestFileSystem extends LocalFileSystem {
         @Override
         public void close() throws IOException {
             currentUnclosedOutputStream.compute(
-                    path, (k, v) -> Preconditions.checkNotNull(v) == 1 ? null : v - 1);
+                    path, (k, v) -> checkNotNull(v) == 1 ? null : v - 1);
             stream.close();
         }
     }

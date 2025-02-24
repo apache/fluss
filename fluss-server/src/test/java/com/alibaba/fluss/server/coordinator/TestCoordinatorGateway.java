@@ -71,7 +71,6 @@ import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -84,6 +83,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getAdjustIsrData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getCommitRemoteLogManifestData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeAdjustIsrResponse;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** A {@link CoordinatorGateway} for test purpose. */
 public class TestCoordinatorGateway implements CoordinatorGateway {
@@ -237,7 +237,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
             return CompletableFuture.completedFuture(
                     new CommitRemoteLogManifestResponse().setCommitSuccess(false));
         }
-        Preconditions.checkNotNull(zkClient, "zkClient is null");
+        checkNotNull(zkClient, "zkClient is null");
         CommitRemoteLogManifestData commitRemoteLogManifestData =
                 getCommitRemoteLogManifestData(request);
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();

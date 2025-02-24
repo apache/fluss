@@ -29,6 +29,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -64,7 +66,7 @@ public abstract class AbstractAutoCloseableRegistry<
 
     public AbstractAutoCloseableRegistry(@Nonnull Map<R, T> closeableToRef) {
         this.lock = new Object();
-        this.closeableToRef = Preconditions.checkNotNull(closeableToRef);
+        this.closeableToRef = checkNotNull(closeableToRef);
         this.closed = false;
     }
 

@@ -35,7 +35,6 @@ import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 import com.alibaba.fluss.utils.log.FairBucketStatusMap;
 
@@ -60,6 +59,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -487,7 +487,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     private long processFetchResultFromRemoteStorage(
             TableBucket tb, FetchLogResultForBucket replicaData) throws Exception {
         RemoteLogFetchInfo rlFetchInfo = replicaData.remoteLogFetchInfo();
-        Preconditions.checkNotNull(rlFetchInfo, "RemoteLogFetchInfo is null");
+        checkNotNull(rlFetchInfo, "RemoteLogFetchInfo is null");
         Replica replica = replicaManager.getReplicaOrException(tb);
         long nextFetchOffset = -1L;
         RemoteLogManager rlm = replicaManager.getRemoteLogManager();

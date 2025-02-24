@@ -17,7 +17,8 @@
 package com.alibaba.fluss.plugin;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Interface for plugins. Plugins typically extend this interface in their SPI and the concrete
@@ -35,7 +36,7 @@ public interface Plugin {
      * @return the class loader used to load the plugin.
      */
     default ClassLoader getClassLoader() {
-        return Preconditions.checkNotNull(
+        return checkNotNull(
                 this.getClass().getClassLoader(),
                 "%s plugin with null class loader",
                 this.getClass().getName());

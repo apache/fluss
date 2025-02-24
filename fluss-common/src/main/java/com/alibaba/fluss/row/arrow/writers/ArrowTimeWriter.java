@@ -18,13 +18,14 @@ package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.util.Preconditions;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for Time. */
 @Internal
@@ -36,7 +37,7 @@ public class ArrowTimeWriter extends ArrowFieldWriter<InternalRow> {
 
     private ArrowTimeWriter(ValueVector valueVector) {
         super(valueVector);
-        Preconditions.checkState(
+        checkState(
                 valueVector instanceof TimeSecVector
                         || valueVector instanceof TimeMilliVector
                         || valueVector instanceof TimeMicroVector

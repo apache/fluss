@@ -38,6 +38,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -349,7 +351,7 @@ public final class ExceptionUtils {
      *     the new exception in the list of suppressed exceptions.
      */
     public static <T extends Throwable> T firstOrSuppressed(T newException, @Nullable T previous) {
-        Preconditions.checkNotNull(newException, "newException");
+        checkNotNull(newException, "newException");
 
         if (previous == null || previous == newException) {
             return newException;

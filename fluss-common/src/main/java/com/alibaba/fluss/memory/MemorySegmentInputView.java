@@ -16,10 +16,10 @@
 
 package com.alibaba.fluss.memory;
 
-import com.alibaba.fluss.utils.Preconditions;
-
 import java.io.EOFException;
 import java.io.IOException;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** A {@link MemorySegment} input implementation for the {@link InputView} interface. */
 public class MemorySegmentInputView implements InputView {
@@ -35,8 +35,7 @@ public class MemorySegmentInputView implements InputView {
     }
 
     public MemorySegmentInputView(MemorySegment segment, int position) {
-        Preconditions.checkArgument(
-                position >= 0 && position < segment.size(), "Position is out of bounds.");
+        checkArgument(position >= 0 && position < segment.size(), "Position is out of bounds.");
         this.segment = segment;
         this.end = segment.size();
         this.position = position;

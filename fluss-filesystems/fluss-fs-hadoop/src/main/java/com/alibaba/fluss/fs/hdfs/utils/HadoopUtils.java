@@ -17,7 +17,6 @@
 package com.alibaba.fluss.fs.hdfs.utils;
 
 import com.alibaba.fluss.config.ConfigBuilder;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.HdfsConfiguration;
@@ -30,6 +29,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.util.Collection;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -124,7 +125,7 @@ public class HadoopUtils {
 
     public static boolean areKerberosCredentialsValid(
             UserGroupInformation ugi, boolean useTicketCache) {
-        Preconditions.checkState(isKerberosSecurityEnabled(ugi));
+        checkState(isKerberosSecurityEnabled(ugi));
 
         // note: UGI::hasKerberosCredentials inaccurately reports false
         // for logins based on a keytab (fixed in Hadoop 2.6.1, see HADOOP-10786),

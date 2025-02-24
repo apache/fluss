@@ -20,7 +20,6 @@ import com.alibaba.fluss.server.utils.ResourceGuard;
 import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.rocksdb.Checkpoint;
 import org.rocksdb.RocksDB;
@@ -40,6 +39,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -234,7 +235,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 @Nonnull List<KvFileHandleAndLocalPath> miscFiles,
                 CloseableRegistry closeableRegistry)
                 throws Exception {
-            Preconditions.checkState(localSnapshotDirectory.exists());
+            checkState(localSnapshotDirectory.exists());
 
             Path[] files = FileUtils.listDirectory(localSnapshotDirectory.toPath());
             List<Path> sstFilePaths = new ArrayList<>(files.length);
