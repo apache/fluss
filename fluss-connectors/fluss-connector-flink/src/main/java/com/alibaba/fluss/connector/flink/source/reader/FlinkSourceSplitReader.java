@@ -132,6 +132,13 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     @Override
     public RecordsWithSplitIds<RecordAndPos> fetch() throws IOException {
+        if (!removedSplits.isEmpty()) {
+            FlinkRecordsWithSplitIds records =
+                    new FlinkRecordsWithSplitIds(
+                            new HashSet<>(removedSplits), flinkSourceReaderMetrics);
+            removedSplits.clear();
+            return records;
+        }
         checkSnapshotSplitOrStartNext();
         if (currentBoundedSplitReader != null) {
             CloseableIterator<RecordAndPos> recordIterator = currentBoundedSplitReader.readBatch();
@@ -148,12 +155,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         new FlinkRecordsWithSplitIds(
                                 new HashSet<>(emptyLogSplits), flinkSourceReaderMetrics);
                 emptyLogSplits.clear();
-                return records;
-            } else if (!removedSplits.isEmpty()) {
-                FlinkRecordsWithSplitIds records =
-                        new FlinkRecordsWithSplitIds(
-                                new HashSet<>(removedSplits), flinkSourceReaderMetrics);
-                removedSplits.clear();
                 return records;
             } else {
                 // if not subscribe any buckets, just return empty records
@@ -251,26 +252,30 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         } else {
             Long partitionId = tableBucket.getPartitionId();
             int bucket = tableBucket.getBucket();
-            try {
-                if (partitionId != null) {
-                    // Try to subscribe using the partition id.
+            if (partitionId != null) {
+                // Try to subscribe using the partition id.
+                try {
                     logScanner.subscribe(partitionId, bucket, startingOffset);
-                } else {
-                    // If no partition id, subscribe by bucket only.
-                    logScanner.subscribe(bucket, startingOffset);
+                } catch (Exception e) {
+                    // the PartitionNotExistException may still happens when partition is removed
+                    // but Flink source reader failover before aware of it
+                    // Traverse the exception chain to check for PartitionNotExistException.
+                    boolean partitionNotExist =
+                            ExceptionUtils.findThrowable(e, PartitionNotExistException.class)
+                                    .isPresent();
+                    if (partitionNotExist) {
+                        // mark the not exist partition to be removed
+                        removedSplits.add(split.splitId());
+                        LOG.warn(
+                                "Partition {} does not exist when subscribing to log for split {}. Skipping subscription.",
+                                partitionId,
+                                split.splitId());
+                        return;
+                    }
                 }
-            } catch (Exception e) {
-                // Traverse the exception chain to check for PartitionNotExistException.
-                boolean partitionNotExist =
-                        ExceptionUtils.findThrowable(e, PartitionNotExistException.class)
-                                .isPresent();
-                if (partitionNotExist) {
-                    LOG.warn(
-                            "Partition {} does not exist when subscribing to log for split {}. Skipping subscription.",
-                            partitionId,
-                            split.splitId());
-                    return;
-                }
+            } else {
+                // If no partition id, subscribe by bucket only.
+                logScanner.subscribe(bucket, startingOffset);
             }
 
             LOG.info(
@@ -284,9 +289,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     public Set<TableBucket> removePartitions(Map<Long, String> removedPartitions) {
-        // todo, may consider to close the current snapshot reader if
-        // the current snapshot split is in the partition buckets
-
         // Set to collect table buckets that are unsubscribed.
         Set<TableBucket> unsubscribedTableBuckets = new HashSet<>();
         // First, if the current active bounded split belongs to a removed partition,
@@ -306,7 +308,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 } catch (IOException e) {
                     LOG.warn(
                             "Failed to close current bounded split for removed partition {}.",
-                            currentBucket.getPartitionId(),
+                            removedPartitions.get(currentBucket.getPartitionId()),
                             e);
                 }
             }
