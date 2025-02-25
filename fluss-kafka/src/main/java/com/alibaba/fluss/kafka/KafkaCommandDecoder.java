@@ -16,16 +16,11 @@
 
 package com.alibaba.fluss.kafka;
 
-import com.alibaba.fluss.kafka.protocols.KafkaRequest;
-import com.alibaba.fluss.kafka.protocols.KafkaResponse;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.protocol.ApiKeys;
-import org.apache.kafka.common.protocol.ApiMessage;
-import org.apache.kafka.common.protocol.ByteBufferAccessor;
-import org.apache.kafka.common.protocol.ObjectSerializationCache;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsRequest;
@@ -33,6 +28,7 @@ import org.apache.kafka.common.requests.ProduceRequest;
 import org.apache.kafka.common.requests.RequestAndSize;
 import org.apache.kafka.common.requests.RequestHeader;
 
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -46,139 +42,146 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
 
     // Need to use a Queue to store the inflight responses, because Kafka clients require the responses to be sent in order.
     // See: org.apache.kafka.clients.InFlightRequests#completeNext
-    private final ConcurrentLinkedDeque<KafkaResponse> inflightResponses = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<KafkaRequest> inflightResponses = new ConcurrentLinkedDeque<>();
     protected final AtomicBoolean isActive = new AtomicBoolean(true);
+    protected volatile ChannelHandlerContext ctx;
+    protected SocketAddress remoteAddress;
 
     @Override
     public void channelRead0(ChannelHandlerContext ctx, ByteBuf buffer) throws Exception {
         CompletableFuture<AbstractResponse> future = new CompletableFuture<>();
-        KafkaResponse response = parseRequest(ctx, future, buffer);
-        inflightResponses.addLast(response);
-
-        future.whenCompleteAsync((r, t) -> {
-            sendResponse(ctx);
-        }, ctx.executor());
-
         try {
+            KafkaRequest request = parseRequest(ctx, future, buffer);
+            inflightResponses.addLast(request);
+            future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
+
             if (!isActive.get()) {
-                handleInactive(response, future);
+                handleInactive(request, future);
                 return;
             }
-            switch (response.apiKey) {
+            switch (request.apiKey()) {
                 case API_VERSIONS:
-                    handleApiVersionsRequest(response, future);
+                    handleApiVersionsRequest(request, future);
                     break;
                 case METADATA:
-                    handleMetadataRequest(response, future);
+                    handleMetadataRequest(request, future);
                     break;
                 case PRODUCE:
-                    handleProducerRequest(response, future);
+                    handleProducerRequest(request, future);
                     break;
                 case FIND_COORDINATOR:
-                    handleFindCoordinatorRequest(response, future);
+                    handleFindCoordinatorRequest(request, future);
                     break;
                 case LIST_OFFSETS:
-                    handleListOffsetRequest(response, future);
+                    handleListOffsetRequest(request, future);
                     break;
                 case OFFSET_FETCH:
-                    handleOffsetFetchRequest(response, future);
+                    handleOffsetFetchRequest(request, future);
                     break;
                 case OFFSET_COMMIT:
-                    handleOffsetCommitRequest(response, future);
+                    handleOffsetCommitRequest(request, future);
                     break;
                 case FETCH:
-                    handleFetchRequest(response, future);
+                    handleFetchRequest(request, future);
                     break;
                 case JOIN_GROUP:
-                    handleJoinGroupRequest(response, future);
+                    handleJoinGroupRequest(request, future);
                     break;
                 case SYNC_GROUP:
-                    handleSyncGroupRequest(response, future);
+                    handleSyncGroupRequest(request, future);
                     break;
                 case HEARTBEAT:
-                    handleHeartbeatRequest(response, future);
+                    handleHeartbeatRequest(request, future);
                     break;
                 case LEAVE_GROUP:
-                    handleLeaveGroupRequest(response, future);
+                    handleLeaveGroupRequest(request, future);
                     break;
                 case DESCRIBE_GROUPS:
-                    handleDescribeGroupsRequest(response, future);
+                    handleDescribeGroupsRequest(request, future);
                     break;
                 case LIST_GROUPS:
-                    handleListGroupsRequest(response, future);
+                    handleListGroupsRequest(request, future);
                     break;
                 case DELETE_GROUPS:
-                    handleDeleteGroupsRequest(response, future);
+                    handleDeleteGroupsRequest(request, future);
                     break;
                 case SASL_HANDSHAKE:
-                    handleSaslHandshakeRequest(response, future);
+                    handleSaslHandshakeRequest(request, future);
                     break;
                 case SASL_AUTHENTICATE:
-                    handleSaslAuthenticateRequest(response, future);
+                    handleSaslAuthenticateRequest(request, future);
                     break;
                 case CREATE_TOPICS:
-                    handleCreateTopicsRequest(response, future);
+                    handleCreateTopicsRequest(request, future);
                     break;
                 case INIT_PRODUCER_ID:
-                    handleInitProducerIdRequest(response, future);
+                    handleInitProducerIdRequest(request, future);
                     break;
                 case ADD_PARTITIONS_TO_TXN:
-                    handleAddPartitionsToTxnRequest(response, future);
+                    handleAddPartitionsToTxnRequest(request, future);
                     break;
                 case ADD_OFFSETS_TO_TXN:
-                    handleAddOffsetsToTxnRequest(response, future);
+                    handleAddOffsetsToTxnRequest(request, future);
                     break;
                 case TXN_OFFSET_COMMIT:
-                    handleTxnOffsetCommitRequest(response, future);
+                    handleTxnOffsetCommitRequest(request, future);
                     break;
                 case END_TXN:
-                    handleEndTxnRequest(response, future);
+                    handleEndTxnRequest(request, future);
                     break;
                 case WRITE_TXN_MARKERS:
-                    handleWriteTxnMarkersRequest(response, future);
+                    handleWriteTxnMarkersRequest(request, future);
                     break;
                 case DESCRIBE_CONFIGS:
-                    handleDescribeConfigsRequest(response, future);
+                    handleDescribeConfigsRequest(request, future);
                     break;
                 case ALTER_CONFIGS:
-                    handleAlterConfigsRequest(response, future);
+                    handleAlterConfigsRequest(request, future);
                     break;
                 case DELETE_TOPICS:
-                    handleDeleteTopicsRequest(response, future);
+                    handleDeleteTopicsRequest(request, future);
                     break;
                 case DELETE_RECORDS:
-                    handleDeleteRecordsRequest(response, future);
+                    handleDeleteRecordsRequest(request, future);
                     break;
                 case OFFSET_DELETE:
-                    handleOffsetDeleteRequest(response, future);
+                    handleOffsetDeleteRequest(request, future);
                     break;
                 case CREATE_PARTITIONS:
-                    handleCreatePartitionsRequest(response, future);
+                    handleCreatePartitionsRequest(request, future);
                     break;
                 case DESCRIBE_CLUSTER:
-                    handleDescribeClusterRequest(response, future);
+                    handleDescribeClusterRequest(request, future);
                     break;
                 default:
-                    handleUnsupportedRequest(response, future);
+                    handleUnsupportedRequest(request, future);
             }
         } catch (Throwable t) {
             log.error("Error handling request", t);
-            future.complete(response.request.getErrorResponse(t));
+            future.completeExceptionally(t);
         } finally {
             buffer.release();
         }
     }
 
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        super.channelActive(ctx);
+        this.ctx = ctx;
+        this.remoteAddress = ctx.channel().remoteAddress();
+        isActive.set(true);
+    }
+
     private void sendResponse(ChannelHandlerContext ctx) {
-        KafkaResponse response;
-        while ((response = inflightResponses.peekFirst()) != null) {
-            CompletableFuture<AbstractResponse> f = response.future;
-            AbstractRequest request = response.request;
-            ApiKeys apiKey = response.apiKey;
+        KafkaRequest request;
+        while ((request = inflightResponses.peekFirst()) != null) {
+            CompletableFuture<AbstractResponse> f = request.future();
+            ApiKeys apiKey = request.apiKey();
             boolean isDone = f.isDone();
+            boolean cancelled = request.cancelled();
 
             if (apiKey.equals(PRODUCE)) {
-                ProduceRequest produceRequest = (ProduceRequest) request;
+                ProduceRequest produceRequest = request.request();
                 if (produceRequest.acks() == 0) {
                     // if acks=0, we don't need to wait for the response to be sent
                     inflightResponses.pollFirst();
@@ -190,26 +193,39 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
                 break;
             }
 
+            if (cancelled) {
+                inflightResponses.pollFirst();
+                request.releaseBuffer();
+                continue;
+            }
+
             inflightResponses.pollFirst();
-            ByteBuf buffer = serialize(response, ctx);
-            ctx.writeAndFlush(buffer);
+            if (isActive.get()) {
+                ByteBuf buffer = request.serialize();
+                ctx.writeAndFlush(buffer);
+            }
         }
     }
 
     protected void close() {
         isActive.set(false);
-        // TODO cancel all inflight requests
+        ctx.close();
+        log.warn("Close channel {} with {} pending requests.", remoteAddress, inflightResponses.size());
+        for (KafkaRequest request : inflightResponses) {
+            request.cancel();
+        }
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        log.error("Exception caught", cause);
-        ctx.close();
+        log.error("Exception caught on channel {}", remoteAddress, cause);
+        close();
     }
 
     protected void handleUnsupportedRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
-        String message = String.format("Unsupported request with api key %s", request.apiKey);
-        AbstractResponse response = request.request.getErrorResponse(new UnsupportedOperationException(message));
+        String message = String.format("Unsupported request with api key %s", request.apiKey());
+        AbstractRequest abstractRequest = request.request();
+        AbstractResponse response = abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
         future.complete(response);
     }
 
@@ -278,32 +294,16 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
     protected abstract void handleDescribeClusterRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
 
 
-    private static ByteBuf serialize(KafkaResponse response, ChannelHandlerContext ctx) {
-        final ObjectSerializationCache cache = new ObjectSerializationCache();
-        int headerSize = response.responseHeader.size();
-        short apiVersion = response.apiVersion;
-        AbstractResponse resp = response.createResponse();
-        ApiMessage apiMessage = resp.data();
-        int messageSize = apiMessage.size(cache, apiVersion);
-        final ByteBuf buffer = ctx.alloc().buffer(headerSize + messageSize);
-        buffer.writerIndex(headerSize + messageSize);
-        final ByteBuffer nioBuffer = buffer.nioBuffer();
-        final ByteBufferAccessor writable = new ByteBufferAccessor(nioBuffer);
-        response.responseHeader.data().write(writable, cache, apiVersion);
-        apiMessage.write(writable, cache, apiVersion);
-        return buffer;
-    }
-
-    private static KafkaResponse parseRequest(ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future,
-                                              ByteBuf buffer) {
+    private static KafkaRequest parseRequest(ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future,
+                                             ByteBuf buffer) {
         ByteBuffer nioBuffer = buffer.nioBuffer();
         RequestHeader header = RequestHeader.parse(nioBuffer);
         if (isUnsupportedApiVersionRequest(header)) {
             ApiVersionsRequest request = new ApiVersionsRequest.Builder(header.apiVersion()).build();
-            return new KafkaResponse(API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
+            return new KafkaRequest(API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
         }
         RequestAndSize request = AbstractRequest.parseRequest(header.apiKey(), header.apiVersion(), nioBuffer);
-        return new KafkaResponse(header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
+        return new KafkaRequest(header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
     }
 
     private static boolean isUnsupportedApiVersionRequest(RequestHeader header) {
