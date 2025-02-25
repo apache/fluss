@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.rpc.netty;
 
-import com.alibaba.fluss.metrics.Counter;
 import com.alibaba.fluss.metrics.Gauge;
 import com.alibaba.fluss.metrics.MeterView;
 import com.alibaba.fluss.metrics.MetricNames;
@@ -24,8 +23,6 @@ import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PoolArenaMetric;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocatorMetric;
-
-import java.util.function.Supplier;
 
 /** A netty metrics class to register metrics from netty. */
 public class NettyMetrics {
@@ -43,44 +40,16 @@ public class NettyMetrics {
         nettyMetricGroup.meter(
                 MetricNames.NETTY_NUM_ALLOCATIONS_PER_SECONDS,
                 new MeterView(
-                        new AllocationsCounter(
-                                () ->
-                                        pooledAllocator.directArenas().stream()
-                                                .mapToLong(PoolArenaMetric::numAllocations)
-                                                .sum())));
+                        () ->
+                                pooledAllocatorMetric.directArenas().stream()
+                                        .mapToLong(PoolArenaMetric::numAllocations)
+                                        .sum()));
         nettyMetricGroup.meter(
                 MetricNames.NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS,
                 new MeterView(
-                        new AllocationsCounter(
-                                () ->
-                                        pooledAllocator.directArenas().stream()
-                                                .mapToLong(PoolArenaMetric::numHugeAllocations)
-                                                .sum())));
-    }
-
-    static class AllocationsCounter implements Counter {
-
-        private final Supplier<Long> counterSupplier;
-
-        AllocationsCounter(Supplier<Long> counterSupplier) {
-            this.counterSupplier = counterSupplier;
-        }
-
-        @Override
-        public void inc() {}
-
-        @Override
-        public void inc(long n) {}
-
-        @Override
-        public void dec() {}
-
-        @Override
-        public void dec(long n) {}
-
-        @Override
-        public long getCount() {
-            return counterSupplier.get();
-        }
+                        () ->
+                                pooledAllocatorMetric.directArenas().stream()
+                                        .mapToLong(PoolArenaMetric::numHugeAllocations)
+                                        .sum()));
     }
 }
