@@ -18,10 +18,6 @@ package com.alibaba.fluss.kafka;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.errors.LeaderNotAvailableException;
-import org.apache.kafka.common.requests.AbstractRequest;
-import org.apache.kafka.common.requests.AbstractResponse;
-
-import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 public final class KafkaRequestHandler extends KafkaCommandDecoder {
@@ -48,10 +44,8 @@ public final class KafkaRequestHandler extends KafkaCommandDecoder {
 
     @Override
     protected void handleInactive(KafkaRequest request) {
-        AbstractRequest req = request.request();
         log.warn("Received a request on an inactive channel: {}", remoteAddress);
-        AbstractResponse response = req.getErrorResponse(new LeaderNotAvailableException("Channel is not ready"));
-        request.complete(response);
+        request.fail(new LeaderNotAvailableException("Channel is inactive"));
     }
 
     @Override
