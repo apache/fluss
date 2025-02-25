@@ -182,9 +182,10 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
 
             if (apiKey.equals(PRODUCE)) {
                 ProduceRequest produceRequest = request.request();
-                if (produceRequest.acks() == 0) {
+                if (produceRequest.acks() == 0 && isDone) {
                     // if acks=0, we don't need to wait for the response to be sent
                     inflightResponses.pollFirst();
+                    request.releaseBuffer();
                     continue;
                 }
             }
