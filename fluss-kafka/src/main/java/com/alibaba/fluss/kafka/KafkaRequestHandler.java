@@ -47,165 +47,165 @@ public final class KafkaRequestHandler extends KafkaCommandDecoder {
     }
 
     @Override
-    protected void handleInactive(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleInactive(KafkaRequest request) {
         AbstractRequest req = request.request();
         log.warn("Received a request on an inactive channel: {}", remoteAddress);
         AbstractResponse response = req.getErrorResponse(new LeaderNotAvailableException("Channel is not ready"));
-        future.complete(response);
+        request.complete(response);
     }
 
     @Override
-    protected void handleApiVersionsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
-
-    }
-
-    @Override
-    protected void handleProducerRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleApiVersionsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleMetadataRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleProducerRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleFindCoordinatorRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleMetadataRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleListOffsetRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleFindCoordinatorRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleOffsetFetchRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleListOffsetRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleOffsetCommitRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleOffsetFetchRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleFetchRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleOffsetCommitRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleJoinGroupRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleFetchRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleSyncGroupRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleJoinGroupRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleHeartbeatRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleSyncGroupRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleLeaveGroupRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleHeartbeatRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleDescribeGroupsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleLeaveGroupRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleListGroupsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleDescribeGroupsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleDeleteGroupsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleListGroupsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleSaslHandshakeRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleDeleteGroupsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleSaslAuthenticateRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleSaslHandshakeRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleCreateTopicsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleSaslAuthenticateRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleInitProducerIdRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleCreateTopicsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleAddPartitionsToTxnRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleInitProducerIdRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleAddOffsetsToTxnRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleAddPartitionsToTxnRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleTxnOffsetCommitRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleAddOffsetsToTxnRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleEndTxnRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleTxnOffsetCommitRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleWriteTxnMarkersRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleEndTxnRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleDescribeConfigsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleWriteTxnMarkersRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleAlterConfigsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleDescribeConfigsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleDeleteTopicsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleAlterConfigsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleDeleteRecordsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleDeleteTopicsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleOffsetDeleteRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleDeleteRecordsRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleCreatePartitionsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleOffsetDeleteRequest(KafkaRequest request) {
 
     }
 
     @Override
-    protected void handleDescribeClusterRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleCreatePartitionsRequest(KafkaRequest request) {
+
+    }
+
+    @Override
+    protected void handleDescribeClusterRequest(KafkaRequest request) {
 
     }
 }
