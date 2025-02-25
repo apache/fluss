@@ -95,6 +95,14 @@ public class KafkaRequest {
         return future;
     }
 
+    public void complete(AbstractResponse response) {
+        future.complete(response);
+    }
+
+    public void fail(Throwable t) {
+        future.completeExceptionally(t);
+    }
+
     public void cancel() {
         cancelled = true;
     }

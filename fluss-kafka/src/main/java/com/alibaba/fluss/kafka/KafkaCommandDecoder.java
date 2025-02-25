@@ -56,105 +56,105 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
             future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
 
             if (!isActive.get()) {
-                handleInactive(request, future);
+                handleInactive(request);
                 return;
             }
             switch (request.apiKey()) {
                 case API_VERSIONS:
-                    handleApiVersionsRequest(request, future);
+                    handleApiVersionsRequest(request);
                     break;
                 case METADATA:
-                    handleMetadataRequest(request, future);
+                    handleMetadataRequest(request);
                     break;
                 case PRODUCE:
-                    handleProducerRequest(request, future);
+                    handleProducerRequest(request);
                     break;
                 case FIND_COORDINATOR:
-                    handleFindCoordinatorRequest(request, future);
+                    handleFindCoordinatorRequest(request);
                     break;
                 case LIST_OFFSETS:
-                    handleListOffsetRequest(request, future);
+                    handleListOffsetRequest(request);
                     break;
                 case OFFSET_FETCH:
-                    handleOffsetFetchRequest(request, future);
+                    handleOffsetFetchRequest(request);
                     break;
                 case OFFSET_COMMIT:
-                    handleOffsetCommitRequest(request, future);
+                    handleOffsetCommitRequest(request);
                     break;
                 case FETCH:
-                    handleFetchRequest(request, future);
+                    handleFetchRequest(request);
                     break;
                 case JOIN_GROUP:
-                    handleJoinGroupRequest(request, future);
+                    handleJoinGroupRequest(request);
                     break;
                 case SYNC_GROUP:
-                    handleSyncGroupRequest(request, future);
+                    handleSyncGroupRequest(request);
                     break;
                 case HEARTBEAT:
-                    handleHeartbeatRequest(request, future);
+                    handleHeartbeatRequest(request);
                     break;
                 case LEAVE_GROUP:
-                    handleLeaveGroupRequest(request, future);
+                    handleLeaveGroupRequest(request);
                     break;
                 case DESCRIBE_GROUPS:
-                    handleDescribeGroupsRequest(request, future);
+                    handleDescribeGroupsRequest(request);
                     break;
                 case LIST_GROUPS:
-                    handleListGroupsRequest(request, future);
+                    handleListGroupsRequest(request);
                     break;
                 case DELETE_GROUPS:
-                    handleDeleteGroupsRequest(request, future);
+                    handleDeleteGroupsRequest(request);
                     break;
                 case SASL_HANDSHAKE:
-                    handleSaslHandshakeRequest(request, future);
+                    handleSaslHandshakeRequest(request);
                     break;
                 case SASL_AUTHENTICATE:
-                    handleSaslAuthenticateRequest(request, future);
+                    handleSaslAuthenticateRequest(request);
                     break;
                 case CREATE_TOPICS:
-                    handleCreateTopicsRequest(request, future);
+                    handleCreateTopicsRequest(request);
                     break;
                 case INIT_PRODUCER_ID:
-                    handleInitProducerIdRequest(request, future);
+                    handleInitProducerIdRequest(request);
                     break;
                 case ADD_PARTITIONS_TO_TXN:
-                    handleAddPartitionsToTxnRequest(request, future);
+                    handleAddPartitionsToTxnRequest(request);
                     break;
                 case ADD_OFFSETS_TO_TXN:
-                    handleAddOffsetsToTxnRequest(request, future);
+                    handleAddOffsetsToTxnRequest(request);
                     break;
                 case TXN_OFFSET_COMMIT:
-                    handleTxnOffsetCommitRequest(request, future);
+                    handleTxnOffsetCommitRequest(request);
                     break;
                 case END_TXN:
-                    handleEndTxnRequest(request, future);
+                    handleEndTxnRequest(request);
                     break;
                 case WRITE_TXN_MARKERS:
-                    handleWriteTxnMarkersRequest(request, future);
+                    handleWriteTxnMarkersRequest(request);
                     break;
                 case DESCRIBE_CONFIGS:
-                    handleDescribeConfigsRequest(request, future);
+                    handleDescribeConfigsRequest(request);
                     break;
                 case ALTER_CONFIGS:
-                    handleAlterConfigsRequest(request, future);
+                    handleAlterConfigsRequest(request);
                     break;
                 case DELETE_TOPICS:
-                    handleDeleteTopicsRequest(request, future);
+                    handleDeleteTopicsRequest(request);
                     break;
                 case DELETE_RECORDS:
-                    handleDeleteRecordsRequest(request, future);
+                    handleDeleteRecordsRequest(request);
                     break;
                 case OFFSET_DELETE:
-                    handleOffsetDeleteRequest(request, future);
+                    handleOffsetDeleteRequest(request);
                     break;
                 case CREATE_PARTITIONS:
-                    handleCreatePartitionsRequest(request, future);
+                    handleCreatePartitionsRequest(request);
                     break;
                 case DESCRIBE_CLUSTER:
-                    handleDescribeClusterRequest(request, future);
+                    handleDescribeClusterRequest(request);
                     break;
                 default:
-                    handleUnsupportedRequest(request, future);
+                    handleUnsupportedRequest(request);
             }
         } catch (Throwable t) {
             log.error("Error handling request", t);
@@ -222,76 +222,76 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
         close();
     }
 
-    protected void handleUnsupportedRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future) {
+    protected void handleUnsupportedRequest(KafkaRequest request) {
         String message = String.format("Unsupported request with api key %s", request.apiKey());
         AbstractRequest abstractRequest = request.request();
         AbstractResponse response = abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
-        future.complete(response);
+        request.complete(response);
     }
 
-    protected abstract void handleInactive(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleInactive(KafkaRequest request);
 
-    protected abstract void handleApiVersionsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleApiVersionsRequest(KafkaRequest request);
 
-    protected abstract void handleProducerRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleProducerRequest(KafkaRequest request);
 
-    protected abstract void handleMetadataRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleMetadataRequest(KafkaRequest request);
 
-    protected abstract void handleFindCoordinatorRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleFindCoordinatorRequest(KafkaRequest request);
 
-    protected abstract void handleListOffsetRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleListOffsetRequest(KafkaRequest request);
 
-    protected abstract void handleOffsetFetchRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleOffsetFetchRequest(KafkaRequest request);
 
-    protected abstract void handleOffsetCommitRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleOffsetCommitRequest(KafkaRequest request);
 
-    protected abstract void handleFetchRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleFetchRequest(KafkaRequest request);
 
-    protected abstract void handleJoinGroupRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleJoinGroupRequest(KafkaRequest request);
 
-    protected abstract void handleSyncGroupRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleSyncGroupRequest(KafkaRequest request);
 
-    protected abstract void handleHeartbeatRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleHeartbeatRequest(KafkaRequest request);
 
-    protected abstract void handleLeaveGroupRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleLeaveGroupRequest(KafkaRequest request);
 
-    protected abstract void handleDescribeGroupsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleDescribeGroupsRequest(KafkaRequest request);
 
-    protected abstract void handleListGroupsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleListGroupsRequest(KafkaRequest request);
 
-    protected abstract void handleDeleteGroupsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleDeleteGroupsRequest(KafkaRequest request);
 
-    protected abstract void handleSaslHandshakeRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleSaslHandshakeRequest(KafkaRequest request);
 
-    protected abstract void handleSaslAuthenticateRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleSaslAuthenticateRequest(KafkaRequest request);
 
-    protected abstract void handleCreateTopicsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleCreateTopicsRequest(KafkaRequest request);
 
-    protected abstract void handleInitProducerIdRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleInitProducerIdRequest(KafkaRequest request);
 
-    protected abstract void handleAddPartitionsToTxnRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleAddPartitionsToTxnRequest(KafkaRequest request);
 
-    protected abstract void handleAddOffsetsToTxnRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleAddOffsetsToTxnRequest(KafkaRequest request);
 
-    protected abstract void handleTxnOffsetCommitRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleTxnOffsetCommitRequest(KafkaRequest request);
 
-    protected abstract void handleEndTxnRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleEndTxnRequest(KafkaRequest request);
 
-    protected abstract void handleWriteTxnMarkersRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleWriteTxnMarkersRequest(KafkaRequest request);
 
-    protected abstract void handleDescribeConfigsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleDescribeConfigsRequest(KafkaRequest request);
 
-    protected abstract void handleAlterConfigsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleAlterConfigsRequest(KafkaRequest request);
 
-    protected abstract void handleDeleteTopicsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleDeleteTopicsRequest(KafkaRequest request);
 
-    protected abstract void handleDeleteRecordsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleDeleteRecordsRequest(KafkaRequest request);
 
-    protected abstract void handleOffsetDeleteRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleOffsetDeleteRequest(KafkaRequest request);
 
-    protected abstract void handleCreatePartitionsRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleCreatePartitionsRequest(KafkaRequest request);
 
-    protected abstract void handleDescribeClusterRequest(KafkaRequest request, CompletableFuture<AbstractResponse> future);
+    protected abstract void handleDescribeClusterRequest(KafkaRequest request);
 
 
     private static KafkaRequest parseRequest(ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future,
