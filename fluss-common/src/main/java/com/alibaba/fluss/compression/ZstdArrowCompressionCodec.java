@@ -54,11 +54,10 @@ public class ZstdArrowCompressionCodec extends AbstractCompressionCodec {
                 compressedBuffer.nioBuffer(
                         CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH, (int) maxSize);
 
-        // The reason why we use Zstd.compressDirectByteBuffer(ByteBuffer dst, int dstOffset, int
-        // dstSize, ByteBuffer src, int srcOffset, int srcSize, int level) instead of
-        // Zstd.compressUnsafe(long dst, long dstSize, long src, long srcSize, int level) used in
-        // arrow-java here is that compressUnsafe() may encounter occasional data corruption issues
-        // when dealing with large volumes of data, and the cause has not yet been determined.
+        // The reason why we use Zstd.compressDirectByteBuffer instead of Zstd.compressUnsafe used
+        // in arrow-java here is that compressUnsafe() may encounter occasional data corruption
+        // issues when dealing with large volumes of data, and the cause has not yet been
+        // determined.
         long bytesWritten =
                 Zstd.compressDirectByteBuffer(
                         compressedDirectBuffer,
