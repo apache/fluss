@@ -37,6 +37,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.TestData;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
@@ -46,6 +47,7 @@ import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -121,6 +123,34 @@ class FlussLakeTableITCase {
                 Arguments.of(true, false),
                 Arguments.of(false, true),
                 Arguments.of(false, false));
+    }
+
+    @Test
+    void testDeleteOnPrimaryKeyTable() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_pk_table_1");
+        createTable(tablePath, TestData.DATA1_TABLE_DESCRIPTOR_PK, false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter tableWriter = table.newUpsert().createWriter();
+            tableWriter.upsert(row(1, "b1"));
+            tableWriter.upsert(row(2, "b2"));
+            tableWriter.upsert(row(3, "b3"));
+            tableWriter.delete(row(2, null));
+            tableWriter.flush();
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            List<InternalRow> row1 = lookuper.lookup(row(1)).get().getRowList();
+            assertThatRows(row1)
+                    .withSchema(TestData.DATA1_SCHEMA_PK.getRowType())
+                    .isEqualTo(Collections.singletonList(row(1, "b1")));
+
+            List<InternalRow> row2 = lookuper.lookup(row(2)).get().getRowList();
+            assertThat(row2).isEmpty();
+
+            List<InternalRow> row3 = lookuper.lookup(row(3)).get().getRowList();
+            assertThatRows(row3)
+                    .withSchema(TestData.DATA1_SCHEMA_PK.getRowType())
+                    .isEqualTo(Collections.singletonList(row(3, "b3")));
+        }
     }
 
     @ParameterizedTest
