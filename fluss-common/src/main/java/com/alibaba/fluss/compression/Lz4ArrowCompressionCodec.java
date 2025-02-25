@@ -74,8 +74,9 @@ public class Lz4ArrowCompressionCodec extends AbstractCompressionCodec {
         ByteBuffer inByteBuffer =
                 compressedBuffer.nioBuffer(
                         CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
-                        (int) compressedBuffer.writerIndex()
-                                - (int) CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH);
+                        (int)
+                                (compressedBuffer.writerIndex()
+                                        - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH));
         ByteArrayOutputStream out = new ByteArrayOutputStream((int) decompressedLength);
         try (InputStream in = new FlussLZ4BlocakInputStream(inByteBuffer)) {
             IOUtils.copyBytes(in, out);

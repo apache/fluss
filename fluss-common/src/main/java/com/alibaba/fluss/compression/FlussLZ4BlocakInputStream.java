@@ -54,8 +54,7 @@ public class FlussLZ4BlocakInputStream extends InputStream {
     private static final XXHash32 CHECKSUM = XXHashFactory.fastestInstance().hash32();
 
     private static final RuntimeException BROKEN_LZ4_EXCEPTION;
-    // https://issues.apache.org/jira/browse/KAFKA-9203
-    // detect buggy lz4 libraries on the classpath
+
     static {
         RuntimeException exception = null;
         try {
@@ -294,11 +293,11 @@ public class FlussLZ4BlocakInputStream extends InputStream {
                     nonZeroOffsetBuffer, 0, compressedLength, dest, 0, source.length);
         } catch (Exception e) {
             throw new RuntimeException(
-                    "Kafka has detected detected a buggy lz4-java library (< 1.4.x) on the classpath."
-                            + " If you are using Kafka client libraries, make sure your application does not"
-                            + " accidentally override the version provided by Kafka or include multiple versions"
+                    "Fluss has detected detected a buggy lz4-java library (< 1.4.x) on the classpath."
+                            + " If you are using Fluss client libraries, make sure your application does not"
+                            + " accidentally override the version provided by Fluss or include multiple versions"
                             + " of the library on the classpath. The lz4-java version on the classpath should"
-                            + " match the version the Kafka client libraries depend on. Adding -verbose:class"
+                            + " match the version the Fluss client libraries depend on. Adding -verbose:class"
                             + " to your JVM arguments may help understand which lz4-java version is getting loaded.",
                     e);
         }

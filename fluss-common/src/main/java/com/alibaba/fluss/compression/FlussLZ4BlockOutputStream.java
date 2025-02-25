@@ -64,8 +64,7 @@ public class FlussLZ4BlockOutputStream extends OutputStream {
      * @param blockSize Default: 4. The block size used during compression. 4=64kb, 5=256kb, 6=1mb,
      *     7=4mb. All other values will generate an exception
      * @param blockChecksum Default: false. When true, a XXHash32 checksum is computed and appended
-     *     to the stream for every block of data FrameDescriptor checksum compatible with older
-     *     kafka clients.
+     *     to the stream for every block of data
      */
     public FlussLZ4BlockOutputStream(OutputStream out, int blockSize, boolean blockChecksum)
             throws IOException {
