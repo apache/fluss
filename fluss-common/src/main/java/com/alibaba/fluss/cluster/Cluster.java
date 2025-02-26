@@ -83,8 +83,7 @@ public final class Cluster {
             List<BucketLocation> bucketsForTable = entry.getValue();
             // Optimise for the common case where all buckets are available.
             boolean foundUnavailableBucket = false;
-            List<BucketLocation> availableBucketsForTable =
-                    new ArrayList<>(bucketsForTable.size());
+            List<BucketLocation> availableBucketsForTable = new ArrayList<>(bucketsForTable.size());
             for (BucketLocation bucketLocation : bucketsForTable) {
                 if (bucketLocation.getLeader() != null) {
                     tmpAvailableLocationByBucket.put(
@@ -98,7 +97,6 @@ public final class Cluster {
                 tmpAvailableLocationsByPath.put(
                         physicalTablePath, Collections.unmodifiableList(availableBucketsForTable));
             } else {
-                availableBucketsForTable=null;
                 tmpAvailableLocationsByPath.put(
                         physicalTablePath, Collections.unmodifiableList(bucketsForTable));
             }
