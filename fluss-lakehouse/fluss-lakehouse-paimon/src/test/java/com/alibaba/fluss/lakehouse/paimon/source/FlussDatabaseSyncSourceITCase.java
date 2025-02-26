@@ -97,7 +97,7 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
                         syncDatabaseFlussSource,
                         WatermarkStrategy.noWatermarks(),
                         "flinkSyncDatabaseSource");
-        input.addSink(new TestingDatabaseSyncSink(sinkDataBase, clientConf));
+        input.sinkTo(new TestingDatabaseSyncSink(sinkDataBase, clientConf));
 
         JobClient jobClient = execEnv.executeAsync();
         // check the records are synced to target database
@@ -210,7 +210,7 @@ class FlussDatabaseSyncSourceITCase extends FlinkTestBase {
                         syncDatabaseFlussSource,
                         WatermarkStrategy.noWatermarks(),
                         "flinkSyncDatabaseSource");
-        input.addSink(new TestingDatabaseSyncSink(sinkDataBase, clientConf));
+        input.sinkTo(new TestingDatabaseSyncSink(sinkDataBase, clientConf));
 
         // execute the sync job
         JobClient jobClient = execEnv.executeAsync();
