@@ -929,8 +929,7 @@ public class ConfigOptions {
     public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
             key("table.log.arrow.compression.type")
                     .enumType(ArrowCompressionType.class)
-                    // TODO: change to ZSTD by default when it is stable
-                    .defaultValue(ArrowCompressionType.NONE)
+                    .defaultValue(ArrowCompressionType.ZSTD)
                     .withDescription(
                             "The compression type of the log records if the log format is set to 'ARROW'. "
                                     + "The candidate compression type is "

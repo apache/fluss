@@ -53,7 +53,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
-import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 import static com.alibaba.fluss.record.TestData.DATA1;
@@ -122,7 +122,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES)
                                         .getBytes());
         fetchParams.setCurrentFetch(
-                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, NO_COMPRESSION, null);
+                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);
     }
@@ -524,7 +524,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 offset,
                 Integer.MAX_VALUE,
                 replica.getRowType(),
-                NO_COMPRESSION,
+                DEFAULT_COMPRESSION,
                 null);
         LogReadInfo logReadInfo = replica.fetchRecords(fetchParams);
         return logReadInfo.getFetchedData().getRecords();
@@ -541,7 +541,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 NO_BATCH_SEQUENCE,
                 rowKinds,
                 values,
-                LogFormat.ARROW);
+                LogFormat.ARROW,
+                DEFAULT_COMPRESSION);
     }
 
     private LogAppendInfo putRecordsToLeader(

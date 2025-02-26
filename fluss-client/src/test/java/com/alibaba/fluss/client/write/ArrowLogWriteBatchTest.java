@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.client.write;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.compression.ArrowCompressionType;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
@@ -43,6 +41,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -128,7 +127,7 @@ public class ArrowLogWriteBatchTest {
                                 DATA1_TABLE_INFO.getSchemaId(),
                                 maxSizeInBytes,
                                 DATA1_ROW_TYPE,
-                                ArrowCompressionInfo.NO_COMPRESSION),
+                                DEFAULT_COMPRESSION),
                         new PreAllocatedPagedOutputView(memorySegmentList),
                         System.currentTimeMillis());
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
@@ -176,8 +175,6 @@ public class ArrowLogWriteBatchTest {
         }
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
-        ArrowCompressionInfo compressionInfo =
-                new ArrowCompressionInfo(ArrowCompressionType.ZSTD, 3);
 
         // The compression rate increases slowly, with an increment of only 0.005
         // (COMPRESSION_RATIO_IMPROVING_STEP#COMPRESSION_RATIO_IMPROVING_STEP) each time. Therefore,
@@ -194,7 +191,7 @@ public class ArrowLogWriteBatchTest {
                             DATA1_TABLE_INFO.getSchemaId(),
                             maxSizeInBytes,
                             DATA1_ROW_TYPE,
-                            compressionInfo);
+                            DEFAULT_COMPRESSION);
 
             ArrowLogWriteBatch arrowLogWriteBatch =
                     new ArrowLogWriteBatch(
@@ -248,7 +245,7 @@ public class ArrowLogWriteBatchTest {
                         DATA1_TABLE_INFO.getSchemaId(),
                         maxSizeInBytes,
                         DATA1_ROW_TYPE,
-                        ArrowCompressionInfo.NO_COMPRESSION),
+                        DEFAULT_COMPRESSION),
                 new UnmanagedPagedOutputView(128),
                 System.currentTimeMillis());
     }

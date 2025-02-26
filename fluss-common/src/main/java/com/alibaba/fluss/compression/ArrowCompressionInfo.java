@@ -25,6 +25,8 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.Compre
 /** Compression information for Arrow record batches. */
 public class ArrowCompressionInfo {
 
+    public static final ArrowCompressionInfo DEFAULT_COMPRESSION =
+            new ArrowCompressionInfo(ArrowCompressionType.ZSTD, 3);
     public static final ArrowCompressionInfo NO_COMPRESSION =
             new ArrowCompressionInfo(ArrowCompressionType.NONE, -1);
 
