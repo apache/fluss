@@ -20,7 +20,6 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 
 import javax.annotation.concurrent.GuardedBy;
@@ -105,12 +104,9 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                         batchSize));
         int pageSize = (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes();
         long perRequestMemorySize =
-                conf.getOptional(ConfigOptions.CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE)
-                        .filter(s -> s.getBytes() > 0)
-                        .map(MemorySize::getBytes)
-                        .orElse((long) pageSize);
+                conf.get(ConfigOptions.CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE).getBytes();
         int segmentCount = (int) (totalBytes / pageSize);
-        long waitTimeout = conf.get(ConfigOptions.CLIENT_WRITER_WAIT_TIMEOUT);
+        long waitTimeout = conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_WAIT_TIMEOUT).toMillis();
         return new LazyMemorySegmentPool(segmentCount, pageSize, waitTimeout, perRequestMemorySize);
     }
 
@@ -118,12 +114,9 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         long totalBytes = conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes();
         int pageSize = (int) conf.get(ConfigOptions.SERVER_BUFFER_PAGE_SIZE).getBytes();
         long perRequestMemorySize =
-                conf.getOptional(ConfigOptions.SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE)
-                        .filter(s -> s.getBytes() > 0)
-                        .map(MemorySize::getBytes)
-                        .orElse((long) pageSize);
+                conf.get(ConfigOptions.SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE).getBytes();
         int segmentCount = (int) (totalBytes / pageSize);
-        long waitTimeout = conf.get(ConfigOptions.SERVER_BUFFER_POOL_WAIT_TIMEOUT);
+        long waitTimeout = conf.get(ConfigOptions.SERVER_BUFFER_POOL_WAIT_TIMEOUT).toMillis();
         return new LazyMemorySegmentPool(segmentCount, pageSize, waitTimeout, perRequestMemorySize);
     }
 
@@ -168,8 +161,11 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     @VisibleForTesting
     protected void lazilyAllocatePages(int required) {
         if (cachePages.size() < required) {
-            int numPages =
-                    Math.min(freePages(), Math.max(required - cachePages.size(), perRequestPages));
+            int minAllocatePages = required - cachePages.size();
+            int maxAllocatePages = freePages() - cachePages.size();
+            // try to allocate more pages than minAllocatePages to have better CPU cache
+            int numPages = Math.min(maxAllocatePages, Math.max(minAllocatePages, perRequestPages));
+
             for (int i = 0; i < numPages; i++) {
                 cachePages.add(MemorySegment.allocateHeapMemory(pageSize));
             }

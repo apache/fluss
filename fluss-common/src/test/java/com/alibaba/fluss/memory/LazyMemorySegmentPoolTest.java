@@ -111,7 +111,7 @@ public class LazyMemorySegmentPoolTest {
     }
 
     @Test
-    void testPerRequestMemorySize() throws Exception {
+    void testPerRequestMemorySizeAllocatesCorrectPageNumber() throws Exception {
         LazyMemorySegmentPool pool = buildLazyMemorySegmentSource(10, 512, Long.MAX_VALUE, 2048);
         List<MemorySegment> segments = new ArrayList<>();
         // should allocate 4 new pages (1 used, 3 cached)
@@ -130,6 +130,24 @@ public class LazyMemorySegmentPoolTest {
         segments.addAll(pool.allocatePages(8));
         assertThat(pool.freePages()).isEqualTo(2);
         assertThat(pool.getAllCachePages().size()).isEqualTo(0);
+    }
+
+    @Test
+    void testPerRequestMemorySizeRespectsTotalPageLimit() throws Exception {
+        LazyMemorySegmentPool pool = buildLazyMemorySegmentSource(5, 512, Long.MAX_VALUE, 2048);
+        pool.allocatePages(3);
+        // should allocate 4 new pages (3 used, 1 cached, 2 more available)
+        assertThat(pool.getAllCachePages().size()).isEqualTo(1);
+        assertThat(pool.availableMemory()).isEqualTo(1024);
+        assertThat(pool.freePages()).isEqualTo(2);
+        // should trigger an allocation request; should use the existing cached page and just
+        // allocate 1 additional one and not 2048/512=4
+        pool.allocatePages(2);
+        // check if page limit is respected
+        assertThat(pool.getAllCachePages().size()).isEqualTo(0);
+        // there should also be no further pages available
+        assertThat(pool.availableMemory()).isEqualTo(0);
+        assertThat(pool.freePages()).isEqualTo(0);
     }
 
     @Test
@@ -463,7 +481,7 @@ public class LazyMemorySegmentPoolTest {
             conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("64kb"));
             conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, MemorySize.parse("2kb"));
             conf.set(ConfigOptions.CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE, MemorySize.parse("2kb"));
-            conf.set(ConfigOptions.CLIENT_WRITER_WAIT_TIMEOUT, 1000L);
+            conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_WAIT_TIMEOUT, Duration.ofMillis(1000L));
 
             LazyMemorySegmentPool pool = LazyMemorySegmentPool.createWriterBufferPool(conf);
             assertThat(pool).isNotNull();
@@ -520,7 +538,7 @@ public class LazyMemorySegmentPoolTest {
             conf.set(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE, MemorySize.parse("128kb"));
             conf.set(ConfigOptions.SERVER_BUFFER_PAGE_SIZE, MemorySize.parse("2kb"));
             conf.set(ConfigOptions.SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE, MemorySize.parse("2kb"));
-            conf.set(ConfigOptions.SERVER_BUFFER_POOL_WAIT_TIMEOUT, 1000L);
+            conf.set(ConfigOptions.SERVER_BUFFER_POOL_WAIT_TIMEOUT, Duration.ofMillis(1000L));
 
             LazyMemorySegmentPool pool = LazyMemorySegmentPool.createServerBufferPool(conf);
             assertThat(pool).isNotNull();
