@@ -90,6 +90,8 @@ public final class NettyClient implements RpcClient {
                         .channel(NettyUtils.getClientSocketChannelClass(eventGroup))
                         .option(ChannelOption.ALLOCATOR, pooledAllocator)
                         .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
+                        .option(ChannelOption.TCP_NODELAY, true)
+                        .option(ChannelOption.SO_KEEPALIVE, true)
                         .handler(new ClientChannelInitializer(connectionMaxIdle));
         this.clientMetricGroup = clientMetricGroup;
         NettyMetrics.registerNettyMetrics(clientMetricGroup, pooledAllocator);
