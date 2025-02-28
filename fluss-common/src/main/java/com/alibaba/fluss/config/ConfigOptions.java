@@ -268,7 +268,7 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
             key("server.buffer.wait-timeout")
                     .durationType()
-                    .defaultValue(Duration.ofMillis(Long.MAX_VALUE))
+                    .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
                     .withDescription(
                             "Defines how long the buffer pool will block when waiting for segments to become available.");
 
@@ -647,7 +647,7 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> CLIENT_WRITER_BUFFER_WAIT_TIMEOUT =
             key("client.writer.buffer.wait-timeout")
                     .durationType()
-                    .defaultValue(Duration.ofMillis(Long.MAX_VALUE))
+                    .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
                     .withDescription(
                             "Defines how long the writer will block when waiting for segments to become available.");
 
