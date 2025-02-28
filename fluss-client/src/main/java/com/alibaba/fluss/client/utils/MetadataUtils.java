@@ -20,6 +20,8 @@ import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -29,6 +31,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
+import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.PbBucketMetadata;
@@ -36,6 +39,9 @@ import com.alibaba.fluss.rpc.messages.PbPartitionMetadata;
 import com.alibaba.fluss.rpc.messages.PbServerNode;
 import com.alibaba.fluss.rpc.messages.PbTableMetadata;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -52,6 +58,7 @@ import java.util.concurrent.TimeoutException;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
+    private static final Logger LOG = LoggerFactory.getLogger(MetadataUtils.class);
 
     private static final Random randOffset = new Random();
 
@@ -75,13 +82,14 @@ public class MetadataUtils {
     public static Cluster sendMetadataRequestAndRebuildCluster(
             Cluster cluster,
             RpcClient client,
+            Configuration configuration,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
             @Nullable Collection<Long> tablePartitionIds)
             throws ExecutionException, InterruptedException, TimeoutException {
         AdminReadOnlyGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
-                        () -> getOneAvailableTabletServerNode(cluster),
+                        () -> getOneAvailableTabletServerNode(cluster, client, configuration),
                         client,
                         AdminReadOnlyGateway.class);
         return sendMetadataRequestAndRebuildCluster(
@@ -254,11 +262,44 @@ public class MetadataUtils {
         }
     }
 
-    public static ServerNode getOneAvailableTabletServerNode(Cluster cluster) {
-        List<ServerNode> aliveTabletServers = cluster.getAliveTabletServerList();
-        if (aliveTabletServers.isEmpty()) {
-            throw new FlussRuntimeException("no alive tablet server in cluster");
+    public static ServerNode getOneAvailableTabletServerNode(
+            Cluster cluster, RpcClient rpcClient, Configuration configuration) {
+        List<ServerNode> aliveTabletServers = null;
+        int maxRetryTimes =
+                configuration.getInt(ConfigOptions.CLIENT_GET_TABLET_SERVER_NODE_MAX_RETRY_TIMES);
+        for (int retryTimes = 0; retryTimes <= maxRetryTimes; retryTimes++) {
+            aliveTabletServers = cluster.getAliveTabletServerList();
+            if (aliveTabletServers.isEmpty()) {
+                LOG.error(
+                        "Fluss get one available tablet server node failed retry times = {}.",
+                        retryTimes);
+                if (retryTimes >= maxRetryTimes) {
+                    String exceptionMsg =
+                            String.format(
+                                    "Execution of Fluss get one available tablet server node failed, no alive tablet server in cluster, retry times = %d.",
+                                    maxRetryTimes);
+                    throw new FlussRuntimeException(exceptionMsg);
+                } else {
+                    try {
+                        GatewayClientProxy.createGatewayProxy(
+                                        cluster::getCoordinatorServer,
+                                        rpcClient,
+                                        CoordinatorGateway.class)
+                                .metadata(new MetadataRequest())
+                                .get(1, TimeUnit.MINUTES);
+                        Thread.sleep(1000L * retryTimes);
+                    } catch (ExecutionException | InterruptedException | TimeoutException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(
+                                "Execution of Fluss get one available tablet server node failed",
+                                e);
+                    }
+                }
+            } else {
+                break;
+            }
         }
+
         // just pick one random server node
         int offset = randOffset.nextInt(aliveTabletServers.size());
         return aliveTabletServers.get(offset);

@@ -16,12 +16,17 @@
 
 package com.alibaba.fluss.client.table;
 
+import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
+import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 
@@ -31,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -39,6 +45,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowListAssert.assertThatRows;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link FlussTable} in the case of one tablet server fails. */
 class FlussFailServerTableITCase extends ClientToServerITCaseBase {
@@ -142,6 +149,43 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
                 assertThatRows(actualRows).withSchema(DATA1_ROW_TYPE).isEqualTo(expectRows);
             } finally {
                 FLUSS_CLUSTER_EXTENSION.startTabletServer(SERVER);
+            }
+        }
+    }
+
+    @Test
+    void testRetryGetTabletServerNodes() throws Exception {
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+            table.newScan().createLogScanner();
+
+            List<ServerNode> serverNodes =
+                    conn.getAdmin().getServerNodes().get().stream()
+                            .filter(
+                                    serverNode ->
+                                            serverNode.serverType() == ServerType.TABLET_SERVER)
+                            .collect(Collectors.toList());
+
+            // kill all tablet server
+            for (ServerNode serverNode : serverNodes) {
+                FLUSS_CLUSTER_EXTENSION.stopTabletServer(serverNode.id());
+            }
+
+            FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+
+            try (Connection connNew = ConnectionFactory.createConnection(clientConf)) {
+                assertThatThrownBy(() -> connNew.getTable(DATA1_TABLE_PATH))
+                        .cause()
+                        .isInstanceOf(FlussRuntimeException.class)
+                        .hasMessage(
+                                "Execution of Fluss get one available tablet server node failed, no alive tablet server in cluster, retry times = %d.",
+                                5);
+            } finally {
+                // start all tablet server
+                for (ServerNode serverNode : serverNodes) {
+                    FLUSS_CLUSTER_EXTENSION.startTabletServer(serverNode.id());
+                }
+                FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
             }
         }
     }

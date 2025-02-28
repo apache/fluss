@@ -876,6 +876,13 @@ public class ConfigOptions {
                             "Enable metrics for client. When metrics is enabled, the client "
                                     + "will collect metrics and report by the JMX metrics reporter.");
 
+    public static final ConfigOption<Integer> CLIENT_GET_TABLET_SERVER_NODE_MAX_RETRY_TIMES =
+            key("client.get-tablet-server-node.max-retry-times")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "Max retry times when get tablet server node failed for client.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
     // ------------------------------------------------------------------------

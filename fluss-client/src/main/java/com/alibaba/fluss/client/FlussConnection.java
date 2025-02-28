@@ -139,12 +139,11 @@ public final class FlussConnection implements Connection {
                 if (securityTokenManager == null) {
                     // prepare security token manager
                     // create the admin read only gateway
-                    // todo: may add retry logic when no any available tablet server?
                     AdminReadOnlyGateway gateway =
                             GatewayClientProxy.createGatewayProxy(
                                     () ->
                                             getOneAvailableTabletServerNode(
-                                                    metadataUpdater.getCluster()),
+                                                    metadataUpdater.getCluster(), rpcClient, conf),
                                     rpcClient,
                                     AdminReadOnlyGateway.class);
                     SecurityTokenProvider securityTokenProvider =
