@@ -676,8 +676,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BATCH_SIZE.key()
                                     + " worth of rows for a bucket it will be sent immediately regardless of this setting, "
                                     + "however if we have fewer than this many bytes accumulated for this bucket we will delay"
-                                    + " for the specified time waiting for more records to show up. This setting defaults "
-                                    + "to 100ms");
+                                    + " for the specified time waiting for more records to show up.");
 
     public static final ConfigOption<NoKeyAssigner> CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER =
             key("client.writer.bucket.no-key-assigner")
@@ -763,7 +762,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_ENABLE_IDEMPOTENCE.key()
                                     + " is set to true. When the number of inflight "
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
-                                    + "requests to complete before sending out new requests. This setting defaults to 5");
+                                    + "requests to complete before sending out new requests.");
 
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
@@ -1342,7 +1341,7 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("9249")
                     .withDescription(
-                            "The port the Prometheus reporter listens on, defaults to 9249. "
+                            "The port the Prometheus reporter listens on."
                                     + "In order to be able to run several instances of the reporter "
                                     + "on one host (e.g. when one TabletServer is colocated with "
                                     + "the CoordinatorServer) it is advisable to use a port range "
