@@ -61,11 +61,16 @@ public class ZooKeeperUtils {
                             + "'.");
         }
 
-        int sessionTimeout = configuration.getInt(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT);
+        int sessionTimeout =
+                Math.toIntExact(
+                        configuration.get(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT).toMillis());
 
-        int connectionTimeout = configuration.getInt(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT);
+        int connectionTimeout =
+                Math.toIntExact(
+                        configuration.get(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT).toMillis());
 
-        int retryWait = configuration.getInt(ConfigOptions.ZOOKEEPER_RETRY_WAIT);
+        int retryWait =
+                Math.toIntExact(configuration.get(ConfigOptions.ZOOKEEPER_RETRY_WAIT).toMillis());
 
         int maxRetryAttempts = configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_RETRY_ATTEMPTS);
 
