@@ -190,7 +190,7 @@ public class LazyMemorySegmentPoolTest {
 
         assertThatThrownBy(() -> pool.allocatePages(3))
                 .isInstanceOf(EOFException.class)
-                .hasMessageContaining("Available pages: 2. Requested pages: 3");
+                .hasMessageContaining("Total pages: 2. Requested pages: 3");
     }
 
     @Test
@@ -213,7 +213,7 @@ public class LazyMemorySegmentPoolTest {
         LazyMemorySegmentPool pool = buildLazyMemorySegmentSource(1, 1024, Long.MAX_VALUE, 1024);
         assertThatThrownBy(() -> pool.allocatePages(2))
                 .isInstanceOf(EOFException.class)
-                .hasMessageContaining("Available pages: 1. Requested pages: 2");
+                .hasMessageContaining("Total pages: 1. Requested pages: 2");
         assertThat(pool.queued()).isEqualTo(0);
         assertThat(pool.freePages()).isEqualTo(1);
     }

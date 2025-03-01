@@ -131,7 +131,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
             throw new EOFException(
                     String.format(
                             "Allocation request cannot be satisfied because the number of maximum available pages is "
-                                    + "exceeded. Available pages: %d. Requested pages: %d",
+                                    + "exceeded. Total pages: %d. Requested pages: %d",
                             this.maxPages, requiredPages));
         }
 
