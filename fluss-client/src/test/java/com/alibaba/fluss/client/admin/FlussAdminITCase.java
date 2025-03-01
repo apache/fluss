@@ -713,11 +713,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         int currentYear = LocalDate.now().getYear();
         assertPartitionInfo(
                 admin.listPartitionInfos(tablePath).get(),
-                Arrays.asList(
-                        String.valueOf(currentYear),
-                        String.valueOf(currentYear + 1),
-                        String.valueOf(currentYear + 2),
-                        String.valueOf(currentYear + 3)));
+                Arrays.asList(String.valueOf(currentYear), String.valueOf(currentYear + 1)));
 
         // add two older partitions (currentYear - 2, currentYear - 1).
         admin.createPartition(
@@ -732,9 +728,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         String.valueOf(currentYear - 2),
                         String.valueOf(currentYear - 1),
                         String.valueOf(currentYear),
-                        String.valueOf(currentYear + 1),
-                        String.valueOf(currentYear + 2),
-                        String.valueOf(currentYear + 3)));
+                        String.valueOf(currentYear + 1)));
 
         // drop one auto created partition.
         admin.dropPartition(
@@ -745,9 +739,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 Arrays.asList(
                         String.valueOf(currentYear - 2),
                         String.valueOf(currentYear - 1),
-                        String.valueOf(currentYear),
-                        String.valueOf(currentYear + 2),
-                        String.valueOf(currentYear + 3)));
+                        String.valueOf(currentYear)));
     }
 
     private void assertHasTabletServerNumber(int tabletServerNumber) {

@@ -343,7 +343,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                         tablePath, newPartitionSpec("c", String.valueOf(currentYear + 10)), false)
                 .get();
         Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath, 5);
+                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath, 3);
 
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
         List<String> expectedPartitions = new ArrayList<>(partitionIdByNames.keySet());

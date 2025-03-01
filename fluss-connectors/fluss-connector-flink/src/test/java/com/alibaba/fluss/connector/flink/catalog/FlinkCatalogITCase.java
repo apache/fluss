@@ -236,11 +236,7 @@ class FlinkCatalogITCase {
         FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
         int currentYear = LocalDate.now().getYear();
         List<String> expectedShowPartitionsResult =
-                Arrays.asList(
-                        "+I[b=" + currentYear + "]",
-                        "+I[b=" + (currentYear + 1) + "]",
-                        "+I[b=" + (currentYear + 2) + "]",
-                        "+I[b=" + (currentYear + 3) + "]");
+                Arrays.asList("+I[b=" + currentYear + "]", "+I[b=" + (currentYear + 1) + "]");
         CloseableIterator<Row> showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
@@ -254,8 +250,6 @@ class FlinkCatalogITCase {
                 Arrays.asList(
                         "+I[b=" + currentYear + "]",
                         "+I[b=" + (currentYear + 1) + "]",
-                        "+I[b=" + (currentYear + 2) + "]",
-                        "+I[b=" + (currentYear + 3) + "]",
                         "+I[b=" + (currentYear + 10) + "]");
         showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
@@ -265,16 +259,12 @@ class FlinkCatalogITCase {
         tEnv.executeSql(
                 String.format(
                         "alter table test_auto_partitioned_table drop partition (b = '%s')",
-                        currentYear + 2));
+                        currentYear + 1));
         tEnv.executeSql(
                 String.format(
                         "alter table test_auto_partitioned_table drop partition (b = '%s')",
                         currentYear + 10));
-        expectedShowPartitionsResult =
-                Arrays.asList(
-                        "+I[b=" + currentYear + "]",
-                        "+I[b=" + (currentYear + 1) + "]",
-                        "+I[b=" + (currentYear + 3) + "]");
+        expectedShowPartitionsResult = Collections.singletonList("+I[b=" + currentYear + "]");
         showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
