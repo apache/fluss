@@ -403,6 +403,16 @@ public class CoordinatorContext {
     }
 
     @VisibleForTesting
+    protected int replicaCounts(long tableId) {
+        return getTableAssignment(tableId).values().stream().mapToInt(List::size).sum();
+    }
+
+    @VisibleForTesting
+    protected int replicaCounts(TablePartition tablePartition) {
+        return getPartitionAssignment(tablePartition).values().stream().mapToInt(List::size).sum();
+    }
+
+    @VisibleForTesting
     protected Map<Integer, List<Integer>> getPartitionAssignment(TablePartition tablePartition) {
         return partitionAssignments.getOrDefault(tablePartition, Collections.emptyMap());
     }

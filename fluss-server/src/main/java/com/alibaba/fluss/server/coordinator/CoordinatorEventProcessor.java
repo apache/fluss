@@ -38,6 +38,7 @@ import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import com.alibaba.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.server.coordinator.event.AccessContextEvent;
 import com.alibaba.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -418,11 +419,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
-    @VisibleForTesting
-    protected CoordinatorContext getCoordinatorContext() {
-        return coordinatorContext;
-    }
-
     private void onShutdown() {
         // first shutdown table manager
         tableManager.shutdown();
@@ -485,6 +481,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 completeFromCallable(
                         commitLakeTableSnapshotEvent.getRespCallback(),
                         () -> tryProcessCommitLakeTableSnapshot(commitLakeTableSnapshotEvent));
+            } else if (event instanceof AccessContextEvent) {
+                AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
+                processAccessContext(accessContextEvent);
+            } else {
+                LOG.warn("Unknown event type: {}", event.getClass().getName());
             }
         } finally {
             updateMetrics();
@@ -933,6 +934,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorRequestBatch.sendNotifyRemoteLogOffsetsRequest(
                 coordinatorContext.getCoordinatorEpoch());
         return response;
+    }
+
+    private <T> void processAccessContext(AccessContextEvent<T> event) {
+        try {
+            T result = event.getAccessFunction().apply(coordinatorContext);
+            event.getResultFuture().complete(result);
+        } catch (Throwable t) {
+            event.getResultFuture().completeExceptionally(t);
+        }
     }
 
     private CommitLakeTableSnapshotResponse tryProcessCommitLakeTableSnapshot(
