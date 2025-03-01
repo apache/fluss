@@ -19,6 +19,7 @@ package com.alibaba.fluss.kafka;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.protocol.ByteBufferAccessor;
@@ -46,8 +47,14 @@ public class KafkaRequest {
     private final CompletableFuture<AbstractResponse> future;
     private volatile boolean cancelled = false;
 
-    protected KafkaRequest(ApiKeys apiKey, short apiVersion, RequestHeader header, AbstractRequest request,
-                           ByteBuf buffer, ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future) {
+    protected KafkaRequest(
+            ApiKeys apiKey,
+            short apiVersion,
+            RequestHeader header,
+            AbstractRequest request,
+            ByteBuf buffer,
+            ChannelHandlerContext ctx,
+            CompletableFuture<AbstractResponse> future) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
         this.header = header;
@@ -77,7 +84,6 @@ public class KafkaRequest {
     public <T> T request() {
         return (T) request;
     }
-
 
     public void releaseBuffer() {
         ReferenceCountUtil.safeRelease(buffer);

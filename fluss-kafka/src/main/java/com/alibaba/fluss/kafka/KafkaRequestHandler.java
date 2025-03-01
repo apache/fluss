@@ -16,11 +16,13 @@
 package com.alibaba.fluss.kafka;
 
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.common.errors.LeaderNotAvailableException;
 
-@Slf4j
+import org.apache.kafka.common.errors.LeaderNotAvailableException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class KafkaRequestHandler extends KafkaCommandDecoder {
+    private static final Logger log = LoggerFactory.getLogger(KafkaRequestHandler.class);
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
@@ -49,157 +51,95 @@ public final class KafkaRequestHandler extends KafkaCommandDecoder {
     }
 
     @Override
-    protected void handleApiVersionsRequest(KafkaRequest request) {
-
-    }
+    protected void handleApiVersionsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleProducerRequest(KafkaRequest request) {
-
-    }
+    protected void handleProducerRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleMetadataRequest(KafkaRequest request) {
-
-    }
+    protected void handleMetadataRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleFindCoordinatorRequest(KafkaRequest request) {
-
-    }
+    protected void handleFindCoordinatorRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleListOffsetRequest(KafkaRequest request) {
-
-    }
+    protected void handleListOffsetRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleOffsetFetchRequest(KafkaRequest request) {
-
-    }
+    protected void handleOffsetFetchRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleOffsetCommitRequest(KafkaRequest request) {
-
-    }
+    protected void handleOffsetCommitRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleFetchRequest(KafkaRequest request) {
-
-    }
+    protected void handleFetchRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleJoinGroupRequest(KafkaRequest request) {
-
-    }
+    protected void handleJoinGroupRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleSyncGroupRequest(KafkaRequest request) {
-
-    }
+    protected void handleSyncGroupRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleHeartbeatRequest(KafkaRequest request) {
-
-    }
+    protected void handleHeartbeatRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleLeaveGroupRequest(KafkaRequest request) {
-
-    }
+    protected void handleLeaveGroupRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleDescribeGroupsRequest(KafkaRequest request) {
-
-    }
+    protected void handleDescribeGroupsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleListGroupsRequest(KafkaRequest request) {
-
-    }
+    protected void handleListGroupsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleDeleteGroupsRequest(KafkaRequest request) {
-
-    }
+    protected void handleDeleteGroupsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleSaslHandshakeRequest(KafkaRequest request) {
-
-    }
+    protected void handleSaslHandshakeRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleSaslAuthenticateRequest(KafkaRequest request) {
-
-    }
+    protected void handleSaslAuthenticateRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleCreateTopicsRequest(KafkaRequest request) {
-
-    }
+    protected void handleCreateTopicsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleInitProducerIdRequest(KafkaRequest request) {
-
-    }
+    protected void handleInitProducerIdRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleAddPartitionsToTxnRequest(KafkaRequest request) {
-
-    }
+    protected void handleAddPartitionsToTxnRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleAddOffsetsToTxnRequest(KafkaRequest request) {
-
-    }
+    protected void handleAddOffsetsToTxnRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleTxnOffsetCommitRequest(KafkaRequest request) {
-
-    }
+    protected void handleTxnOffsetCommitRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleEndTxnRequest(KafkaRequest request) {
-
-    }
+    protected void handleEndTxnRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleWriteTxnMarkersRequest(KafkaRequest request) {
-
-    }
+    protected void handleWriteTxnMarkersRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleDescribeConfigsRequest(KafkaRequest request) {
-
-    }
+    protected void handleDescribeConfigsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleAlterConfigsRequest(KafkaRequest request) {
-
-    }
+    protected void handleAlterConfigsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleDeleteTopicsRequest(KafkaRequest request) {
-
-    }
+    protected void handleDeleteTopicsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleDeleteRecordsRequest(KafkaRequest request) {
-
-    }
+    protected void handleDeleteRecordsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleOffsetDeleteRequest(KafkaRequest request) {
-
-    }
+    protected void handleOffsetDeleteRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleCreatePartitionsRequest(KafkaRequest request) {
-
-    }
+    protected void handleCreatePartitionsRequest(KafkaRequest request) {}
 
     @Override
-    protected void handleDescribeClusterRequest(KafkaRequest request) {
-
-    }
+    protected void handleDescribeClusterRequest(KafkaRequest request) {}
 }
