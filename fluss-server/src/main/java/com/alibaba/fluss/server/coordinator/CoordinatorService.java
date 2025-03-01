@@ -137,9 +137,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(response);
     }
 
-    // todo keep a validation that whether the created table using system reserved columns
-    // (_change_type, _log_offset, _commit_timestamp)
-
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
