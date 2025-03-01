@@ -16,10 +16,16 @@
 
 package com.alibaba.fluss.kafka;
 
+import static org.apache.kafka.common.protocol.ApiKeys.API_VERSIONS;
+import static org.apache.kafka.common.protocol.ApiKeys.PRODUCE;
+
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+
 import lombok.extern.slf4j.Slf4j;
+
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
@@ -34,15 +40,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.apache.kafka.common.protocol.ApiKeys.API_VERSIONS;
-import static org.apache.kafka.common.protocol.ApiKeys.PRODUCE;
-
 @Slf4j
 public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
 
-    // Need to use a Queue to store the inflight responses, because Kafka clients require the responses to be sent in order.
+    // Need to use a Queue to store the inflight responses, because Kafka clients require the
+    // responses to be sent in order.
     // See: org.apache.kafka.clients.InFlightRequests#completeNext
-    private final ConcurrentLinkedDeque<KafkaRequest> inflightResponses = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<KafkaRequest> inflightResponses =
+            new ConcurrentLinkedDeque<>();
     protected final AtomicBoolean isActive = new AtomicBoolean(true);
     protected volatile ChannelHandlerContext ctx;
     protected SocketAddress remoteAddress;
@@ -56,7 +61,11 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
             future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
 
             if (!isActive.get()) {
-                handleInactive(request);
+                try {
+                    handleInactive(request);
+                } finally {
+                    ReferenceCountUtil.release(buffer);
+                }
                 return;
             }
             switch (request.apiKey()) {
@@ -160,7 +169,7 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
             log.error("Error handling request", t);
             future.completeExceptionally(t);
         } finally {
-            buffer.release();
+            ReferenceCountUtil.release(buffer);
         }
     }
 
@@ -211,7 +220,10 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
     protected void close() {
         isActive.set(false);
         ctx.close();
-        log.warn("Close channel {} with {} pending requests.", remoteAddress, inflightResponses.size());
+        log.warn(
+                "Close channel {} with {} pending requests.",
+                remoteAddress,
+                inflightResponses.size());
         for (KafkaRequest request : inflightResponses) {
             request.cancel();
         }
@@ -226,7 +238,8 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
     protected void handleUnsupportedRequest(KafkaRequest request) {
         String message = String.format("Unsupported request with api key %s", request.apiKey());
         AbstractRequest abstractRequest = request.request();
-        AbstractResponse response = abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
+        AbstractResponse response =
+                abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
         request.complete(response);
     }
 
@@ -294,20 +307,24 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
 
     protected abstract void handleDescribeClusterRequest(KafkaRequest request);
 
-
-    private static KafkaRequest parseRequest(ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future,
-                                             ByteBuf buffer) {
+    private static KafkaRequest parseRequest(
+            ChannelHandlerContext ctx, CompletableFuture<AbstractResponse> future, ByteBuf buffer) {
         ByteBuffer nioBuffer = buffer.nioBuffer();
         RequestHeader header = RequestHeader.parse(nioBuffer);
         if (isUnsupportedApiVersionRequest(header)) {
-            ApiVersionsRequest request = new ApiVersionsRequest.Builder(header.apiVersion()).build();
-            return new KafkaRequest(API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
+            ApiVersionsRequest request =
+                    new ApiVersionsRequest.Builder(header.apiVersion()).build();
+            return new KafkaRequest(
+                    API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
         }
-        RequestAndSize request = AbstractRequest.parseRequest(header.apiKey(), header.apiVersion(), nioBuffer);
-        return new KafkaRequest(header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
+        RequestAndSize request =
+                AbstractRequest.parseRequest(header.apiKey(), header.apiVersion(), nioBuffer);
+        return new KafkaRequest(
+                header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
     }
 
     private static boolean isUnsupportedApiVersionRequest(RequestHeader header) {
-        return header.apiKey() == API_VERSIONS && !API_VERSIONS.isVersionSupported(header.apiVersion());
+        return header.apiKey() == API_VERSIONS
+                && !API_VERSIONS.isVersionSupported(header.apiVersion());
     }
 }
