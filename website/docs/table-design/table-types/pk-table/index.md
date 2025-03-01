@@ -85,10 +85,6 @@ The following merge engines are supported:
 1. [FirstRow Merge Engine](/docs/table-design/table-types/pk-table/merge-engines/first-row)
 2. [Versioned Merge Engine](/docs/table-design/table-types/pk-table/merge-engines/versioned)
 
-## Data Queries
-
-For primary key tables, Fluss supports querying data directly based on the key. Please refer to
-the [Flink Reads](../../../engine-flink/reads.md) for detailed instructions.
 
 ## Changelog Generation
 
@@ -117,10 +113,22 @@ be generated.
 -D(1, 4.0, 'banana')
 ```
 
-## Data Consumption
+## Data Queries
 
-For a primary key table, the default consumption method is a full snapshot followed by incremental data. First, the
+For primary key tables, Fluss supports various kinds of querying abilities.
+
+### Reads
+
+For a primary key table, the default read method is a full snapshot followed by incremental data. First, the
 snapshot data of the table is consumed, followed by the binlog data of the table.
 
-It is also possible to only consume the binlog data of the table. For more details, please refer to
-the [Flink Reads](../../../engine-flink/reads.md)
+It is also possible to only consume the binlog data of the table. For more details, please refer to the [Flink Reads](/docs/engine-flink/reads.md)
+
+### Lookup
+
+Fluss primary key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique row. it always used in [Flink Lookup Join](/docs/engine-flink//lookups.md#lookup).
+
+### Prefix Lookup
+
+Fluss primary key table can also do prefix lookup by the prefix subset primary keys. Unlike lookup, prefix lookup
+will scan data based on the prefix of primary keys and may return multiple rows. It always used in [Flink Prefix Lookup Join](/docs/engine-flink/lookups.md#prefix-lookup).

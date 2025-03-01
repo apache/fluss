@@ -26,7 +26,7 @@ CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
   `o_clerk` CHAR(15) NOT NULL,
   `o_shippriority` INT NOT NULL,
   `o_comment` STRING NOT NULL,
-  `o_ts` STRING NOT NULL,
+  `o_dt` STRING NOT NULL,
   PRIMARY KEY (o_orderkey) NOT ENFORCED
 );
 ```
@@ -100,10 +100,10 @@ CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned` (
   `c_acctbal` DECIMAL(15, 2) NOT NULL,
   `c_mktsegment` CHAR(10) NOT NULL,
   `c_comment` STRING NOT NULL,
-  `ts` STRING NOT NULL,
-  PRIMARY KEY (`c_custkey`, `ts`) NOT ENFORCED
+  `dt` STRING NOT NULL,
+  PRIMARY KEY (`c_custkey`, `dt`) NOT ENFORCED
 ) 
-PARTITIONED BY (`ts`)
+PARTITIONED BY (`dt`)
 WITH (
     'table.auto-partition.enabled' = 'true',
     'table.auto-partition.time-unit' = 'year'
@@ -119,7 +119,7 @@ FROM
 (SELECT `orders`.*, proctime() AS ptime FROM `orders`) AS `o`
 LEFT JOIN `customer_partitioned`
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
-ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_ts` = `c`.`ts`;
+ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 ```
 
 For more details about Fluss partitioned table, see [Partitioned Tables](/docs/table-design/data-distribution/partitioning.md).
@@ -159,7 +159,7 @@ CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
   `o_clerk` CHAR(15) NOT NULL,
   `o_shippriority` INT NOT NULL,
   `o_comment` STRING NOT NULL,
-  `o_ts` STRING NOT NULL,
+  `o_dt` STRING NOT NULL,
   PRIMARY KEY (o_orderkey) NOT ENFORCED
 );
 ```
@@ -230,7 +230,7 @@ ON `o`.`o_custkey` = `c`.`c_custkey`;
 Continuing from the previous prefix lookup example, if our dimension table is a Fluss partitioned primary key table, as follows:
 
 ```sql title="Flink SQL"
--- primary keys are (c_custkey, c_nationkey, ts)
+-- primary keys are (c_custkey, c_nationkey, dt)
 -- bucket key is (c_custkey)
 CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned` (
   `c_custkey` INT NOT NULL,
@@ -241,10 +241,10 @@ CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned` (
   `c_acctbal` DECIMAL(15, 2) NOT NULL,
   `c_mktsegment` CHAR(10) NOT NULL,
   `c_comment` STRING NOT NULL,
-  `ts` STRING NOT NULL,
-  PRIMARY KEY (`c_custkey`, `c_nationkey`, `ts`) NOT ENFORCED
+  `dt` STRING NOT NULL,
+  PRIMARY KEY (`c_custkey`, `c_nationkey`, `dt`) NOT ENFORCED
 ) 
-PARTITIONED BY (`ts`)
+PARTITIONED BY (`dt`)
 WITH (
     'bucket.key' = 'c_custkey',
     'table.auto-partition.enabled' = 'true',
@@ -261,7 +261,7 @@ FROM
 (SELECT `orders`.*, proctime() AS ptime FROM `orders`) AS `o`
 LEFT JOIN `customer_partitioned`
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
-ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_ts` = `c`.`ts`;
+ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 
 -- join key is a prefix set of dimension table primary keys (excluding partition key) + partition key.
 ```

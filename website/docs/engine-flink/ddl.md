@@ -58,7 +58,7 @@ DROP DATABASE my_db;
 
 ### PrimaryKey Table
 
-The following SQL statement will create a [PrimaryKey Table](table-design/table-types/pk-table.md) with a primary key consisting of shop_id and user_id.
+The following SQL statement will create a [PrimaryKey Table](table-design/table-types/pk-table/index.md) with a primary key consisting of shop_id and user_id.
 ```sql title="Flink SQL"
 CREATE TABLE my_pk_table (
   shop_id BIGINT,
