@@ -470,15 +470,6 @@ public class CoordinatorContext {
         }
     }
 
-    private boolean isToBeDeleted(TableBucket tableBucket) {
-        if (tableBucket.getPartitionId() == null) {
-            return isTableQueuedForDeletion(tableBucket.getTableId());
-        } else {
-            return isPartitionQueuedForDeletion(
-                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
-        }
-    }
-
     public void putBucketStateIfNotExists(TableBucket tableBucket, BucketState targetState) {
         bucketStates.putIfAbsent(tableBucket, targetState);
     }
@@ -520,6 +511,15 @@ public class CoordinatorContext {
 
     public Set<TablePartition> getPartitionsToBeDeleted() {
         return partitionsToBeDeleted;
+    }
+
+    public boolean isToBeDeleted(TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() == null) {
+            return isTableQueuedForDeletion(tableBucket.getTableId());
+        } else {
+            return isPartitionQueuedForDeletion(
+                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
+        }
     }
 
     public boolean isTableQueuedForDeletion(long tableId) {

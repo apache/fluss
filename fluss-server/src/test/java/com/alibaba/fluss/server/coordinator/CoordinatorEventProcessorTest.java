@@ -930,7 +930,7 @@ class CoordinatorEventProcessorTest {
                 .distributedBy(3)
                 .partitionedBy("b")
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "YEAR")
                 // set to 0 to disable pre-create partition
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 0)
                 .build()

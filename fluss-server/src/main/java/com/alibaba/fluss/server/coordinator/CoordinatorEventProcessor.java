@@ -713,8 +713,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         .filter(
                                 // don't consider replicas to be deleted
                                 tableBucketReplica ->
-                                        !coordinatorContext.isTableQueuedForDeletion(
-                                                tableBucketReplica.getTableBucket().getTableId()))
+                                        !coordinatorContext.isToBeDeleted(
+                                                tableBucketReplica.getTableBucket()))
                         .collect(Collectors.toSet());
 
         replicaStateMachine.handleStateChanges(replicas, OnlineReplica);
@@ -750,9 +750,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
                         .filter(
                                 // don't consider buckets to be deleted
-                                tableBucket ->
-                                        !coordinatorContext.isTableQueuedForDeletion(
-                                                tableBucket.getTableId()))
+                                tableBucket -> !coordinatorContext.isToBeDeleted(tableBucket))
                         .collect(Collectors.toSet());
         // trigger offline state for all the table buckets whose current leader
         // is the failed tablet server
@@ -767,8 +765,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         .filter(
                                 // don't consider replicas to be deleted
                                 tableBucketReplica ->
-                                        !coordinatorContext.isTableQueuedForDeletion(
-                                                tableBucketReplica.getTableBucket().getTableId()))
+                                        !coordinatorContext.isToBeDeleted(
+                                                tableBucketReplica.getTableBucket()))
                         .collect(Collectors.toSet());
 
         // trigger OfflineReplica state change for those newly offline replicas
