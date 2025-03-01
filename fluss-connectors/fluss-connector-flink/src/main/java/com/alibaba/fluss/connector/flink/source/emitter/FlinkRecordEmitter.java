@@ -22,6 +22,7 @@ import com.alibaba.fluss.connector.flink.source.reader.FlinkSourceReader;
 import com.alibaba.fluss.connector.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.connector.flink.source.split.HybridSnapshotLogSplitState;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitState;
+import com.alibaba.fluss.connector.flink.utils.ChangelogRowConverter;
 import com.alibaba.fluss.connector.flink.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.types.RowType;
 
@@ -48,8 +49,12 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
 
     private LakeRecordRecordEmitter lakeRecordRecordEmitter;
 
-    public FlinkRecordEmitter(RowType rowType) {
-        this.converter = new FlussRowToFlinkRowConverter(rowType);
+    public FlinkRecordEmitter(RowType rowType, boolean isChangeLogMode) {
+        if (!isChangeLogMode) {
+            this.converter = new FlussRowToFlinkRowConverter(rowType);
+        } else {
+            this.converter = new ChangelogRowConverter(rowType);
+        }
     }
 
     @Override

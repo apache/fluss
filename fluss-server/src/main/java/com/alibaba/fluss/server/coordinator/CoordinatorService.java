@@ -65,6 +65,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
@@ -135,6 +137,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(response);
     }
 
+    // todo keep a validation that whether the created table using system reserved columns
+    // (_change_type, _log_offset, _commit_timestamp)
+
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
@@ -143,6 +148,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TableDescriptor tableDescriptor;
         try {
             tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
+            // Validate reserved column names
+            List<String> reservedColumns =
+                    Arrays.asList("_change_type", "_log_offset", "_commit_timestamp");
+            for (String columnName : tableDescriptor.getSchema().getColumnNames()) {
+                if (reservedColumns.contains(columnName)) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Column name '%s' is reserved for system use.", columnName));
+                }
+            }
+
         } catch (Exception e) {
             if (e instanceof UncheckedIOException) {
                 throw new InvalidTableException(

@@ -48,7 +48,7 @@ import java.util.function.Consumer;
 public class FlinkSourceReader
         extends SingleThreadMultiplexSourceReaderBase<
                 RecordAndPos, RowData, SourceSplitBase, SourceSplitState> {
-
+    // todo take changes for changeloftable columns
     public FlinkSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
             Configuration flussConfig,
@@ -56,7 +56,8 @@ public class FlinkSourceReader
             RowType sourceOutputType,
             SourceReaderContext context,
             @Nullable int[] projectedFields,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
+            boolean isChangelog) {
         super(
                 elementsQueue,
                 new FlinkSourceFetcherManager(
@@ -69,7 +70,9 @@ public class FlinkSourceReader
                                         projectedFields,
                                         flinkSourceReaderMetrics),
                         (ignore) -> {}),
-                new FlinkRecordEmitter(sourceOutputType),
+                // todo should have a special FlussRowToFlinkRowConverter that converts the Fluss
+                // InternalRow into Flink RowData with the additional metadata columns
+                new FlinkRecordEmitter(sourceOutputType, isChangelog),
                 context.getConfiguration(),
                 context);
     }

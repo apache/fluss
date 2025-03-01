@@ -32,6 +32,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.IOUtils;
 
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
@@ -63,6 +65,7 @@ import org.apache.flink.table.factories.Factory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -77,6 +80,8 @@ import static org.apache.flink.util.Preconditions.checkArgument;
 public class FlinkCatalog implements Catalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
+
+    public static final String CHANGELOG_TABLE_SPLITTER = "$changelog";
 
     protected final ClassLoader classLoader;
 
@@ -263,6 +268,48 @@ public class FlinkCatalog implements Catalog {
                                             tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
                 return getLakeTable(objectPath.getDatabaseName(), tableName);
+            } else if ((tableName.contains(CHANGELOG_TABLE_SPLITTER))) {
+                String baseTableName = tableName.split("\\" + CHANGELOG_TABLE_SPLITTER)[0];
+                TablePath baseTablePath = TablePath.of(objectPath.getDatabaseName(), baseTableName);
+                tableInfo = admin.getTableInfo(baseTablePath).get();
+                if (!tableInfo.hasPrimaryKey()) {
+                    throw new UnsupportedOperationException(
+                            String.format(
+                                    "\"Table %s has no primary key, only primary key tables support changelog.",
+                                    baseTableName));
+                }
+                CatalogTable originalTable = FlinkConversions.toFlinkTable(tableInfo);
+                Schema originalSchema = originalTable.getUnresolvedSchema();
+                List<Schema.UnresolvedColumn> newColumns =
+                        new ArrayList<>(originalSchema.getColumns());
+                newColumns.add(
+                        new Schema.UnresolvedPhysicalColumn("_change_type", DataTypes.STRING()));
+                newColumns.add(
+                        new Schema.UnresolvedPhysicalColumn("_log_offset", DataTypes.BIGINT()));
+                newColumns.add(
+                        new Schema.UnresolvedPhysicalColumn(
+                                "_commit_timestamp", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()));
+                Schema changeLogSchema =
+                        Schema.newBuilder()
+                                .fromColumns(newColumns)
+                                .primaryKey(
+                                        originalSchema
+                                                .getPrimaryKey()
+                                                .orElse(null)
+                                                .getColumnNames())
+                                .build();
+
+                Map<String, String> options = new HashMap<>(originalTable.getOptions());
+                options.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
+                options.put("changelog", "true");
+
+                return CatalogTable.newBuilder()
+                        .schema(changeLogSchema)
+                        .comment(originalTable.getComment())
+                        .options(options)
+                        .partitionKeys(originalTable.getPartitionKeys())
+                        .build();
+
             } else {
                 tableInfo = admin.getTableInfo(tablePath).get();
             }

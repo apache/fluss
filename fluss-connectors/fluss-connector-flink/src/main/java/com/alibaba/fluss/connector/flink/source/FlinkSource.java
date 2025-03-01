@@ -55,6 +55,7 @@ public class FlinkSource implements Source<RowData, SourceSplitBase, SourceEnume
     private final OffsetsInitializer offsetsInitializer;
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean streaming;
+    private boolean isChangelog;
 
     public FlinkSource(
             Configuration flussConf,
@@ -65,7 +66,8 @@ public class FlinkSource implements Source<RowData, SourceSplitBase, SourceEnume
             @Nullable int[] projectedFields,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
-            boolean streaming) {
+            boolean streaming,
+            boolean isChangelog) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -75,6 +77,7 @@ public class FlinkSource implements Source<RowData, SourceSplitBase, SourceEnume
         this.offsetsInitializer = offsetsInitializer;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
+        this.isChangelog = isChangelog;
     }
 
     @Override
@@ -136,6 +139,7 @@ public class FlinkSource implements Source<RowData, SourceSplitBase, SourceEnume
                 sourceOutputType,
                 context,
                 projectedFields,
-                flinkSourceReaderMetrics);
+                flinkSourceReaderMetrics,
+                isChangelog);
     }
 }

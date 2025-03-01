@@ -47,6 +47,7 @@ public class FlussRowToFlinkRowConverter {
     private final FlussDeserializationConverter[] toFlinkFieldConverters;
     private final InternalRow.FieldGetter[] flussFieldGetters;
 
+    // todo converts the Fluss InternalRow into Flink RowData with the additional metadata columns
     public FlussRowToFlinkRowConverter(RowType rowType) {
         this.toFlinkFieldConverters = new FlussDeserializationConverter[rowType.getFieldCount()];
         this.flussFieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];

@@ -51,6 +51,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
+import static com.alibaba.fluss.connector.flink.catalog.FlinkCatalog.CHANGELOG_TABLE_SPLITTER;
 import static com.alibaba.fluss.connector.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
 import static com.alibaba.fluss.connector.flink.utils.FlinkConversions.toFlinkOption;
 
@@ -68,6 +69,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             tableName = tableName.substring(0, tableName.indexOf(LAKE_TABLE_SPLITTER));
             lakeTableFactory = mayInitLakeTableFactory();
             return lakeTableFactory.createDynamicTableSource(context, tableName);
+        }
+        boolean isChangelog = false;
+        if (tableName.contains(CHANGELOG_TABLE_SPLITTER)) {
+            isChangelog = true;
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
@@ -129,7 +134,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 cache,
                 partitionDiscoveryIntervalMs,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)));
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                isChangelog);
     }
 
     @Override
