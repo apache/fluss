@@ -47,7 +47,6 @@ import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -1227,13 +1226,6 @@ public class RpcMessageUtils {
 
         return new NotifyLakeTableOffsetData(
                 notifyLakeTableOffsetRequest.getCoordinatorEpoch(), lakeBucketOffsetMap);
-    }
-
-    public static DescribeLakeStorageResponse makeDescribeLakeStorageResponse(
-            LakeStorageInfo lakeStorageInfo) {
-        DescribeLakeStorageResponse describeLakeStorageResponse = new DescribeLakeStorageResponse();
-        describeLakeStorageResponse.setLakehouseStorageInfo(toPbLakeStorageInfo(lakeStorageInfo));
-        return describeLakeStorageResponse;
     }
 
     public static GetLatestLakeSnapshotResponse makeGetLatestLakeSnapshotResponse(

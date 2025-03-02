@@ -23,6 +23,7 @@ import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
 import com.alibaba.fluss.lakehouse.paimon.sink.NewTablesAddedPaimonListener;
 import com.alibaba.fluss.lakehouse.paimon.sink.PaimonDataBaseSyncSinkBuilder;
 import com.alibaba.fluss.lakehouse.paimon.source.FlussDatabaseSyncSource;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -122,7 +123,10 @@ public class PaimonSyncTestBase extends FlinkPaimonTestBase {
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
                         .distributedBy(bucketNum, "a")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+                        .customProperty("table.datalake.paimon.metastore", "filesystem")
+                        .customProperty("table.datalake.paimon.warehouse", warehousePath);
 
         if (isPartitioned) {
             schemaBuilder.column("c", DataTypes.STRING());
@@ -150,6 +154,9 @@ public class PaimonSyncTestBase extends FlinkPaimonTestBase {
                                         .build())
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+                        .customProperty("table.datalake.paimon.metastore", "filesystem")
+                        .customProperty("table.datalake.paimon.warehouse", warehousePath)
                         .build();
         return createTable(tablePath, table1Descriptor);
     }

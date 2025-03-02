@@ -66,7 +66,7 @@ public class FlinkPaimonTestBase {
     protected static Connection conn;
     protected static Admin admin;
     protected static Configuration clientConf;
-    private static String warehousePath;
+    protected static String warehousePath;
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();

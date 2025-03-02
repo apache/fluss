@@ -46,8 +46,6 @@ import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -412,17 +410,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         Map<String, Long> partitionNameAndIds = metadataManager.listPartitions(tablePath);
         return CompletableFuture.completedFuture(
                 RpcMessageUtils.toListPartitionInfosResponse(partitionNameAndIds));
-    }
-
-    @Override
-    public CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
-            DescribeLakeStorageRequest request) {
-        if (lakeStorageInfo == null) {
-            throw new LakeStorageNotConfiguredException("Lake storage is not configured.");
-        }
-
-        return CompletableFuture.completedFuture(
-                RpcMessageUtils.makeDescribeLakeStorageResponse(lakeStorageInfo));
     }
 
     @Override

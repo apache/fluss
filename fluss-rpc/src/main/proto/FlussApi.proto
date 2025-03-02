@@ -359,13 +359,6 @@ message GetFileSystemSecurityTokenResponse {
   repeated PbKeyValue addition_info = 4;
 }
 
-message DescribeLakeStorageRequest {
-}
-
-message DescribeLakeStorageResponse {
-  required PbLakeStorageInfo lakehouse_storage_info = 1;
-}
-
 // init writer request and response
 message InitWriterRequest {
 }

@@ -19,6 +19,7 @@ package com.alibaba.fluss.lakehouse.paimon.flink;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.lakehouse.paimon.sink.PaimonDataBaseSyncSinkBuilder;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -148,7 +149,10 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         batchTEnv.executeSql(
                                 String.format("select * from %s$lake$options", tableName)));
         assertThat(paimonOptionsRows.toString())
-                .isEqualTo("[+I[bucket, 3], +I[bucket-key, a], +I[changelog-producer, input]]");
+                .isEqualTo(
+                        String.format(
+                                "[+I[bucket, 3], +I[bucket-key, a], +I[changelog-producer, input], +I[table.datalake.paimon.metastore, filesystem], +I[table.datalake.paimon.warehouse, %s]]",
+                                warehousePath));
 
         // stop sync database job
         jobClient.cancel().get();
@@ -306,7 +310,10 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
                         .distributedBy(bucketNum)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+                        .customProperty("table.datalake.paimon.metastore", "filesystem")
+                        .customProperty("table.datalake.paimon.warehouse", warehousePath);
 
         if (isPartitioned) {
             schemaBuilder.column("c", DataTypes.STRING());
