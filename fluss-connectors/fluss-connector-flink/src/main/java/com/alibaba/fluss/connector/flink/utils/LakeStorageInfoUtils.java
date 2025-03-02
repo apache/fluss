@@ -17,9 +17,9 @@
 package com.alibaba.fluss.connector.flink.utils;
 
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.TableInfo;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -27,35 +27,31 @@ import java.util.Map;
 /** Utility class for {@link LakeStorageInfo}. */
 public class LakeStorageInfoUtils {
 
-    private static final String TABLE_DATALAKE_PAIMON_PREFIX = "table.datalake.paimon.";
-
-    public static LakeStorageInfo getLakeStorageInfo(TableInfo tableInfo) {
-        DataLakeFormat datalakeFormat =
-                tableInfo.getProperties().get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+    public static LakeStorageInfo getLakeStorageInfo(Configuration configuration) {
+        DataLakeFormat datalakeFormat = configuration.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (datalakeFormat == null) {
             throw new IllegalArgumentException(
                     String.format(
-                            "The lakehouse storage is not set, please set it by %s",
+                            "The datalake format is not set, please set it by %s",
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key()));
         }
 
         if (datalakeFormat != DataLakeFormat.PAIMON) {
             throw new UnsupportedOperationException(
                     String.format(
-                            "The lakehouse storage %s "
-                                    + " is not supported. Only %s is supported.",
+                            "The datalake format %s " + " is not supported. Only %s is supported.",
                             datalakeFormat, DataLakeFormat.PAIMON));
         }
 
         // currently, extract catalog config
         Map<String, String> datalakeConfig = new HashMap<>();
-        Map<String, String> flussConfig = tableInfo.getCustomProperties().toMap();
+        Map<String, String> flussConfig = configuration.toMap();
+        String dataLakePrefix = "table.datalake." + datalakeFormat + ".";
         for (Map.Entry<String, String> configEntry : flussConfig.entrySet()) {
             String configKey = configEntry.getKey();
             String configValue = configEntry.getValue();
-            if (configKey.startsWith(TABLE_DATALAKE_PAIMON_PREFIX)) {
-                datalakeConfig.put(
-                        configKey.substring(TABLE_DATALAKE_PAIMON_PREFIX.length()), configValue);
+            if (configKey.startsWith(dataLakePrefix)) {
+                datalakeConfig.put(configKey.substring(dataLakePrefix.length()), configValue);
             }
         }
         return new LakeStorageInfo(datalakeFormat.toString(), datalakeConfig);

@@ -32,7 +32,6 @@ import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.lakehouse.LakeStorageInfo;
-import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -102,7 +101,6 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -155,7 +153,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 config.get(ConfigOptions.DATALAKE_FORMAT) != null
                         ? LakeStorageUtils.getLakeStorageInfo(config)
                         : null;
-        this.tableDataLakeProperties = getTableDataLakeProperties(config);
+        this.tableDataLakeProperties = LakeStorageUtils.getTableDataLakeProperties(config);
     }
 
     @Override
@@ -640,23 +638,5 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             this.tableAssignment = tableAssignment;
             this.partitionId = partitionId;
         }
-    }
-
-    @Nullable
-    private Map<String, String> getTableDataLakeProperties(Configuration configuration) {
-        Optional<DataLakeFormat> optDataLakeFormat =
-                configuration.getOptional(ConfigOptions.DATALAKE_FORMAT);
-        if (!optDataLakeFormat.isPresent()) {
-            return null;
-        }
-        Map<String, String> datalakeProperties = new HashMap<>();
-        String dataLakePrefix = "datalake." + optDataLakeFormat.get() + ".";
-        for (Map.Entry<String, String> configurationEntry : configuration.toMap().entrySet()) {
-            if (configurationEntry.getKey().startsWith(dataLakePrefix)) {
-                datalakeProperties.put(
-                        "table." + configurationEntry.getKey(), configurationEntry.getValue());
-            }
-        }
-        return datalakeProperties;
     }
 }

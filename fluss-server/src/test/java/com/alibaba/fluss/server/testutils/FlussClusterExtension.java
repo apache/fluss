@@ -165,7 +165,7 @@ public final class FlussClusterExtension
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
                 createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zooKeeperClient);
+        metadataManager = new MetadataManager(zooKeeperClient, clusterConf);
         Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(

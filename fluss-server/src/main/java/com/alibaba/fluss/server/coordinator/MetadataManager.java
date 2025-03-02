@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -34,6 +35,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.utils.LakeStorageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
@@ -62,9 +64,15 @@ public class MetadataManager {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
 
     private final ZooKeeperClient zookeeperClient;
+    private @Nullable final Map<String, String> tableDataLakeProperties;
 
     public MetadataManager(ZooKeeperClient zookeeperClient) {
+        this(zookeeperClient, new Configuration());
+    }
+
+    public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
+        this.tableDataLakeProperties = LakeStorageUtils.getTableDataLakeProperties(conf);
     }
 
     public void createDatabase(
@@ -250,7 +258,7 @@ public class MetadataManager {
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
-        return getTable(tablePath, null);
+        return getTable(tablePath, tableDataLakeProperties);
     }
 
     public TableInfo getTable(

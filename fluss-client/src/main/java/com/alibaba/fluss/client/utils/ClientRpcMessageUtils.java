@@ -297,7 +297,7 @@ public class ClientRpcMessageUtils {
                     new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
             tableBucketsOffset.put(tableBucket, pbLakeSnapshotForBucket.getLogOffset());
         }
-        return new LakeSnapshot(lakeStorageInfo, snapshotId, tableBucketsOffset);
+        return new LakeSnapshot(snapshotId, tableBucketsOffset);
     }
 
     public static List<FsPathAndFileName> toFsPathAndFileName(

@@ -122,7 +122,8 @@ public class LakeSplitReaderGenerator {
         try (Catalog paimonCatalog =
                 FlinkCatalogFactory.createPaimonCatalog(
                         Options.fromMap(
-                                LakeStorageInfoUtils.getLakeStorageInfo(table.getTableInfo())
+                                LakeStorageInfoUtils.getLakeStorageInfo(
+                                                table.getTableInfo().getProperties())
                                         .getCatalogProperties()))) {
             fileStoreTable =
                     (FileStoreTable)
