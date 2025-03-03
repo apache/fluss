@@ -20,7 +20,6 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -76,7 +75,6 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbKeyValue;
 import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
-import com.alibaba.fluss.rpc.messages.PbLakeStorageInfo;
 import com.alibaba.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import com.alibaba.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
@@ -1229,10 +1227,9 @@ public class RpcMessageUtils {
     }
 
     public static GetLatestLakeSnapshotResponse makeGetLatestLakeSnapshotResponse(
-            long tableId, LakeStorageInfo lakeStorageInfo, LakeTableSnapshot lakeTableSnapshot) {
+            long tableId, LakeTableSnapshot lakeTableSnapshot) {
         GetLatestLakeSnapshotResponse getLakeTableSnapshotResponse =
-                new GetLatestLakeSnapshotResponse()
-                        .setLakehouseStorageInfo(toPbLakeStorageInfo(lakeStorageInfo));
+                new GetLatestLakeSnapshotResponse();
 
         getLakeTableSnapshotResponse.setTableId(tableId);
         getLakeTableSnapshotResponse.setSnapshotId(lakeTableSnapshot.getSnapshotId());
@@ -1260,17 +1257,5 @@ public class RpcMessageUtils {
             partitionKeyAndValues.put(pbKeyValue.getKey(), pbKeyValue.getValue());
         }
         return new PartitionSpec(partitionKeyAndValues);
-    }
-
-    private static PbLakeStorageInfo toPbLakeStorageInfo(LakeStorageInfo lakeStorageInfo) {
-        PbLakeStorageInfo pbLakeStorageInfo = new PbLakeStorageInfo();
-        pbLakeStorageInfo.setLakeStorageType(lakeStorageInfo.getLakeStorage());
-        for (Map.Entry<String, String> entry : lakeStorageInfo.getCatalogProperties().entrySet()) {
-            pbLakeStorageInfo
-                    .addCatalogProperty()
-                    .setKey(entry.getKey())
-                    .setValue(entry.getValue());
-        }
-        return pbLakeStorageInfo;
     }
 }

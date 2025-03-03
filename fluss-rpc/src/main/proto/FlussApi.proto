@@ -343,10 +343,9 @@ message GetLatestLakeSnapshotRequest {
 }
 
 message GetLatestLakeSnapshotResponse {
-  required PbLakeStorageInfo lakehouse_storage_info = 1;
-  required int64 table_id = 2;
-  required int64 snapshotId = 3;
-  repeated PbLakeSnapshotForBucket bucket_snapshots = 4;
+  required int64 table_id = 1;
+  required int64 snapshotId = 2;
+  repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
 }
 
 message GetFileSystemSecurityTokenRequest {
@@ -731,9 +730,4 @@ message PbPartitionInfo {
 
 message PbPartitionSpec {
   repeated PbKeyValue partition_key_values = 1;
-}
-
-message PbLakeStorageInfo {
-  required string lake_storage_type = 1;
-  repeated PbKeyValue catalog_properties = 2;
 }

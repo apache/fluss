@@ -66,10 +66,12 @@ public class MetadataManager {
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> tableDataLakeProperties;
 
-    public MetadataManager(ZooKeeperClient zookeeperClient) {
-        this(zookeeperClient, new Configuration());
-    }
-
+    /**
+     * Creates a new metadata manager.
+     *
+     * @param zookeeperClient the zookeeper client
+     * @param conf the cluster configuration
+     */
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.tableDataLakeProperties = LakeStorageUtils.getTableDataLakeProperties(conf);
@@ -258,12 +260,6 @@ public class MetadataManager {
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
-        return getTable(tablePath, tableDataLakeProperties);
-    }
-
-    public TableInfo getTable(
-            TablePath tablePath, @Nullable Map<String, String> additionalProperties)
-            throws TableNotExistException {
         Optional<TableRegistration> optionalTable;
         try {
             optionalTable = zookeeperClient.getTable(tablePath);
@@ -275,7 +271,7 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        return tableReg.toTableInfo(tablePath, schemaInfo, additionalProperties);
+        return tableReg.toTableInfo(tablePath, schemaInfo, tableDataLakeProperties);
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {

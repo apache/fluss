@@ -196,7 +196,6 @@ public class TabletServer extends ServerBase {
             MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.tabletService =
                     new TabletService(
-                            conf,
                             serverId,
                             remoteFileSystem,
                             zkClient,

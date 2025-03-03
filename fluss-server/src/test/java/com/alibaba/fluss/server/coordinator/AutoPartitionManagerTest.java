@@ -71,7 +71,7 @@ class AutoPartitionManagerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zookeeperClient);
+        metadataManager = new MetadataManager(zookeeperClient, new Configuration());
     }
 
     @AfterEach
@@ -185,7 +185,7 @@ class AutoPartitionManagerTest {
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingMetadataCache(3),
-                        new MetadataManager(zookeeperClient),
+                        new MetadataManager(zookeeperClient, new Configuration()),
                         new Configuration(),
                         clock,
                         periodicExecutor);

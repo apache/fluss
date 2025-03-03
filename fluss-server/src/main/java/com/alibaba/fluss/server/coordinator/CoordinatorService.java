@@ -98,13 +98,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             Supplier<EventManager> eventManagerSupplier,
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager) {
-        super(
-                conf,
-                remoteFileSystem,
-                ServerType.COORDINATOR,
-                zkClient,
-                metadataCache,
-                metadataManager);
+        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataCache, metadataManager);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.eventManagerSupplier = eventManagerSupplier;
