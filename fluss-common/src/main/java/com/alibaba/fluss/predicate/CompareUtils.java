@@ -33,6 +33,8 @@ public class CompareUtils {
 
     public static int compareLiteral(DataType type, Object v1, Object v2) {
         if (v1 instanceof Comparable) {
+            // because BinaryString can not serialize so v1 or v2 may be BinaryString convert to
+            // String for compare
             if (v1 instanceof BinaryString) {
                 v1 = ((BinaryString) v1).toString();
             }
