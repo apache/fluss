@@ -124,19 +124,6 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
 
-### Lookup Options
-
-
-| Option                                          | Type     | Required | Default     | Description                                                                                                                                                                                                                                                                                                                                             |
-|-------------------------------------------------|----------|----------|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| lookup.cache                                    | Enum     | optional | NONE        | The caching strategy for this lookup table, including NONE, PARTIAL.                                                                                                                                                                                                                                                                                    |
-| lookup.max-retries                              | Integer  | optional | 3           | The maximum allowed retries if a lookup operation fails.                                                                                                                                                                                                                                                                                                |
-| lookup.partial-cache.expire-after-access        | Duration | optional | (none)      | Duration to expire an entry in the cache after accessing.                                                                                                                                                                                                                                                                                               |
-| lookup.partial-cache.expire-after-write         | Duration | optional | (none)      | Duration to expire an entry in the cache after writing.                                                                                                                                                                                                                                                                                                 |
-| lookup.partial-cache.cache-missing-key          | Boolean  | optional | true        | Whether to store an empty value into the cache if the lookup key doesn't match any rows in the table.                                                                                                                                                                                                                                                   |
-| lookup.partial-cache.max-rows                   | Long     | optional | true        | The maximum number of rows to store in the cache.                                                                                                                                                                                                                                                                                                       |
-
-
 ## Prefix Lookup
 
 ### Instructions
@@ -267,3 +254,7 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 ```
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
+
+## Lookup Options
+
+Fluss lookup join supports various configuration options. For more details, please refer to the [Connector Options](/engine-flink/options.md#lookup-options) page.
