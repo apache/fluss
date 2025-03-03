@@ -385,7 +385,7 @@ public final class LogTablet {
         updateHighWatermarkMetadata(newHighWatermarkMetadata);
     }
 
-    public void updateHighWatermarkMetadata(LogOffsetMetadata newHighWatermark) {
+    private void updateHighWatermarkMetadata(LogOffsetMetadata newHighWatermark) {
         if (newHighWatermark.getMessageOffset() < 0) {
             throw new IllegalArgumentException("High watermark offset should be non-negative");
         }
@@ -403,14 +403,11 @@ public final class LogTablet {
     }
 
     /**
-     * Judge whether to update the highWatermark to a new value if and only if it is larger than the
-     * old value. It is an error to update to a value which is larger than the log end offset.
+     * Update the highWatermark to a new value if and only if it is larger than the old value. It is
+     * an error to update to a value which is larger than the log end offset.
      *
      * <p>This method is intended to be used by the leader to update the highWatermark after
      * follower fetch offsets have been updated.
-     *
-     * @param newHighWatermark the suggested new value for the high watermark.
-     * @return the old high watermark if the new high watermark can be updated, otherwise empty.
      */
     public Optional<LogOffsetMetadata> maybeIncrementHighWatermark(
             LogOffsetMetadata newHighWatermark) throws IOException {
@@ -428,6 +425,7 @@ public final class LogTablet {
             if (oldHighWatermark.getMessageOffset() < newHighWatermark.getMessageOffset()
                     || (oldHighWatermark.getMessageOffset() == newHighWatermark.getMessageOffset()
                             && oldHighWatermark.onOlderSegment(newHighWatermark))) {
+                updateHighWatermarkMetadata(newHighWatermark);
                 return Optional.of(oldHighWatermark);
             } else {
                 return Optional.empty();
