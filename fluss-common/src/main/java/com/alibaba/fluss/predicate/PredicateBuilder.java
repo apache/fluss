@@ -26,7 +26,7 @@ import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DecimalType;
 import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.Preconditions;
+import com.alibaba.fluss.utils.TypeUtils;
 
 import javax.annotation.Nullable;
 
@@ -51,7 +51,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.utils.TypeUtils.castFromString;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static java.util.Collections.singletonList;
 
 /* This file is based on source code of Apache Paimon Project (https://paimon.apache.org/), licensed by the Apache
@@ -165,7 +165,7 @@ public class PredicateBuilder {
     }
 
     public static Predicate and(List<Predicate> predicates) {
-        Preconditions.checkArgument(
+        checkArgument(
                 predicates.size() > 0,
                 "There must be at least 1 inner predicate to construct an AND predicate");
         if (predicates.size() == 1) {
@@ -196,7 +196,7 @@ public class PredicateBuilder {
     }
 
     public static Predicate or(List<Predicate> predicates) {
-        Preconditions.checkArgument(
+        checkArgument(
                 predicates.size() > 0,
                 "There must be at least 1 inner predicate to construct an OR predicate");
         return predicates.stream()
@@ -438,7 +438,7 @@ public class PredicateBuilder {
                     entry.getKey(),
                     defaultPartValue.equals(entry.getValue())
                             ? null
-                            : castFromString(
+                            : TypeUtils.castFromString(
                                     entry.getValue(), partType.getField(entry.getKey()).getType()));
         }
         return partValues;
