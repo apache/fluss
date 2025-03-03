@@ -37,7 +37,7 @@ during the Fluss cluster working.
 | remote.data.dir                                  | String     | (none)                                                                                                                                                                | The directory used for storing the kv snapshot data files and remote log for log tiered storage in a Fluss supported filesystem.                                                                                                                                                 |
 | remote.fs.write-buffer-size                      | MemorySize | 4kb                                                                                                                                                                   | The default size of the write buffer for writing the local files to remote file systems.                                                                                                                                                                                         |
 | plugin.classloader.parent-first-patterns.default | String     | java.,<br/>com.alibaba.fluss.,<br/>javax.annotation.,<br/>org.slf4j,<br/>org.apache.log4j,<br/>org.apache.logging,<br/>org.apache.commons.logging,<br/>ch.qos.logback | A (semicolon-separated) list of patterns that specifies which classes should always be resolved through the plugin parent ClassLoader first. A pattern is a simple prefix that is checked against the fully qualified class name. This setting should generally not be modified. |
-| auto-partition.check.interval                    | Duration   | 10min                                                                                                                                                                 | The interval of auto partition check. he default value is 10 minutes.                                                                                                                                                                                                            |
+| auto-partition.check.interval                    | Duration   | 10min                                                                                                                                                                 | The interval of auto partition check. The default value is 10 minutes.                                                                                                                                                                                                           |
 
 
 ### CoordinatorServer
@@ -255,7 +255,7 @@ CREATE TABLE my_table (
   PRIMARY KEY (id)
 ) WITH (
   'bucket.num' = '2',
-  'client.writer.acks ' = 'all');
+  'client.writer.acks' = 'all');
 ```
 
 2. Also, you can change the client configuration use [Flink SQL Hints](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/queries/hints/#dynamic-table-options) like:
