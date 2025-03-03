@@ -424,6 +424,8 @@ public class FlinkCatalog implements Catalog {
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, CatalogException {
+        // TODO, list partitions by catalogPartitionSpec. Trace by
+        // https://github.com/alibaba/fluss/issues/514
         throw new UnsupportedOperationException();
     }
 
