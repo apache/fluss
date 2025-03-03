@@ -23,8 +23,8 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.lakehouse.LakeCatalog;
 import com.alibaba.fluss.connector.flink.utils.CatalogExceptionUtils;
+import com.alibaba.fluss.connector.flink.utils.DataLakeUtils;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
-import com.alibaba.fluss.connector.flink.utils.LakeStorageInfoUtils;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -632,14 +632,17 @@ public class FlinkCatalog implements Catalog {
         return TablePath.of(objectPath.getDatabaseName(), objectPath.getObjectName());
     }
 
-    private void mayInitLakeCatalogCatalog(Configuration configuration) {
+    private void mayInitLakeCatalogCatalog(Configuration tableOptions) {
+        // TODO: Currently, a Fluss cluster only supports a single DataLake storage. However, in the
+        //  future, it may support multiple DataLakes. The following code assumes that a single
+        //  lakeCatalog is shared across multiple tables, which will no longer be valid in such
+        //  cases and should be updated accordingly.
         if (lakeCatalog == null) {
             synchronized (this) {
                 if (lakeCatalog == null) {
                     try {
                         Map<String, String> catalogProperties =
-                                LakeStorageInfoUtils.getLakeStorageInfo(configuration)
-                                        .getCatalogProperties();
+                                DataLakeUtils.extractLakeCatalogProperties(tableOptions);
                         lakeCatalog = new LakeCatalog(catalogName, catalogProperties, classLoader);
                     } catch (Exception e) {
                         throw new FlussRuntimeException("Failed to init paimon catalog.", e);

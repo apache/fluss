@@ -23,7 +23,6 @@ import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSp
 import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer;
 import com.alibaba.fluss.connector.flink.source.split.LogSplit;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.connector.flink.utils.LakeStorageInfoUtils;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -49,6 +48,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.connector.flink.utils.DataLakeUtils.extractLakeCatalogProperties;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -84,8 +84,7 @@ public class LakeSplitGenerator {
         FileStoreTable fileStoreTable =
                 getTable(
                         lakeSnapshotInfo.getSnapshotId(),
-                        LakeStorageInfoUtils.getLakeStorageInfo(tableInfo.getProperties())
-                                .getCatalogProperties());
+                        extractLakeCatalogProperties(tableInfo.getProperties()));
         boolean isLogTable = fileStoreTable.schema().primaryKeys().isEmpty();
         boolean isPartitioned = !fileStoreTable.schema().partitionKeys().isEmpty();
 

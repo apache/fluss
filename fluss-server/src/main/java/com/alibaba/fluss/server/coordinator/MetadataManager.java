@@ -64,7 +64,7 @@ public class MetadataManager {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
 
     private final ZooKeeperClient zookeeperClient;
-    private @Nullable final Map<String, String> tableDataLakeProperties;
+    private @Nullable final Map<String, String> defaultTableLakeOptions;
 
     /**
      * Creates a new metadata manager.
@@ -74,7 +74,7 @@ public class MetadataManager {
      */
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
-        this.tableDataLakeProperties = LakeStorageUtils.getTableDataLakeProperties(conf);
+        this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
     }
 
     public void createDatabase(
@@ -271,7 +271,7 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        return tableReg.toTableInfo(tablePath, schemaInfo, tableDataLakeProperties);
+        return tableReg.toTableInfo(tablePath, schemaInfo, defaultTableLakeOptions);
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {

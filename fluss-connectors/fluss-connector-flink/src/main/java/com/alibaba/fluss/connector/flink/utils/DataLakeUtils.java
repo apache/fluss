@@ -18,17 +18,16 @@ package com.alibaba.fluss.connector.flink.utils;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 
 import java.util.HashMap;
 import java.util.Map;
 
-/** Utility class for {@link LakeStorageInfo}. */
-public class LakeStorageInfoUtils {
+/** Utility class for accessing data lake related configurations. */
+public class DataLakeUtils {
 
-    public static LakeStorageInfo getLakeStorageInfo(Configuration configuration) {
-        DataLakeFormat datalakeFormat = configuration.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+    public static Map<String, String> extractLakeCatalogProperties(Configuration tableOptions) {
+        DataLakeFormat datalakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (datalakeFormat == null) {
             throw new IllegalArgumentException(
                     String.format(
@@ -43,9 +42,9 @@ public class LakeStorageInfoUtils {
                             datalakeFormat, DataLakeFormat.PAIMON));
         }
 
-        // currently, extract catalog config
+        // currently, extract datalake catalog config
         Map<String, String> datalakeConfig = new HashMap<>();
-        Map<String, String> flussConfig = configuration.toMap();
+        Map<String, String> flussConfig = tableOptions.toMap();
         String dataLakePrefix = "table.datalake." + datalakeFormat + ".";
         for (Map.Entry<String, String> configEntry : flussConfig.entrySet()) {
             String configKey = configEntry.getKey();
@@ -54,6 +53,6 @@ public class LakeStorageInfoUtils {
                 datalakeConfig.put(configKey.substring(dataLakePrefix.length()), configValue);
             }
         }
-        return new LakeStorageInfo(datalakeFormat.toString(), datalakeConfig);
+        return datalakeConfig;
     }
 }

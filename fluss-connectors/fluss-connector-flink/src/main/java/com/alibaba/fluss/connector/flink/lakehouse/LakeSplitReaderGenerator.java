@@ -24,7 +24,7 @@ import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAn
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
 import com.alibaba.fluss.connector.flink.source.reader.BoundedSplitReader;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.connector.flink.utils.LakeStorageInfoUtils;
+import com.alibaba.fluss.connector.flink.utils.DataLakeUtils;
 import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.flink.util.ExceptionUtils;
@@ -122,9 +122,8 @@ public class LakeSplitReaderGenerator {
         try (Catalog paimonCatalog =
                 FlinkCatalogFactory.createPaimonCatalog(
                         Options.fromMap(
-                                LakeStorageInfoUtils.getLakeStorageInfo(
-                                                table.getTableInfo().getProperties())
-                                        .getCatalogProperties()))) {
+                                DataLakeUtils.extractLakeCatalogProperties(
+                                        table.getTableInfo().getProperties())))) {
             fileStoreTable =
                     (FileStoreTable)
                             paimonCatalog.getTable(
