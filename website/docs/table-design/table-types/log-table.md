@@ -39,16 +39,47 @@ Log Tables in Fluss allow real-time data consumption, preserving the order of da
 - For two data records from the same partition but different buckets, the consumption order is not guaranteed because different buckets may be processed concurrently by different data consumption jobs.
 
 
-## Log Tiering
-Log Table supports tiering data to different storage tiers. See more details about [Remote Log](/docs/maintenance/tiered-storage/remote-storage/).
+## Column Pruning
+
+Column pruning is a technique used to reduce the amount of data that needs to be read from storage by eliminating unnecessary columns from the query.
+Fluss supports column pruning for Log Tables and the changelog of PrimaryKey Tables, which can significantly improve query performance by reducing the amount of data that needs to be read from storage and lowering networking costs.
+
+What sets Fluss apart is its ability to apply **column pruning during streaming reads**, a capability that is both unique and industry-leading. This ensures that even in real-time streaming scenarios, only the required columns are processed, minimizing resource usage and maximizing efficiency.
+
+In Fluss, Log Tables are stored in a columnar format by default (i.e., Apache Arrow).
+This format stores data column-by-column rather than row-by-row, making it highly efficient for column pruning.
+When a query specifies only a subset of columns, Fluss skips reading irrelevant columns entirely.
+This enables efficient column pruning during query execution and ensures that only the required columns are read,
+minimizing I/O overhead and improving overall system efficiency.
+
+During query execution, query engines like Flink analyzes the query to identify the columns required for processing and tells Fluss to only read the necessary columns.
+For example the following streaming query:
+
+```sql
+SELECT id, name FROM log_table WHERE timestamp > '2023-01-01';
+```
+
+In this query, only the `id`, `name`, and `timestamp` columns are accessed. Other columns (e.g., `address`, `status`) are pruned and not read from storage.
+
 
 ## Log Compression
-Log Table supports the end-to-end block compression feature for arrow log format. If enabled, data will be compressed 
-by the writer in client, written in compressed format and decompressed by the log scanner in client. Log compression 
-can significantly reduce storage costs on the server side.
 
-Currently, Log Table is defaulted to using `ZSTD` compression codec, with the compression level set to `3`. If you want to
-modify the compression codec or compression level of `ZSTD` compression codec, you can create table as:
+**Log Table** supports end-to-end compression for the Arrow log format. Fluss leverages [Arrow native compression](https://arrow.apache.org/docs/format/Columnar.html#compression) to implement this feature,
+ensuring that compressed data remains compliant with the Arrow format. As a result, the compressed data can be seamlessly decompressed by any Arrow-compatible library.
+Additionally, compression is applied to each column independently, preserving the ability to perform column pruning on the compressed data without performance degradation.
+
+When compression is enabled:
+- For **Log Tables**, data is compressed by the writer on the client side, written in a compressed format, and decompressed by the log scanner on the client side.
+- For **PrimaryKey Table changelogs**, compression is performed server-side since the changelog is generated on the server.
+
+Log compression significantly reduces networking and storage costs. Benchmark results demonstrate that using the ZSTD compression with level 3 achieves a compression ratio of approximately **5x** (e.g., reducing 5GB of data to 1GB).
+Furthermore, read/write throughput improves substantially due to reduced networking overhead.
+
+By default, the Log Table uses the `ZSTD` compression codec with a compression level of `3`.
+You can change the compression codec by setting the `table.log.arrow.compression.type` property to `NONE`, `LZ4_FRAME`, or `ZSTD`.
+You can also adjust the compression level for `ZSTD` by setting the `table.log.arrow.compression.zstd.level` property to a value between `1` and `22`.
+
+For example:
 
 ```sql title="Flink SQL"
 -- Set the compression codec to LZ4_FRAME
@@ -73,6 +104,7 @@ WITH (
   'table.log.arrow.compression.zstd.level' = '2'
 );
 ```
+
 In the above example, we set the compression codec to `LZ4_FRAME` and the compression level to `2`.
 
 :::note 
@@ -80,8 +112,5 @@ In the above example, we set the compression codec to `LZ4_FRAME` and the compre
 2. The valid range of `table.log.arrow.compression.zstd.level` is 1 to 22.
 :::
 
-### Supported Compression Codecs
-Currently, Fluss supports the following compression codecs for arrow format:
-- `NONE`: No compression.
-- `LZ4_FRAME`: LZ4 frame compression.
-- `ZSTD`: ZSTD compression.
+## Log Tiering
+Log Table supports tiering data to different storage tiers. See more details about [Remote Log](/docs/maintenance/tiered-storage/remote-storage/).
