@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.utils;
 
+import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 
 import java.time.DateTimeException;
@@ -26,6 +27,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
 import java.time.temporal.TemporalAccessor;
+import java.util.TimeZone;
 
 import static java.time.temporal.ChronoField.DAY_OF_MONTH;
 import static java.time.temporal.ChronoField.HOUR_OF_DAY;
@@ -107,6 +109,14 @@ public class DateTimeUtils {
             throws DateTimeException {
         return TimestampNtz.fromLocalDateTime(
                 fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision));
+    }
+
+    public static TimestampLtz parseTimestampData(String dateStr, int precision, TimeZone timeZone)
+            throws DateTimeException {
+        return TimestampLtz.fromInstant(
+                fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision)
+                        .atZone(timeZone.toZoneId())
+                        .toInstant());
     }
 
     public static Integer parseDate(String s) {

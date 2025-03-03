@@ -322,6 +322,8 @@
                                         <exclude>com.alibaba.fluss.kafka.*</exclude>
                                         <!-- exclude for fluss-ci-tools -->
                                         <exclude>com.alibaba.fluss.tools.ci.*</exclude>
+                                        <!-- end exclude for predicate -->
+                                        <exclude>com.alibaba.fluss.predicate.*</exclude>
                                         <!-- exclude for dummy class -->
                                         <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
                                         <exclude>com.alibaba.fluss.flink.DummyClass120</exclude>
