@@ -42,3 +42,46 @@ Log Tables in Fluss allow real-time data consumption, preserving the order of da
 ## Log Tiering
 Log Table supports tiering data to different storage tiers. See more details about [Remote Log](/docs/maintenance/tiered-storage/remote-storage/).
 
+## Log Compression
+Log Table supports the end-to-end block compression feature for arrow log format. If enabled, data will be compressed 
+by the writer in client, written in compressed format and decompressed by the log scanner in client. Log compression 
+can significantly reduce storage costs on the server side.
+
+Currently, Log Table is defaulted to using `ZSTD` compression codec, with the compression level set to `3`. If you want to
+modify the compression codec or compression level of `ZSTD` compression codec, you can create table as:
+
+```sql title="Flink SQL"
+-- Set the compression codec to LZ4_FRAME
+CREATE TABLE log_table (
+  order_id BIGINT,
+  item_id BIGINT,
+  amount INT,
+  address STRING
+)
+WITH (
+  'table.log.arrow.compression.type' = 'LZ4_FRAME'
+);
+
+-- Set the 'ZSTD' compression level to 2
+CREATE TABLE log_table (
+  order_id BIGINT,
+  item_id BIGINT,
+  amount INT,
+  address STRING
+)
+WITH (
+  'table.log.arrow.compression.zstd.level' = '2'
+);
+```
+In the above example, we set the compression codec to `LZ4_FRAME` and the compression level to `2`.
+
+:::note 
+1. Currently, the compression codec and compression level are only supported for arrow format. If you set `'table.log.format'='indexed'`, the compression codec and compression level will be ignored.
+2. The valid range of `table.log.arrow.compression.zstd.level` is 1 to 22.
+:::
+
+### Supported Compression Codecs
+Currently, Fluss supports the following compression codecs for arrow format:
+- `NONE`: No compression.
+- `LZ4_FRAME`: LZ4 frame compression.
+- `ZSTD`: ZSTD compression.
