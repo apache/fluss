@@ -161,7 +161,11 @@ final class LogTabletTest extends LogTestBase {
         logTablet.appendAsLeader(mr1);
         assertHighWatermark(0L);
         // Update highWatermark as leader.
-        logTablet.maybeIncrementHighWatermark(new LogOffsetMetadata(1L));
+        LogOffsetMetadata logOffsetMetadata = new LogOffsetMetadata(1L);
+        Optional<LogOffsetMetadata> oldLogOffsetMetadata =
+                logTablet.maybeIncrementHighWatermark(logOffsetMetadata);
+        assertThat(oldLogOffsetMetadata).isPresent();
+        logTablet.updateHighWatermarkMetadata(logOffsetMetadata);
         assertHighWatermark(1L);
         // Cannot update past the log end offset.
         logTablet.updateHighWatermark(5L);

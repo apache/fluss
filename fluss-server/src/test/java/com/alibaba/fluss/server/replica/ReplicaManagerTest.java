@@ -64,6 +64,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -80,6 +81,7 @@ import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -102,6 +104,7 @@ import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecords;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static com.alibaba.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -1161,6 +1164,51 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         + "The latest known leader epoch is 2 for table bucket "
                                         + "TableBucket{tableId=150001, bucket=1}."));
         replicaManager.getReplicaOrException(tb);
+    }
+
+    @Test
+    void testKvDataVisibility() throws Exception {
+        // The CDC log is only visible after the KV has been flushed to RocksDB. In other words,
+        // when we can read the CDC log, the associated kv record must have been
+        // inserted/updated/deleted in RocksDB. The reason for ensuring this visibility is that we
+        // first buffer the data in memory before flushing it to RocksDB. Thus, we need to guarantee
+        // visibility.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+        Replica replica = replicaManager.getReplicaOrException(tb);
+
+        // retry send kv records to kv store, if the highWatermark increased, the kv record must be
+        // visible in rocksdb.
+        int round = 1000;
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        CompletableFuture<List<PutKvResultForBucket>> future;
+        for (int i = 0; i < round; i++) {
+            future = new CompletableFuture<>();
+            Object[] key = {i};
+            Object[] value = {i, "a"};
+            byte[] keyBytes = keyEncoder.encodeKey(row(key));
+            byte[] valueBytes =
+                    ValueEncoder.encodeValue(
+                            DEFAULT_SCHEMA_ID, compactedRow(DATA1_SCHEMA_PK.getRowType(), value));
+            List<byte[]> lookups = replica.lookups(Collections.singletonList(keyBytes));
+            assertThat(lookups.size()).isEqualTo(1);
+            assertThat(lookups.get(0)).isNull();
+            replicaManager.putRecordsToKv(
+                    20000,
+                    1,
+                    Collections.singletonMap(
+                            tb, genKvRecordBatch(Collections.singletonList(Tuple2.of(key, value)))),
+                    null,
+                    future::complete);
+            assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, i + 1));
+
+            int expectedHw = i + 1;
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(replica.getLogHighWatermark()).isEqualTo(expectedHw));
+            assertThat(replica.lookups(Collections.singletonList(keyBytes)))
+                    .containsExactlyInAnyOrder(valueBytes);
+        }
     }
 
     @Test
