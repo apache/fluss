@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.client.admin;
 
+import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
@@ -23,6 +25,7 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -740,6 +743,36 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         String.valueOf(currentYear - 2),
                         String.valueOf(currentYear - 1),
                         String.valueOf(currentYear)));
+    }
+
+    @Test
+    void testBootstrapServerConfigAsTabletServer() throws Exception {
+        Configuration newConf = clientConf;
+        ServerNode ts0 = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0);
+        newConf.set(
+                ConfigOptions.BOOTSTRAP_SERVERS,
+                Collections.singletonList(String.format("%s:%d", ts0.host(), ts0.port())));
+        try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
+            Admin newAdmin = conn.getAdmin();
+            String dbName = "test_bootstrap_server_t1";
+            newAdmin.createDatabase(
+                            dbName,
+                            DatabaseDescriptor.builder().comment("test comment").build(),
+                            false)
+                    .get();
+            newAdmin.createTable(
+                            TablePath.of(dbName, "test_table_1"),
+                            TableDescriptor.builder().schema(Schema.newBuilder().build()).build(),
+                            false)
+                    .get();
+            assertThat(newAdmin.getDatabaseInfo(dbName).get().getDatabaseName()).isEqualTo(dbName);
+            assertThat(
+                            newAdmin.getTableInfo(TablePath.of(dbName, "test_table_1"))
+                                    .get()
+                                    .getTablePath()
+                                    .getTableName())
+                    .isEqualTo("test_table_1");
+        }
     }
 
     private void assertHasTabletServerNumber(int tabletServerNumber) {

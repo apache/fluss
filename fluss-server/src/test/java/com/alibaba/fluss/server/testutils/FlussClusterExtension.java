@@ -222,9 +222,9 @@ public final class FlussClusterExtension
                 coordinatorServer = new CoordinatorServer(conf);
                 coordinatorServer.start();
                 coordinatorServerNode =
-                        // we use -1 as coordinator server id
+                        // TODO, Currently, we use 0 as coordinator server id.
                         new ServerNode(
-                                -1, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
+                                0, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
             }
         } else {
             // start the existing coordinator server

@@ -274,10 +274,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     .getCoordinatorAddress()
                     .map(
                             coordinatorAddress ->
-                                    // we set id to -1 as the id for the id stored in zk
-                                    // for coordinator server is an uuid now
+                                    // TODO we set id to 0 as that CoordinatorServer don't support
+                                    // HA, if we support HA, we need to set id to the config
+                                    // CoordinatorServer id to avoid node drift.
                                     new ServerNode(
-                                            -1,
+                                            0,
                                             coordinatorAddress.getHost(),
                                             coordinatorAddress.getPort(),
                                             ServerType.COORDINATOR))

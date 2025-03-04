@@ -557,7 +557,7 @@ class RecordAccumulatorTest {
 
         return new Cluster(
                 aliveTabletServersById,
-                new ServerNode(-1, "localhost", 89, ServerType.COORDINATOR),
+                new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
                 Collections.emptyMap(),
