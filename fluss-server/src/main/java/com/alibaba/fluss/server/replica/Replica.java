@@ -937,6 +937,7 @@ public final class Replica {
         // TODO The flushKV and updateHighWatermark need to be atomic operation. See
         // https://github.com/alibaba/fluss/issues/513
         mayFlushKv(newHighWatermark.getMessageOffset());
+
         Optional<LogOffsetMetadata> oldWatermark =
                 leaderLog.maybeIncrementHighWatermark(newHighWatermark);
         if (oldWatermark.isPresent()) {
