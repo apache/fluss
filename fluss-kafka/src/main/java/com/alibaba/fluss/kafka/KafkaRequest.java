@@ -34,7 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class KafkaRequest {
-    private final AtomicLong ID_GENERATOR = new AtomicLong(0);
+    private static final AtomicLong ID_GENERATOR = new AtomicLong(0);
 
     private final ApiKeys apiKey;
     private final short apiVersion;
