@@ -213,6 +213,15 @@ class FlinkCatalogITCase {
         expectedShowPartitionsResult = Arrays.asList("+I[b=2]", "+I[b=3]");
         showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        // 4. show partitions with spec.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                "show partitions test_partitioned_table partition (b=2)")
+                                        .collect())
+                .rootCause()
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test

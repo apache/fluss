@@ -188,7 +188,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         new CoordinatorRequestBatch(
                                 coordinatorChannelManager, coordinatorEventManager),
                         zooKeeperClient);
-        this.metadataManager = new MetadataManager(zooKeeperClient);
+        this.metadataManager = new MetadataManager(zooKeeperClient, conf);
 
         int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
         checkArgument(ioExecutorPoolSize > 0, "ioExecutorPoolSize must be positive");

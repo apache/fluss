@@ -17,7 +17,6 @@
 package com.alibaba.fluss.server.tablet;
 
 import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -78,20 +77,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final ReplicaManager replicaManager;
 
     public TabletService(
-            Configuration config,
             int serverId,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             ReplicaManager replicaManager,
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager) {
-        super(
-                config,
-                remoteFileSystem,
-                ServerType.TABLET_SERVER,
-                zkClient,
-                metadataCache,
-                metadataManager);
+        super(remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataCache, metadataManager);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
     }

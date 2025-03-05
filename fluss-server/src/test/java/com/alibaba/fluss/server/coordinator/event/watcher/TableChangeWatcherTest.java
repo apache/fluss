@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -79,7 +80,7 @@ class TableChangeWatcherTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zookeeperClient);
+        metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
     }
 

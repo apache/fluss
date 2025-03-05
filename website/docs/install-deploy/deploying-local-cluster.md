@@ -21,7 +21,7 @@ test machine and point to the directory of your Java installation.
 
 ## Fluss Setup
 
-Go to the [downloads page](/downloads) and download the latest Fluss release. Make sure to pick ths Fluss
+Go to the [downloads page](/downloads) and download the latest Fluss release. Make sure to pick the Fluss
 package **matching your Java version**. After downloading the latest release, extract it:
 
 ```shell

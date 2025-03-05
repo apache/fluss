@@ -88,15 +88,46 @@ CREATE TABLE my_log_table (
 
 ### Partitioned (PrimaryKey/Log) Table
 
-The following SQL statement creates a Partitioned PrimaryKey Table in Fluss. Note that the partitioned field (`dt` in this case) must be a subset of the primary key (`dt, shop_id, user_id` in this case).
-Currently, Fluss only supports one partitioned field with `STRING` type.
-
 :::note
-Currently, partitioned table must enable auto partition and set auto partition time unit.
+1. Currently, Fluss only supports one partitioned field with `STRING` type
+2. For the Partitioned PrimaryKey Table, the partitioned field (`dt` in this case) must be a subset of the primary key (`dt, shop_id, user_id` in this case)
 :::
+
+The following SQL statement creates a Partitioned PrimaryKey Table in Fluss.
 
 ```sql title="Flink SQL"
 CREATE TABLE my_part_pk_table (
+  dt STRING,
+  shop_id BIGINT,
+  user_id BIGINT,
+  num_orders INT,
+  total_amount INT,
+  PRIMARY KEY (dt, shop_id, user_id) NOT ENFORCED
+) PARTITIONED BY (dt);
+```
+
+The following SQL statement creates a Partitioned Log Table in Fluss.
+
+```sql title="Flink SQL"
+CREATE TABLE my_part_log_table (
+  order_id BIGINT,
+  item_id BIGINT,
+  amount INT,
+  address STRING,
+  dt STRING
+) PARTITIONED BY (dt);
+```
+:::note
+After the Partitioned (PrimaryKey/Log) Table is created, you need first manually create the corresponding partition using the [Add Partition](/docs/engine-flink/ddl.md#add-partition) statement
+before you write/read data into this partition.
+:::
+
+#### Auto partitioned (PrimaryKey/Log) table
+
+Fluss also support creat Auto Partitioned (PrimaryKey/Log) Table. The following SQL statement creates an Auto Partitioned PrimaryKey Table in Fluss.
+
+```sql title="Flink SQL"
+CREATE TABLE my_auto_part_pk_table (
   dt STRING,
   shop_id BIGINT,
   user_id BIGINT,
@@ -110,10 +141,10 @@ CREATE TABLE my_part_pk_table (
 );
 ```
 
-The following SQL statement creates a Partitioned Log Table in Fluss.
+The following SQL statement creates an Auto Partitioned Log Table in Fluss.
 
 ```sql title="Flink SQL"
-CREATE TABLE my_part_log_table (
+CREATE TABLE my_auto_part_log_table (
   order_id BIGINT,
   item_id BIGINT,
   amount INT,
@@ -126,6 +157,9 @@ CREATE TABLE my_part_log_table (
 );
 ```
 
+For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning Options](/docs/table-design/data-distribution/partitioning/#auto-partitioning-options).
+
+### Options
 
 The supported option in "with" parameters when creating a table are as follows:
 
@@ -171,5 +205,44 @@ DROP TABLE my_table;
 ```
 
 This will entirely remove all the data of the table in the Fluss cluster.
+
+## Show Partitions
+
+To show all the partitions of a partitioned table, run:
+```sql title="Flink SQL"
+SHOW PARTITIONS my_part_pk_table;
+```
+
+For more details, refer to the [Flink SHOW PARTITIONS](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/show/#show-partitions) documentation.
+
+:::note
+Currently, we only support show all partitions of a partitioned table, but not support show partitions with the given partition spec.
+:::
+
+## Add Partition
+
+Fluss support manually add partitions to an exists partitioned table by Fluss Catalog. If the specified partition 
+not exists, Fluss will create the partition. If the specified partition already exists, Fluss will ignore the request 
+or throw an exception.
+
+To add partitions, run:
+```sql title="Flink SQL"
+ALTER TABLE my_part_pk_table ADD PARTITION (dt = '2025-03-05');
+```
+
+For more details, refer to the [Flink ALTER TABLE(ADD)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#add) documentation.
+
+## Drop Partition
+
+Fluss also support manually drop partitions from an exists partitioned table by Fluss Catalog. If the specified partition 
+not exists, Fluss will ignore the request or throw an exception.
+
+
+To drop partitions, run:
+```sql title="Flink SQL"
+ALTER TABLE my_part_pk_table DROP PARTITION (dt = '2025-03-05');
+```
+
+For more details, refer to the [Flink ALTER TABLE(DROP)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#drop) documentation.
 
 

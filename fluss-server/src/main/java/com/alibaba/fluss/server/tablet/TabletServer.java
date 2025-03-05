@@ -193,10 +193,9 @@ public class TabletServer extends ServerBase {
                             systemClock);
             replicaManager.startup();
 
-            MetadataManager metadataManager = new MetadataManager(zkClient);
+            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.tabletService =
                     new TabletService(
-                            conf,
                             serverId,
                             remoteFileSystem,
                             zkClient,

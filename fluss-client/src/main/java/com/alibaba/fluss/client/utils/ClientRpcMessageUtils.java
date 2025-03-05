@@ -27,7 +27,6 @@ import com.alibaba.fluss.client.write.WriteBatch;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -39,7 +38,6 @@ import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
@@ -53,7 +51,6 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbKeyValue;
 import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
-import com.alibaba.fluss.rpc.messages.PbLakeStorageInfo;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
@@ -284,7 +281,6 @@ public class ClientRpcMessageUtils {
     }
 
     public static LakeSnapshot toLakeTableSnapshotInfo(GetLatestLakeSnapshotResponse response) {
-        LakeStorageInfo lakeStorageInfo = toLakeStorageInfo(response.getLakehouseStorageInfo());
         long tableId = response.getTableId();
         long snapshotId = response.getSnapshotId();
         Map<TableBucket, Long> tableBucketsOffset =
@@ -298,7 +294,7 @@ public class ClientRpcMessageUtils {
                     new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
             tableBucketsOffset.put(tableBucket, pbLakeSnapshotForBucket.getLogOffset());
         }
-        return new LakeSnapshot(lakeStorageInfo, snapshotId, tableBucketsOffset);
+        return new LakeSnapshot(snapshotId, tableBucketsOffset);
     }
 
     public static List<FsPathAndFileName> toFsPathAndFileName(
@@ -426,16 +422,6 @@ public class ClientRpcMessageUtils {
                                         pbPartitionInfo.getPartitionId(),
                                         pbPartitionInfo.getPartitionName()))
                 .collect(Collectors.toList());
-    }
-
-    public static LakeStorageInfo toLakeStorageInfo(DescribeLakeStorageResponse response) {
-        return toLakeStorageInfo(response.getLakehouseStorageInfo());
-    }
-
-    private static LakeStorageInfo toLakeStorageInfo(PbLakeStorageInfo pbLakeStorageInfo) {
-        Map<String, String> dataLakeCatalogConfig =
-                toKeyValueMap(pbLakeStorageInfo.getCatalogPropertiesList());
-        return new LakeStorageInfo(pbLakeStorageInfo.getLakeStorageType(), dataLakeCatalogConfig);
     }
 
     public static Map<String, String> toKeyValueMap(List<PbKeyValue> pbKeyValues) {

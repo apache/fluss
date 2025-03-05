@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -34,6 +35,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.utils.LakeStorageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
@@ -62,9 +64,17 @@ public class MetadataManager {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
 
     private final ZooKeeperClient zookeeperClient;
+    private @Nullable final Map<String, String> defaultTableLakeOptions;
 
-    public MetadataManager(ZooKeeperClient zookeeperClient) {
+    /**
+     * Creates a new metadata manager.
+     *
+     * @param zookeeperClient the zookeeper client
+     * @param conf the cluster configuration
+     */
+    public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
+        this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
     }
 
     public void createDatabase(
@@ -250,12 +260,6 @@ public class MetadataManager {
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
-        return getTable(tablePath, null);
-    }
-
-    public TableInfo getTable(
-            TablePath tablePath, @Nullable Map<String, String> additionalProperties)
-            throws TableNotExistException {
         Optional<TableRegistration> optionalTable;
         try {
             optionalTable = zookeeperClient.getTable(tablePath);
@@ -267,7 +271,7 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        return tableReg.toTableInfo(tablePath, schemaInfo, additionalProperties);
+        return tableReg.toTableInfo(tablePath, schemaInfo, defaultTableLakeOptions);
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {

@@ -36,7 +36,6 @@ import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -372,7 +371,4 @@ public interface Admin extends AutoCloseable {
             PhysicalTablePath physicalTablePath,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec);
-
-    /** Describe the lake used for lakehouse storage. */
-    CompletableFuture<LakeStorageInfo> describeLakeStorage();
 }

@@ -36,8 +36,6 @@ import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
@@ -136,12 +134,6 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
-            DescribeLakeStorageRequest request) {
         throw new UnsupportedOperationException();
     }
 

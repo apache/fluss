@@ -43,7 +43,7 @@ import static com.alibaba.fluss.compression.FlussLZ4BlockOutputStream.MAGIC;
  *
  * <p>This class is not thread-safe.
  */
-public class FlussLZ4BlocakInputStream extends InputStream {
+public class FlussLZ4BlockInputStream extends InputStream {
     public static final String PREMATURE_EOS = "Stream ended prematurely";
     public static final String NOT_SUPPORTED = "Stream unsupported (invalid magic bytes)";
     public static final String BLOCK_HASH_MISMATCH = "Block checksum mismatch";
@@ -82,7 +82,7 @@ public class FlussLZ4BlocakInputStream extends InputStream {
      *
      * @param in The byte buffer to decompress
      */
-    public FlussLZ4BlocakInputStream(ByteBuffer in) throws IOException {
+    public FlussLZ4BlockInputStream(ByteBuffer in) throws IOException {
         if (BROKEN_LZ4_EXCEPTION != null) {
             throw BROKEN_LZ4_EXCEPTION;
         }

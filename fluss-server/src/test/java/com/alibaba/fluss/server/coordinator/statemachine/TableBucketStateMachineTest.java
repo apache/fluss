@@ -98,7 +98,7 @@ class TableBucketStateMachineTest {
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
-                        new MetadataManager(zookeeperClient),
+                        new MetadataManager(zookeeperClient, new Configuration()),
                         new Configuration());
     }
 
