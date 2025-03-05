@@ -56,8 +56,8 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          editUrl: ({versionDocsDirPath, docPath}) =>
-              `https://github.com/alibaba/fluss/tree/main/website/docs/${docPath}`,
+          editUrl: ({docPath}) =>
+              `https://github.com/alibaba/fluss/edit/main/website/docs/${docPath}`,
           remarkPlugins: [versionReplace],
         },
         blog: {
@@ -77,6 +77,19 @@ const config: Config = {
     ],
   ],
   plugins: [
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'community',
+        path: 'community',
+        routeBasePath: 'community',
+        sidebarPath: './sidebarsCommunity.js',
+        editUrl: ({docPath}) => {
+          return `https://github.com/alibaba/fluss/edit/main/website/community/${docPath}`;
+        },
+        // ... other options
+      },
+    ],
     [
       '@docusaurus/plugin-pwa',
       {
@@ -115,7 +128,7 @@ const config: Config = {
           label: 'Docs',
         },
         {to: '/blog', label: 'Blog', position: 'left'},
-        {to: '/community', label: 'Community', position: 'left'},
+        {to: '/community/welcome', label: 'Community', position: 'left'},
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
         {

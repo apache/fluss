@@ -33,7 +33,7 @@ This transition aims to streamline operations and enhance system reliability.
 
 - Support for complex data types: Array ([#168](https://github.com/alibaba/fluss/issues/168)), Map ([#169](https://github.com/alibaba/fluss/issues/169)), Struct ([#170](https://github.com/alibaba/fluss/issues/170)), Variant/JSON.
 - Support for schema evolution.
-- Support for secondary index for Delta Join with Flink ([#65](https://github.com/alibaba/fluss/issues/65)).
+- Support for secondary index for Delta Join with Flink (~~[#65](https://github.com/alibaba/fluss/issues/65)~~).
 - Support for buckets rescale.
 
 ## Zero Disks

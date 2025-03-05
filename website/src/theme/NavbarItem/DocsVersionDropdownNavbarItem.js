@@ -22,7 +22,7 @@ import useRouteContext from '@docusaurus/useRouteContext';
 export default function DocsVersionDropdownNavbarItemWrapper(props) {
     const {plugin} = useRouteContext();
 
-    if (plugin.name === "docusaurus-plugin-content-docs") {
+    if (plugin.name === "docusaurus-plugin-content-docs" && plugin.id !== "community") {
         return (
             <>
                 <DocsVersionDropdownNavbarItem {...props} />
