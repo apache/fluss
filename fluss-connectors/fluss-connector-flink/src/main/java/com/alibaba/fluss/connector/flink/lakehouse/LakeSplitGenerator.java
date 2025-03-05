@@ -17,7 +17,7 @@
 package com.alibaba.fluss.connector.flink.lakehouse;
 
 import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
+import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
 import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer;
@@ -47,7 +47,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -80,8 +80,8 @@ public class LakeSplitGenerator {
     }
 
     public List<SourceSplitBase> generateLakeSplits() throws Exception {
-        // get the file store store
-        LakeTableSnapshotInfo lakeSnapshotInfo = flussAdmin.getLakeTableSnapshot(tablePath).get();
+        // get the file store
+        LakeSnapshot lakeSnapshotInfo = flussAdmin.getLatestLakeSnapshot(tablePath).get();
         FileStoreTable fileStoreTable =
                 getTable(
                         lakeSnapshotInfo.getSnapshotId(),
@@ -145,7 +145,7 @@ public class LakeSplitGenerator {
         List<SourceSplitBase> splits = new ArrayList<>();
         FileStoreSourceSplitGenerator splitGenerator = new FileStoreSourceSplitGenerator();
         if (isLogTable) {
-            // it's log table, we don't care about bucket and we can't get bucket in paimon's
+            // it's log table, we don't care about bucket, and we can't get bucket in paimon's
             // dynamic bucket; so first generate split for the whole paimon snapshot,
             // then generate log split for each bucket paimon snapshot + fluss log
             splits.addAll(

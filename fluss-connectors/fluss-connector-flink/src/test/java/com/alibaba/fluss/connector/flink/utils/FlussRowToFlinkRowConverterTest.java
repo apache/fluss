@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.utils;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.row.indexed.IndexedRowWriter;
 import com.alibaba.fluss.types.DataType;

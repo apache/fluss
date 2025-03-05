@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.ByteColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TinyIntVector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for TinyInt. */
 @Internal
@@ -28,7 +29,7 @@ public class ArrowTinyIntColumnVector implements ByteColumnVector {
     private final TinyIntVector tinyIntVector;
 
     public ArrowTinyIntColumnVector(TinyIntVector tinyIntVector) {
-        this.tinyIntVector = Preconditions.checkNotNull(tinyIntVector);
+        this.tinyIntVector = checkNotNull(tinyIntVector);
     }
 
     @Override

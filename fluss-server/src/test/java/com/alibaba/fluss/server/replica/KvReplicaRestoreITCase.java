@@ -43,7 +43,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -82,10 +82,7 @@ class KvReplicaRestoreITCase {
         for (int i = 0; i < tableNum; i++) {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId =
-                    createTable(
-                            FLUSS_CLUSTER_EXTENSION,
-                            tablePath,
-                            DATA1_TABLE_INFO_PK.getTableDescriptor());
+                    createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
             }
@@ -116,7 +113,7 @@ class KvReplicaRestoreITCase {
         final int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
         Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
 
-        int recordsNum = 3000;
+        int recordsNum = 10000;
         // create pretty many records to make can flush to file
         List<KvRecord> records = new ArrayList<>(recordsNum);
         for (int i = 0; i < recordsNum; i++) {
@@ -140,7 +137,11 @@ class KvReplicaRestoreITCase {
                     return false;
                 },
                 Duration.ofMinutes(2),
-                "Fail to wait for the replica to restore in another server");
+                "Fail to wait for the replica to restore in another server. "
+                        + "Previous leader is "
+                        + leaderServer
+                        + ", restored leader is "
+                        + newLeaderServer.get());
         // wait the new replica become leader
         TabletServerGateway leaderGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeaderServer.get());

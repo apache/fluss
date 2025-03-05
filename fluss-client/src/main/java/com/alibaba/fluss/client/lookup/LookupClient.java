@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,18 +56,18 @@ public class LookupClient {
 
     private final LookupQueue lookupQueue;
 
-    private final ExecutorService lookupSenderTheadPool;
+    private final ExecutorService lookupSenderThreadPool;
     private final LookupSender lookupSender;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
         this.lookupQueue = new LookupQueue(conf);
-        this.lookupSenderTheadPool = createThreadPool();
+        this.lookupSenderThreadPool = createThreadPool();
         this.lookupSender =
                 new LookupSender(
                         metadataUpdater,
                         lookupQueue,
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE));
-        lookupSenderTheadPool.submit(lookupSender);
+        lookupSenderThreadPool.submit(lookupSender);
     }
 
     private ExecutorService createThreadPool() {
@@ -76,9 +77,15 @@ public class LookupClient {
     }
 
     public CompletableFuture<byte[]> lookup(TableBucket tableBucket, byte[] keyBytes) {
-        Lookup lookup = new Lookup(tableBucket, keyBytes);
+        LookupQuery lookup = new LookupQuery(tableBucket, keyBytes);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
+    }
+
+    public CompletableFuture<List<byte[]>> prefixLookup(TableBucket tableBucket, byte[] keyBytes) {
+        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tableBucket, keyBytes);
+        lookupQueue.appendLookup(prefixLookup);
+        return prefixLookup.future();
     }
 
     public void close(Duration timeout) {
@@ -88,20 +95,20 @@ public class LookupClient {
             lookupSender.initiateClose();
         }
 
-        if (lookupSenderTheadPool != null) {
-            lookupSenderTheadPool.shutdown();
+        if (lookupSenderThreadPool != null) {
+            lookupSenderThreadPool.shutdown();
             try {
-                if (lookupSenderTheadPool.awaitTermination(
+                if (lookupSenderThreadPool.awaitTermination(
                         timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                    lookupSenderTheadPool.shutdownNow();
+                    lookupSenderThreadPool.shutdownNow();
 
-                    if (!lookupSenderTheadPool.awaitTermination(
+                    if (!lookupSenderThreadPool.awaitTermination(
                             timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                         LOG.error("Failed to shutdown lookup client.");
                     }
                 }
             } catch (InterruptedException e) {
-                lookupSenderTheadPool.shutdownNow();
+                lookupSenderThreadPool.shutdownNow();
                 Thread.currentThread().interrupt();
             }
         }

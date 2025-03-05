@@ -126,7 +126,7 @@ public class TestInternalRowGenerator {
         for (int i = 0; i < dataTypes.length; i++) {
             rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(indexedRow));
         }
-        return (CompactedRow) rowEncoder.finishRow();
+        return rowEncoder.finishRow();
     }
 
     private static void setRandomNull(

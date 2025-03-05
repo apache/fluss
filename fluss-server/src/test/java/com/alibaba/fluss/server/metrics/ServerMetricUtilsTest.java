@@ -203,7 +203,7 @@ public class ServerMetricUtilsTest {
     private static class Dummy {}
 
     /**
-     * Define an new class using {@link Dummy} class's name and bytecode to consume Metaspace and
+     * Define a new class using {@link Dummy} class's name and bytecode to consume Metaspace and
      * NonHeap memory.
      */
     private static Class<?> redefineDummyClass() throws ClassNotFoundException {

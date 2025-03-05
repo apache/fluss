@@ -18,12 +18,13 @@ package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.Closeable;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /**
- * A wrapper for curatorFramework and unHandledErrorListener which should be unregister from
+ * A wrapper for curatorFramework and unHandledErrorListener which should be unregistered from
  * curatorFramework before closing it.
  */
 public class CuratorFrameworkWithUnhandledErrorListener implements Closeable {
@@ -34,8 +35,8 @@ public class CuratorFrameworkWithUnhandledErrorListener implements Closeable {
 
     public CuratorFrameworkWithUnhandledErrorListener(
             CuratorFramework client, UnhandledErrorListener listener) {
-        this.client = Preconditions.checkNotNull(client);
-        this.listener = Preconditions.checkNotNull(listener);
+        this.client = checkNotNull(client);
+        this.listener = checkNotNull(listener);
     }
 
     @Override

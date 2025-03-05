@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,41 +16,12 @@
 
 package com.alibaba.fluss.client.write;
 
-import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
 /** Bucket assigner interface. */
-@Internal
-public interface BucketAssigner {
-
-    /**
-     * Assign the bucket for the given key. The key may be null.
-     *
-     * @param key the key
-     * @param cluster the cluster
-     * @return the bucket id
-     * @deprecated use {@link #assignBucket(byte[], InternalRow, Cluster)} instead.
-     */
-    @Deprecated
-    int assignBucket(@Nullable byte[] key, Cluster cluster);
-
-    /**
-     * Assign the bucket for the given row with given key.
-     *
-     * <p>TODO: use {@link com.alibaba.fluss.row.BinaryRow} for the bucket key to replace byte[] and
-     * row parameters.
-     *
-     * @param key the key
-     * @param row the row
-     * @param cluster the cluster
-     * @return the bucket id
-     */
-    default int assignBucket(@Nullable byte[] key, InternalRow row, Cluster cluster) {
-        return assignBucket(key, cluster);
-    }
+interface BucketAssigner {
 
     /**
      * When append record to record accumulator, whether the record accumulator need to abort this
@@ -65,8 +36,14 @@ public interface BucketAssigner {
      * @param cluster The current cluster metadata
      * @param prevBucketId The bucket previously selected for the record that triggered a new batch
      */
-    default void onNewBatch(Cluster cluster, int prevBucketId) {}
+    void onNewBatch(Cluster cluster, int prevBucketId);
 
-    /** This is called when bucket assigner is closed. */
-    void close();
+    /**
+     * Assign the bucket the given bucket key.
+     *
+     * @param bucketKey the bucket key
+     * @param cluster the cluster
+     * @return the bucket id
+     */
+    int assignBucket(@Nullable byte[] bucketKey, Cluster cluster);
 }

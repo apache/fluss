@@ -34,7 +34,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.function.Function;
 
-/** JUnit extension to customize the classloader that a test is run with. */
+/** JUnit's extension to customize the classloader that a test is run with. */
 public class ContextClassLoaderExtension implements BeforeAllCallback, AfterAllCallback {
 
     private File tempDir;

@@ -81,7 +81,24 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
-
+  plugins: [
+    [
+      '@docusaurus/plugin-pwa',
+      {
+          debug: true,
+          offlineModeActivationStrategies: [
+            'appInstalled',
+            'standalone',
+            'queryString',
+          ],
+          pwaHead: [
+            { tagName: 'link', rel: 'icon', href: '/img/logo.svg' },
+            { tagName: 'link', rel: 'manifest', href: '/manifest.json' },
+            { tagName: 'meta', name: 'theme-color', content: '#0071e3' },
+          ],
+      },
+    ],
+  ],
   themeConfig: {
     // Replace with your project's social card
     image: 'img/docusaurus-social-card.jpg',
@@ -124,9 +141,9 @@ const config: Config = {
       darkTheme: prismThemes.dracula,
     },
     algolia: {
-      appId: "xx",
-      apiKey: "yy",
-      indexName: "fluss",
+      appId: "D8RXQUTC99",
+      apiKey: "8039cbe25ae878764cbace303aa800e0",
+      indexName: "alibabaio",
       contextualSearch: true,
     },
   } satisfies Preset.ThemeConfig,

@@ -30,6 +30,7 @@ public class PaimonSnapshotAndFlussLogSplitState extends SourceSplitState {
             PaimonSnapshotAndFlussLogSplit paimonSnapshotAndFlussLogSplit) {
         super(paimonSnapshotAndFlussLogSplit);
         this.paimonSnapshotAndFlussLogSplit = paimonSnapshotAndFlussLogSplit;
+        this.recordsToSkip = paimonSnapshotAndFlussLogSplit.getRecordsToSkip();
     }
 
     public void setRecordsToSkip(long recordsToSkip) {

@@ -26,7 +26,6 @@ import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +48,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -245,9 +246,9 @@ public class ServerMetricUtils {
 
         private AttributeGauge(
                 MBeanServer server, ObjectName objectName, String attributeName, T errorValue) {
-            this.server = Preconditions.checkNotNull(server);
-            this.objectName = Preconditions.checkNotNull(objectName);
-            this.attributeName = Preconditions.checkNotNull(attributeName);
+            this.server = checkNotNull(server);
+            this.objectName = checkNotNull(objectName);
+            this.attributeName = checkNotNull(attributeName);
             this.errorValue = errorValue;
         }
 

@@ -37,4 +37,39 @@ public class MathUtilsTest {
 
         assertThat(log2strict(16)).isEqualTo(4);
     }
+
+    @Test
+    void testCeilDiv() {
+        assertThat(MathUtils.ceilDiv(10, 3)).isEqualTo(4);
+        assertThat(MathUtils.ceilDiv(10, 10)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 1)).isEqualTo(10);
+        assertThat(MathUtils.ceilDiv(10, 5)).isEqualTo(2);
+        assertThat(MathUtils.ceilDiv(10, 6)).isEqualTo(2);
+        assertThat(MathUtils.ceilDiv(10, 7)).isEqualTo(2);
+        assertThat(MathUtils.ceilDiv(10, 8)).isEqualTo(2);
+        assertThat(MathUtils.ceilDiv(10, 9)).isEqualTo(2);
+        assertThat(MathUtils.ceilDiv(10, 10)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 11)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 12)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 13)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 14)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 15)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 16)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 17)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 18)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 19)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 20)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 21)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 22)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 23)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 24)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 25)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 26)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 27)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 28)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 29)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 30)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 31)).isEqualTo(1);
+        assertThat(MathUtils.ceilDiv(10, 32)).isEqualTo(1);
+    }
 }

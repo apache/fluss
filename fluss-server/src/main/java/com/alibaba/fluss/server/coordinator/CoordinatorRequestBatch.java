@@ -53,6 +53,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTableBucket;
+
 /** A request sender for coordinator server to request to tablet server by batch. */
 public class CoordinatorRequestBatch {
 
@@ -316,13 +318,7 @@ public class CoordinatorRequestBatch {
                         for (PbNotifyLeaderAndIsrRespForBucket protoNotifyLeaderRespForBucket :
                                 response.getNotifyBucketsLeaderRespsList()) {
                             TableBucket tableBucket =
-                                    new TableBucket(
-                                            protoNotifyLeaderRespForBucket
-                                                    .getTableBucket()
-                                                    .getTableId(),
-                                            protoNotifyLeaderRespForBucket
-                                                    .getTableBucket()
-                                                    .getBucketId());
+                                    toTableBucket(protoNotifyLeaderRespForBucket.getTableBucket());
                             // construct the result for notify bucket leader and isr
                             NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket =
                                     protoNotifyLeaderRespForBucket.hasErrorCode()
@@ -360,7 +356,7 @@ public class CoordinatorRequestBatch {
             Set<TableBucket> deletedReplicaBuckets =
                     stopReplicas.values().stream()
                             .filter(PbStopReplicaReqForBucket::isDelete)
-                            .map(t -> RpcMessageUtils.toTableBucket(t.getTableBucket()))
+                            .map(t -> toTableBucket(t.getTableBucket()))
                             .collect(Collectors.toSet());
 
             coordinatorChannelManager.sendStopBucketReplicaRequest(
@@ -387,8 +383,7 @@ public class CoordinatorRequestBatch {
                         for (PbStopReplicaRespForBucket stopReplicaRespForBucket :
                                 stopReplicasResps) {
                             TableBucket tableBucket =
-                                    RpcMessageUtils.toTableBucket(
-                                            stopReplicaRespForBucket.getTableBucket());
+                                    toTableBucket(stopReplicaRespForBucket.getTableBucket());
 
                             // now, for stop replica(delete=false), it's best effort without any
                             // error handling.

@@ -26,8 +26,10 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -39,6 +41,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -55,6 +59,8 @@ class CompletedSnapshotStoreManagerTest {
 
     private @TempDir Path tempDir;
 
+    private static ExecutorService ioExecutor;
+
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
@@ -62,11 +68,17 @@ class CompletedSnapshotStoreManagerTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         completedSnapshotHandleStore = new ZooKeeperCompletedSnapshotHandleStore(zookeeperClient);
+        ioExecutor = Executors.newFixedThreadPool(1);
     }
 
     @AfterEach
     void afterEach() {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
+    }
+
+    @AfterAll
+    static void afterAll() {
+        ioExecutor.shutdownNow();
     }
 
     @ParameterizedTest
@@ -137,9 +149,32 @@ class CompletedSnapshotStoreManagerTest {
                 .hasSize(0);
     }
 
+    @Test
+    void testRemoveCompletedSnapshotStoreFromManager() throws Exception {
+        CompletedSnapshotStoreManager completedSnapshotStoreManager =
+                createCompletedSnapshotStoreManager(10);
+        Set<TableBucket> tableBuckets = createTableBuckets(1, 2);
+        int snapshotNum = 3;
+        for (TableBucket tableBucket : tableBuckets) {
+            // add some snapshots
+            for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
+                CompletedSnapshot completedSnapshot =
+                        KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
+            }
+        }
+        // before remove CompletedSnapshotStore
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
+                .isEqualTo(2);
+        // after remove CompletedSnapshotStore
+        completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(tableBuckets);
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+    }
+
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain) {
-        return new CompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain, 1, zookeeperClient);
+        return new CompletedSnapshotStoreManager(
+                maxNumberOfSnapshotsToRetain, ioExecutor, zookeeperClient);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(

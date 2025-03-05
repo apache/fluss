@@ -22,6 +22,12 @@ jark:
 
 giannis:
   name: Giannis Polyzos
-  title: Fluss Lead @ Ververica
+  title: Fluss Contributor
   url: https://github.com/polyzos
   image_url: https://github.com/polyzos.png
+
+yuxia:
+  name: Luo Yuxia
+  title: Fluss Committer
+  url: https://github.com/luoyuxia
+  image_url: https://github.com/luoyuxia.png

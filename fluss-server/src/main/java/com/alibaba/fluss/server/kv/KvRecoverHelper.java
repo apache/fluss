@@ -17,10 +17,10 @@
 package com.alibaba.fluss.server.kv;
 
 import com.alibaba.fluss.exception.KvStorageException;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
@@ -44,8 +44,7 @@ import com.alibaba.fluss.utils.function.ThrowingConsumer;
 
 import javax.annotation.Nullable;
 
-import java.util.List;
-import java.util.Optional;
+import static com.alibaba.fluss.server.TabletManagerBase.getTableInfo;
 
 /** A helper for recovering Kv from log. */
 public class KvRecoverHelper {
@@ -55,7 +54,6 @@ public class KvRecoverHelper {
     private final long recoverPointOffset;
     private final KvRecoverContext recoverContext;
     private final KvFormat kvFormat;
-    private final List<String> partitionedKeys;
 
     // will be initialized when first encounter a log record during recovering from log
     private Integer currentSchemaId;
@@ -71,14 +69,12 @@ public class KvRecoverHelper {
             LogTablet logTablet,
             long recoverPointOffset,
             KvRecoverContext recoverContext,
-            KvFormat kvFormat,
-            List<String> partitionedKeys) {
+            KvFormat kvFormat) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
         this.recoverContext = recoverContext;
         this.kvFormat = kvFormat;
-        this.partitionedKeys = partitionedKeys;
     }
 
     public void recover() throws Exception {
@@ -161,7 +157,7 @@ public class KvRecoverHelper {
                         LogRecord logRecord = logRecordIter.next();
                         if (logRecord.getRowKind() != RowKind.UPDATE_BEFORE) {
                             InternalRow logRow = logRecord.getRow();
-                            byte[] key = keyEncoder.encode(logRow);
+                            byte[] key = keyEncoder.encodeKey(logRow);
                             byte[] value = null;
                             if (logRecord.getRowKind() != RowKind.DELETE) {
                                 // the log row format may not compatible with kv row format,
@@ -201,33 +197,17 @@ public class KvRecoverHelper {
     private void initSchema(int schemaId) throws Exception {
         // todo, may need a cache,
         // but now, we get the schema from zk
-        Optional<SchemaInfo> schemaInfoOpt =
-                recoverContext.zkClient.getSchemaById(recoverContext.tablePath, schemaId);
-        Schema schema =
-                schemaInfoOpt
-                        .orElseThrow(
-                                () ->
-                                        new KvStorageException(
-                                                String.format(
-                                                        "Can't recover kv tablet for table bucket %s since "
-                                                                + "can not get the schema info for table %s with schema id %s. ",
-                                                        recoverContext.tableBucket,
-                                                        recoverContext.tablePath,
-                                                        currentSchemaId)))
-                        .getSchema();
+        TableInfo tableInfo = getTableInfo(recoverContext.zkClient, recoverContext.tablePath);
         // todo: we need to check the schema's table id is equal to the
         // kv tablet's table id or not. If not equal, it means other table with same
         // table path has been created, so the kv tablet's table is consider to be
         // deleted. We can ignore the restore operation
-        currentRowType = schema.toRowType();
+        currentRowType = tableInfo.getRowType();
         DataType[] dataTypes = currentRowType.getChildren().toArray(new DataType[0]);
         currentSchemaId = schemaId;
 
-        keyEncoder =
-                KeyEncoder.createKeyEncoder(
-                        currentRowType,
-                        schema.getPrimaryKey().get().getColumnNames(),
-                        partitionedKeys);
+        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        keyEncoder = KeyEncoder.of(currentRowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
         rowEncoder = RowEncoder.create(kvFormat, dataTypes);
         currentFieldGetters = new InternalRow.FieldGetter[currentRowType.getFieldCount()];
         for (int i = 0; i < currentRowType.getFieldCount(); i++) {

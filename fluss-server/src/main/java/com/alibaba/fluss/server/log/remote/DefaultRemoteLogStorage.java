@@ -263,7 +263,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
 
     private List<CompletableFuture<Void>> createUploadFutures(
             RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles) throws IOException {
-        FsPath rlsPath = creatRemoteLogSegmentDir(remoteLogSegment);
+        FsPath rlsPath = createRemoteLogSegmentDir(remoteLogSegment);
         List<Path> localFiles = logSegmentFiles.getAllPaths();
         List<CompletableFuture<Void>> list = new ArrayList<>();
         for (Path localFile : localFiles) {
@@ -319,7 +319,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         }
     }
 
-    private FsPath creatRemoteLogSegmentDir(RemoteLogSegment remoteLogSegment) throws IOException {
+    private FsPath createRemoteLogSegmentDir(RemoteLogSegment remoteLogSegment) throws IOException {
         FsPath remoteLogSegmentDir = remoteLogSegmentDir(remoteLogDir, remoteLogSegment);
         fileSystem.mkdirs(remoteLogSegmentDir);
         return remoteLogSegmentDir;

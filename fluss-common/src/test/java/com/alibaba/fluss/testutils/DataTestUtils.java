@@ -16,12 +16,14 @@
 
 package com.alibaba.fluss.testutils;
 
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
 import com.alibaba.fluss.memory.TestingMemorySegmentPool;
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
+import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -38,15 +40,15 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.RowKind;
-import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.row.BinaryString;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.row.compacted.CompactedRow;
+import com.alibaba.fluss.row.encode.CompactedKeyEncoder;
 import com.alibaba.fluss.row.encode.CompactedRowEncoder;
-import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.row.encode.RowEncoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.row.indexed.IndexedRow;
@@ -86,8 +88,25 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Utils for data related test. like create {@link IndexedRow} and create {@link MemoryLogRecords}.
  */
 public class DataTestUtils {
+
+    public static GenericRow row(Object... objects) {
+        GenericRow row = new GenericRow(objects.length);
+        for (int i = 0; i < objects.length; i++) {
+            if (objects[i] instanceof String) {
+                row.setField(i, BinaryString.fromString((String) objects[i]));
+            } else {
+                row.setField(i, objects[i]);
+            }
+        }
+        return row;
+    }
+
     public static CompactedRow compactedRow(RowType rowType, Object[] objects) {
         return genCompacted(rowType, objects);
+    }
+
+    public static IndexedRow indexedRow(RowType rowType, Object[] objects) {
+        return genIndexed(rowType, objects);
     }
 
     /**
@@ -95,11 +114,11 @@ public class DataTestUtils {
      */
     public static IndexedRow keyRow(Schema schema, Object[] objects) {
         int[] pkIndex = schema.getPrimaryKeyIndexes();
-        RowType rowType = schema.toRowType();
-        return row(rowType, objects).projectRow(pkIndex);
+        RowType rowType = schema.getRowType();
+        return genIndexed(rowType, objects).projectRow(pkIndex);
     }
 
-    public static IndexedRow row(RowType rowType, Object[] data) {
+    private static IndexedRow genIndexed(RowType rowType, Object[] data) {
         DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
         assertThat(dataTypes.length).isEqualTo(data.length);
         RowEncoder rowEncoder = RowEncoder.create(KvFormat.INDEXED, dataTypes);
@@ -132,7 +151,12 @@ public class DataTestUtils {
     public static MemoryLogRecords genMemoryLogRecordsByObject(List<Object[]> objects)
             throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, 0, System.currentTimeMillis(), objects);
+                DATA1_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                0,
+                System.currentTimeMillis(),
+                objects,
+                LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genMemoryLogRecordsWithWriterId(
@@ -148,7 +172,8 @@ public class DataTestUtils {
                 writerId,
                 batchSequence,
                 rowKinds,
-                objects);
+                objects,
+                LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genIndexedMemoryLogRecords(List<IndexedRow> rows)
@@ -168,34 +193,49 @@ public class DataTestUtils {
     public static MemoryLogRecords genMemoryLogRecordsWithBaseOffset(
             long offsetBase, List<Object[]> objects) throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, -1L, objects);
+                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, -1L, objects, LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genLogRecordsWithBaseOffsetAndTimestamp(
             long offsetBase, long maxTimestamp, List<Object[]> objects) throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, maxTimestamp, objects);
+                DATA1_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                offsetBase,
+                maxTimestamp,
+                objects,
+                LogFormat.ARROW);
     }
 
     public static KvRecordBatch genKvRecordBatch(List<Tuple2<Object[], Object[]>> keyAndValues)
             throws Exception {
-        return genKvRecordBatchWithWriterId(keyAndValues, NO_WRITER_ID, NO_BATCH_SEQUENCE);
+        return genKvRecordBatch(DATA1_KEY_TYPE, DATA1_ROW_TYPE, keyAndValues);
+    }
+
+    public static KvRecordBatch genKvRecordBatch(
+            RowType keyType, RowType valueType, List<Tuple2<Object[], Object[]>> keyAndValues)
+            throws Exception {
+        return genKvRecordBatchWithWriterId(
+                keyAndValues, keyType, valueType, NO_WRITER_ID, NO_BATCH_SEQUENCE);
     }
 
     public static KvRecordBatch genKvRecordBatchWithWriterId(
-            List<Tuple2<Object[], Object[]>> keyAndValues, long writerId, int batchSequence)
+            List<Tuple2<Object[], Object[]>> keyAndValues,
+            RowType keyType,
+            RowType valueType,
+            long writerId,
+            int batchSequence)
             throws Exception {
-        KeyEncoder keyEncoder = new KeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(keyType);
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
                 KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+                KvRecordTestUtils.KvRecordFactory.of(valueType);
         List<KvRecord> records = new ArrayList<>();
         for (Tuple2<Object[], Object[]> keyAndValue : keyAndValues) {
             records.add(
                     kvRecordFactory.ofRecord(
-                            keyEncoder.encode(row(DATA1_KEY_TYPE, keyAndValue.f0)),
-                            keyAndValue.f1));
+                            keyEncoder.encodeKey(row(keyAndValue.f0)), keyAndValue.f1));
         }
         return kvRecordBatchFactory.ofRecords(records, writerId, batchSequence);
     }
@@ -246,11 +286,20 @@ public class DataTestUtils {
                 remoteLogTabletDir(remoteLogDir(conf), physicalTablePath, tableBucket);
         FsPath remoteLogSegmentDir =
                 remoteLogSegmentDir(remoteLogTabletDir, remoteLogSegment.remoteLogSegmentId());
-        genLogFile(DATA1_ROW_TYPE, new File(remoteLogSegmentDir.toString()), DATA1, baseOffset);
+        genLogFile(
+                DATA1_ROW_TYPE,
+                new File(remoteLogSegmentDir.toString()),
+                DATA1,
+                baseOffset,
+                LogFormat.ARROW);
     }
 
     public static File genLogFile(
-            RowType rowType, File segmentDir, List<Object[]> objects, long baseOffset)
+            RowType rowType,
+            File segmentDir,
+            List<Object[]> objects,
+            long baseOffset,
+            LogFormat logFormat)
             throws Exception {
         if (!segmentDir.exists()) {
             segmentDir.mkdirs();
@@ -264,7 +313,8 @@ public class DataTestUtils {
                         DEFAULT_SCHEMA_ID,
                         baseOffset,
                         System.currentTimeMillis(),
-                        objects));
+                        objects,
+                        logFormat));
         fileLogRecords.flush();
         fileLogRecords.close();
         return logFile;
@@ -277,7 +327,7 @@ public class DataTestUtils {
     public static List<KvRecord> genKvRecords(Object[]... values) {
         KvRecordTestUtils.PKBasedKvRecordFactory kvRecordFactory =
                 KvRecordTestUtils.PKBasedKvRecordFactory.of(
-                        DATA1_SCHEMA_PK.toRowType(), DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
+                        DATA1_SCHEMA_PK.getRowType(), DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
         List<KvRecord> records = new ArrayList<>();
         for (Object[] value : values) {
             records.add(kvRecordFactory.ofRecord(value));
@@ -305,7 +355,8 @@ public class DataTestUtils {
             int schemaId,
             long offsetBase,
             long maxTimestamp,
-            List<Object[]> objects)
+            List<Object[]> objects,
+            LogFormat logFormat)
             throws Exception {
         List<RowKind> rowKinds =
                 objects.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
@@ -317,7 +368,8 @@ public class DataTestUtils {
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 rowKinds,
-                objects);
+                objects,
+                logFormat);
     }
 
     public static MemoryLogRecords createBasicMemoryLogRecords(
@@ -328,19 +380,56 @@ public class DataTestUtils {
             long writerId,
             int batchSequence,
             List<RowKind> rowKinds,
-            List<Object[]> objects)
+            List<Object[]> objects,
+            LogFormat logFormat)
             throws Exception {
-        List<InternalRow> rows =
-                objects.stream().map(object -> row(rowType, object)).collect(Collectors.toList());
-        return createArrowMemoryLogRecords(
+        return createMemoryLogRecords(
                 rowType,
+                schemaId,
                 offsetBase,
                 maxTimestamp,
-                schemaId,
                 writerId,
                 batchSequence,
                 rowKinds,
-                rows);
+                objects,
+                logFormat);
+    }
+
+    public static MemoryLogRecords createMemoryLogRecords(
+            RowType rowType,
+            int schemaId,
+            long offsetBase,
+            long maxTimestamp,
+            long writerId,
+            int batchSequence,
+            List<RowKind> rowKinds,
+            List<Object[]> objects,
+            LogFormat logFormat)
+            throws Exception {
+        if (logFormat == LogFormat.ARROW) {
+            List<InternalRow> rows =
+                    objects.stream().map(DataTestUtils::row).collect(Collectors.toList());
+            return createArrowMemoryLogRecords(
+                    rowType,
+                    offsetBase,
+                    maxTimestamp,
+                    schemaId,
+                    writerId,
+                    batchSequence,
+                    rowKinds,
+                    rows);
+        } else {
+            return createIndexedMemoryLogRecords(
+                    offsetBase,
+                    maxTimestamp,
+                    schemaId,
+                    writerId,
+                    batchSequence,
+                    rowKinds,
+                    objects.stream()
+                            .map(object -> indexedRow(rowType, object))
+                            .collect(Collectors.toList()));
+        }
     }
 
     private static MemoryLogRecords createIndexedMemoryLogRecords(
@@ -352,7 +441,7 @@ public class DataTestUtils {
             List<RowKind> rowKinds,
             List<IndexedRow> rows)
             throws Exception {
-        MemorySegmentOutputView outputView = new MemorySegmentOutputView(100);
+        UnmanagedPagedOutputView outputView = new UnmanagedPagedOutputView(100);
         MemoryLogRecordsIndexedBuilder builder =
                 MemoryLogRecordsIndexedBuilder.builder(
                         baseLogOffset, schemaId, Integer.MAX_VALUE, DEFAULT_MAGIC, outputView);
@@ -360,11 +449,12 @@ public class DataTestUtils {
             builder.append(rowKinds.get(i), rows.get(i));
         }
         builder.setWriterState(writerId, batchSequence);
-        MemoryLogRecords memoryLogRecords = builder.build();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         memoryLogRecords.ensureValid();
 
         ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                 .setCommitTimestamp(maxTimestamp);
+        builder.close();
         return memoryLogRecords;
     }
 
@@ -381,7 +471,12 @@ public class DataTestUtils {
         try (BufferAllocator allocator = new RootAllocator(Integer.MAX_VALUE);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator)) {
             ArrowWriter writer =
-                    provider.getOrCreateWriter(1L, schemaId, Integer.MAX_VALUE, rowType);
+                    provider.getOrCreateWriter(
+                            1L,
+                            schemaId,
+                            Integer.MAX_VALUE,
+                            rowType,
+                            ArrowCompressionInfo.NO_COMPRESSION);
             MemoryLogRecordsArrowBuilder builder =
                     MemoryLogRecordsArrowBuilder.builder(
                             baseLogOffset,
@@ -393,10 +488,7 @@ public class DataTestUtils {
             }
             builder.setWriterState(writerId, batchSequence);
             builder.close();
-            builder.serialize();
-            MultiBytesView bytesView = builder.build();
-            MemoryLogRecords memoryLogRecords =
-                    MemoryLogRecords.pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
+            MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
 
             ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                     .setCommitTimestamp(maxTimestamp);
@@ -436,6 +528,21 @@ public class DataTestUtils {
             }
         }
         assertThat(iterator.hasNext()).isFalse();
+    }
+
+    public static void assertLogRecordBatchEqualsWithRowKind(
+            RowType rowType,
+            LogRecordBatch logRecordBatch,
+            List<Tuple2<RowKind, Object[]>> expected) {
+        try (LogRecordReadContext readContext = createArrowReadContext(rowType, DEFAULT_SCHEMA_ID);
+                CloseableIterator<LogRecord> logIterator = logRecordBatch.records(readContext)) {
+            for (Tuple2<RowKind, Object[]> expectedFieldAndRowKind : expected) {
+                assertThat(logIterator.hasNext()).isTrue();
+                assertLogRecordsEqualsWithRowKind(
+                        rowType, logIterator.next(), expectedFieldAndRowKind);
+            }
+            assertThat(logIterator.hasNext()).isFalse();
+        }
     }
 
     public static void assertLogRecordsEquals(LogRecords actual, LogRecords expected) {

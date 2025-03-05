@@ -17,7 +17,6 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.exception.InvalidConfigException;
 
 import java.lang.reflect.Field;
 import java.util.HashMap;
@@ -33,39 +32,6 @@ public class FlussConfigUtils {
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
-    }
-
-    /** Validate all table properties are known to Fluss and property values are valid. */
-    public static void validateTableProperties(Map<String, String> tableProperties) {
-        Configuration conf = Configuration.fromMap(tableProperties);
-        for (String key : tableProperties.keySet()) {
-            if (!TABLE_OPTIONS.containsKey(key)) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
-                                key));
-            }
-            ConfigOption<?> option = TABLE_OPTIONS.get(key);
-            validateOptionValue(conf, option);
-        }
-
-        if (conf.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS) <= 0) {
-            throw new InvalidConfigException(
-                    String.format(
-                            "'%s' must be greater than 0.",
-                            ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
-        }
-    }
-
-    private static void validateOptionValue(ReadableConfig options, ConfigOption<?> option) {
-        try {
-            options.get(option);
-        } catch (Throwable t) {
-            throw new InvalidConfigException(
-                    String.format(
-                            "Invalid value for config '%s'. Reason: %s",
-                            option.key(), t.getMessage()));
-        }
     }
 
     private static Map<String, ConfigOption<?>> extractConfigOptions(String prefix) {

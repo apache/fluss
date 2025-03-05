@@ -189,7 +189,7 @@ public class FsPath implements Serializable {
         }
 
         // uri path is the rest of the string -- query & fragment not supported
-        final String path = pathString.substring(start, pathString.length());
+        final String path = pathString.substring(start);
 
         initialize(scheme, authority, path);
     }

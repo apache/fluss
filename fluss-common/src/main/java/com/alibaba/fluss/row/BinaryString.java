@@ -22,7 +22,6 @@ import com.alibaba.fluss.memory.MemorySegment;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
@@ -393,11 +392,11 @@ public final class BinaryString extends BinarySection
         if (inFirstSegment()) {
             int s = 0;
             int e = this.sizeInBytes - 1;
-            // skip all of the space (0x20) in the left side
+            // skip all the space (0x20) on the left side
             while (s < this.sizeInBytes && getByteOneSegment(s) == 0x20) {
                 s++;
             }
-            // skip all of the space (0x20) in the right side
+            // skip all the space (0x20) on the right side
             while (e >= s && getByteOneSegment(e) == 0x20) {
                 e--;
             }
@@ -417,13 +416,13 @@ public final class BinaryString extends BinarySection
         int e = this.sizeInBytes - 1;
         int segSize = segments[0].size();
         BinaryString.SegmentAndOffset front = firstSegmentAndOffset(segSize);
-        // skip all of the space (0x20) in the left side
+        // skip all the space (0x20) on the left side
         while (s < this.sizeInBytes && front.value() == 0x20) {
             s++;
             front.nextByte(segSize);
         }
         BinaryString.SegmentAndOffset behind = lastSegmentAndOffset(segSize);
-        // skip all of the space (0x20) in the right side
+        // skip all the space (0x20) on the right side
         while (e >= s && behind.value() == 0x20) {
             e--;
             behind.previousByte(segSize);
@@ -525,7 +524,7 @@ public final class BinaryString extends BinarySection
                 // fallback
                 return javaToUpperCase();
             }
-            int upper = Character.toUpperCase((int) b);
+            int upper = Character.toUpperCase(b);
             if (upper > 127) {
                 // fallback
                 return javaToUpperCase();
@@ -559,7 +558,7 @@ public final class BinaryString extends BinarySection
                 // fallback
                 return javaToLowerCase();
             }
-            int lower = Character.toLowerCase((int) b);
+            int lower = Character.toLowerCase(b);
             if (lower > 127) {
                 // fallback
                 return javaToLowerCase();
@@ -808,13 +807,9 @@ public final class BinaryString extends BinarySection
     }
 
     public static int defaultEncodeUTF8(String str, byte[] bytes) {
-        try {
-            byte[] buffer = str.getBytes("UTF-8");
-            System.arraycopy(buffer, 0, bytes, 0, buffer.length);
-            return buffer.length;
-        } catch (UnsupportedEncodingException e) {
-            throw new RuntimeException("encodeUTF8 error", e);
-        }
+        byte[] buffer = str.getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(buffer, 0, bytes, 0, buffer.length);
+        return buffer.length;
     }
 
     public static String decodeUTF8(byte[] input, int offset, int byteLen) {

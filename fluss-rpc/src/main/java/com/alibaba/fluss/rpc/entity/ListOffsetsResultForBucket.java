@@ -62,4 +62,16 @@ public class ListOffsetsResultForBucket extends ResultForBucket {
         ListOffsetsResultForBucket that = (ListOffsetsResultForBucket) o;
         return offset == that.offset;
     }
+
+    @Override
+    public String toString() {
+        return "ListOffsetsResultForBucket{"
+                + "offset="
+                + offset
+                + ", tableBucket="
+                + tableBucket
+                + ", error="
+                + error
+                + '}';
+    }
 }

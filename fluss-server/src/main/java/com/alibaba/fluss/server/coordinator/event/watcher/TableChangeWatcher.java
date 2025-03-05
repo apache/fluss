@@ -129,7 +129,9 @@ public class TableChangeWatcher {
                             TablePartition partition = PartitionZNode.decode(oldData.getData());
                             eventManager.put(
                                     new DropPartitionEvent(
-                                            partition.getTableId(), partition.getPartitionId()));
+                                            partition.getTableId(),
+                                            partition.getPartitionId(),
+                                            physicalTablePath.getPartitionName()));
                         } else {
                             // maybe table node is deleted
                             // try to parse the path as a table node
@@ -188,14 +190,8 @@ public class TableChangeWatcher {
                 LOG.error("Fail to get schema for table {}.", tablePath, e);
                 return;
             }
-            eventManager.put(
-                    new CreateTableEvent(
-                            new TableInfo(
-                                    tablePath,
-                                    tableId,
-                                    table.toTableDescriptor(schemaInfo.getSchema()),
-                                    schemaInfo.getSchemaId()),
-                            assignment));
+            TableInfo tableInfo = table.toTableInfo(tablePath, schemaInfo);
+            eventManager.put(new CreateTableEvent(tableInfo, assignment));
         }
 
         private void processCreatePartition(

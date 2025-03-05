@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.IntColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for Int. */
 @Internal
@@ -28,7 +29,7 @@ public class ArrowIntColumnVector implements IntColumnVector {
     private final IntVector intVector;
 
     public ArrowIntColumnVector(IntVector intVector) {
-        this.intVector = Preconditions.checkNotNull(intVector);
+        this.intVector = checkNotNull(intVector);
     }
 
     @Override

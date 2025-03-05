@@ -62,7 +62,7 @@ class SharedKvFileRegistryTest {
         sharedKvFileRegistry.registerReference(
                 SharedKvFileRegistryKey.fromKvFileHandle(placeHolder), placeHolder, 1);
         sharedKvFileRegistry.unregisterUnusedKvFile(1L);
-        // the handle shoudn't be discarded since snapshot1 is still referring to it
+        // the handle shouldn't be discarded since snapshot1 is still referring to it
         assertThat(testKvHandle.discarded).isFalse();
 
         sharedKvFileRegistry.unregisterUnusedKvFile(2L);

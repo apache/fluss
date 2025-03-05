@@ -18,7 +18,6 @@ package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.utils.CollectionUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +30,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -442,8 +443,8 @@ public class Configuration implements Serializable, ReadableConfig {
      */
     public <T extends Enum<T>> T getEnum(
             final Class<T> enumClass, final ConfigOption<String> configOption) {
-        Preconditions.checkNotNull(enumClass, "enumClass must not be null");
-        Preconditions.checkNotNull(configOption, "configOption must not be null");
+        checkNotNull(enumClass, "enumClass must not be null");
+        checkNotNull(configOption, "configOption must not be null");
 
         Object rawValue = getRawValueFromOption(configOption).orElseGet(configOption::defaultValue);
         try {

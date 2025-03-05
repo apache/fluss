@@ -136,9 +136,8 @@ final class LogLoader {
                         File logFile = FlussPaths.logFile(logTabletDir, offset);
                         if (!logFile.exists()) {
                             LOG.warn(
-                                    "Found an orphaned index file "
-                                            + file.getAbsolutePath()
-                                            + ", with no corresponding log file.");
+                                    "Found an orphaned index file {}, with no corresponding log file.",
+                                    file.getAbsolutePath());
                             Files.deleteIfExists(file.toPath());
                         }
                     } else if (LocalLog.isLogFile(file)) {

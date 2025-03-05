@@ -17,12 +17,18 @@
 package com.alibaba.fluss.row.arrow;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.types.RowType;
 
 /** The provider used for requesting and releasing {@link ArrowWriter}. */
 @Internal
 public interface ArrowWriterProvider extends AutoCloseable {
-    ArrowWriter getOrCreateWriter(long tableId, int schemaId, int maxSizeInBytes, RowType schema);
+    ArrowWriter getOrCreateWriter(
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo);
 
     void recycleWriter(ArrowWriter arrowWriter);
 }

@@ -19,18 +19,18 @@ package com.alibaba.fluss.benchmark;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
@@ -95,16 +95,15 @@ public class LogScannerBenchmark {
                                         .build())
                         .distributedBy(1) // 1 bucket for benchmark
                         .build();
-        admin.createDatabase("benchmark_db", false).get();
+        admin.createDatabase("benchmark_db", DatabaseDescriptor.EMPTY, false).get();
         admin.createTable(TablePath.of("benchmark_db", "benchmark_table"), descriptor, false).get();
 
         // produce logs
-        RowType rowType = descriptor.getSchema().toRowType();
         this.table = conn.getTable(TablePath.of("benchmark_db", "benchmark_table"));
-        AppendWriter appendWriter = table.getAppendWriter();
+        AppendWriter appendWriter = table.newAppend().createWriter();
         for (long i = 0; i < RECORDS_SIZE; i++) {
-            Object[] columns = new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
-            appendWriter.append(row(rowType, columns));
+            GenericRow row = row(randomAlphanumeric(10), i, randomAlphanumeric(1000));
+            appendWriter.append(row);
         }
         appendWriter.flush();
     }
@@ -117,14 +116,15 @@ public class LogScannerBenchmark {
     }
 
     @Benchmark
-    public void scanLog() {
-        LogScanner logScanner = table.getLogScanner(new LogScan());
+    public void scanLog() throws Exception {
+        LogScanner logScanner = table.newScan().createLogScanner();
         logScanner.subscribeFromBeginning(0);
         long scanned = 0;
         while (scanned < RECORDS_SIZE) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             scanned += scanRecords.count();
         }
+        logScanner.close();
     }
 
     public static void main(String[] args) throws RunnerException {

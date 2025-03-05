@@ -32,25 +32,26 @@ class OSSWithTokenFileSystemBehaviorITCase extends OSSWithTokenFileSystemBehavio
 
     private static final String TEST_DATA_DIR = "tests-" + UUID.randomUUID();
 
-    private static final FsPath basePath =
-            new FsPath(OSSTestCredentials.getTestBucketUri() + TEST_DATA_DIR);
-
     @BeforeAll
     static void setup() throws Exception {
         // init a filesystem with ak/sk so that it can generate sts token
         initFileSystemWithSecretKey();
         // now, we can init with sts token
-        initFileSystemWithToken();
+        initFileSystemWithToken(getFsPath());
     }
 
     @Override
     protected FileSystem getFileSystem() throws Exception {
-        return basePath.getFileSystem();
+        return getFsPath().getFileSystem();
     }
 
     @Override
     protected FsPath getBasePath() {
-        return basePath;
+        return getFsPath();
+    }
+
+    private static FsPath getFsPath() {
+        return new FsPath(OSSTestCredentials.getTestBucketUri() + TEST_DATA_DIR);
     }
 
     @AfterAll
@@ -58,11 +59,10 @@ class OSSWithTokenFileSystemBehaviorITCase extends OSSWithTokenFileSystemBehavio
         FileSystem.initialize(new Configuration(), null);
     }
 
-    private static void initFileSystemWithToken() throws Exception {
+    private static void initFileSystemWithToken(FsPath fsPath) throws Exception {
         Configuration configuration = new Configuration();
         // obtain a security token and call onNewTokensObtained
-        ObtainedSecurityToken obtainedSecurityToken =
-                basePath.getFileSystem().obtainSecurityToken();
+        ObtainedSecurityToken obtainedSecurityToken = fsPath.getFileSystem().obtainSecurityToken();
         OSSSecurityTokenReceiver ossSecurityTokenReceiver = new OSSSecurityTokenReceiver();
         ossSecurityTokenReceiver.onNewTokensObtained(obtainedSecurityToken);
 

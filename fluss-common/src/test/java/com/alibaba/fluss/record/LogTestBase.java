@@ -80,11 +80,11 @@ public abstract class LogTestBase {
         LogRecordReadContext readContext =
                 LogRecordReadContext.createIndexedReadContext(rowType, TestData.DEFAULT_SCHEMA_ID);
         try (CloseableIterator<LogRecord> actualIter = actual.records(readContext);
-                CloseableIterator<LogRecord> expectIter = expected.records(readContext); ) {
+                CloseableIterator<LogRecord> expectIter = expected.records(readContext)) {
             int i = 0;
             while (actualIter.hasNext() && expectIter.hasNext()) {
-                DefaultLogRecord actualRecord = (DefaultLogRecord) actualIter.next();
-                DefaultLogRecord expectedRecord = (DefaultLogRecord) expectIter.next();
+                IndexedLogRecord actualRecord = (IndexedLogRecord) actualIter.next();
+                IndexedLogRecord expectedRecord = (IndexedLogRecord) expectIter.next();
                 assertIndexedRecordEquals(actualRecord, expectedRecord, rows.get(i), i);
                 i++;
             }

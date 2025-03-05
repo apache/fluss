@@ -17,6 +17,7 @@
 package com.alibaba.fluss.metrics.groups;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
 import com.alibaba.fluss.metrics.Gauge;
@@ -359,6 +360,11 @@ public abstract class AbstractMetricGroup implements MetricGroup {
             default:
                 return new GenericMetricGroup(registry, this, name);
         }
+    }
+
+    @VisibleForTesting
+    public Map<String, Metric> getMetrics() {
+        return metrics;
     }
 
     /**

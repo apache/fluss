@@ -40,7 +40,15 @@ public class OSSTestCredentials {
     // ------------------------------------------------------------------------
 
     public static boolean credentialsAvailable() {
-        return ENDPOINT != null && BUCKET != null && ACCESS_KEY != null && SECRET_KEY != null;
+        return isNotEmpty(ENDPOINT)
+                && isNotEmpty(BUCKET)
+                && isNotEmpty(ACCESS_KEY)
+                && isNotEmpty(SECRET_KEY);
+    }
+
+    /** Checks if a String is not null and not empty. */
+    private static boolean isNotEmpty(@Nullable String str) {
+        return str != null && !str.isEmpty();
     }
 
     public static void assumeCredentialsAvailable() {

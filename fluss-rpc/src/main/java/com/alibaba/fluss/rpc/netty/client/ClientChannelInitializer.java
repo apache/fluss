@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.rpc.netty.client;
 
+import com.alibaba.fluss.rpc.netty.NettyLogger;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
@@ -31,6 +32,8 @@ final class ClientChannelInitializer extends ChannelInitializer<SocketChannel> {
 
     private final int maxIdleTimeSeconds;
 
+    private static final NettyLogger nettyLogger = new NettyLogger();
+
     public ClientChannelInitializer(long maxIdleTimeSeconds) {
         checkArgument(maxIdleTimeSeconds <= Integer.MAX_VALUE, "maxIdleTimeSeconds too large");
         this.maxIdleTimeSeconds = (int) maxIdleTimeSeconds;
@@ -39,6 +42,9 @@ final class ClientChannelInitializer extends ChannelInitializer<SocketChannel> {
     @Override
     protected void initChannel(SocketChannel ch) {
         // NettyClientHandler will be added dynamically when connection is built
+        if (nettyLogger.getLoggingHandler() != null) {
+            ch.pipeline().addLast("loggingHandler", nettyLogger.getLoggingHandler());
+        }
         ch.pipeline()
                 .addLast(
                         "frameDecoder",

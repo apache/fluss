@@ -20,12 +20,13 @@ import com.alibaba.fluss.fs.FSDataInputStream;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -34,23 +35,17 @@ import java.util.Optional;
 /**
  * A handle to a completed snapshot which contains the metadata file path to the completed snapshot.
  * It is as a wrapper around a {@link CompletedSnapshot} to make the referenced completed snapshot
- * retrievable trough a simple get call.
+ * retrievable through a simple get call.
  */
 public class CompletedSnapshotHandle {
 
     private final FsPath metadataFilePath;
+    private final long logOffset;
 
-    public CompletedSnapshotHandle(FsPath metadataFilePath) {
-        Preconditions.checkNotNull(metadataFilePath);
+    public CompletedSnapshotHandle(FsPath metadataFilePath, long logOffset) {
+        checkNotNull(metadataFilePath);
         this.metadataFilePath = metadataFilePath;
-    }
-
-    /**
-     * Creates a {@link CompletedSnapshotHandle} from a given metadata file path. The metadata file
-     * path must be a valid {@link FsPath} URI string.
-     */
-    public static CompletedSnapshotHandle fromMetadataPath(String metadataFilePath) {
-        return new CompletedSnapshotHandle(new FsPath(metadataFilePath));
+        this.logOffset = logOffset;
     }
 
     public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
@@ -76,6 +71,10 @@ public class CompletedSnapshotHandle {
 
     public FsPath getMetadataFilePath() {
         return metadataFilePath;
+    }
+
+    public long getLogOffset() {
+        return logOffset;
     }
 
     public void discard() throws Exception {

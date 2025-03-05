@@ -29,7 +29,6 @@ import com.alibaba.fluss.metrics.reporter.MetricReporter;
 import com.alibaba.fluss.metrics.reporter.ScheduledMetricReporter;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.ExecutorUtils;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.TimeUtils;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
@@ -49,6 +48,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -308,8 +309,8 @@ public class MetricRegistryImpl implements MetricRegistry {
         private final ReporterScopedSettings settings;
 
         private ReporterAndSettings(MetricReporter reporter, ReporterScopedSettings settings) {
-            this.reporter = Preconditions.checkNotNull(reporter);
-            this.settings = Preconditions.checkNotNull(settings);
+            this.reporter = checkNotNull(reporter);
+            this.settings = checkNotNull(settings);
         }
 
         public ReporterScopedSettings getSettings() {

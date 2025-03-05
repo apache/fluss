@@ -23,7 +23,6 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +34,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** The abstract write batch contains write callback object to wait write request feedback. */
 @Internal
@@ -53,9 +54,10 @@ public abstract class WriteBatch {
     protected int recordCount;
     private long drainedMs;
 
-    public WriteBatch(TableBucket tableBucket, PhysicalTablePath physicalTablePath) {
+    public WriteBatch(
+            TableBucket tableBucket, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
-        this.createdMs = System.currentTimeMillis();
+        this.createdMs = createdMs;
         this.tableBucket = tableBucket;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
@@ -72,31 +74,12 @@ public abstract class WriteBatch {
             throws Exception;
 
     /**
-     * Serialize the batch into a sequence of {@link MemorySegment}s. Should be called after {@link
-     * #close()}.
-     *
-     * <p>Note: This may involve dynamic allocating {@link MemorySegment}s and block the thread. The
-     * caller should ensure that this method is called without holding other locks, otherwise this
-     * may lead to deadlocks.
-     */
-    public abstract void serialize();
-
-    /**
-     * Try to serialize the batch into a sequence of {@link MemorySegment}s without waiting for
-     * available {@link MemorySegment}s.
-     *
-     * @return true if the serialization is successful or has been done by {@link #serialize}, false
-     *     otherwise.
-     */
-    public abstract boolean trySerialize();
-
-    /**
      * Gets the memory segment bytes view of the batch. This includes the latest updated {@link
      * #setWriterState(long, int)} in the bytes view.
      */
     public abstract BytesView build();
 
-    /** close the batch. */
+    /** close the batch to not append new records. */
     public abstract void close() throws Exception;
 
     /**
@@ -107,20 +90,20 @@ public abstract class WriteBatch {
     public abstract boolean isClosed();
 
     /**
-     * get size in bytes.
-     *
-     * @return the size in bytes
+     * Get an estimate of the number of bytes written to the underlying buffer. The returned value
+     * is exactly correct if the record set is not compressed or if the batch has been {@link
+     * #build()}.
      */
-    public abstract int sizeInBytes();
+    public abstract int estimatedSizeInBytes();
 
     /**
-     * get memory segments to de-allocate. After produceLog/PutKv acks, the {@link WriteBatch} need
-     * to de-allocate the allocated {@link MemorySegment}s back to {@link WriterMemoryBuffer} or
-     * {@link MemorySegmentPool} for reusing.
+     * get pooled memory segments to de-allocate. After produceLog/PutKv acks, the {@link
+     * WriteBatch} need to de-allocate the allocated pooled {@link MemorySegment}s back to {@link
+     * MemorySegmentPool} for reusing.
      *
-     * @return the memory segment this batch allocated
+     * @return the pooled memory segment this batch allocated
      */
-    public abstract List<MemorySegment> memorySegments();
+    public abstract List<MemorySegment> pooledMemorySegments();
 
     public abstract void setWriterState(long writerId, int batchSequence);
 
@@ -179,7 +162,7 @@ public abstract class WriteBatch {
      * contained in the batch.
      */
     public boolean completeExceptionally(Exception exception) {
-        Preconditions.checkNotNull(exception);
+        checkNotNull(exception);
         return done(exception);
     }
 

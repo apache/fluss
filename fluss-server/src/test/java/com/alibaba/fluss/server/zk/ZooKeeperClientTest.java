@@ -163,6 +163,7 @@ class ZooKeeperClientTest {
         Map<String, String> options = new HashMap<>();
         options.put("option-1", "100");
         options.put("option-2", "200");
+        long currentMillis = System.currentTimeMillis();
         TableRegistration tableReg =
                 new TableRegistration(
                         11,
@@ -170,7 +171,9 @@ class ZooKeeperClientTest {
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
-                        Collections.singletonMap("custom-1", "100"));
+                        Collections.singletonMap("custom-1", "100"),
+                        currentMillis,
+                        currentMillis);
 
         zookeeperClient.registerTable(tablePath, tableReg);
         Optional<TableRegistration> optionalTable = zookeeperClient.getTable(tablePath);
@@ -178,6 +181,7 @@ class ZooKeeperClientTest {
         assertThat(optionalTable.get()).isEqualTo(tableReg);
 
         // update table.
+        currentMillis = System.currentTimeMillis();
         tableReg =
                 new TableRegistration(
                         22,
@@ -185,7 +189,9 @@ class ZooKeeperClientTest {
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         options,
-                        Collections.singletonMap("custom-2", "200"));
+                        Collections.singletonMap("custom-2", "200"),
+                        currentMillis,
+                        currentMillis);
         zookeeperClient.updateTable(tablePath, tableReg);
         optionalTable = zookeeperClient.getTable(tablePath);
         assertThat(optionalTable.isPresent()).isTrue();
@@ -267,17 +273,17 @@ class ZooKeeperClientTest {
                 TableAssignment.builder()
                         .add(table1Bucket2.getBucket(), BucketAssignment.of(0, 1, 2))
                         .build());
-        BucketSnapshot snapshot1 = new BucketSnapshot("oss://test/cp1");
-        BucketSnapshot snapshot2 = new BucketSnapshot("oss://test/cp2");
-        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, 1, snapshot1);
-        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, 2, snapshot2);
+        BucketSnapshot snapshot1 = new BucketSnapshot(1L, 10L, "oss://test/cp1");
+        BucketSnapshot snapshot2 = new BucketSnapshot(2L, 20L, "oss://test/cp2");
+        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, snapshot1);
+        zookeeperClient.registerTableBucketSnapshot(table1Bucket2, snapshot2);
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 1).get())
                 .isEqualTo(snapshot1);
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 2).get())
                 .isEqualTo(snapshot2);
         TableBucket table2Bucket2 = new TableBucket(2, 2);
-        BucketSnapshot snapshot21 = new BucketSnapshot("oss://test/cp21");
-        zookeeperClient.registerTableBucketSnapshot(table2Bucket2, 1, snapshot21);
+        BucketSnapshot snapshot21 = new BucketSnapshot(1L, 11L, "oss://test/cp21");
+        zookeeperClient.registerTableBucketSnapshot(table2Bucket2, snapshot21);
         final List<Tuple2<BucketSnapshot, Long>> table1Bucket2AllSnapshotAndIds =
                 zookeeperClient.getTableBucketAllSnapshotAndIds(table1Bucket2);
         assertThat(table1Bucket2AllSnapshotAndIds)
@@ -293,7 +299,7 @@ class ZooKeeperClientTest {
 
         // check all table buckets' snapshots for table 1;
         Map<Integer, Optional<BucketSnapshot>> tableBucketsLatestSnapshot =
-                zookeeperClient.getTableLatestBucketSnapshot(table1Bucket2.getTableId()).get();
+                zookeeperClient.getTableLatestBucketSnapshot(table1Bucket2.getTableId());
         Map<Integer, Optional<BucketSnapshot>> expectedTableBucketsLatestSnapshot =
                 Collections.singletonMap(table1Bucket2.getBucket(), Optional.of(snapshot2));
         assertThat(tableBucketsLatestSnapshot).isEqualTo(expectedTableBucketsLatestSnapshot);
@@ -325,6 +331,7 @@ class ZooKeeperClientTest {
         // first create a table
         TablePath tablePath = TablePath.of("db", "tb");
         long tableId = 12;
+        long currentMillis = System.currentTimeMillis();
         TableRegistration tableReg =
                 new TableRegistration(
                         tableId,
@@ -332,7 +339,9 @@ class ZooKeeperClientTest {
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
-                        Collections.emptyMap());
+                        Collections.emptyMap(),
+                        currentMillis,
+                        currentMillis);
         zookeeperClient.registerTable(tablePath, tableReg);
 
         Set<String> partitions = zookeeperClient.getPartitions(tablePath);

@@ -92,7 +92,7 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
      * removed.
      *
      * @param serverId the id of the server to be removed
-     * @return a future to be completed when the the disconnection is complete
+     * @return a future to be completed when the disconnection is complete
      */
     public CompletableFuture<Void> removeServer(int serverId) {
         ServerRpcGateway serverRpcGateway = serverRpcGateways.remove(serverId);

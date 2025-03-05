@@ -67,6 +67,30 @@ public final class LogOffsetMetadata {
         return relativePositionInSegment;
     }
 
+    /**
+     * Compute the number of bytes between this offset to the given offset, if they are on the same
+     * segment and this offset precedes the given offset.
+     */
+    public int positionDiff(LogOffsetMetadata that) {
+        if (messageOffsetOnly()) {
+            throw new FlussRuntimeException(
+                    this
+                            + " cannot compare its message offset with "
+                            + that
+                            + " since it only has message offset info.");
+        }
+
+        if (!onSameSegment(that)) {
+            throw new FlussRuntimeException(
+                    this
+                            + " is not on the same segment with "
+                            + that
+                            + " since they are not on the same segment.");
+        }
+
+        return this.relativePositionInSegment - that.relativePositionInSegment;
+    }
+
     // check if this offset is already on an older segment compared with the given offset.
     public boolean onOlderSegment(LogOffsetMetadata that) {
         if (messageOffsetOnly()) {
@@ -83,6 +107,11 @@ public final class LogOffsetMetadata {
     public boolean messageOffsetOnly() {
         return segmentBaseOffset == UNIFIED_LOG_UNKNOWN_OFFSET
                 && relativePositionInSegment == UNKNOWN_FILE_POSITION;
+    }
+
+    // check if this offset is on the same segment with the given offset
+    private boolean onSameSegment(LogOffsetMetadata that) {
+        return this.segmentBaseOffset == that.segmentBaseOffset;
     }
 
     @Override

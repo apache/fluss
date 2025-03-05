@@ -4,7 +4,6 @@ title: Fluss is Now Open Source
 authors: [jark, giannis]
 ---
 
-## Fluss Is Now Open Source
 Earlier this year at Flink Forward 2024 Berlin we [announced Fluss](https://www.ververica.com/blog/introducing-fluss) and today we are thrilled to announce open-sourcing the project.
 Fluss is a **streaming storage system** designed to power real-time analytics. It aspires to change how organizations approach real-time data by acting as the **real-time data layer** for the Lakehouse. 
 Its cutting-edge design enables businesses to achieve **sub-second latency**, **high throughput**, and **cost efficiency** for data analytics, making it the ideal solution for modern data-driven applications.

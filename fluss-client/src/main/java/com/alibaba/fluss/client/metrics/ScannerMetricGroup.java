@@ -17,8 +17,8 @@
 package com.alibaba.fluss.client.metrics;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
@@ -38,10 +38,11 @@ import java.util.Map;
 
 import static com.alibaba.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
-/** The metric group for scanner, including {@link LogScanner} and {@link SnapshotScanner}. */
+/** The metric group for scanner, including {@link LogScanner} and {@link BatchScanner}. */
 @Internal
 public class ScannerMetricGroup extends AbstractMetricGroup {
-    private static final String name = "scanner";
+
+    private static final String NAME = "scanner";
     private static final int WINDOW_SIZE = 1024;
 
     private final TablePath tablePath;
@@ -62,7 +63,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     private final Map<Integer, GenericMetricGroup> buckets = new HashMap<>();
 
     public ScannerMetricGroup(ClientMetricGroup parent, TablePath tablePath) {
-        super(parent.getMetricRegistry(), makeScope(parent, name), parent);
+        super(parent.getMetricRegistry(), makeScope(parent, NAME), parent);
         this.tablePath = tablePath;
 
         fetchRequestCount = new ThreadSafeSimpleCounter();
@@ -140,7 +141,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return NAME;
     }
 
     @Override

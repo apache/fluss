@@ -31,7 +31,7 @@ import java.util.Objects;
 @Internal
 public abstract class ResultForBucket {
     protected final TableBucket tableBucket;
-    private final ApiError error;
+    protected final ApiError error;
 
     public ResultForBucket(TableBucket tableBucket) {
         this(tableBucket, ApiError.NONE);

@@ -30,6 +30,7 @@ public class PaimonSnapshotSplitState extends SourceSplitState {
     public PaimonSnapshotSplitState(PaimonSnapshotSplit paimonSnapshotSplit) {
         super(paimonSnapshotSplit);
         this.paimonSnapshotSplit = paimonSnapshotSplit;
+        this.recordsToSkip = paimonSnapshotSplit.getFileStoreSourceSplit().recordsToSkip();
     }
 
     public void setRecordsToSkip(long recordsToSkip) {

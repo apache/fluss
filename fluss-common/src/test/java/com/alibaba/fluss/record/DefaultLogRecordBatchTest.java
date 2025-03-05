@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.record;
 
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.row.TestInternalRowGenerator;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.testutils.DataTestUtils;
@@ -50,7 +51,11 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         RowType allRowType = TestInternalRowGenerator.createAllRowType();
         MemoryLogRecordsIndexedBuilder builder =
                 MemoryLogRecordsIndexedBuilder.builder(
-                        baseLogOffset, schemaId, Integer.MAX_VALUE, magic, outputView);
+                        baseLogOffset,
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        magic,
+                        new UnmanagedPagedOutputView(100));
 
         List<IndexedRow> rows = new ArrayList<>();
         for (int i = 0; i < recordNumber; i++) {
@@ -59,7 +64,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
             rows.add(row);
         }
 
-        MemoryLogRecords memoryLogRecords = builder.build();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
 
         assertThat(iterator.hasNext()).isTrue();
@@ -87,6 +92,63 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
                 assertThat(record.getRow()).isEqualTo(rows.get(i));
                 i++;
             }
+        }
+
+        builder.close();
+    }
+
+    @Test
+    void testNoRecordAppend() throws Exception {
+        // 1. no record append with baseOffset as 0.
+        MemoryLogRecordsIndexedBuilder builder =
+                MemoryLogRecordsIndexedBuilder.builder(
+                        0L, schemaId, Integer.MAX_VALUE, magic, new UnmanagedPagedOutputView(100));
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
+        Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
+        // only contains batch header.
+        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(48);
+
+        assertThat(iterator.hasNext()).isTrue();
+        LogRecordBatch logRecordBatch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        logRecordBatch.ensureValid();
+        assertThat(logRecordBatch.getRecordCount()).isEqualTo(0);
+        assertThat(logRecordBatch.lastLogOffset()).isEqualTo(0);
+        assertThat(logRecordBatch.nextLogOffset()).isEqualTo(1);
+        assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+                CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
+            assertThat(iter.hasNext()).isFalse();
+        }
+
+        // 2. no record append with baseOffset as 100.
+        builder =
+                MemoryLogRecordsIndexedBuilder.builder(
+                        100L,
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        magic,
+                        new UnmanagedPagedOutputView(100));
+        memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
+        iterator = memoryLogRecords.batches().iterator();
+        // only contains batch header.
+        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(48);
+
+        assertThat(iterator.hasNext()).isTrue();
+        logRecordBatch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        logRecordBatch.ensureValid();
+        assertThat(logRecordBatch.getRecordCount()).isEqualTo(0);
+        assertThat(logRecordBatch.lastLogOffset()).isEqualTo(100);
+        assertThat(logRecordBatch.nextLogOffset()).isEqualTo(101);
+        assertThat(logRecordBatch.baseLogOffset()).isEqualTo(100);
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+                CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
+            assertThat(iter.hasNext()).isFalse();
         }
     }
 }

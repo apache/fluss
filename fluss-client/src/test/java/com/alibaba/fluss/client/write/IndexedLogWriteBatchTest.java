@@ -17,27 +17,30 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.DefaultLogRecord;
 import com.alibaba.fluss.record.DefaultLogRecordBatch;
+import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.record.LogRecord;
+import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
-import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
+import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
+import java.util.Iterator;
+
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.DataTestUtils.indexedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -48,8 +51,8 @@ public class IndexedLogWriteBatchTest {
 
     @BeforeEach
     void setup() {
-        row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        estimatedSizeInBytes = DefaultLogRecord.sizeOf(row);
+        row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        estimatedSizeInBytes = IndexedLogRecord.sizeOf(row);
     }
 
     @Test
@@ -87,12 +90,11 @@ public class IndexedLogWriteBatchTest {
         assertThat(appendResult).isTrue();
 
         logProducerBatch.close();
-        logProducerBatch.serialize();
         BytesView bytesView = logProducerBatch.build();
-        DefaultLogRecordBatch recordBatch = new DefaultLogRecordBatch();
-        MemorySegmentBytesView firstBytesView = (MemorySegmentBytesView) bytesView;
-        recordBatch.pointTo(firstBytesView.getMemorySegment(), firstBytesView.getPosition());
-        assertDefaultLogRecordBatchEquals(recordBatch);
+        MemoryLogRecords logRecords = MemoryLogRecords.pointToBytesView(bytesView);
+        Iterator<LogRecordBatch> iterator = logRecords.batches().iterator();
+        assertDefaultLogRecordBatchEquals(iterator.next());
+        assertThat(iterator.hasNext()).isFalse();
     }
 
     @Test
@@ -141,7 +143,7 @@ public class IndexedLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord() {
-        return new WriteRecord(DATA1_PHYSICAL_TABLE_PATH, WriteKind.APPEND, row, null);
+        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private IndexedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)
@@ -151,20 +153,17 @@ public class IndexedLogWriteBatchTest {
     }
 
     private IndexedLogWriteBatch createLogWriteBatch(
-            TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment)
-            throws Exception {
+            TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment) {
         return new IndexedLogWriteBatch(
                 tb,
                 DATA1_PHYSICAL_TABLE_PATH,
-                MemoryLogRecordsIndexedBuilder.builder(
-                        baseLogOffset,
-                        DATA1_TABLE_INFO.getSchemaId(),
-                        writeLimit,
-                        (byte) 0,
-                        new MemorySegmentOutputView(memorySegment)));
+                DATA1_TABLE_INFO.getSchemaId(),
+                writeLimit,
+                new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment)),
+                System.currentTimeMillis());
     }
 
-    private void assertDefaultLogRecordBatchEquals(DefaultLogRecordBatch recordBatch) {
+    private void assertDefaultLogRecordBatchEquals(LogRecordBatch recordBatch) {
         assertThat(recordBatch.getRecordCount()).isEqualTo(1);
         assertThat(recordBatch.baseLogOffset()).isEqualTo(0L);
         assertThat(recordBatch.schemaId()).isEqualTo((short) DATA1_TABLE_INFO.getSchemaId());

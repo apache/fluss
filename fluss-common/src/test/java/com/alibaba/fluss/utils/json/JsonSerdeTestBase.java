@@ -23,7 +23,6 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Abstract test base for json serde. */
@@ -50,11 +49,7 @@ public abstract class JsonSerdeTestBase<T> {
     void testJsonSerde() throws IOException {
         T[] testObjects = createObjects();
         String[] expectedJsons = expectedJsons();
-        checkArgument(
-                testObjects.length == expectedJsons.length,
-                "The length of createObjects() and expectedJsons() should be the same, but is %s and %s",
-                testObjects.length,
-                expectedJsons.length);
+        assertThat(testObjects.length).isEqualTo(expectedJsons.length);
         for (int i = 0; i < testObjects.length; i++) {
             T value = testObjects[i];
             final byte[] json = JsonSerdeUtils.writeValueAsBytes(value, serializer);

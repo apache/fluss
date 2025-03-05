@@ -20,7 +20,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
 
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.paimon.catalog.Catalog;
+import org.apache.paimon.catalog.CatalogLoader;
 import org.apache.paimon.flink.FlinkCatalogFactory;
 import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
@@ -93,7 +93,7 @@ public class PaimonDataBaseSyncSinkBuilder {
         paimonMultiTableSink.sinkFrom(partitioned);
     }
 
-    private Catalog.Loader catalogLoader() {
+    private CatalogLoader catalogLoader() {
         // to make the workflow serializable
         Options catalogOptions = this.catalogOptions;
         return () -> FlinkCatalogFactory.createPaimonCatalog(catalogOptions);

@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.BytesColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for VarChar. */
 @Internal
@@ -29,7 +30,7 @@ public class ArrowVarCharColumnVector implements BytesColumnVector {
     private final VarCharVector varCharVector;
 
     public ArrowVarCharColumnVector(VarCharVector varCharVector) {
-        this.varCharVector = Preconditions.checkNotNull(varCharVector);
+        this.varCharVector = checkNotNull(varCharVector);
     }
 
     @Override

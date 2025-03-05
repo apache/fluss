@@ -116,11 +116,18 @@ class NewTableAddedPaimonListenerTest {
         Identifier paimonPkTableId = Identifier.create(DATABASE, pkTablePath.getTableName());
 
         // then, add the two tables
+        long currentMillis = System.currentTimeMillis();
         newTableAddedPaimonListener.onNewTablesAdded(
                 Arrays.asList(
-                        new TableInfo(logTablePath, 1L, logTable, 1),
-                        new TableInfo(pkTablePath, 2L, pkTable, 1),
-                        new TableInfo(logNoBucketKeyTablePath, 3L, logNoBucketKeyTable, 1)));
+                        TableInfo.of(logTablePath, 1L, 1, logTable, currentMillis, currentMillis),
+                        TableInfo.of(pkTablePath, 2L, 1, pkTable, currentMillis, currentMillis),
+                        TableInfo.of(
+                                logNoBucketKeyTablePath,
+                                3L,
+                                1,
+                                logNoBucketKeyTable,
+                                currentMillis,
+                                currentMillis)));
 
         Table paimonPkTable = paimonCatalog.getTable(paimonPkTableId);
         // check the gotten pk table
@@ -174,7 +181,7 @@ class NewTableAddedPaimonListenerTest {
                             "log_c1", "log_c2", OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME
                         }),
                 null,
-                -1,
+                BUCKET_NUM,
                 customProperties);
 
         // create partitioned table
@@ -197,7 +204,13 @@ class NewTableAddedPaimonListenerTest {
         // then, add the partitioned table
         newTableAddedPaimonListener.onNewTablesAdded(
                 Collections.singletonList(
-                        new TableInfo(partitionedTablePath, 4L, partitionedTableDescriptor, 1)));
+                        TableInfo.of(
+                                partitionedTablePath,
+                                4L,
+                                1,
+                                partitionedTableDescriptor,
+                                currentMillis,
+                                currentMillis)));
 
         Identifier paimonPartitionedTableId =
                 Identifier.create(DATABASE, partitionedTablePath.getTableName());
@@ -236,7 +249,11 @@ class NewTableAddedPaimonListenerTest {
 
         // check bucket num
         Options options = Options.fromMap(paimonTable.options());
-        assertThat(options.get(CoreOptions.BUCKET)).isEqualTo(bucketNum);
+        assertThat(options.get(CoreOptions.BUCKET))
+                .isEqualTo(
+                        expectedBucketKey == null
+                                ? CoreOptions.BUCKET.defaultValue().intValue()
+                                : bucketNum);
         assertThat(options.get(CoreOptions.BUCKET_KEY)).isEqualTo(expectedBucketKey);
 
         // check custom properties

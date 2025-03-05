@@ -145,7 +145,7 @@ public class CompletedSnapshot {
     }
 
     /**
-     * Return the metadata file path that stores all the informations that describes the snapshot.
+     * Return the metadata file path that stores all the information that describes the snapshot.
      */
     public FsPath getMetadataFilePath() {
         return new FsPath(snapshotLocation, SNAPSHOT_METADATA_FILE_NAME);

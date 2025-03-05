@@ -18,7 +18,7 @@ package com.alibaba.fluss.connector.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.table.api.DataTypes;
@@ -30,8 +30,8 @@ import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
-import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.Row;
+import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -39,6 +39,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -47,6 +49,7 @@ import java.util.Map;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -154,17 +157,18 @@ class FlinkCatalogITCase {
 
     @Test
     void testCreateUnSupportedTable() {
-        // test unsupported table, partitioned table without auto partitioned enabled
+        // test invalid property
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
-                                        "create table test_table_unsupported"
-                                                + " (a int, b int) partitioned by (b)"))
+                                        "create table test_arrow_compression"
+                                                + " (a int, b int) with ("
+                                                + " 'table.log.format' = 'arrow',"
+                                                + " 'table.log.arrow.compression.type' = 'zstd',"
+                                                + " 'table.log.arrow.compression.zstd.level' = '0')"))
                 .cause()
-                .isInstanceOf(CatalogException.class)
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining("Currently, partitioned table must enable auto partition");
+                .hasRootCauseMessage(
+                        "Invalid ZSTD compression level: 0. Expected a value between 1 and 22.");
     }
 
     @Test
@@ -182,19 +186,88 @@ class FlinkCatalogITCase {
     }
 
     @Test
-    void testCreatePartitionedTable() throws Exception {
-        tEnv.executeSql(
-                "create table test_partitioned_table (a int, b string) partitioned by (b) "
-                        + "with ('table.auto-partition.enabled' = 'true',"
-                        + " 'table.auto-partition.time-unit' = 'day')");
+    void testPartitionedTable() throws Exception {
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_partitioned_table");
+
+        // 1. first create.
+        tEnv.executeSql("create table test_partitioned_table (a int, b string) partitioned by (b)");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
         Schema expectedSchema = schemaBuilder.build();
-        CatalogTable table =
-                (CatalogTable)
-                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_partitioned_table"));
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
-        assertThat(table.getPartitionKeys()).isEqualTo(Collections.singletonList("b"));
+        List<String> partitionKeys = table.getPartitionKeys();
+        assertThat(partitionKeys).isEqualTo(Collections.singletonList("b"));
+
+        // 2. add partitions.
+        tEnv.executeSql("alter table test_partitioned_table add partition (b = 1)");
+        tEnv.executeSql("alter table test_partitioned_table add partition (b = 2)");
+        tEnv.executeSql("alter table test_partitioned_table add partition (b = 3)");
+        List<String> expectedShowPartitionsResult = Arrays.asList("+I[b=1]", "+I[b=2]", "+I[b=3]");
+        CloseableIterator<Row> showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table").collect();
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        // 3. drop partitions.
+        tEnv.executeSql("alter table test_partitioned_table drop partition (b = 1)");
+        expectedShowPartitionsResult = Arrays.asList("+I[b=2]", "+I[b=3]");
+        showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table").collect();
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+    }
+
+    @Test
+    void testAutoPartitionedTable() throws Exception {
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_auto_partitioned_table");
+
+        // 1. test add table.
+        tEnv.executeSql(
+                "create table test_auto_partitioned_table (a int, b string) partitioned by (b) "
+                        + "with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.time-unit' = 'year')");
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
+        Schema expectedSchema = schemaBuilder.build();
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        List<String> partitionKeys = table.getPartitionKeys();
+        assertThat(partitionKeys).isEqualTo(Collections.singletonList("b"));
+
+        TablePath tablePath = new TablePath(DEFAULT_DB, "test_auto_partitioned_table");
+        FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+        int currentYear = LocalDate.now().getYear();
+        List<String> expectedShowPartitionsResult =
+                Arrays.asList("+I[b=" + currentYear + "]", "+I[b=" + (currentYear + 1) + "]");
+        CloseableIterator<Row> showPartitionIterator =
+                tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        // 2. test add partitions.
+        tEnv.executeSql(
+                String.format(
+                        "alter table test_auto_partitioned_table add partition (b = '%s')",
+                        currentYear + 10));
+        expectedShowPartitionsResult =
+                Arrays.asList(
+                        "+I[b=" + currentYear + "]",
+                        "+I[b=" + (currentYear + 1) + "]",
+                        "+I[b=" + (currentYear + 10) + "]");
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        // 3. test drop partitions.
+        tEnv.executeSql(
+                String.format(
+                        "alter table test_auto_partitioned_table drop partition (b = '%s')",
+                        currentYear + 1));
+        tEnv.executeSql(
+                String.format(
+                        "alter table test_auto_partitioned_table drop partition (b = '%s')",
+                        currentYear + 10));
+        expectedShowPartitionsResult = Collections.singletonList("+I[b=" + currentYear + "]");
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
     }
 
     @Test
@@ -299,9 +372,50 @@ class FlinkCatalogITCase {
                 .hasMessage("Cannot discover a connector using option: 'connector'='fluss'");
     }
 
+    @Test
+    void testCreateTableWithUnknownOptions() {
+        // create fluss table with unknown options whose prefix is 'table.*' or 'client.*'
+        tEnv.executeSql(
+                "create table test_table_unknown_options (a int, b int)"
+                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'table.unknown.option' = 'table-unknown-val', 'client.unknown.option' = 'client-unknown-val')");
+
+        // test table as source
+        String sourcePlan = tEnv.explainSql("select * from test_table_unknown_options");
+        assertThat(sourcePlan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, fluss, test_table_unknown_options]], fields=[a, b])");
+
+        // test table as sink
+        String sinkPlan = tEnv.explainSql("insert into test_table_unknown_options values (1, 2)");
+        assertThat(sinkPlan)
+                .contains(
+                        "Sink(table=[testcatalog.fluss.test_table_unknown_options], fields=[EXPR$0, EXPR$1])");
+
+        // create fluss table with other invalid unknown option
+        tEnv.executeSql(
+                "create table test_table_other_unknown_options (a int, b int)"
+                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'other.unknown.option' = 'other-unknown-val')");
+
+        // test invalid table as source
+        assertThatThrownBy(() -> tEnv.explainSql("select * from test_table_other_unknown_options"))
+                .cause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("Unsupported options found for 'fluss'");
+
+        // test invalid table as sink
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        "insert into test_table_other_unknown_options values (1, 2)"))
+                .cause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("Unsupported options found for 'fluss'");
+    }
+
     private static void assertOptionsEqual(
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
+        actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }

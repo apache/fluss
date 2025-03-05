@@ -17,7 +17,7 @@
 package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.rpc.netty.server.RpcRequest;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.EmptyByteBuf;
@@ -25,54 +25,51 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The test for {@link RequestChannel}. */
 public class RequestChannelTest {
 
     @Test
-    void testRequestPriority() throws Exception {
-        RequestChannel channel = new RequestChannel(10);
+    void testRequestsFIFO() throws Exception {
+        RequestChannel channel = new RequestChannel(100);
 
-        // 1. request with same priority score. Use FIFO.
+        // 1. Same request type, Use FIFO.
+        List<RpcRequest> rpcRequests = new ArrayList<>();
+        // push rpc requests
+        for (int i = 0; i < 100; i++) {
+            RpcRequest rpcRequest =
+                    new RpcRequest(
+                            ApiKeys.GET_TABLE_INFO.id,
+                            (short) 0,
+                            i,
+                            null,
+                            new GetTableInfoRequest(),
+                            new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
+                            null);
+            channel.putRequest(rpcRequest);
+            rpcRequests.add(rpcRequest);
+        }
+        // pop rpc requests
+        for (int i = 0; i < 100; i++) {
+            RpcRequest gotRequest = channel.pollRequest(100);
+            assertThat(gotRequest).isEqualTo(rpcRequests.get(i));
+        }
+
+        // 2. Different request type, Use FIFO.
         RpcRequest rpcRequest1 =
                 new RpcRequest(
-                        ApiKeys.GET_TABLE.id,
-                        (short) 0,
-                        2,
-                        null,
-                        new GetTableRequest(),
-                        new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                        null);
-        RpcRequest rpcRequest2 =
-                new RpcRequest(
-                        ApiKeys.GET_TABLE.id,
-                        (short) 0,
-                        1,
-                        null,
-                        new GetTableRequest(),
-                        new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                        null);
-
-        channel.putRequest(rpcRequest1);
-        channel.putRequest(rpcRequest2);
-
-        RpcRequest rpcRequest = channel.pollRequest(100);
-        assertThat(rpcRequest).isEqualTo(rpcRequest1);
-        rpcRequest = channel.pollRequest(100);
-        assertThat(rpcRequest).isEqualTo(rpcRequest2);
-
-        // 2. request with different priority score. Should be ordered by priority score.
-        RpcRequest rpcRequest3 =
-                new RpcRequest(
-                        ApiKeys.GET_TABLE.id,
+                        ApiKeys.GET_TABLE_INFO.id,
                         (short) 0,
                         3,
                         null,
-                        new GetTableRequest(),
+                        new GetTableInfoRequest(),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         null);
-        RpcRequest rpcRequest4 =
+        RpcRequest rpcRequest2 =
                 new RpcRequest(
                         ApiKeys.FETCH_LOG.id,
                         (short) 0,
@@ -81,11 +78,11 @@ public class RequestChannelTest {
                         new FetchLogRequest().setMaxBytes(100).setFollowerServerId(2),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         null);
-        channel.putRequest(rpcRequest3);
-        channel.putRequest(rpcRequest4);
+        channel.putRequest(rpcRequest1);
+        channel.putRequest(rpcRequest2);
+        RpcRequest rpcRequest = channel.pollRequest(100);
+        assertThat(rpcRequest).isEqualTo(rpcRequest1);
         rpcRequest = channel.pollRequest(100);
-        assertThat(rpcRequest).isEqualTo(rpcRequest4);
-        rpcRequest = channel.pollRequest(100);
-        assertThat(rpcRequest).isEqualTo(rpcRequest3);
+        assertThat(rpcRequest).isEqualTo(rpcRequest2);
     }
 }

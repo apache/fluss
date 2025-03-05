@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.kv.rocksdb;
 
 import com.alibaba.fluss.server.kv.KvBatchWriter;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -34,6 +33,8 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -64,7 +65,7 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
     private final List<AutoCloseable> toClose;
 
     public RocksDBWriteBatchWrapper(@Nonnull RocksDB rocksDB, long batchSize) {
-        Preconditions.checkArgument(batchSize >= 0, "Max batch size have to be no negative.");
+        checkArgument(batchSize >= 0, "Max batch size have to be no negative.");
         this.db = rocksDB;
         this.batchSize = batchSize;
         this.toClose = new ArrayList<>(2);

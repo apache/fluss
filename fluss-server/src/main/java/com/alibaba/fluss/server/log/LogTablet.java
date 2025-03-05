@@ -40,7 +40,6 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.server.log.LocalLog.SegmentDeletionReason;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 import com.alibaba.fluss.utils.types.Either;
@@ -66,6 +65,7 @@ import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 
 import static com.alibaba.fluss.utils.FileUtils.flushFileIfExists;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -147,7 +147,7 @@ public final class LogTablet {
                         writerExpirationCheckIntervalMs,
                         writerExpirationCheckIntervalMs);
         this.logFormat = logFormat;
-        Preconditions.checkArgument(
+        checkArgument(
                 tieredLogLocalSegments > 0,
                 "log segments to retain in local must be greater than 0");
         this.tieredLogLocalSegments = tieredLogLocalSegments;
@@ -500,6 +500,20 @@ public final class LogTablet {
         deleteSegments(remoteLogEndOffset);
     }
 
+    /**
+     * Fully materialize and return an offset snapshot including segment position info. This method
+     * will update the LogOffsetMetadata for the high watermark if they are message-only. Throws an
+     * offset out of range error if the segment info cannot be loaded.
+     */
+    public LogOffsetSnapshot fetchOffsetSnapshot() throws IOException {
+        LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata();
+        return new LogOffsetSnapshot(
+                logStartOffset(),
+                localLogStartOffset(),
+                localLog.getLocalLogEndOffsetMetadata(),
+                highWatermark);
+    }
+
     private void deleteSegments(long cleanUpToOffset) {
         // cache to local variables
         long localLogStartOffset = localLog.getLocalLogStartOffset();
@@ -618,6 +632,7 @@ public final class LogTablet {
                 appendInfo.setLastOffset(duplicatedBatch.lastOffset);
                 appendInfo.setMaxTimestamp(duplicatedBatch.timestamp);
                 appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
+                appendInfo.setDuplicated(true);
             } else {
                 // Append the records, and increment the local log end offset immediately after
                 // append because write to the transaction index below may fail, and we want to
@@ -676,8 +691,7 @@ public final class LogTablet {
                         "Currently, we only support DefaultLogRecordBatch.");
             }
 
-            int recordCount = batch.getRecordCount();
-            initialOffset += recordCount;
+            initialOffset = batch.nextLogOffset();
         }
 
         return new AssignResult(initialOffset - 1, commitTimestamp, baseLogOffset);

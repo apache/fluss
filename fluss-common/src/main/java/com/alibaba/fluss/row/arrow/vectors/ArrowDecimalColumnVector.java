@@ -20,7 +20,8 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.columnar.DecimalColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.DecimalVector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for Decimal. */
 @Internal
@@ -30,7 +31,7 @@ public class ArrowDecimalColumnVector implements DecimalColumnVector {
     private final DecimalVector decimalVector;
 
     public ArrowDecimalColumnVector(DecimalVector decimalVector) {
-        this.decimalVector = Preconditions.checkNotNull(decimalVector);
+        this.decimalVector = checkNotNull(decimalVector);
     }
 
     @Override

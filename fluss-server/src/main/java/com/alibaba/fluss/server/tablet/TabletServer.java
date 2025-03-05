@@ -28,6 +28,7 @@ import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
@@ -58,6 +59,8 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static com.alibaba.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
@@ -151,12 +154,11 @@ public class TabletServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
-            // TODO set scheduler thread number.
-            this.scheduler = new FlussScheduler(10);
+            this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
 
-            this.logManager =
-                    LogManager.create(conf, zkClient, scheduler, SystemClock.getInstance());
+            SystemClock systemClock = SystemClock.getInstance();
+            this.logManager = LogManager.create(conf, zkClient, scheduler, systemClock);
             logManager.startup();
 
             this.kvManager = KvManager.create(conf, zkClient, logManager);
@@ -187,9 +189,11 @@ public class TabletServer extends ServerBase {
                             coordinatorGateway,
                             DefaultCompletedKvSnapshotCommitter.create(rpcClient, metadataCache),
                             this,
-                            tabletServerMetricGroup);
+                            tabletServerMetricGroup,
+                            systemClock);
             replicaManager.startup();
 
+            MetadataManager metadataManager = new MetadataManager(zkClient);
             this.tabletService =
                     new TabletService(
                             conf,
@@ -197,7 +201,8 @@ public class TabletServer extends ServerBase {
                             remoteFileSystem,
                             zkClient,
                             replicaManager,
-                            metadataCache);
+                            metadataCache,
+                            metadataManager);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -207,6 +212,7 @@ public class TabletServer extends ServerBase {
                             conf.getString(ConfigOptions.TABLET_SERVER_HOST),
                             conf.getString(ConfigOptions.TABLET_SERVER_PORT),
                             tabletService,
+                            tabletServerMetricGroup,
                             requestsMetrics);
             rpcServer.start();
 

@@ -16,10 +16,13 @@
 
 package com.alibaba.fluss.utils.crc;
 
+import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.zip.Checksum;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -92,6 +95,26 @@ public final class Crc32C {
         Checksum crc = create();
         for (int i = 0; i < buffers.length; i++) {
             Checksums.update(crc, buffers[i], offsets[i], size[i]);
+        }
+        return crc.getValue();
+    }
+
+    /**
+     * Compute the CRC32C (Castagnoli) of a list of {@link MemorySegmentBytesView} from a given
+     * start offset (relative to the first buffer's current position).
+     *
+     * @param buffers the list of buffers with the underlying data
+     * @param startOffset the offset relative to the first buffer's current position
+     * @return the CRC32C
+     */
+    public static long compute(List<MemorySegmentBytesView> buffers, int startOffset) {
+        Checksum crc = create();
+        boolean first = true;
+        for (MemorySegmentBytesView buffer : buffers) {
+            int offset = first ? startOffset : 0;
+            int size = buffer.getBytesLength() - offset;
+            Checksums.update(crc, buffer.getByteBuffer(), offset, size);
+            first = false;
         }
         return crc.getValue();
     }

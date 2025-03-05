@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.log.remote;
 
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
@@ -39,7 +40,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static com.alibaba.fluss.utils.FlussPaths.remoteLogDir;
 import static com.alibaba.fluss.utils.FlussPaths.remoteLogTabletDir;
@@ -350,7 +354,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     void testCleanupLocalSegments(boolean partitionTable) throws Exception {
         TableBucket tb = makeTableBucket(partitionTable);
         // Need to make leader by ReplicaManager.
-        makeKvTableAsLeader(tb, INITIAL_LEADER_EPOCH, partitionTable);
+        makeKvTableAsLeader(tb, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
         // 2. generate 5 segments and trigger upload 4 to remote storage
@@ -412,7 +416,15 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ValueSource(booleans = {true, false})
     void testConfigureTieredLogLocalSegments(boolean partitionedTable) throws Exception {
         int tieredLogLocalSegments = 8;
-        long tableId = registerTableInZkClient(tieredLogLocalSegments);
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        200L,
+                        Collections.emptyList(),
+                        Collections.singletonMap(
+                                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),
+                                String.valueOf(tieredLogLocalSegments)));
         TableBucket tb = makeTableBucket(tableId, partitionedTable);
 
         // make leader, and then remote log tablet should be created.

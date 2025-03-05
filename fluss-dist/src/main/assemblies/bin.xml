@@ -65,7 +65,7 @@
     <fileSets>
         <!-- copy start scripts -->
         <fileSet>
-            <directory>src/main/fluss-bin/bin</directory>
+            <directory>src/main/resources/bin</directory>
             <outputDirectory>bin</outputDirectory>
             <fileMode>0755</fileMode>
         </fileSet>
@@ -73,14 +73,14 @@
 
         <!-- copy default configuration -->
         <fileSet>
-            <directory>src/main/fluss-bin/conf</directory>
+            <directory>src/main/resources/conf</directory>
             <outputDirectory>conf</outputDirectory>
             <fileMode>0644</fileMode>
         </fileSet>
 
         <!-- create an empty log directory -->
         <fileSet>
-            <directory>src/main/fluss-bin/</directory>
+            <directory>src/main/resources/</directory>
             <outputDirectory>log</outputDirectory>
             <fileMode>0644</fileMode>
             <excludes>

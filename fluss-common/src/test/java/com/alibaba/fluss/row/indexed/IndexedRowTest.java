@@ -160,7 +160,7 @@ public class IndexedRowTest {
         assertThat(row.getInt(0)).isEqualTo(1000);
         assertThat(row.getString(2)).isEqualTo(BinaryString.fromString("hello"));
 
-        IndexedRow projectRow = (IndexedRow) row.projectRow(new int[] {0, 2});
+        IndexedRow projectRow = row.projectRow(new int[] {0, 2});
         assertThat(projectRow.getInt(0)).isEqualTo(1000);
         assertThat(projectRow.getString(1)).isEqualTo(BinaryString.fromString("hello"));
 

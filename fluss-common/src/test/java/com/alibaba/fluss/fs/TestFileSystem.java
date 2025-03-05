@@ -20,13 +20,14 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.local.LocalDataOutputStream;
 import com.alibaba.fluss.fs.local.LocalFileStatus;
 import com.alibaba.fluss.fs.local.LocalFileSystem;
-import com.alibaba.fluss.utils.Preconditions;
+import com.alibaba.fluss.utils.MapUtils;
 
 import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A test file system. This also has a service entry in the test resources, to be loaded during
@@ -41,7 +42,7 @@ public class TestFileSystem extends LocalFileSystem {
 
     // current number of created, unclosed (output) stream
     private static final Map<FsPath, Integer> currentUnclosedOutputStream =
-            new ConcurrentHashMap<>();
+            MapUtils.newConcurrentHashMap();
 
     public static int getNumtimeStreamOpened() {
         return streamOpenCounter.get();
@@ -125,7 +126,7 @@ public class TestFileSystem extends LocalFileSystem {
         @Override
         public void close() throws IOException {
             currentUnclosedOutputStream.compute(
-                    path, (k, v) -> Preconditions.checkNotNull(v) == 1 ? null : v - 1);
+                    path, (k, v) -> checkNotNull(v) == 1 ? null : v - 1);
             stream.close();
         }
     }

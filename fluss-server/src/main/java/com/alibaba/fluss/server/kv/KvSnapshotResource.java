@@ -102,7 +102,7 @@ public class KvSnapshotResource {
                         conf.getInt(ConfigOptions.KV_SNAPSHOT_SCHEDULER_THREAD_NUM),
                         new ExecutorThreadFactory("periodic-snapshot-scheduler-" + serverId));
 
-        // the parameter to create thread pool is from Flink. todo: may ajust according Fluss's
+        // the parameter to create thread pool is from Flink. todo: may adjust according Fluss's
         // workload
         // create a thread pool for the async part of kv snapshot
         ExecutorService asyncOperationsThreadPool =

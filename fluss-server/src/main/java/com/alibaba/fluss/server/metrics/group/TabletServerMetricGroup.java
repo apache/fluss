@@ -24,17 +24,17 @@ import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.ThreadSafeSimpleCounter;
 import com.alibaba.fluss.metrics.groups.AbstractMetricGroup;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
+import com.alibaba.fluss.utils.MapUtils;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
 
-    private static final String name = "tabletserver";
+    private static final String NAME = "tabletserver";
 
     private final Map<PhysicalTablePath, PhysicalTableMetricGroup> metricGroupByPhysicalTable =
-            new ConcurrentHashMap<>();
+            MapUtils.newConcurrentHashMap();
 
     protected final String clusterId;
     protected final String hostname;
@@ -43,10 +43,13 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     // ---- metrics ----
     private final Counter replicationBytesIn;
     private final Counter replicationBytesOut;
+    private final Counter delayedWriteExpireCount;
+    private final Counter delayedFetchFromFollowerExpireCount;
+    private final Counter delayedFetchFromClientExpireCount;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, int serverId) {
-        super(registry, new String[] {clusterId, hostname, name}, null);
+        super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
@@ -55,6 +58,17 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.REPLICATION_IN_RATE, new MeterView(replicationBytesIn));
         replicationBytesOut = new ThreadSafeSimpleCounter();
         meter(MetricNames.REPLICATION_OUT_RATE, new MeterView(replicationBytesOut));
+
+        delayedWriteExpireCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.DELAYED_WRITE_EXPIRES_RATE, new MeterView(delayedWriteExpireCount));
+        delayedFetchFromFollowerExpireCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE,
+                new MeterView(delayedFetchFromFollowerExpireCount));
+        delayedFetchFromClientExpireCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
+                new MeterView(delayedFetchFromClientExpireCount));
     }
 
     @Override
@@ -66,7 +80,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return NAME;
     }
 
     public Counter replicationBytesIn() {
@@ -75,6 +89,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter replicationBytesOut() {
         return replicationBytesOut;
+    }
+
+    public Counter delayedWriteExpireCount() {
+        return delayedWriteExpireCount;
+    }
+
+    public Counter delayedFetchFromFollowerExpireCount() {
+        return delayedFetchFromFollowerExpireCount;
+    }
+
+    public Counter delayedFetchFromClientExpireCount() {
+        return delayedFetchFromClientExpireCount;
     }
 
     // ------------------------------------------------------------------------

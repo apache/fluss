@@ -24,6 +24,7 @@ import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
+import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
@@ -257,12 +258,21 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
     // Database
     // --------------------------------------------------------------------------------------------
-
-    /** Register a database to zk. */
-    public void registerDatabase(String database) throws Exception {
+    public void registerDatabase(String database, DatabaseRegistration databaseRegistration)
+            throws Exception {
         String path = DatabaseZNode.path(database);
-        zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.PERSISTENT).forPath(path);
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, DatabaseZNode.encode(databaseRegistration));
         LOG.info("Registered database {}", database);
+    }
+
+    /** Get the database in ZK. */
+    public Optional<DatabaseRegistration> getDatabase(String database) throws Exception {
+        String path = DatabaseZNode.path(database);
+        Optional<byte[]> bytes = getOrEmpty(path);
+        return bytes.map(DatabaseZNode::decode);
     }
 
     public void deleteDatabase(String database) throws Exception {
@@ -451,9 +461,9 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
     // Table Bucket snapshot
     // --------------------------------------------------------------------------------------------
-    public void registerTableBucketSnapshot(
-            TableBucket tableBucket, long snapshotId, BucketSnapshot snapshot) throws Exception {
-        String path = BucketSnapshotIdZNode.path(tableBucket, snapshotId);
+    public void registerTableBucketSnapshot(TableBucket tableBucket, BucketSnapshot snapshot)
+            throws Exception {
+        String path = BucketSnapshotIdZNode.path(tableBucket, snapshot.getSnapshotId());
         zkClient.create()
                 .creatingParentsIfNeeded()
                 .forPath(path, BucketSnapshotIdZNode.encode(snapshot));
@@ -503,30 +513,30 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /**
      * Get all the latest snapshot for the buckets of the table. If no any buckets found for the
-     * table in zk, return empty.
+     * table in zk, return empty. The key of the map is the bucket id, the value is the optional
+     * latest snapshot, empty if there is no snapshot for the kv bucket.
      */
-    public Optional<Map<Integer, Optional<BucketSnapshot>>> getTableLatestBucketSnapshot(
-            long tableId) throws Exception {
+    public Map<Integer, Optional<BucketSnapshot>> getTableLatestBucketSnapshot(long tableId)
+            throws Exception {
         Optional<TableAssignment> optTableAssignment = getTableAssignment(tableId);
         if (!optTableAssignment.isPresent()) {
-            return Optional.empty();
+            return Collections.emptyMap();
         } else {
             TableAssignment tableAssignment = optTableAssignment.get();
-            return Optional.of(getBucketSnapshots(tableId, null, tableAssignment));
+            return getBucketSnapshots(tableId, null, tableAssignment);
         }
     }
 
-    public Optional<Map<Integer, Optional<BucketSnapshot>>> getPartitionLatestBucketSnapshot(
-            long partitionId) throws Exception {
+    public Map<Integer, Optional<BucketSnapshot>> getPartitionLatestBucketSnapshot(long partitionId)
+            throws Exception {
         Optional<PartitionAssignment> optPartitionAssignment = getPartitionAssignment(partitionId);
         if (!optPartitionAssignment.isPresent()) {
-            return Optional.empty();
+            return Collections.emptyMap();
         } else {
-            return Optional.of(
-                    getBucketSnapshots(
-                            optPartitionAssignment.get().getTableId(),
-                            partitionId,
-                            optPartitionAssignment.get()));
+            return getBucketSnapshots(
+                    optPartitionAssignment.get().getTableId(),
+                    partitionId,
+                    optPartitionAssignment.get());
         }
     }
 

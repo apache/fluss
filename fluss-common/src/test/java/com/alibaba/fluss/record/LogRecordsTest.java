@@ -34,6 +34,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
+import static com.alibaba.fluss.testutils.DataTestUtils.indexedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FileLogRecords} and {@link MemoryLogRecords}. */
@@ -60,9 +61,7 @@ final class LogRecordsTest extends LogTestBase {
         Object[] objects2 = new Object[] {2, "2"};
 
         List<IndexedRow> rows1 =
-                Arrays.asList(
-                        DataTestUtils.row(baseRowType, objects1),
-                        DataTestUtils.row(baseRowType, objects2));
+                Arrays.asList(indexedRow(baseRowType, objects1), indexedRow(baseRowType, objects2));
         MemoryLogRecords memoryLogRecords1 = DataTestUtils.genIndexedMemoryLogRecords(rows1);
 
         // Create FileLogRecords.

@@ -16,27 +16,29 @@
 
 package com.alibaba.fluss.lakehouse.paimon.source.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.snapshot.SnapshotScanner;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.lakehouse.paimon.record.CdcRecord;
 import com.alibaba.fluss.lakehouse.paimon.source.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.flink.table.data.RowData;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Iterator;
 
 /**
  * A snapshot reader to reading Fluss's snapshot data into {@link MultiplexCdcRecordAndPos}s.
  *
- * <p>It wraps a {@link SnapshotScanner} to read snapshot data, skips the {@link #toSkip} records
- * while reading and produce {@link MultiplexCdcRecordAndPos}s with the current reading records
- * count.
+ * <p>It wraps a {@link BatchScanner} to read snapshot data, skips the {@link #toSkip} records while
+ * reading and produce {@link MultiplexCdcRecordAndPos}s with the current reading records count.
  *
  * <p>In method {@link #readBatch()}, it'll first skip the {@link #toSkip} records, and then return
  * the {@link MultiplexCdcRecordAndPos}s.
@@ -48,7 +50,7 @@ class SnapshotReader implements AutoCloseable {
 
     private final TablePath tablePath;
     private final TableBucket tableBucket;
-    private final SnapshotScanner snapshotScanner;
+    private final BatchScanner snapshotScanner;
     private final FlussRowToFlinkRowConverter converter;
     private long currentReadRecordsCount;
     private long toSkip;
@@ -56,7 +58,7 @@ class SnapshotReader implements AutoCloseable {
     public SnapshotReader(
             TablePath tablePath,
             TableBucket tableBucket,
-            SnapshotScanner snapshotScanner,
+            BatchScanner snapshotScanner,
             FlussRowToFlinkRowConverter converter,
             final long toSkip) {
         this.tablePath = tablePath;
@@ -106,36 +108,36 @@ class SnapshotReader implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         snapshotScanner.close();
     }
 
     private Iterator<ScanRecord> pollBatch() {
-        // reach end, return null directly
-        if (snapshotScanner.reachedEnd()) {
-            return null;
+        try {
+            CloseableIterator<InternalRow> records = snapshotScanner.pollBatch(POLL_TIMEOUT);
+            return records == null ? null : new ScanRecordBatch(records);
+        } catch (IOException e) {
+            throw new FlussRuntimeException("Failed to poll snapshot records", e);
         }
-        Iterator<ScanRecord> records = snapshotScanner.poll(POLL_TIMEOUT);
-        return records == null ? null : new ScanRecordBatch(records);
     }
 
     private static class ScanRecordBatch implements Iterator<ScanRecord> {
         private int currentRecords = 0;
-        private final Iterator<ScanRecord> scanRecordIterator;
+        private final CloseableIterator<InternalRow> recordIterator;
 
-        public ScanRecordBatch(Iterator<ScanRecord> scanRecordIterator) {
-            this.scanRecordIterator = scanRecordIterator;
+        public ScanRecordBatch(CloseableIterator<InternalRow> recordIterator) {
+            this.recordIterator = recordIterator;
         }
 
         @Override
         public boolean hasNext() {
-            return scanRecordIterator.hasNext() && currentRecords < BATCH_SIZE;
+            return recordIterator.hasNext() && currentRecords < BATCH_SIZE;
         }
 
         @Override
         public ScanRecord next() {
             currentRecords++;
-            return scanRecordIterator.next();
+            return new ScanRecord(recordIterator.next());
         }
     }
 
@@ -161,10 +163,7 @@ class SnapshotReader implements AutoCloseable {
 
         @Override
         public void close() {
-            // we have reached end of the snapshot scanner, close it
-            if (snapshotScanner.reachedEnd()) {
-                snapshotScanner.close();
-            }
+            // do nothing
         }
     }
 
@@ -176,7 +175,7 @@ class SnapshotReader implements AutoCloseable {
             long pos) {
         RowData rowData = converter.toFlinkRowData(scanRecord);
         CdcRecord cdcRecord =
-                new CdcRecord(scanRecord.getOffset(), scanRecord.getTimestamp(), rowData);
+                new CdcRecord(scanRecord.logOffset(), scanRecord.timestamp(), rowData);
         return new MultiplexCdcRecordAndPos(tablePath, tableBucket, cdcRecord, pos);
     }
 }

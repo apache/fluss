@@ -18,12 +18,10 @@ package com.alibaba.fluss.server.replica.delay;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.server.utils.timer.DefaultTimer;
 import com.alibaba.fluss.server.utils.timer.Timer;
 import com.alibaba.fluss.server.utils.timer.TimerTask;
-import com.alibaba.fluss.utils.Preconditions;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -35,12 +33,12 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -55,7 +53,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
     private static final int DEFAULT_SHARDS = 512;
 
     private final String managerName;
-    private final Timer timoutTimer;
+    private final Timer timeoutTimer;
 
     private final int serverId;
     private final int purgeInterval;
@@ -65,10 +63,9 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
     private final AtomicInteger estimatedTotalOperations = new AtomicInteger(0);
     private final ExpiredOperationReaper expirationReaper;
 
-    public DelayedOperationManager(
-            String managerName, int serverId, int purgeInterval, MetricGroup metricGroup) {
+    public DelayedOperationManager(String managerName, int serverId, int purgeInterval) {
         this.managerName = managerName;
-        this.timoutTimer = new DefaultTimer(managerName);
+        this.timeoutTimer = new DefaultTimer(managerName);
         this.serverId = serverId;
         this.purgeInterval = purgeInterval;
         this.watcherLists = new ArrayList<>(DEFAULT_SHARDS);
@@ -78,8 +75,6 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
         this.expirationReaper = new ExpiredOperationReaper();
         expirationReaper.start();
-
-        metricGroup.gauge(MetricNames.DELAYED_OPERATIONS_SIZE, this::numDelayed);
     }
 
     /**
@@ -96,7 +91,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
      * @return true if the delayed operations can be completed by the caller
      */
     public boolean tryCompleteElseWatch(T operation, List<Object> watchKeys) {
-        Preconditions.checkArgument(!watchKeys.isEmpty());
+        checkArgument(!watchKeys.isEmpty());
 
         // The cost of tryComplete() is typically proportional to the number of keys. Calling
         // tryComplete() for each key is going to be expensive if there are many keys. Instead, we
@@ -117,7 +112,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
         // if it cannot be completed by now and hence is watched, add to the expiry queue also.
         if (!operation.isCompleted()) {
-            timoutTimer.add(operation);
+            timeoutTimer.add(operation);
 
             if (operation.isCompleted()) {
                 // cancel the timer task.
@@ -163,7 +158,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
     /** Return the number of delayed operations in the expiry queue. */
     public int numDelayed() {
-        return timoutTimer.numOfTimerTasks();
+        return timeoutTimer.numOfTimerTasks();
     }
 
     /**
@@ -220,7 +215,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         expirationReaper.initiateShutdown();
         // improve shutdown time by waking up any ShutdownableThread(s) blocked on poll by
         // sending a no-op.
-        timoutTimer.add(
+        timeoutTimer.add(
                 new TimerTask(0) {
                     @Override
                     public void run() {}
@@ -231,7 +226,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
             throw new FlussRuntimeException("Error while shutdown delayed operation manager", e);
         }
 
-        timoutTimer.shutdown();
+        timeoutTimer.shutdown();
     }
 
     /** A list of operation watching keys. */
@@ -240,7 +235,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         private final Lock watcherLock;
 
         public WatcherList() {
-            this.watchersByKey = new ConcurrentHashMap<>();
+            this.watchersByKey = MapUtils.newConcurrentHashMap();
             this.watcherLock = new ReentrantLock();
         }
 
@@ -346,7 +341,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         }
 
         private void advanceClock() throws InterruptedException {
-            timoutTimer.advanceClock(200L);
+            timeoutTimer.advanceClock(200L);
 
             // Trigger an expiry operation if the number of completed but still being watched
             // operations is

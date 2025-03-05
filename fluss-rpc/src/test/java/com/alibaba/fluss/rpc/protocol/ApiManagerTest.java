@@ -18,8 +18,8 @@ package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.rpc.RpcGateway;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaResponse;
 
@@ -43,8 +43,8 @@ public class ApiManagerTest {
         ApiManager tabletserverApi = new ApiManager(ServerType.TABLET_SERVER);
 
         // both exists
-        assertThat(coordinatorApi.getApi(ApiKeys.GET_TABLE.id)).isNotNull();
-        assertThat(tabletserverApi.getApi(ApiKeys.GET_TABLE.id)).isNotNull();
+        assertThat(coordinatorApi.getApi(ApiKeys.GET_TABLE_INFO.id)).isNotNull();
+        assertThat(tabletserverApi.getApi(ApiKeys.GET_TABLE_INFO.id)).isNotNull();
 
         // coordinator only
         assertThat(coordinatorApi.getApi(ApiKeys.CREATE_TABLE.id)).isNotNull();
@@ -87,8 +87,8 @@ public class ApiManagerTest {
                 .hasMessageContaining(
                         "RPC method [public abstract java.util.concurrent.CompletableFuture "
                                 + InvalidResponseRpcGateway.class.getName()
-                                + ".getTable("
-                                + GetTableRequest.class.getName()
+                                + ".getTableInfo("
+                                + GetTableInfoRequest.class.getName()
                                 + ")] must have a return type of CompletableFuture<T extends ApiMessage>");
 
         assertThatThrownBy(
@@ -99,8 +99,8 @@ public class ApiManagerTest {
                                         new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
-                        "RPC method [getTable] expects to have a response return class "
-                                + "of type GetTableResponse, but is GetTableSchemaResponse");
+                        "RPC method [getTableInfo] expects to have a response return class "
+                                + "of type GetTableInfoResponse, but is GetTableSchemaResponse");
 
         assertThatThrownBy(
                         () ->
@@ -110,8 +110,8 @@ public class ApiManagerTest {
                                         new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
-                        "RPC method [getTable] expects to have a request parameter "
-                                + "of type GetTableRequest, but is GetTableSchemaRequest");
+                        "RPC method [getTableInfo] expects to have a request parameter "
+                                + "of type GetTableInfoRequest, but is GetTableSchemaRequest");
 
         assertThatThrownBy(
                         () ->
@@ -121,36 +121,35 @@ public class ApiManagerTest {
                                         new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
-                        "Different RPC methods are registered with the same API key [GET_TABLE(1007)]");
+                        "Different RPC methods are registered with the same API key [GET_TABLE_INFO(1007)]");
     }
 
     // --------------------------------------------------------------------------------------------
     interface InvalidRpcGateway1 extends RpcGateway {
-        @RPC(api = ApiKeys.GET_TABLE)
+        @RPC(api = ApiKeys.GET_TABLE_INFO)
         void testMethod();
     }
 
     interface InvalidResponseRpcGateway extends RpcGateway {
-        @RPC(api = ApiKeys.GET_TABLE)
-        CompletableFuture<?> getTable(GetTableRequest getTableRequest);
+        @RPC(api = ApiKeys.GET_TABLE_INFO)
+        CompletableFuture<?> getTableInfo(GetTableInfoRequest request);
     }
 
     interface InvalidResponseNamingRpcGateway extends RpcGateway {
-        @RPC(api = ApiKeys.GET_TABLE)
-        CompletableFuture<GetTableSchemaResponse> getTable(GetTableRequest getTableRequest);
+        @RPC(api = ApiKeys.GET_TABLE_INFO)
+        CompletableFuture<GetTableSchemaResponse> getTableInfo(GetTableInfoRequest request);
     }
 
     interface InvalidRequestNamingRpcGateway extends RpcGateway {
-        @RPC(api = ApiKeys.GET_TABLE)
-        CompletableFuture<GetTableResponse> getTable(GetTableSchemaRequest getTableRequest);
+        @RPC(api = ApiKeys.GET_TABLE_INFO)
+        CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableSchemaRequest request);
     }
 
     interface InvalidDuplicatedRpcGateway extends RpcGateway {
-        @RPC(api = ApiKeys.GET_TABLE)
-        CompletableFuture<GetTableResponse> getTable(GetTableRequest getTableRequest);
+        @RPC(api = ApiKeys.GET_TABLE_INFO)
+        CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request);
 
-        @RPC(api = ApiKeys.GET_TABLE)
-        CompletableFuture<GetTableSchemaResponse> getTableSchema(
-                GetTableSchemaRequest getSchemaRequest);
+        @RPC(api = ApiKeys.GET_TABLE_INFO)
+        CompletableFuture<GetTableSchemaResponse> getTableSchema(GetTableSchemaRequest request);
     }
 }

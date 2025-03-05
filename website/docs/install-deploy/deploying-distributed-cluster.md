@@ -13,11 +13,11 @@ This page provides instructions on how to deploy a *distributed cluster* for Flu
 
 Fluss runs on all *UNIX-like environments*, e.g. **Linux**, **Mac OS X**.
 To build a distributed cluster, you need to have at least two nodes.
-This docs provides a simple example of how to deploy a distributed cluster on three nodes.
+This doc provides a simple example of how to deploy a distributed cluster on three nodes.
 
 ### Software Requirements
 
-Before you start to setup the system, make sure you have the following software installed **on each node**:
+Before you start to set up the system, make sure you have the following software installed **on each node**:
 - **Java 17** or higher (Java 8 and Java 11 are not recommended)
 - **Zookeeper 3.6.0** or higher (It is not recommended to use zookeeper versions below 3.6.0)
 
@@ -47,8 +47,8 @@ Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 wi
 Go to the [downloads page](/downloads) and download the latest Fluss release. After downloading the latest release, copy the archive to all the nodes and extract it:
 
 ```shell
-tar -xzf fluss-0.5.0-bin.tgz
-cd fluss-0.5.0/
+tar -xzf fluss-<fluss-version>-bin.tgz
+cd fluss-<fluss-version>/
 ```
 
 ### Configuring Fluss
@@ -128,9 +128,9 @@ You can start a Flink standalone cluster refer to [Flink Environment Preparation
 #### Add catalog
 
 In Flink SQL client, a catalog is created and named by executing the following query:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
-  'type'='fluss',
+  'type' = 'fluss',
   'bootstrap.servers' = '192.168.10.1:9123'
 );
 ```

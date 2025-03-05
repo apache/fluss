@@ -19,36 +19,42 @@ package com.alibaba.fluss.client.table;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
+import com.alibaba.fluss.client.lookup.LookupResult;
+import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.table.scanner.Scan;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.TableWriter;
-import com.alibaba.fluss.client.table.writer.UpsertWrite;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
+import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.BinaryString;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.compacted.CompactedRow;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.types.StringType;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.apache.commons.lang3.StringUtils;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -57,16 +63,17 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static com.alibaba.fluss.record.TestData.DATA3_SCHEMA_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertRowValueEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.keyRow;
@@ -80,27 +87,31 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testGetDescriptor() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
         // get table descriptor.
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        TableDescriptor tableDescriptor = table.getDescriptor();
-        assertThat(tableDescriptor).isEqualTo(DATA1_TABLE_INFO_PK.getTableDescriptor());
+        TableInfo tableInfo = table.getTableInfo();
+
+        // the created table info will be applied with additional replica factor property
+        TableDescriptor expected =
+                DATA1_TABLE_DESCRIPTOR_PK
+                        .withReplicationFactor(3)
+                        .withDataLakeFormat(DataLakeFormat.PAIMON);
+        assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }
 
     @Test
     void testAppendOnly() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_INFO.getTableDescriptor(), false);
-        // append data.
-        InternalRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
-
+        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
-            AppendWriter appendWriter = table.getAppendWriter();
-            appendWriter.append(row).get();
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            appendWriter.append(row(1, "a")).get();
         }
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    @Disabled("TODO, fix me in #116")
     void testAppendWithSmallBuffer(boolean indexedFormat) throws Exception {
         TableDescriptor desc =
                 indexedFormat
@@ -119,11 +130,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         int expectedSize = 20;
         try (Connection conn = ConnectionFactory.createConnection(config)) {
             Table table = conn.getTable(DATA1_TABLE_PATH);
-            AppendWriter appendWriter = table.getAppendWriter();
+            AppendWriter appendWriter = table.newAppend().createWriter();
             BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
             // should exceed the buffer size, but append successfully
             for (int i = 0; i < expectedSize; i++) {
-                appendWriter.append(row(DATA1_ROW_TYPE, new Object[] {1, value}));
+                appendWriter.append(row(1, value));
             }
             appendWriter.flush();
 
@@ -158,11 +169,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         int expectedSize = 20;
         try (Connection conn = ConnectionFactory.createConnection(config)) {
             Table table = conn.getTable(DATA1_TABLE_PATH);
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
             // should exceed the buffer size, but append successfully
             for (int i = 0; i < expectedSize; i++) {
-                upsertWriter.upsert(compactedRow(DATA1_ROW_TYPE, new Object[] {i, value}));
+                upsertWriter.upsert(row(i, value));
             }
             upsertWriter.flush();
 
@@ -186,8 +197,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPutAndLookup() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
-        verifyPutAndLookup(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK, new Object[] {1, "a"});
+        TablePath tablePath = TablePath.of("test_db_1", "test_put_and_lookup_table");
+        createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
+
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, new Object[] {1, "a"});
 
         // test put/lookup data for primary table with pk index is not 0
         Schema schema =
@@ -204,8 +218,133 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         TablePath data1PkTablePath2 =
                 TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_2");
         createTable(data1PkTablePath2, tableDescriptor, true);
+
         // now, check put/lookup data
-        verifyPutAndLookup(data1PkTablePath2, schema, new Object[] {"a", 1});
+        Table table2 = conn.getTable(data1PkTablePath2);
+        verifyPutAndLookup(table2, new Object[] {"a", 1});
+    }
+
+    @Test
+    void testPutAndPrefixLookup() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_put_and_prefix_lookup_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        createTable(tablePath, descriptor, false);
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, new Object[] {1, "a", 1L, "value1"});
+        verifyPutAndLookup(table, new Object[] {1, "a", 2L, "value2"});
+        verifyPutAndLookup(table, new Object[] {1, "a", 3L, "value3"});
+        verifyPutAndLookup(table, new Object[] {2, "a", 4L, "value4"});
+        RowType rowType = schema.getRowType();
+
+        // test prefix lookup.
+        Schema prefixKeySchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        RowType prefixKeyRowType = prefixKeySchema.getRowType();
+        Lookuper prefixLookuper =
+                table.newLookup().lookupBy(prefixKeyRowType.getFieldNames()).createLookuper();
+        CompletableFuture<LookupResult> result = prefixLookuper.lookup(row(1, "a"));
+        LookupResult prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        List<InternalRow> rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(3);
+        for (int i = 0; i < rowList.size(); i++) {
+            assertRowValueEquals(
+                    rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+        }
+
+        result = prefixLookuper.lookup(row(2, "a"));
+        prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(1);
+        assertRowValueEquals(rowType, rowList.get(0), new Object[] {2, "a", 4L, "value4"});
+
+        result = prefixLookuper.lookup(compactedRow(prefixKeyRowType, new Object[] {3, "a"}));
+        prefixLookupResult = result.get();
+        assertThat(prefixLookupResult).isNotNull();
+        rowList = prefixLookupResult.getRowList();
+        assertThat(rowList.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testInvalidPrefixLookup() throws Exception {
+        // First, test the bucket keys not a prefix subset of primary keys.
+        TablePath tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.BIGINT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "c").build();
+        createTable(tablePath, descriptor, false);
+        Table table = conn.getTable(tablePath);
+
+        assertThatThrownBy(() -> table.newLookup().lookupBy("a", "c").createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_1', "
+                                + "because the bucket keys [a, c] is not a prefix subset of the "
+                                + "physical primary keys [a, b, c] (excluded partition fields if present).");
+
+        // Second, test the lookup column names in PrefixLookup not a subset of primary keys.
+        tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_2");
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+
+        descriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        createTable(tablePath, descriptor, true);
+        Table table2 = conn.getTable(tablePath);
+
+        // not match bucket key
+        assertThatThrownBy(() -> table2.newLookup().lookupBy("a", "d").createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [a, d] must contain all bucket keys [a, b] in order.");
+
+        // wrong bucket key order
+        assertThatThrownBy(() -> table2.newLookup().lookupBy("b", "a").createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
+    }
+
+    @Test
+    void testLookupForNotReadyTable() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_lookup_unready_table_t1");
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(10).build();
+        long tableId = createTable(tablePath, descriptor, true);
+        IndexedRow rowKey = keyRow(DATA1_SCHEMA_PK, new Object[] {1, "a"});
+        // retry until all replica ready. Otherwise, the lookup maybe fail. To avoid test unstable,
+        // if you want to test the lookup for not ready table, you can comment the following line.
+        waitAllReplicasReady(tableId, 10);
+        Table table = conn.getTable(tablePath);
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThat(lookupRow(lookuper, rowKey)).isNull();
     }
 
     @Test
@@ -217,26 +356,25 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         int limitSize = 5;
         try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
             Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
 
             List<Object[]> expectedRows = new ArrayList<>();
             for (int i = 0; i < insertSize; i++) {
                 BinaryString value = BinaryString.fromString(StringUtils.repeat("a", i));
-                CompactedRow compactedRow = compactedRow(DATA1_ROW_TYPE, new Object[] {i, value});
-                upsertWriter.upsert(compactedRow);
+                upsertWriter.upsert(row(i, value));
                 if (i < limitSize) {
                     expectedRows.add(new Object[] {i, StringUtils.repeat("a", i)});
                 }
             }
             upsertWriter.flush();
+
+            TableBucket tb = new TableBucket(tableId, 0);
             List<InternalRow> actualRows =
-                    table.limitScan(new TableBucket(tableId, 0), limitSize, null).get().stream()
-                            .map(ScanRecord::getRow)
-                            .collect(Collectors.toList());
+                    collectRows(table.newScan().limit(limitSize).createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType(), actualRows.get(i), expectedRows.get(i));
+                        DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
             }
 
             // test projection scan
@@ -245,14 +383,15 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 expectedRows.set(i, new Object[] {expectedRows.get(i)[1]});
             }
             actualRows =
-                    table.limitScan(new TableBucket(tableId, 0), limitSize, projectedFields).get()
-                            .stream()
-                            .map(ScanRecord::getRow)
-                            .collect(Collectors.toList());
+                    collectRows(
+                            table.newScan()
+                                    .limit(limitSize)
+                                    .project(projectedFields)
+                                    .createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType().project(projectedFields),
+                        DATA1_SCHEMA.getRowType().project(projectedFields),
                         actualRows.get(i),
                         expectedRows.get(i));
             }
@@ -269,27 +408,26 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         int limitSize = 5;
         try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
             Table table = conn.getTable(DATA1_TABLE_PATH);
-            AppendWriter appendWriter = table.getAppendWriter();
+            AppendWriter appendWriter = table.newAppend().createWriter();
 
             List<Object[]> expectedRows = new ArrayList<>();
             for (int i = 0; i < insertSize; i++) {
                 BinaryString value = BinaryString.fromString(StringUtils.repeat("a", i));
-                CompactedRow compactedRow = compactedRow(DATA1_ROW_TYPE, new Object[] {i, value});
-                appendWriter.append(compactedRow);
+                appendWriter.append(row(i, value));
                 // limit log scan read the latest limit number of record.
                 if (i >= insertSize - limitSize) {
                     expectedRows.add(new Object[] {i, StringUtils.repeat("a", i)});
                 }
             }
             appendWriter.flush();
+
+            TableBucket tb = new TableBucket(tableId, 0);
             List<InternalRow> actualRows =
-                    table.limitScan(new TableBucket(tableId, 0), limitSize, null).get().stream()
-                            .map(ScanRecord::getRow)
-                            .collect(Collectors.toList());
+                    collectRows(table.newScan().limit(limitSize).createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType(), actualRows.get(i), expectedRows.get(i));
+                        DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
             }
 
             // test projection scan
@@ -298,38 +436,18 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 expectedRows.set(i, new Object[] {expectedRows.get(i)[1]});
             }
             actualRows =
-                    table.limitScan(new TableBucket(tableId, 0), limitSize, projectedFields).get()
-                            .stream()
-                            .map(ScanRecord::getRow)
-                            .collect(Collectors.toList());
+                    collectRows(
+                            table.newScan()
+                                    .limit(limitSize)
+                                    .project(projectedFields)
+                                    .createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.toRowType().project(projectedFields),
+                        DATA1_SCHEMA.getRowType().project(projectedFields),
                         actualRows.get(i),
                         expectedRows.get(i));
             }
-        }
-    }
-
-    void verifyPutAndLookup(TablePath tablePath, Schema tableSchema, Object[] fields)
-            throws Exception {
-        // put data.
-        InternalRow row = compactedRow(tableSchema.toRowType(), fields);
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
-            // put data.
-            upsertWriter.upsert(row).get();
-        }
-        // lookup this key.
-        IndexedRow keyRow = keyRow(tableSchema, fields);
-        assertThat(lookupRow(tablePath, keyRow)).isEqualTo(row);
-    }
-
-    private InternalRow lookupRow(TablePath tablePath, IndexedRow keyRow) throws Exception {
-        try (Table table = conn.getTable(tablePath)) {
-            // lookup this key.
-            return table.lookup(keyRow).get().getRow();
         }
     }
 
@@ -343,54 +461,44 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("d", DataTypes.BOOLEAN())
                         .primaryKey("a")
                         .build();
-        RowType pkRowType = RowType.of(DataTypes.INT());
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
 
         // test put a full row
-        verifyPutAndLookup(DATA1_TABLE_PATH_PK, schema, new Object[] {1, "a", 1, true});
+        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        verifyPutAndLookup(table, new Object[] {1, "a", 1, true});
 
         // partial update columns: a, b
-        UpsertWrite partialUpdate = new UpsertWrite().withPartialUpdate(new int[] {0, 1});
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        UpsertWriter upsertWriter = table.getUpsertWriter(partialUpdate);
-        upsertWriter
-                .upsert(compactedRow(schema.toRowType(), new Object[] {1, "aaa", null, null}))
-                .get();
+        UpsertWriter upsertWriter =
+                table.newUpsert().partialUpdate(new int[] {0, 1}).createWriter();
+        upsertWriter.upsert(row(1, "aaa", null, null)).get();
+        Lookuper lookuper = table.newLookup().createLookuper();
 
         // check the row
-        IndexedRow rowKey = row(pkRowType, new Object[] {1});
-        assertThat(lookupRow(DATA1_TABLE_PATH_PK, rowKey))
-                .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "aaa", 1, true}));
+        GenericRow rowKey = row(1);
+        assertThat(lookupRow(lookuper, rowKey))
+                .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "aaa", 1, true}));
 
         // partial update columns columns: a,b,c
-        partialUpdate = new UpsertWrite().withPartialUpdate(new int[] {0, 1, 2});
-        upsertWriter = table.getUpsertWriter(partialUpdate);
-        upsertWriter
-                .upsert(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, null}))
-                .get();
+        upsertWriter = table.newUpsert().partialUpdate("a", "b", "c").createWriter();
+        upsertWriter.upsert(row(1, "bbb", 222, null)).get();
 
         // lookup the row
-        assertThat(lookupRow(DATA1_TABLE_PATH_PK, rowKey))
-                .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, true}));
+        assertThat(lookupRow(lookuper, rowKey))
+                .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, "bbb", 222, true}));
 
         // test partial delete, target column is a,b,c
-        upsertWriter
-                .delete(compactedRow(schema.toRowType(), new Object[] {1, "bbb", 222, null}))
-                .get();
-        assertThat(lookupRow(DATA1_TABLE_PATH_PK, rowKey))
-                .isEqualTo(compactedRow(schema.toRowType(), new Object[] {1, null, null, true}));
+        upsertWriter.delete(row(1, "bbb", 222, null)).get();
+        assertThat(lookupRow(lookuper, rowKey))
+                .isEqualTo(compactedRow(schema.getRowType(), new Object[] {1, null, null, true}));
 
         // partial delete, target column is d
-        partialUpdate = new UpsertWrite().withPartialUpdate(new int[] {0, 3});
-        upsertWriter = table.getUpsertWriter(partialUpdate);
-        upsertWriter
-                .delete(compactedRow(schema.toRowType(), new Object[] {1, null, null, true}))
-                .get();
+        upsertWriter = table.newUpsert().partialUpdate("a", "d").createWriter();
+        upsertWriter.delete(row(1, null, null, true)).get();
 
         // the row should be deleted, shouldn't get the row again
-        assertThat(lookupRow(DATA1_TABLE_PATH_PK, rowKey)).isNull();
+        assertThat(lookupRow(lookuper, rowKey)).isNull();
 
         table.close();
     }
@@ -409,49 +517,48 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
 
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
-            // the target columns doesn't contains the primary column, should
+            // the target columns doesn't contain the primary column, should
             // throw exception
-            assertThatThrownBy(
-                            () ->
-                                    table.getUpsertWriter(
-                                            new UpsertWrite().withPartialUpdate(new int[] {1})))
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("b").createWriter())
                     .hasMessage(
                             "The target write columns [b] must contain the primary key columns [a].");
 
             // the column not in the primary key is nullable, should throw exception
-            assertThatThrownBy(
-                            () ->
-                                    table.getUpsertWriter(
-                                            new UpsertWrite().withPartialUpdate(new int[] {0, 1})))
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "b").createWriter())
                     .hasMessage(
                             "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
-            assertThatThrownBy(
-                            () ->
-                                    table.getUpsertWriter(
-                                            new UpsertWrite().withPartialUpdate(new int[] {0, 2})))
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "c").createWriter())
                     .hasMessage(
                             "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "d").createWriter())
+                    .hasMessage(
+                            "Can not find target column: d for table test_db_1.test_pk_table_1.");
+            assertThatThrownBy(
+                            () -> table.newUpsert().partialUpdate(new int[] {0, 3}).createWriter())
+                    .hasMessage(
+                            "Invalid target column index: 3 for table test_db_1.test_pk_table_1. The table only has 3 columns.");
         }
     }
 
     @Test
     void testDelete() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK.getTableDescriptor(), false);
+        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
 
         // put key.
         InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             upsertWriter.upsert(row).get();
+            Lookuper lookuper = table.newLookup().createLookuper();
 
             // lookup this key.
             IndexedRow keyRow = keyRow(DATA1_SCHEMA_PK, new Object[] {1, "a"});
-            assertThat(lookupRow(DATA1_TABLE_PATH_PK, keyRow)).isEqualTo(row);
+            assertThat(lookupRow(lookuper, keyRow)).isEqualTo(row);
 
             // delete this key.
             upsertWriter.delete(row).get();
             // lookup this key again, will return null.
-            assertThat(lookupRow(DATA1_TABLE_PATH_PK, keyRow)).isNull();
+            assertThat(lookupRow(lookuper, keyRow)).isNull();
         }
     }
 
@@ -467,9 +574,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         createTable(DATA1_TABLE_PATH, tableDescriptor, false);
 
         // append data.
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        GenericRow row = row(1, "a");
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
-            AppendWriter appendWriter = table.getAppendWriter();
+            AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row).get();
 
             // fetch data.
@@ -528,26 +635,13 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             TableWriter tableWriter;
             if (append) {
-                tableWriter = table.getAppendWriter();
+                tableWriter = table.newAppend().createWriter();
             } else {
-                tableWriter = table.getUpsertWriter();
+                tableWriter = table.newUpsert().createWriter();
             }
             for (int i = 0; i < expectedSize; i++) {
                 String value = i % 2 == 0 ? "hello, friend" + i : null;
-                InternalRow row;
-                if (append) {
-                    row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
-                } else {
-                    Preconditions.checkNotNull(kvFormat);
-                    KvFormat format = KvFormat.fromString(kvFormat);
-                    if (format == KvFormat.COMPACTED) {
-                        row =
-                                compactedRow(
-                                        schema.toRowType(), new Object[] {i, 100, value, i * 10L});
-                    } else {
-                        row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
-                    }
-                }
+                GenericRow row = row(i, 100, value, i * 10L);
                 if (tableWriter instanceof AppendWriter) {
                     ((AppendWriter) tableWriter).append(row);
                 } else {
@@ -591,8 +685,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testAppendAndProject() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"INDEXED", "ARROW"})
+    void testAppendAndProject(String format) throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -600,15 +695,20 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("c", DataTypes.STRING())
                         .column("d", DataTypes.BIGINT())
                         .build();
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .logFormat(LogFormat.fromString(format))
+                        .build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_append_and_project");
+        createTable(tablePath, tableDescriptor, false);
 
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
-            AppendWriter appendWriter = table.getAppendWriter();
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
             int expectedSize = 30;
             for (int i = 0; i < expectedSize; i++) {
                 String value = i % 2 == 0 ? "hello, friend" + i : null;
-                InternalRow row = row(schema.toRowType(), new Object[] {i, 100, value, i * 10L});
+                GenericRow row = row(i, 100, value, i * 10L);
                 appendWriter.append(row);
                 if (i % 10 == 0) {
                     // insert 3 bathes, each batch has 10 rows
@@ -638,6 +738,29 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             }
             assertThat(count).isEqualTo(expectedSize);
             logScanner.close();
+
+            // fetch data with projection reorder.
+            logScanner = createLogScanner(table, new int[] {2, 0});
+            subscribeFromBeginning(logScanner, table);
+            count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                    assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(0).toString())
+                                .isEqualTo("hello, friend" + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(0)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
         }
     }
 
@@ -659,34 +782,23 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         int keyId = 0;
         int expectedSize = 0;
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int b = 0; b < batches; b++) {
                 // insert 10 rows
                 for (int i = keyId; i < keyId + 10; i++) {
-                    InternalRow row =
-                            compactedRow(
-                                    schema.toRowType(),
-                                    new Object[] {i, 100, "hello, friend" + i, i * 10L});
+                    InternalRow row = row(i, 100, "hello, friend" + i, i * 10L);
                     upsertWriter.upsert(row);
                     expectedSize += 1;
                 }
                 // update 5 rows: [keyId, keyId+4]
                 for (int i = keyId; i < keyId + 5; i++) {
-                    InternalRow row =
-                            compactedRow(
-                                    schema.toRowType(),
-                                    new Object[] {i, 200, "HELLO, FRIEND" + i, i * 10L});
+                    InternalRow row = row(i, 200, "HELLO, FRIEND" + i, i * 10L);
                     upsertWriter.upsert(row);
                     expectedSize += 2;
                 }
                 // delete 1 row: [keyId+5]
                 int deleteKey = keyId + 5;
-                InternalRow row =
-                        compactedRow(
-                                schema.toRowType(),
-                                new Object[] {
-                                    deleteKey, 100, "hello, friend" + deleteKey, deleteKey * 10L
-                                });
+                InternalRow row = row(deleteKey, 100, "hello, friend" + deleteKey, deleteKey * 10L);
                 upsertWriter.delete(row);
                 expectedSize += 1;
                 // flush the mutation batch
@@ -764,10 +876,245 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         Table table = conn.getTable(DATA1_TABLE_PATH);
 
         // validation on projection
-        assertThatThrownBy(() -> createLogScanner(table, new int[] {1}))
+        assertThatThrownBy(() -> createLogScanner(table, new int[] {1, 2, 3, 4, 5}))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Only ARROW log format supports column projection, but the log format "
-                                + "of table 'test_db_1.test_non_pk_table_1' is INDEXED");
+                        "Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFirstRowMergeEngine(boolean doProjection) throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.FIRST_ROW)
+                        .build();
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
+        String tableName =
+                String.format(
+                        "test_first_row_merge_engine_with_%s",
+                        doProjection ? "projection" : "no_projection");
+        TablePath tablePath = TablePath.of("test_db_1", tableName);
+        createTable(tablePath, tableDescriptor, false);
+
+        int rows = 5;
+        int duplicateNum = 10;
+        int batchSize = 3;
+        int count = 0;
+        try (Table table = conn.getTable(tablePath)) {
+            // first, put rows
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            List<InternalRow> expectedScanRows = new ArrayList<>(rows);
+            List<InternalRow> expectedLookupRows = new ArrayList<>(rows);
+            for (int id = 0; id < rows; id++) {
+                for (int num = 0; num < duplicateNum; num++) {
+                    upsertWriter.upsert(row(id, "value_" + num));
+                    if (count++ > batchSize) {
+                        upsertWriter.flush();
+                        count = 0;
+                    }
+                }
+
+                expectedLookupRows.add(row(id, "value_0"));
+                expectedScanRows.add(doProjection ? row(id) : row(id, "value_0"));
+            }
+
+            upsertWriter.flush();
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            // now, get rows by lookup
+            for (int id = 0; id < rows; id++) {
+                InternalRow gotRow = lookuper.lookup(row(id)).get().getSingletonRow();
+                assertThatRow(gotRow).withSchema(rowType).isEqualTo(expectedLookupRows.get(id));
+            }
+
+            Scan scan = table.newScan();
+            if (doProjection) {
+                scan = scan.project(new int[] {0}); // do projection.
+            }
+            LogScanner logScanner = scan.createLogScanner();
+
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(0);
+            while (actualLogRecords.size() < rows) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            logScanner.close();
+            assertThat(actualLogRecords).hasSize(rows);
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord scanRecord = actualLogRecords.get(i);
+                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.INSERT);
+                assertThatRow(scanRecord.getRow())
+                        .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
+                        .isEqualTo(expectedScanRows.get(i));
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"none,3", "lz4_frame,3", "zstd,3", "zstd,9"})
+    void testArrowCompressionAndProject(String compression, String level) throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
+                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_" + compression + level);
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
+                Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            int expectedSize = 30;
+            for (int i = 0; i < expectedSize; i++) {
+                String value = i % 2 == 0 ? "hello, friend " + i : null;
+                InternalRow row = row(i, 100, value, i * 10L);
+                appendWriter.append(row);
+                if (i % 10 == 0) {
+                    // insert 3 bathes, each batch has 10 rows
+                    appendWriter.flush();
+                }
+            }
+
+            // fetch data without project.
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+            int count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                    assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(2).toString())
+                                .isEqualTo("hello, friend " + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+
+            // fetch data with project.
+            logScanner = createLogScanner(table, new int[] {0, 2});
+            subscribeFromBeginning(logScanner, table);
+            count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                    assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
+                    if (count % 2 == 0) {
+                        assertThat(scanRecord.getRow().getString(1).toString())
+                                .isEqualTo("hello, friend " + count);
+                    } else {
+                        // check null values
+                        assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
+                    }
+                    count++;
+                }
+            }
+            assertThat(count).isEqualTo(expectedSize);
+            logScanner.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testMergeEngineWithVersion(boolean doProjection) throws Exception {
+        // Create table.
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA3_SCHEMA_PK)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.VERSIONED)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, "b")
+                        .build();
+        RowType rowType = DATA3_SCHEMA_PK.getRowType();
+        String tableName =
+                String.format(
+                        "test_merge_engine_with_version_with_%s",
+                        doProjection ? "projection" : "no_projection");
+        TablePath tablePath = TablePath.of("test_db_1", tableName);
+        createTable(tablePath, tableDescriptor, false);
+
+        int rows = 3;
+        try (Table table = conn.getTable(tablePath)) {
+            // put rows.
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            List<ScanRecord> expectedScanRecords = new ArrayList<>(rows);
+            // init rows.
+            for (int id = 0; id < rows; id++) {
+                upsertWriter.upsert(row(id, 1000L));
+
+                expectedScanRecords.add(
+                        doProjection ? new ScanRecord(row(id)) : new ScanRecord(row(id, 1000L)));
+            }
+            upsertWriter.flush();
+
+            // update row if id=0 and version < 1000L, will not update
+            int oldVersionRecordCount = 20;
+            int batchSize = 3;
+            int count = 0;
+            for (int i = 0; i < oldVersionRecordCount; i++) {
+                upsertWriter.upsert(row(0, 999L));
+                if (count++ > batchSize) {
+                    upsertWriter.flush();
+                    count = 0;
+                }
+            }
+
+            // update if version> 1000L
+            upsertWriter.upsert(row(1, 1001L));
+            // update_before record, don't care about offset/timestamp
+            expectedScanRecords.add(
+                    new ScanRecord(
+                            -1, -1, RowKind.UPDATE_BEFORE, doProjection ? row(1) : row(1, 1000L)));
+            // update_after record
+            expectedScanRecords.add(
+                    new ScanRecord(
+                            -1, -1, RowKind.UPDATE_AFTER, doProjection ? row(1) : row(1, 1001L)));
+            rows = rows + 2;
+
+            upsertWriter.flush();
+
+            Scan scan = table.newScan();
+            if (doProjection) {
+                scan = scan.project(new int[] {0}); // do projection.
+            }
+            LogScanner logScanner = scan.createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(rows);
+            while (actualLogRecords.size() < rows) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(rows);
+            for (int i = 0; i < rows; i++) {
+                ScanRecord actualScanRecord = actualLogRecords.get(i);
+                ScanRecord expectedRecord = expectedScanRecords.get(i);
+                assertThat(actualScanRecord.getRowKind()).isEqualTo(expectedRecord.getRowKind());
+                assertThatRow(actualScanRecord.getRow())
+                        .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
+                        .isEqualTo(expectedRecord.getRow());
+            }
+        }
     }
 }

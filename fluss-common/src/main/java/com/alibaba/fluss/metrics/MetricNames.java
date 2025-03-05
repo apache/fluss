@@ -48,7 +48,13 @@ public class MetricNames {
     public static final String REPLICA_LEADER_COUNT = "leaderCount";
     public static final String REPLICA_COUNT = "replicaCount";
     public static final String WRITE_ID_COUNT = "writerIdCount";
-    public static final String DELAYED_OPERATIONS_SIZE = "delayedOperationsSize";
+    public static final String DELAYED_WRITE_COUNT = "delayedWriteCount";
+    public static final String DELAYED_WRITE_EXPIRES_RATE = "delayedWriteExpiresPerSecond";
+    public static final String DELAYED_FETCH_COUNT = "delayedFetchCount";
+    public static final String DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE =
+            "delayedFetchFromFollowerExpiresPerSecond";
+    public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
+            "delayedFetchFromClientExpiresPerSecond";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table
@@ -76,6 +82,10 @@ public class MetricNames {
     public static final String FAILED_PUT_KV_REQUESTS_RATE = "failedPutKvRequestsPerSecond";
     public static final String TOTAL_LIMIT_SCAN_REQUESTS_RATE = "totalLimitScanRequestsPerSecond";
     public static final String FAILED_LIMIT_SCAN_REQUESTS_RATE = "failedLimitScanRequestsPerSecond";
+    public static final String TOTAL_PREFIX_LOOKUP_REQUESTS_RATE =
+            "totalPrefixLookupRequestsPerSecond";
+    public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
+            "failedPrefixLookupRequestsPerSecond";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket
@@ -98,6 +108,13 @@ public class MetricNames {
 
     // for kv tablet
     public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
+    public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE =
+            "preWriteBufferTruncateAsDuplicatedPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
+            "preWriteBufferTruncateAsErrorPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_FLUSH_RATE = "preWriteBufferFlushPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS =
+            "preWriteBufferFlushLatencyMs";
 
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
@@ -116,13 +133,7 @@ public class MetricNames {
     // for writer
     public static final String WRITER_BUFFER_TOTAL_BYTES = "bufferTotalBytes";
     public static final String WRITER_BUFFER_AVAILABLE_BYTES = "bufferAvailableBytes";
-    public static final String WRITER_BUFFER_POOL_WAIT_TIME_MS = "bufferPoolWaitTimeMs";
-    public static final String WRITER_MEMORY_SEGMENT_POOL_TOTAL_BYTES =
-            "memorySegmentPoolTotalBytes";
-    public static final String WRITER_MEMORY_SEGMENT_POOL_AVAILABLE_PAGE_COUNT =
-            "memorySegmentPoolAvailablePageCount";
-    public static final String WRITER_MEMORY_SEGMENT_POOL_WAITER_COUNT =
-            "memorySegmentPoolWaiterCount";
+    public static final String WRITER_BUFFER_WAITING_THREADS = "bufferWaitingThreads";
     public static final String WRITER_BATCH_QUEUE_TIME_MS = "batchQueueTimeMs";
     public static final String WRITER_RECORDS_RETRY_RATE = "recordsRetryPerSecond";
     public static final String WRITER_RECORDS_SEND_RATE = "recordSendPerSecond";
@@ -141,4 +152,11 @@ public class MetricNames {
     public static final String SCANNER_REMOTE_FETCH_BYTES_RATE = "remoteFetchBytesPerSecond";
     public static final String SCANNER_REMOTE_FETCH_RATE = "remoteFetchRequestsPerSecond";
     public static final String SCANNER_REMOTE_FETCH_ERROR_RATE = "remoteFetchErrorPerSecond";
+
+    // for netty
+    public static final String NETTY_USED_DIRECT_MEMORY = "usedDirectMemory";
+    public static final String NETTY_NUM_DIRECT_ARENAS = "numDirectArenas";
+    public static final String NETTY_NUM_ALLOCATIONS_PER_SECONDS = "numAllocationsPerSecond";
+    public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS =
+            "numHugeAllocationsPerSecond";
 }

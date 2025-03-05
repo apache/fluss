@@ -25,8 +25,8 @@ Go to the [downloads page](/downloads) and download the latest Fluss release. Ma
 package **matching your Java version**. After downloading the latest release, extract it:
 
 ```shell
-tar -xzf fluss-0.5.0-bin.tgz
-cd fluss-0.5.0/
+tar -xzf fluss-<fluss-version>-bin.tgz
+cd fluss-<fluss-version>/
 ```
 
 ## Starting Fluss Local Cluster
@@ -56,9 +56,9 @@ You can start a Flink standalone cluster refer to [Flink Environment Preparation
 #### Add catalog
 
 In Flink SQL client, a catalog is created and named by executing the following query:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
-  'type'='fluss',
+  'type' = 'fluss',
   'bootstrap.servers' = 'localhost:9123'
 );
 ```

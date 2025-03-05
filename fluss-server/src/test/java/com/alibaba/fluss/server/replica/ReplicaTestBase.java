@@ -23,8 +23,10 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -75,6 +77,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -86,18 +89,18 @@ import java.util.stream.Collectors;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
-import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA2_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA2_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_PATH;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
@@ -216,35 +219,37 @@ public class ReplicaTestBase {
         TableDescriptor data1NonPkTableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build();
         zkClient.registerTable(
-                DATA1_TABLE_PATH, TableRegistration.of(DATA1_TABLE_ID, data1NonPkTableDescriptor));
+                DATA1_TABLE_PATH,
+                TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
         zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
-                TableRegistration.of(DATA1_TABLE_ID_PK, DATA1_TABLE_INFO_PK.getTableDescriptor()));
+                TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
-                TableRegistration.of(DATA2_TABLE_ID, DATA2_TABLE_INFO.getTableDescriptor()));
+                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
-    protected long registerTableInZkClient(int tieredLogLocalSegment) throws Exception {
-        long tableId = 200;
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(3)
-                        .property(
-                                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS,
-                                tieredLogLocalSegment)
-                        .build();
+    protected long registerTableInZkClient(
+            TablePath tablePath,
+            Schema schema,
+            long tableId,
+            List<String> bucketKeys,
+            Map<String, String> properties)
+            throws Exception {
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder().schema(schema).distributedBy(3, bucketKeys);
+        properties.forEach(builder::property);
+        TableDescriptor tableDescriptor = builder.build();
         // if exists, drop it firstly
-        if (zkClient.tableExist(DATA1_TABLE_PATH)) {
-            zkClient.deleteTable(DATA1_TABLE_PATH);
+        if (zkClient.tableExist(tablePath)) {
+            zkClient.deleteTable(tablePath);
         }
-        zkClient.registerTable(DATA1_TABLE_PATH, TableRegistration.of(tableId, tableDescriptor));
-        zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
+        zkClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableDescriptor));
+        zkClient.registerSchema(tablePath, schema);
         return tableId;
     }
 
@@ -262,7 +267,8 @@ public class ReplicaTestBase {
                 snapshotReporter,
                 NOPErrorHandler.INSTANCE,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
-                remoteLogManager);
+                remoteLogManager,
+                manualClock);
     }
 
     @AfterEach
@@ -291,6 +297,10 @@ public class ReplicaTestBase {
 
         if (rpcClient != null) {
             rpcClient.close();
+        }
+
+        if (scheduler != null) {
+            scheduler.shutdown();
         }
 
         // clear zk environment.
@@ -332,14 +342,16 @@ public class ReplicaTestBase {
 
     // TODO this is only for single tablet server unit test.
     // TODO add more test cases for partition table which make leader by this method.
-    protected void makeKvTableAsLeader(int bucketId) {
+    protected void makeKvTableAsLeader(long tableId, TablePath tablePath, int bucketId) {
         makeKvTableAsLeader(
-                new TableBucket(DATA1_TABLE_ID_PK, bucketId), INITIAL_LEADER_EPOCH, false);
+                new TableBucket(tableId, bucketId), tablePath, INITIAL_LEADER_EPOCH, false);
     }
 
-    protected void makeKvTableAsLeader(TableBucket tb, int leaderEpoch, boolean partitionTable) {
+    protected void makeKvTableAsLeader(
+            TableBucket tb, TablePath tablePath, int leaderEpoch, boolean partitionTable) {
         makeKvTableAsLeader(
                 tb,
+                tablePath,
                 Collections.singletonList(TABLET_SERVER_ID),
                 Collections.singletonList(TABLET_SERVER_ID),
                 leaderEpoch,
@@ -348,6 +360,7 @@ public class ReplicaTestBase {
 
     protected void makeKvTableAsLeader(
             TableBucket tb,
+            TablePath tablePath,
             List<Integer> replicas,
             List<Integer> isr,
             int leaderEpoch,
@@ -357,7 +370,7 @@ public class ReplicaTestBase {
                         new NotifyLeaderAndIsrData(
                                 partitionTable
                                         ? DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024
-                                        : DATA1_PHYSICAL_TABLE_PATH_PK,
+                                        : PhysicalTablePath.of(tablePath),
                                 tb,
                                 replicas,
                                 new LeaderAndIsr(
@@ -421,12 +434,14 @@ public class ReplicaTestBase {
                                         conf.getString(ConfigOptions.DATA_DIR),
                                         HIGH_WATERMARK_CHECKPOINT_FILE_NAME))),
                 replicaManager.getDelayedWriteManager(),
+                replicaManager.getDelayedFetchLogManager(),
                 replicaManager.getAdjustIsrManager(),
                 snapshotContext,
                 serverMetadataCache,
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build());
+                DATA1_TABLE_INFO,
+                manualClock);
     }
 
     private void initRemoteLogEnv() throws Exception {
@@ -501,7 +516,7 @@ public class ReplicaTestBase {
                 .collect(Collectors.toSet());
     }
 
-    /** A implementation of {@link SnapshotContext} for test purpose. */
+    /** An implementation of {@link SnapshotContext} for test purpose. */
     protected class TestSnapshotContext implements SnapshotContext {
 
         private final FsPath remoteKvTabletDir;

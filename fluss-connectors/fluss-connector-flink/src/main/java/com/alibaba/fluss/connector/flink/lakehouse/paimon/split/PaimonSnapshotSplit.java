@@ -82,10 +82,13 @@ public class PaimonSnapshotSplit extends SourceSplitBase {
     @Override
     public String toString() {
         return "PaimonSnapshotSplit{"
-                + "fileStoreSourceSplit="
-                + fileStoreSourceSplit
-                + ", tableBucket="
+                + "tableBucket="
                 + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + ", fileStoreSourceSplit="
+                + fileStoreSourceSplit
                 + '}';
     }
 }

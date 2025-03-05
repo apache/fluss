@@ -27,7 +27,6 @@ import com.alibaba.fluss.metrics.Meter;
 import com.alibaba.fluss.metrics.Metric;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.reporter.MetricReporter;
-import com.alibaba.fluss.utils.Preconditions;
 
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
@@ -47,6 +46,8 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -72,7 +73,7 @@ public class PrometheusReporter implements MetricReporter {
     private int port;
 
     int getPort() {
-        Preconditions.checkState(httpServer != null, "Server has not been initialized.");
+        checkState(httpServer != null, "Server has not been initialized.");
         return port;
     }
 

@@ -21,7 +21,7 @@ package com.alibaba.fluss.testutils.common;
  * exceptions.
  *
  * <p>Rather than overriding {@link Thread#run()} (or supplying a {@link Runnable}), one needs to
- * extends this class and implement the {@link #go()} method. That method may throw exceptions.
+ * extend this class and implement the {@link #go()} method. That method may throw exceptions.
  *
  * <p>Exception from the {@link #go()} method are caught and re-thrown when joining this thread via
  * the {@link #sync()} method.

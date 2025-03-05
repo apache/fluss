@@ -17,7 +17,6 @@
 package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -31,6 +30,7 @@ import java.nio.ByteOrder;
 import java.nio.ReadOnlyBufferException;
 
 import static com.alibaba.fluss.memory.MemoryUtils.getByteBufferAddress;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -257,7 +257,7 @@ public final class MemorySegment {
                 return ByteBuffer.wrap(heapMemory, offset, length);
             } else {
                 try {
-                    ByteBuffer wrapper = Preconditions.checkNotNull(offHeapBuffer).duplicate();
+                    ByteBuffer wrapper = checkNotNull(offHeapBuffer).duplicate();
                     wrapper.limit(offset + length);
                     wrapper.position(offset);
                     return wrapper;

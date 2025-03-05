@@ -377,7 +377,7 @@ public final class LogSegment {
     }
 
     /**
-     * Calculate the offset that would be used for the next message to be append to this segment.
+     * Calculate the offset that would be used for the next message to be appended to this segment.
      * Note that this is expensive.
      */
     public long readNextOffset() throws IOException {
@@ -585,7 +585,7 @@ public final class LogSegment {
      *       greater than or equals to the startingOffset.
      * </pre>
      *
-     * <p>This method only returns None when 1) all recordBatch' endOffset < startOffset or 2) the
+     * <p>This method only returns None when 1) all recordBatch's endOffset < startOffset or 2) the
      * log is not empty, but we did not see any recordBatch when scanning the log from the indexed
      * position. The latter could happen if the log is truncated after we get the indexed position
      * but before we scan the log from there. In this case we simply return None and the caller will

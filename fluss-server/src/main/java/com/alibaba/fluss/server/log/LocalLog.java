@@ -370,14 +370,10 @@ public final class LocalLog {
             throws IOException {
         if (LOG.isTraceEnabled()) {
             LOG.trace(
-                    "Reading maximum "
-                            + maxLength
-                            + " bytes at offset "
-                            + readOffset
-                            + " from log with "
-                            + "total length "
-                            + segments.sizeInBytes()
-                            + " bytes");
+                    "Reading maximum {} bytes at offset {} from log with total length {} bytes",
+                    maxLength,
+                    readOffset,
+                    segments.sizeInBytes());
         }
 
         long startOffset = localLogStartOffset;

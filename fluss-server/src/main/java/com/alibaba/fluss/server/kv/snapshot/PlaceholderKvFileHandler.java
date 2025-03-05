@@ -17,8 +17,8 @@
 package com.alibaba.fluss.server.kv.snapshot;
 
 /**
- * A placeholder handle for shared kv files that will replaced by an original that was created in a
- * previous snapshot. This class is used in the referenced kv files of {@link KvSnapshotHandle}.
+ * A placeholder handle for shared kv files that will be replaced by an original that was created in
+ * a previous snapshot. This class is used in the referenced kv files of {@link KvSnapshotHandle}.
  */
 public class PlaceholderKvFileHandler extends KvFileHandle {
 

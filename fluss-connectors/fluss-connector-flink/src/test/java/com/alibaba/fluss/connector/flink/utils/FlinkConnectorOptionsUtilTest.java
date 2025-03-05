@@ -20,6 +20,7 @@ import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
 
 import java.time.ZoneId;
+import java.util.TimeZone;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static com.alibaba.fluss.connector.flink.utils.FlinkConnectorOptionsUtils.parseTimestamp;
@@ -41,7 +42,7 @@ class FlinkConnectorOptionsUtilTest {
                         parseTimestamp(
                                 "2023-12-09 23:09:12",
                                 SCAN_STARTUP_TIMESTAMP.key(),
-                                ZoneId.systemDefault()))
+                                TimeZone.getTimeZone("Asia/Shanghai").toZoneId()))
                 .isEqualTo(1702134552000L);
 
         assertThatThrownBy(

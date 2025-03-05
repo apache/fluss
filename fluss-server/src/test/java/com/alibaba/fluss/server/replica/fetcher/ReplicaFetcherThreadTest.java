@@ -44,6 +44,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
+import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.FlussScheduler;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
@@ -66,8 +67,8 @@ import java.util.function.Consumer;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -90,7 +91,6 @@ public class ReplicaFetcherThreadTest {
     private ReplicaManager leaderRM;
     private ServerNode leader;
     private ReplicaManager followerRM;
-    private ServerNode follower;
     private ReplicaFetcherThread followerFetcher;
 
     @BeforeAll
@@ -110,7 +110,8 @@ public class ReplicaFetcherThreadTest {
         followerRM = createReplicaManager(followerServerId);
         // with local test leader end point.
         leader = new ServerNode(leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER);
-        follower = new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER);
+        ServerNode follower =
+                new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER);
         followerFetcher =
                 new ReplicaFetcherThread(
                         "test-fetcher-thread",
@@ -165,7 +166,7 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.of(DATA1_TABLE_ID, DATA1_TABLE_INFO.getTableDescriptor()));
+                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 
@@ -219,7 +220,8 @@ public class ReplicaFetcherThreadTest {
                         serverId,
                         new ServerMetadataCacheImpl(),
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        SystemClock.getInstance());
         replicaManager.startup();
         return replicaManager;
     }
@@ -238,7 +240,8 @@ public class ReplicaFetcherThreadTest {
                 int serverId,
                 ServerMetadataCache metadataCache,
                 RpcClient rpcClient,
-                TabletServerMetricGroup serverMetricGroup)
+                TabletServerMetricGroup serverMetricGroup,
+                Clock clock)
                 throws IOException {
             super(
                     conf,
@@ -252,7 +255,8 @@ public class ReplicaFetcherThreadTest {
                     new TestCoordinatorGateway(),
                     new TestingCompletedKvSnapshotCommitter(),
                     NOPErrorHandler.INSTANCE,
-                    serverMetricGroup);
+                    serverMetricGroup,
+                    clock);
         }
 
         @Override

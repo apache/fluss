@@ -26,13 +26,13 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.types.RowType;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -73,7 +73,8 @@ public class FlinkPaimonTestBase {
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                 // not to clean snapshots for test purpose
                 .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
-        conf.set(ConfigOptions.LAKEHOUSE_STORAGE, "paimon");
+        conf.setString("datalake.format", "paimon");
+        conf.setString("datalake.paimon.metastore", "filesystem");
         try {
             warehousePath =
                     Files.createTempDirectory("fluss-testing-datalake-tiered")
@@ -82,10 +83,7 @@ public class FlinkPaimonTestBase {
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
-        Map<String, String> paimonConf = getPaimonCatalogConf();
-        for (Map.Entry<String, String> entry : paimonConf.entrySet()) {
-            conf.setString("paimon.catalog." + entry.getKey(), entry.getValue());
-        }
+        conf.setString("datalake.paimon.warehouse", warehousePath);
         return conf;
     }
 
@@ -98,12 +96,12 @@ public class FlinkPaimonTestBase {
 
     @BeforeEach
     void beforeEach() throws Exception {
-        admin.createDatabase(DEFAULT_DB, true).get();
+        admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 
     protected static Map<String, String> getPaimonCatalogConf() {
         Map<String, String> paimonConf = new HashMap<>();
-        paimonConf.put("type", "filesystem");
+        paimonConf.put("metastore", "filesystem");
         paimonConf.put("warehouse", warehousePath);
         return paimonConf;
     }
@@ -123,7 +121,7 @@ public class FlinkPaimonTestBase {
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
@@ -138,9 +136,9 @@ public class FlinkPaimonTestBase {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
-                tableWriter = table.getAppendWriter();
+                tableWriter = table.newAppend().createWriter();
             } else {
-                tableWriter = table.getUpsertWriter();
+                tableWriter = table.newUpsert().createWriter();
             }
             for (InternalRow row : rows) {
                 if (tableWriter instanceof AppendWriter) {
@@ -158,15 +156,14 @@ public class FlinkPaimonTestBase {
             TableDescriptor tableDescriptor,
             Map<Long, String> partitionNameByIds)
             throws Exception {
-        RowType rowType = tableDescriptor.getSchema().toRowType();
         List<InternalRow> rows = new ArrayList<>();
         Map<String, List<InternalRow>> writtenRowsByPartition = new HashMap<>();
         for (String partitionName : partitionNameByIds.values()) {
             List<InternalRow> partitionRows =
                     Arrays.asList(
-                            row(rowType, new Object[] {11, "v1", partitionName}),
-                            row(rowType, new Object[] {12, "v2", partitionName}),
-                            row(rowType, new Object[] {13, "v3", partitionName}));
+                            row(11, "v1", partitionName),
+                            row(12, "v2", partitionName),
+                            row(13, "v3", partitionName));
             rows.addAll(partitionRows);
             writtenRowsByPartition.put(partitionName, partitionRows);
         }

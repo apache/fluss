@@ -27,7 +27,7 @@ import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -37,7 +37,6 @@ import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +52,7 @@ import java.util.Set;
 
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -121,7 +121,7 @@ public class Sender implements Runnable {
         this.inFlightBatches = new HashMap<>();
 
         this.metadataUpdater = metadataUpdater;
-        Preconditions.checkNotNull(metadataUpdater.getCoordinatorServer());
+        checkNotNull(metadataUpdater.getCoordinatorServer());
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
@@ -203,21 +203,26 @@ public class Sender implements Runnable {
         Set<ServerNode> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
-            // will cause the CPU to be occupied. Currently, we just sleep 1 second to avoid this.
+            // will cause the CPU to be occupied.
             // In the future, we need to introduce delay logic to deal with it.
-            Thread.sleep(1);
+            // TODO: condition waiter
+            Thread.sleep(readyCheckResult.nextReadyCheckDelayMs);
         }
 
         // get the list of batches prepare to send.
         Map<Integer, List<WriteBatch>> batches =
                 accumulator.drain(metadataUpdater.getCluster(), readyNodes, maxRequestSize);
-        addToInflightBatches(batches);
 
-        updateWriterMetrics(batches);
+        if (!batches.isEmpty()) {
+            addToInflightBatches(batches);
 
-        // TODO add logic for batch expire.
+            // TODO add logic for batch expire.
 
-        sendWriteRequests(batches);
+            sendWriteRequests(batches);
+
+            // move metrics update to the end to make sure the batches has been built.
+            updateWriterMetrics(batches);
+        }
     }
 
     private void completeBatch(WriteBatch batch) {
@@ -327,10 +332,8 @@ public class Sender implements Runnable {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         writeBatchByTable.forEach(
                 (tableId, writeBatches) -> {
-                    TableDescriptor tableDescriptor =
-                            metadataUpdater.getTableDescriptorOrElseThrow(tableId);
-
-                    if (tableDescriptor.hasPrimaryKey()) {
+                    TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
+                    if (tableInfo.hasPrimaryKey()) {
                         sendPutKvRequestAndHandleResponse(
                                 gateway,
                                 makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
@@ -525,10 +528,14 @@ public class Sender implements Runnable {
                                 int recordCount = batch.getRecordCount();
                                 writerMetricGroup.recordsSendTotal().inc(recordCount);
                                 writerMetricGroup.setBatchQueueTimeMs(batch.getQueueTimeMs());
-                                writerMetricGroup.bytesSendTotal().inc(batch.sizeInBytes());
+                                writerMetricGroup
+                                        .bytesSendTotal()
+                                        .inc(batch.estimatedSizeInBytes());
 
                                 writerMetricGroup.recordPerBatch().update(recordCount);
-                                writerMetricGroup.bytesPerBatch().update(batch.sizeInBytes());
+                                writerMetricGroup
+                                        .bytesPerBatch()
+                                        .update(batch.estimatedSizeInBytes());
                             }
                         });
     }

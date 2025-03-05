@@ -35,6 +35,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
+import com.alibaba.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,6 @@ import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
@@ -59,7 +59,7 @@ final class ServerConnection {
     private final ServerNode node;
 
     // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
-    private final Map<Integer, InflightRequest> inflightRequests = new ConcurrentHashMap<>();
+    private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
 
@@ -327,8 +327,15 @@ final class ServerConnection {
                                         if (!future.isSuccess()) {
                                             connectionMetricGroup.updateMetricsAfterGetResponse(
                                                     apiKey, inflight.requestStartTime, 0);
-                                            inflight.responseFuture.completeExceptionally(
-                                                    future.cause());
+                                            Throwable cause = future.cause();
+                                            if (cause instanceof IOException) {
+                                                // when server close the channel, the cause will be
+                                                // IOException, if the cause is IOException, we wrap
+                                                // it as retryable NetworkException to retry to
+                                                // connect
+                                                cause = new NetworkException(cause);
+                                            }
+                                            inflight.responseFuture.completeExceptionally(cause);
                                             inflightRequests.remove(inflight.requestId);
                                         }
                                     });

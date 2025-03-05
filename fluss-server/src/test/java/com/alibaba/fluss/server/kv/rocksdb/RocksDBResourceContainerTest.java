@@ -152,9 +152,9 @@ class RocksDBResourceContainerTest {
         configuration.set(
                 ConfigOptions.KV_COMPRESSION_PER_LEVEL,
                 Arrays.asList(
-                        ConfigOptions.CompressionType.NO,
-                        ConfigOptions.CompressionType.LZ4,
-                        ConfigOptions.CompressionType.ZSTD));
+                        ConfigOptions.KvCompressionType.NO,
+                        ConfigOptions.KvCompressionType.LZ4,
+                        ConfigOptions.KvCompressionType.ZSTD));
 
         try (RocksDBResourceContainer optionsContainer =
                 new RocksDBResourceContainer(configuration, null, true)) {

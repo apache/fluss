@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.plugin;
 
-import com.alibaba.fluss.utils.Preconditions;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -37,6 +35,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 
@@ -57,7 +56,7 @@ public class DirectoryBasedPluginFinderTest {
                         .collect(Collectors.toList());
 
         for (File subDir : subDirs) {
-            Preconditions.checkState(subDir.mkdirs());
+            checkState(subDir.mkdirs());
         }
 
         try {
@@ -69,8 +68,8 @@ public class DirectoryBasedPluginFinderTest {
 
         for (File subDir : subDirs) {
             // we create a file and another subfolder to check that they are ignored
-            Preconditions.checkState(new File(subDir, "ignore-test.zip").createNewFile());
-            Preconditions.checkState(new File(subDir, "ignore-dir").mkdirs());
+            checkState(new File(subDir, "ignore-test.zip").createNewFile());
+            checkState(new File(subDir, "ignore-dir").mkdirs());
         }
 
         try {
@@ -88,7 +87,7 @@ public class DirectoryBasedPluginFinderTest {
 
             for (int j = 0; j <= i; ++j) {
                 File file = new File(subDir, "jar-file-" + j + ".jar");
-                Preconditions.checkState(file.createNewFile());
+                checkState(file.createNewFile());
                 jarURLs[j] = file.toURI().toURL();
             }
 

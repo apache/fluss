@@ -41,6 +41,10 @@ public class PhysicalTablePath implements Serializable {
 
     private final @Nullable String partitionName;
 
+    // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
+    // RecordAccumulator.ready)
+    private Integer hash;
+
     private PhysicalTablePath(TablePath tablePath, @Nullable String partitionName) {
         this.tablePath = tablePath;
         this.partitionName = partitionName;
@@ -80,8 +84,20 @@ public class PhysicalTablePath implements Serializable {
      * Returns true if the database name, table name and the optional partition name are all valid.
      */
     public boolean isValid() {
-        return getTablePath().isValid()
-                && (partitionName == null || detectInvalidName(partitionName) == null);
+        if (!getTablePath().isValid()) {
+            return false;
+        }
+
+        if (partitionName != null) {
+            String[] partitionValues = partitionName.split("\\$");
+            for (String partitionValue : partitionValues) {
+                if (detectInvalidName(partitionValue) != null) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     @Override
@@ -99,7 +115,14 @@ public class PhysicalTablePath implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(tablePath, partitionName);
+        Integer h = this.hash;
+        if (h == null) {
+            int result = Objects.hash(tablePath, partitionName);
+            this.hash = result;
+            return result;
+        } else {
+            return h;
+        }
     }
 
     @Override

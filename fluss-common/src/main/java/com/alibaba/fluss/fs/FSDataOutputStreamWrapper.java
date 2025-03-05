@@ -17,10 +17,11 @@
 package com.alibaba.fluss.fs;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.WrappingProxy;
 
 import java.io.IOException;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Simple forwarding wrapper around {@link FSDataInputStream}. */
 @Internal
@@ -30,7 +31,7 @@ public class FSDataOutputStreamWrapper extends FSDataOutputStream
     protected final FSDataOutputStream outputStream;
 
     public FSDataOutputStreamWrapper(FSDataOutputStream outputStream) {
-        this.outputStream = Preconditions.checkNotNull(outputStream);
+        this.outputStream = checkNotNull(outputStream);
     }
 
     @Override

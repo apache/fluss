@@ -36,6 +36,9 @@ public final class LogAppendInfo {
     private long maxTimestamp;
     private long startOffsetOfMaxTimestamp;
 
+    /** Whether the appended log data is duplicated. */
+    private boolean duplicated;
+
     /** Creates an instance with the given params. */
     public LogAppendInfo(
             long firstOffset,
@@ -74,6 +77,7 @@ public final class LogAppendInfo {
         this.validBytes = validBytes;
         this.offsetsMonotonic = offsetsMonotonic;
         this.errorMessage = errorMessage;
+        this.duplicated = false;
     }
 
     public long firstOffset() {
@@ -117,6 +121,14 @@ public final class LogAppendInfo {
         this.startOffsetOfMaxTimestamp = startOffsetOfMaxTimestamp;
     }
 
+    public boolean duplicated() {
+        return duplicated;
+    }
+
+    public void setDuplicated(boolean duplicated) {
+        this.duplicated = duplicated;
+    }
+
     public boolean offsetsMonotonic() {
         return offsetsMonotonic;
     }
@@ -150,6 +162,8 @@ public final class LogAppendInfo {
                 + validBytes
                 + ", offsetsMonotonic="
                 + offsetsMonotonic
+                + ", duplicated="
+                + duplicated
                 + ", recordErrors="
                 + errorMessage
                 + ')';

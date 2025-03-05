@@ -39,8 +39,8 @@ public interface MetricReporter {
      * Configures this reporter.
      *
      * <p>If the reporter was instantiated generically and hence parameter-less, this method is the
-     * place where the reporter sets it's basic fields based on configuration values. Otherwise,
-     * this method will typically be a no-op since resources can be acquired in the constructor.
+     * place where the reporter sets its basic fields based on configuration values. Otherwise, this
+     * method will typically be a no-op since resources can be acquired in the constructor.
      *
      * <p>This method is always called first on a newly instantiated reporter.
      *

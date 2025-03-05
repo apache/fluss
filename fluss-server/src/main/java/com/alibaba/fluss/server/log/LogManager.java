@@ -24,13 +24,14 @@ import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.TabletManagerBase;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 import com.alibaba.fluss.utils.types.Tuple2;
@@ -48,7 +49,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -77,7 +77,7 @@ public final class LogManager extends TabletManagerBase {
     private final Clock clock;
     private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
-    private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
+    private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
 
     private volatile OffsetCheckpointFile recoveryPointCheckpoint;
 
@@ -306,8 +306,7 @@ public final class LogManager extends TabletManagerBase {
 
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
-        TableDescriptor tableDescriptor =
-                getTableDescriptor(zkClient, tablePath, tableBucket, tabletDir);
+        TableInfo tableInfo = getTableInfo(zkClient, tablePath);
         LogTablet logTablet =
                 LogTablet.create(
                         physicalTablePath,
@@ -315,9 +314,9 @@ public final class LogManager extends TabletManagerBase {
                         conf,
                         logRecoveryPoint,
                         scheduler,
-                        tableDescriptor.getLogFormat(),
-                        tableDescriptor.getTieredLogLocalSegments(),
-                        tableDescriptor.hasPrimaryKey(),
+                        tableInfo.getTableConfig().getLogFormat(),
+                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
+                        tableInfo.hasPrimaryKey(),
                         clock);
 
         if (currentLogs.containsKey(tableBucket)) {

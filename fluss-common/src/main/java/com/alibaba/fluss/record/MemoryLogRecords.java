@@ -17,7 +17,9 @@
 package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.memory.MemorySegment;
+import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.utils.AbstractIterator;
 
 import java.io.IOException;
@@ -141,5 +143,15 @@ public class MemoryLogRecords implements LogRecords {
             buffer.get(bytes);
             return pointToBytes(bytes);
         }
+    }
+
+    /**
+     * Make a {@link MemoryLogRecords} instance from the given {@link BytesView}.
+     *
+     * <p>Note: this is a heavy operation involving copy bytes, only used for testing.
+     */
+    @VisibleForTesting
+    public static MemoryLogRecords pointToBytesView(BytesView bytesView) {
+        return pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
     }
 }

@@ -23,6 +23,7 @@ import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.config.Password;
 import com.alibaba.fluss.connector.flink.FlinkConnectorOptions;
 import com.alibaba.fluss.connector.flink.catalog.FlinkCatalogFactory;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -32,11 +33,13 @@ import com.alibaba.fluss.utils.StringUtils;
 import com.alibaba.fluss.utils.TimeUtils;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
+import org.apache.flink.types.RowKind;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -84,28 +87,19 @@ public class FlinkConversions {
 
     /** Convert Fluss's table to Flink's table. */
     public static CatalogTable toFlinkTable(TableInfo tableInfo) {
-        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        Map<String, String> newOptions =
-                new HashMap<>(tableInfo.getTableDescriptor().getCustomProperties());
+        Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
 
         // put fluss table properties into flink options, to make the properties visible to users
-        convertFlussTablePropertiesToFlinkOptions(
-                tableInfo.getTableDescriptor().getProperties(), newOptions);
+        convertFlussTablePropertiesToFlinkOptions(tableInfo.getProperties().toMap(), newOptions);
 
         org.apache.flink.table.api.Schema.Builder schemaBuilder =
                 org.apache.flink.table.api.Schema.newBuilder();
-        Schema schema = tableInfo.getTableDescriptor().getSchema();
-        if (schema.getPrimaryKey().isPresent()) {
-            schemaBuilder.primaryKey(
-                    schema.getPrimaryKey()
-                            .map(Schema.PrimaryKey::getColumnNames)
-                            .orElse(Collections.emptyList()));
+        if (tableInfo.hasPrimaryKey()) {
+            schemaBuilder.primaryKey(tableInfo.getPrimaryKeys());
         }
 
-        List<String> physicalColumns =
-                schema.getColumns().stream()
-                        .map(Schema.Column::getName)
-                        .collect(Collectors.toList());
+        Schema schema = tableInfo.getSchema();
+        List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
                 physicalColumns.size()
                         + CatalogPropertiesUtils.nonPhysicalColumnsCount(
@@ -129,18 +123,9 @@ public class FlinkConversions {
         }
 
         // now, put distribution information to options
-        if (tableDescriptor.getTableDistribution().isPresent()) {
-            TableDescriptor.TableDistribution tableDistribution =
-                    tableDescriptor.getTableDistribution().get();
-            if (tableDistribution.getBucketCount().isPresent()) {
-                newOptions.put(
-                        BUCKET_NUMBER.key(),
-                        String.valueOf(tableDistribution.getBucketCount().get()));
-            }
-            if (!tableDistribution.getBucketKeys().isEmpty()) {
-                newOptions.put(
-                        BUCKET_KEY.key(), String.join(",", tableDistribution.getBucketKeys()));
-            }
+        newOptions.put(BUCKET_NUMBER.key(), String.valueOf(tableInfo.getNumBuckets()));
+        if (!tableInfo.getBucketKeys().isEmpty()) {
+            newOptions.put(BUCKET_KEY.key(), String.join(",", tableInfo.getBucketKeys()));
         }
 
         // deserialize watermark
@@ -148,8 +133,8 @@ public class FlinkConversions {
 
         return CatalogTable.of(
                 schemaBuilder.build(),
-                tableDescriptor.getComment().orElse(null),
-                tableDescriptor.getPartitionKeys(),
+                tableInfo.getComment().orElse(null),
+                tableInfo.getPartitionKeys(),
                 CatalogPropertiesUtils.deserializeOptions(newOptions));
     }
 
@@ -242,6 +227,14 @@ public class FlinkConversions {
                 .build();
     }
 
+    /** Convert Flink's table to Fluss's database. */
+    public static DatabaseDescriptor toFlussDatabase(CatalogDatabase catalogDatabase) {
+        return DatabaseDescriptor.builder()
+                .comment(catalogDatabase.getComment())
+                .customProperties(catalogDatabase.getProperties())
+                .build();
+    }
+
     /** Convert Fluss's ConfigOptions to Flink's ConfigOptions. */
     public static List<org.apache.flink.configuration.ConfigOption<?>> toFlinkOptions(
             Collection<ConfigOption<?>> flussOption) {
@@ -251,8 +244,9 @@ public class FlinkConversions {
     }
 
     /** Convert Fluss's ConfigOption to Flink's ConfigOption. */
-    public static org.apache.flink.configuration.ConfigOption<?> toFlinkOption(
-            ConfigOption<?> flussOption) {
+    @SuppressWarnings("unchecked")
+    public static <T> org.apache.flink.configuration.ConfigOption<T> toFlinkOption(
+            ConfigOption<T> flussOption) {
         org.apache.flink.configuration.ConfigOptions.OptionBuilder builder =
                 org.apache.flink.configuration.ConfigOptions.key(flussOption.key());
         org.apache.flink.configuration.ConfigOption<?> option;
@@ -290,9 +284,7 @@ public class FlinkConversions {
             option = builder.stringType().defaultValue(defaultValue);
         } else if (clazz.equals(MemorySize.class)) {
             // use string type in Flink option instead to make convert back easier
-            option =
-                    builder.stringType()
-                            .defaultValue(((MemorySize) flussOption.defaultValue()).toString());
+            option = builder.stringType().defaultValue(flussOption.defaultValue().toString());
         } else if (clazz.isEnum()) {
             //noinspection unchecked
             option =
@@ -303,7 +295,23 @@ public class FlinkConversions {
         }
         option.withDescription(flussOption.description());
         // TODO: support fallback keys in the future.
-        return option;
+        return (org.apache.flink.configuration.ConfigOption<T>) option;
+    }
+
+    public static RowKind toFlinkRowKind(com.alibaba.fluss.record.RowKind rowKind) {
+        switch (rowKind) {
+            case APPEND_ONLY:
+            case INSERT:
+                return RowKind.INSERT;
+            case UPDATE_BEFORE:
+                return RowKind.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return RowKind.UPDATE_AFTER;
+            case DELETE:
+                return RowKind.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported row kind: " + rowKind);
+        }
     }
 
     private static Map<String, String> convertFlinkOptionsToFlussTableProperties(

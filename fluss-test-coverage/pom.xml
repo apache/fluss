@@ -210,6 +210,7 @@
                                         <exclude>com.alibaba.fluss.cluster.*</exclude>
                                         <exclude>com.alibaba.fluss.Bucket</exclude>
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
+                                        <exclude>com.alibaba.fluss.compression.*</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.connector.flink.catalog.*
                                         </exclude>
@@ -246,6 +247,7 @@
                                         <exlucde>
                                             com.alibaba.fluss.connector.flink.source.reader.RecordAndPos
                                         </exlucde>
+                                        <exclude>com.alibaba.fluss.connector.flink.sink.FlinkSink</exclude>
                                         <exclude>
                                             com.alibaba.fluss.connector.flink.metrics.*
                                         </exclude>
@@ -253,7 +255,7 @@
                                         <exclude>com.alibaba.fluss.fs.hdfs.HadoopFsPlugin
                                         </exclude>
                                         <exclude>com.alibaba.fluss.fs.hdfs.HadoopSecurityTokenReceiver</exclude>
-                                        <exclude>com.alibaba.fluss.fs.oss.OSSFileSystem</exclude>
+                                        <exclude>com.alibaba.fluss.fs.oss.*</exclude>
                                         <exclude>com.alibaba.fluss.fs.s3.*</exclude>
                                         <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*</exclude>
                                         <exclude>com.alibaba.fluss.rocksdb.RocksIteratorWrapper
@@ -263,7 +265,7 @@
                                         <exclude>com.alibaba.fluss.metrics.*</exclude>
                                         <!-- end exclude for metric -->
                                         <!-- start exclude for lakehouse-paimon -->
-                                        <exclude>com.alibaba.fluss.lakehouse.paimon.*</exclude>
+                                        <exclude>com.alibaba.fluss.lakehouse.*</exclude>
                                         <exclude>com.alibaba.fluss.connector.flink.lakehouse.*</exclude>
                                         <!-- end exclude for lakehouse-paimon -->
                                         <exclude>com.alibaba.fluss.lakehouse.cli.*</exclude>

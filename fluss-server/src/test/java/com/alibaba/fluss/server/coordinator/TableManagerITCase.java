@@ -36,7 +36,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
@@ -49,7 +49,6 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.utils.AutoPartitionUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,7 +79,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newCreateTa
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDatabaseExistsRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropDatabaseRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
-import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newGetTableRequest;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newListTablesRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newMetadataRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newTableExistsRequest;
@@ -89,6 +88,7 @@ import static com.alibaba.fluss.server.utils.RpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
+import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -258,9 +258,10 @@ class TableManagerITCase {
         assertThat(gateway.tableExists(newTableExistsRequest(tablePath)).get().isExists()).isTrue();
 
         // get the table and check it
-        GetTableResponse response = gateway.getTable(newGetTableRequest(tablePath)).get();
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
-        assertThat(gottenTable).isEqualTo(tableDescriptor);
+        assertThat(gottenTable).isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // check assignment, just check replica numbers, don't care about actual assignment
         checkAssignmentWithReplicaFactor(
@@ -306,7 +307,7 @@ class TableManagerITCase {
         // check assignment, just check bucket number, it should be equal to the default bucket
         // number
         // configured in cluster-level
-        response = gateway.getTable(newGetTableRequest(new TablePath(db1, tb2))).get();
+        response = gateway.getTableInfo(newGetTableInfoRequest(new TablePath(db1, tb2))).get();
         TableAssignment tableAssignment = zkClient.getTableAssignment(response.getTableId()).get();
         assertThat(tableAssignment.getBucketAssignments().size())
                 .isEqualTo(clientConf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER));
@@ -339,7 +340,7 @@ class TableManagerITCase {
     void testPartitionedTableManagement(AutoPartitionTimeUnit timeUnit) throws Exception {
         AdminGateway adminGateway = getAdminGateway();
         String db1 = "db1";
-        String tb1 = "tb1";
+        String tb1 = "tb1_" + timeUnit.name();
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
@@ -350,7 +351,7 @@ class TableManagerITCase {
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true");
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), timeUnit.name());
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "1");
-        TableDescriptor tableDescriptor = newPartitionedTable().copy(options);
+        TableDescriptor tableDescriptor = newPartitionedTable().withProperties(options);
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
         // wait util partition is created
@@ -368,7 +369,8 @@ class TableManagerITCase {
                         Duration.ofMinutes(1),
                         "partition is not created");
         // check the created partitions
-        List<String> expectAddedPartitions = getExpectAddedPartitions(now, timeUnit, 1);
+        List<String> expectAddedPartitions =
+                getExpectAddedPartitions(Collections.singletonList("dt"), now, timeUnit, 1);
         assertThat(partitions).containsOnlyKeys(expectAddedPartitions);
 
         // let's drop the table
@@ -390,20 +392,6 @@ class TableManagerITCase {
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
-        // then create a partitioned table and removes all options
-        TableDescriptor tableWithoutOptions = newPartitionedTable().copy(Collections.emptyMap());
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableWithoutOptions, false))
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table must enable auto partition, "
-                                + "please set table property 'table.auto-partition.enabled' to true.");
 
         TableDescriptor tableWithMultiPartKey =
                 newPartitionedTableBuilder(new Schema.Column("tttt", DataTypes.INT()))
@@ -433,7 +421,7 @@ class TableManagerITCase {
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(
-                        "Currently, partitioned table only supports STRING type partition key, but got partition key 'id' with data type INT NOT NULL.");
+                        "Currently, partitioned table supported partition key type are [STRING], but got partition key 'id' with data type INT NOT NULL.");
     }
 
     @ParameterizedTest
@@ -449,8 +437,9 @@ class TableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         TableDescriptor tableDescriptor = newTable();
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
-        GetTableResponse getTableResponse = gateway.getTable(newGetTableRequest(tablePath)).get();
-        long tableId = getTableResponse.getTableId();
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        long tableId = response.getTableId();
 
         // retry until all replica ready.
         int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
@@ -469,7 +458,7 @@ class TableManagerITCase {
         PbTableMetadata tableMetadata = metadataResponse.getTableMetadataAt(0);
         assertThat(toTablePath(tableMetadata.getTablePath())).isEqualTo(tablePath);
         assertThat(TableDescriptor.fromJsonBytes(tableMetadata.getTableJson()))
-                .isEqualTo(tableDescriptor);
+                .isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // now, check the table buckets metadata
         assertThat(tableMetadata.getBucketMetadatasCount()).isEqualTo(expectBucketCount);
@@ -517,7 +506,8 @@ class TableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
-        long tableId = adminGateway.getTable(newGetTableRequest(tablePath)).get().getTableId();
+        long tableId =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get().getTableId();
         int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
 
         Map<String, Long> partitionById =
@@ -607,11 +597,16 @@ class TableManagerITCase {
     }
 
     public static List<String> getExpectAddedPartitions(
-            Instant addInstant, AutoPartitionTimeUnit timeUnit, int newPartitions) {
+            List<String> partitionKeys,
+            Instant addInstant,
+            AutoPartitionTimeUnit timeUnit,
+            int newPartitions) {
         ZonedDateTime addDateTime = ZonedDateTime.ofInstant(addInstant, ZoneId.systemDefault());
         List<String> partitions = new ArrayList<>();
         for (int i = 0; i < newPartitions; i++) {
-            partitions.add(AutoPartitionUtils.getPartitionString(addDateTime, i, timeUnit));
+            partitions.add(
+                    generateAutoPartition(partitionKeys, addDateTime, i, timeUnit)
+                            .getPartitionName());
         }
         return partitions;
     }
@@ -649,7 +644,7 @@ class TableManagerITCase {
         return TableDescriptor.builder()
                 .schema(builder.build())
                 .comment("partitioned table")
-                .distributedBy(16)
+                .distributedBy(3)
                 .partitionedBy("dt")
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
                 .property(
@@ -662,7 +657,7 @@ class TableManagerITCase {
         return TableDescriptor.builder()
                 .schema(newSchema())
                 .comment("first table")
-                .distributedBy(16, "a")
+                .distributedBy(3, "a")
                 .build();
     }
 

@@ -134,11 +134,9 @@ public class LocalFileSystem extends FileSystem {
             File[] containedFiles = file.listFiles();
             if (containedFiles == null) {
                 throw new IOException(
-                        "Directory "
-                                + file.toString()
-                                + " does not exist or an I/O error occurred");
+                        "Directory " + file + " does not exist or an I/O error occurred");
             } else if (containedFiles.length != 0) {
-                throw new IOException("Directory " + file.toString() + " is not empty");
+                throw new IOException("Directory " + file + " is not empty");
             }
         }
 

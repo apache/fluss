@@ -22,12 +22,12 @@ import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.log.LogManager;
-import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
+import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -195,8 +195,8 @@ public abstract class TabletManagerBase {
         }
     }
 
-    protected TableDescriptor getTableDescriptor(
-            ZooKeeperClient zkClient, TablePath tablePath, TableBucket tableBucket, File tabletDir)
+    // TODO: we should support get table info from local properties file instead of from zk
+    public static TableInfo getTableInfo(ZooKeeperClient zkClient, TablePath tablePath)
             throws Exception {
         int schemaId = zkClient.getCurrentSchemaId(tablePath);
         Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
@@ -204,16 +204,22 @@ public abstract class TabletManagerBase {
         if (!schemaInfoOpt.isPresent()) {
             throw new LogStorageException(
                     String.format(
-                            "Failed to load %s for table %s, bucket %s in dir %s. "
-                                    + "Table schema not found in metadata cache.",
-                            tabletType,
-                            tablePath,
-                            tableBucket.getBucket(),
-                            tabletDir.getAbsolutePath()));
+                            "Failed to load table '%s': Table schema not found in zookeeper metadata.",
+                            tablePath));
         } else {
             schemaInfo = schemaInfoOpt.get();
         }
-        return ReplicaManager.getTableDescriptor(tablePath, zkClient, schemaInfo.getSchema());
+
+        TableRegistration tableRegistration =
+                zkClient.getTable(tablePath)
+                        .orElseThrow(
+                                () ->
+                                        new LogStorageException(
+                                                String.format(
+                                                        "Failed to load table '%s': table info not found in zookeeper metadata.",
+                                                        tablePath)));
+
+        return tableRegistration.toTableInfo(tablePath, schemaInfo);
     }
 
     /** Create a tablet directory in the given dir. */

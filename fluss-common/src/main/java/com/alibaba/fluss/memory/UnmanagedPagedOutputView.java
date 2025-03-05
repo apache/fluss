@@ -16,12 +16,14 @@
 
 package com.alibaba.fluss.memory;
 
+import java.util.Collections;
 import java.util.List;
 
 /** A managed {@link AbstractPagedOutputView}, whose {@link MemorySegment} is un-managed. */
 public class UnmanagedPagedOutputView extends AbstractPagedOutputView {
-    public UnmanagedPagedOutputView(int size) {
-        super(MemorySegment.allocateHeapMemory(size), size);
+
+    public UnmanagedPagedOutputView(int pageSize) {
+        super(MemorySegment.allocateHeapMemory(pageSize), pageSize);
     }
 
     @Override
@@ -30,7 +32,7 @@ public class UnmanagedPagedOutputView extends AbstractPagedOutputView {
     }
 
     @Override
-    protected void deallocate(List<MemorySegment> segments) {
-        // do nothing.
+    public List<MemorySegment> allocatedPooledSegments() {
+        return Collections.emptyList();
     }
 }

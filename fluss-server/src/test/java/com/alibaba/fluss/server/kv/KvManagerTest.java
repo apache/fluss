@@ -16,8 +16,10 @@
 
 package com.alibaba.fluss.server.kv;
 
+import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -246,7 +248,7 @@ final class KvManagerTest {
 
     private void put(KvTablet kvTablet, KvRecord... kvRecords) throws Exception {
         KvRecordBatch kvRecordBatch = kvRecordBatchFactory.ofRecords(Arrays.asList(kvRecords));
-        kvTablet.putAsLeader(kvRecordBatch, null, DATA1_SCHEMA_PK);
+        kvTablet.putAsLeader(kvRecordBatch, null);
         // flush to make sure data is visible
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
     }
@@ -260,7 +262,13 @@ final class KvManagerTest {
         LogTablet logTablet =
                 logManager.getOrCreateLog(physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
         return kvManager.getOrCreateKv(
-                physicalTablePath, tableBucket, logTablet, KvFormat.COMPACTED);
+                physicalTablePath,
+                tableBucket,
+                logTablet,
+                KvFormat.COMPACTED,
+                DATA1_SCHEMA_PK,
+                new TableConfig(new Configuration()),
+                ArrowCompressionInfo.NO_COMPRESSION);
     }
 
     private byte[] valueOf(KvRecord kvRecord) {
