@@ -122,7 +122,7 @@ FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 ```
 
-For more details about Fluss partitioned table, see [Partitioned Tables](/docs/table-design/data-distribution/partitioning.md).
+For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
 
 ### Lookup Options
 
@@ -266,4 +266,4 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 -- join key is a prefix set of dimension table primary keys (excluding partition key) + partition key.
 ```
 
-For more details about Fluss partitioned table, see [Partitioned Tables](/docs/table-design/data-distribution/partitioning.md).
+For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).

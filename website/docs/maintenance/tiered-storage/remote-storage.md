@@ -5,7 +5,7 @@ sidebar_position: 2
 # Remote Storage
 
 Remote storage usually means a cost-efficient and fault-tolerant storage comparing to local disk, such as S3, HDFS, OSS.
-See more detail about how to configure remote storage in documentation of [filesystems](../../maintenance/filesystems/overview.md).
+See more detail about how to configure remote storage in documentation of [filesystems](maintenance/filesystems/overview.md).
 
 For log table, Fluss will use remote storage to store the tiered log segments of data. For primary key table, Fluss will use remote storage to store the snapshot as well as the tiered log segments for change log.
 

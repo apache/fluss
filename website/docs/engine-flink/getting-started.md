@@ -5,13 +5,13 @@ sidebar_position: 1
 
 # Getting Started with Flink Engine
 ## Quick Start
-For a quick introduction to running Flink, refer to the [Quick Start](/docs/quickstart/flink.md) guide.
+For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
 
 
 ## Support Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
 |--------------------------|--------------------------| 
-| 0.5                      | 1.18, 1.19, 1.20         |
+| $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20         |
 
 
 ## Feature Support
@@ -43,10 +43,10 @@ tar -xzf flink-1.20.1-bin-scala_2.12.tgz
 Download [Fluss connector jar](/downloads#fluss-connector) and copy to the lib directory of your Flink home.
 
 ```shell
-cp fluss-connector-flink-<fluss-version>.jar <FLINK_HOME>/lib/
+cp fluss-connector-flink-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
 ```
 :::note
-If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](/docs/maintenance/tiered-storage/remote-storage), 
+If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
 you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also copy it to the lib directory of your Flink home.
 :::
 
@@ -79,7 +79,7 @@ CREATE CATALOG fluss_catalog WITH (
 
 :::note
 1. The `bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
-   you should start the Fluss server first. See [Deploying Fluss](/docs/install-deploy/overview/#how-to-deploy-fluss)
+   you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
 2. The` bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.

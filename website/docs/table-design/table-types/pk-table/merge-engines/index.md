@@ -11,5 +11,5 @@ However, users can specify a different merge engine to customize the merging beh
 
 The following merge engines are supported:
 
-1. [FirstRow Merge Engine](/docs/table-design/table-types/pk-table/merge-engines/first-row)
-2. [Versioned Merge Engine](/docs/table-design/table-types/pk-table/merge-engines/versioned)
+1. [FirstRow Merge Engine](table-design/table-types/pk-table/merge-engines/first-row.md)
+2. [Versioned Merge Engine](table-design/table-types/pk-table/merge-engines/versioned.md)

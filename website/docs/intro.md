@@ -20,8 +20,8 @@ With built-in replication for fault tolerance, horizontal scalability, and advan
 
 ## Where to go Next?
 
-- [QuickStart](/docs/quickstart/flink/): Get started with Fluss in minutes.
-- [Architecture](/docs/concepts/architecture/): Learn about Fluss's architecture.
-- [Table Design](/docs/table-design/overview): Explore Fluss's table types, partitions and buckets.
-- [Lakehouse](/docs/streaming-lakehouse/overview/): Integrate Fluss with your Lakehouse to bring low-latency data to your Lakehouse analytics.
-- [Development](/docs/dev/ide-setup/): Set up your development environment and contribute to the community.
+- [QuickStart](quickstart/flink.md): Get started with Fluss in minutes.
+- [Architecture](concepts/architecture.md): Learn about Fluss's architecture.
+- [Table Design](table-design/overview.md): Explore Fluss's table types, partitions and buckets.
+- [Lakehouse](streaming-lakehouse/overview.md): Integrate Fluss with your Lakehouse to bring low-latency data to your Lakehouse analytics.
+- [Development](dev/ide-setup.md): Set up your development environment and contribute to the community.
