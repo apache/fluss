@@ -16,11 +16,11 @@
 
 package com.alibaba.fluss.plugin;
 
-import com.alibaba.fluss.utils.Preconditions;
-
 import java.io.File;
 import java.net.MalformedURLException;
 import java.net.URL;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * Base class for some tests related to the plugin mechanism. Provides access to some common test
@@ -45,8 +45,7 @@ abstract class PluginTestBase {
         if (!file.exists()) {
             file = new File(OPT_PREFIX + fileString);
         }
-        Preconditions.checkState(
-                file.exists(), "Unable to locate jar file for test: " + fileString);
+        checkState(file.exists(), "Unable to locate jar file for test: " + fileString);
         return file;
     }
 }

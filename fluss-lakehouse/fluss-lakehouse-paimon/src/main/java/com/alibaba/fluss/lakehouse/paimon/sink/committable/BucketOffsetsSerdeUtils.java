@@ -17,12 +17,13 @@
 package com.alibaba.fluss.lakehouse.paimon.sink.committable;
 
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Utils for serialize/deserialize the mapping from table bucket to a log offset of a table. */
 class BucketOffsetsSerdeUtils {
@@ -47,7 +48,7 @@ class BucketOffsetsSerdeUtils {
         for (Map.Entry<TableBucket, Long> offsetEntry : logOffsets.entrySet()) {
             if (isPartitioned) {
                 Long partitionId = offsetEntry.getKey().getPartitionId();
-                Preconditions.checkNotNull(partitionId, "partitionId must be not null");
+                checkNotNull(partitionId, "partitionId must be not null");
                 buffer.putLong(offsetEntry.getKey().getPartitionId());
             }
             buffer.putInt(offsetEntry.getKey().getBucket());

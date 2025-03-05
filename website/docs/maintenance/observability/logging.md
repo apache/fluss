@@ -21,7 +21,7 @@ Log4j periodically scans this file for changes and adjusts the logging behavior 
 
 
 ### Log4j 2 configuration
-The following [logging-related configuration options](../configuration.md) are available:
+The following [logging-related configuration options](maintenance/configuration.md) are available:
 
 | Configuration                   | Description                                                             | Default                        |
 |---------------------------------|-------------------------------------------------------------------------|--------------------------------|

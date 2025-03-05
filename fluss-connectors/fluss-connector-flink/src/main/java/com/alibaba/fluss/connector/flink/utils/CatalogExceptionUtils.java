@@ -19,8 +19,12 @@ package com.alibaba.fluss.connector.flink.utils;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
+import com.alibaba.fluss.exception.InvalidPartitionException;
+import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
+import com.alibaba.fluss.exception.TableNotPartitionedException;
 
 /** Utility class for catalog exceptions. */
 public class CatalogExceptionUtils {
@@ -45,5 +49,21 @@ public class CatalogExceptionUtils {
 
     public static boolean isTableAlreadyExist(Throwable throwable) {
         return throwable instanceof TableAlreadyExistException;
+    }
+
+    public static boolean isTableNotPartitioned(Throwable throwable) {
+        return throwable instanceof TableNotPartitionedException;
+    }
+
+    public static boolean isPartitionAlreadyExists(Throwable throwable) {
+        return throwable instanceof PartitionAlreadyExistsException;
+    }
+
+    public static boolean isPartitionNotExist(Throwable throwable) {
+        return throwable instanceof PartitionNotExistException;
+    }
+
+    public static boolean isPartitionInvalid(Throwable throwable) {
+        return throwable instanceof InvalidPartitionException;
     }
 }

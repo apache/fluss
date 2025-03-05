@@ -233,7 +233,7 @@ public class FlinkTestBase {
     public static Map<Long, String> createPartitions(
             ZooKeeperClient zkClient, TablePath tablePath, List<String> partitionsToCreate)
             throws Exception {
-        MetadataManager metadataManager = new MetadataManager(zkClient);
+        MetadataManager metadataManager = new MetadataManager(zkClient, new Configuration());
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         Map<Long, String> newPartitionIds = new HashMap<>();
         for (String partition : partitionsToCreate) {

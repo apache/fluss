@@ -327,8 +327,15 @@ final class ServerConnection {
                                         if (!future.isSuccess()) {
                                             connectionMetricGroup.updateMetricsAfterGetResponse(
                                                     apiKey, inflight.requestStartTime, 0);
-                                            inflight.responseFuture.completeExceptionally(
-                                                    future.cause());
+                                            Throwable cause = future.cause();
+                                            if (cause instanceof IOException) {
+                                                // when server close the channel, the cause will be
+                                                // IOException, if the cause is IOException, we wrap
+                                                // it as retryable NetworkException to retry to
+                                                // connect
+                                                cause = new NetworkException(cause);
+                                            }
+                                            inflight.responseFuture.completeExceptionally(cause);
                                             inflightRequests.remove(inflight.requestId);
                                         }
                                     });

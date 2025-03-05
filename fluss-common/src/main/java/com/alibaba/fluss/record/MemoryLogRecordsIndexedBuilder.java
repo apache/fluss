@@ -24,7 +24,6 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.indexed.IndexedRow;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
@@ -38,6 +37,7 @@ import static com.alibaba.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
 import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#INDEXED} format.
@@ -66,7 +66,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
             int writeLimit,
             byte magic,
             AbstractPagedOutputView pagedOutputView) {
-        Preconditions.checkArgument(
+        checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
         this.baseLogOffset = baseLogOffset;

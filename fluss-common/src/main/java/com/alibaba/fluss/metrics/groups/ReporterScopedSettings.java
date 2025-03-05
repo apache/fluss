@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.metrics.groups;
 
-import com.alibaba.fluss.utils.Preconditions;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** Encapsulates all settings that are defined per reporter. */
 public class ReporterScopedSettings {
@@ -24,7 +24,7 @@ public class ReporterScopedSettings {
     private final int reporterIndex;
 
     public ReporterScopedSettings(int reporterIndex) {
-        Preconditions.checkArgument(reporterIndex >= 0);
+        checkArgument(reporterIndex >= 0);
         this.reporterIndex = reporterIndex;
     }
 

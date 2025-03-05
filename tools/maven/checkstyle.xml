@@ -240,8 +240,8 @@ This file is based on the checkstyle file of Apache Beam.
              Require static importing from Preconditions.
         -->
         <module name="RegexpSinglelineJava">
-            <property name="format" value="^import com.google.common.base.Preconditions;$"/>
-            <property name="message" value="Static import functions from Guava Preconditions"/>
+            <property name="format" value="^import com.alibaba.fluss.utils.Preconditions;$"/>
+            <property name="message" value="Static import functions from Fluss Preconditions"/>
         </module>
 
         <module name="UnusedImports">

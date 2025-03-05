@@ -253,6 +253,25 @@ public class ConfigOptions {
                                     + SERVER_BUFFER_MEMORY_SIZE.key()
                                     + "').");
 
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE =
+            key("server.buffer.per-request-memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("16mb"))
+                    .withDescription(
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closes multiple of "
+                                    + SERVER_BUFFER_PAGE_SIZE.key()
+                                    + "It must be greater than or equal to "
+                                    + SERVER_BUFFER_PAGE_SIZE.key()
+                                    + ". "
+                                    + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
+
+    public static final ConfigOption<Duration> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
+            key("server.buffer.wait-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
+                    .withDescription(
+                            "Defines how long the buffer pool will block when waiting for segments to become available.");
+
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------
@@ -277,27 +296,26 @@ public class ConfigOptions {
     //  ZooKeeper Client Settings
     // ------------------------------------------------------------------------
 
-    public static final ConfigOption<Integer> ZOOKEEPER_SESSION_TIMEOUT =
+    public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
-                    .intType()
-                    .defaultValue(60000)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(60_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.session-timeout")
-                    .withDescription(
-                            "Defines the session timeout for the ZooKeeper session in ms.");
+                    .withDescription("Defines the session timeout for the ZooKeeper session.");
 
-    public static final ConfigOption<Integer> ZOOKEEPER_CONNECTION_TIMEOUT =
+    public static final ConfigOption<Duration> ZOOKEEPER_CONNECTION_TIMEOUT =
             key("zookeeper.client.connection-timeout")
-                    .intType()
-                    .defaultValue(15000)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(15_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.connection-timeout")
-                    .withDescription("Defines the connection timeout for ZooKeeper in ms.");
+                    .withDescription("Defines the connection timeout for ZooKeeper.");
 
-    public static final ConfigOption<Integer> ZOOKEEPER_RETRY_WAIT =
+    public static final ConfigOption<Duration> ZOOKEEPER_RETRY_WAIT =
             key("zookeeper.client.retry-wait")
-                    .intType()
-                    .defaultValue(5000)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(5_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.retry-wait")
-                    .withDescription("Defines the pause between consecutive retries in ms.");
+                    .withDescription("Defines the pause between consecutive retries.");
 
     public static final ConfigOption<Integer> ZOOKEEPER_MAX_RETRY_ATTEMPTS =
             key("zookeeper.client.max-retry-attempts")
@@ -613,19 +631,29 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BUFFER_MEMORY_SIZE.key()
                                     + "').");
 
+    public static final ConfigOption<MemorySize> CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE =
+            key("client.writer.buffer.per-request-memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("16mb"))
+                    .withDescription(
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closes multiple of "
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + "It must be greater than or equal to "
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + ". "
+                                    + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_BUFFER_WAIT_TIMEOUT =
+            key("client.writer.buffer.wait-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
+                    .withDescription(
+                            "Defines how long the writer will block when waiting for segments to become available.");
+
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BATCH_SIZE =
             key("client.writer.batch-size")
                     .memoryType()
                     .defaultValue(MemorySize.parse("2mb"))
-                    .withDescription(
-                            "The writer or walBuilder will attempt to batch records together into one batch for"
-                                    + " the same bucket. This helps performance on both the client and the server.");
-
-    @Deprecated
-    public static final ConfigOption<MemorySize> CLIENT_WRITER_LEGACY_BATCH_SIZE =
-            key("client.writer.legacy.batch-size")
-                    .memoryType()
-                    .defaultValue(MemorySize.parse("64kb"))
                     .withDescription(
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
@@ -647,8 +675,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BATCH_SIZE.key()
                                     + " worth of rows for a bucket it will be sent immediately regardless of this setting, "
                                     + "however if we have fewer than this many bytes accumulated for this bucket we will delay"
-                                    + " for the specified time waiting for more records to show up. This setting defaults "
-                                    + "to 100ms");
+                                    + " for the specified time waiting for more records to show up.");
 
     public static final ConfigOption<NoKeyAssigner> CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER =
             key("client.writer.bucket.no-key-assigner")
@@ -734,7 +761,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_ENABLE_IDEMPOTENCE.key()
                                     + " is set to true. When the number of inflight "
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
-                                    + "requests to complete before sending out new requests. This setting defaults to 5");
+                                    + "requests to complete before sending out new requests.");
 
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
@@ -902,8 +929,7 @@ public class ConfigOptions {
     public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
             key("table.log.arrow.compression.type")
                     .enumType(ArrowCompressionType.class)
-                    // TODO: change to ZSTD by default when it is stable
-                    .defaultValue(ArrowCompressionType.NONE)
+                    .defaultValue(ArrowCompressionType.ZSTD)
                     .withDescription(
                             "The compression type of the log records if the log format is set to 'ARROW'. "
                                     + "The candidate compression type is "
@@ -936,9 +962,10 @@ public class ConfigOptions {
     public static final ConfigOption<AutoPartitionTimeUnit> TABLE_AUTO_PARTITION_TIME_UNIT =
             key("table.auto-partition.time-unit")
                     .enumType(AutoPartitionTimeUnit.class)
-                    .noDefaultValue()
+                    .defaultValue(AutoPartitionTimeUnit.DAY)
                     .withDescription(
                             "The time granularity for auto created partitions. "
+                                    + "The default value is 'DAY'. "
                                     + "Valid values are 'HOUR', 'DAY', 'MONTH', 'QUARTER', 'YEAR'. "
                                     + "If the value is 'HOUR', the partition format for "
                                     + "auto created is yyyyMMddHH. "
@@ -961,23 +988,25 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_PRECREATE =
             key("table.auto-partition.num-precreate")
                     .intType()
-                    .defaultValue(4)
+                    .defaultValue(2)
                     .withDescription(
                             "The number of partitions to pre-create for auto created partitions in each check for auto partition. "
                                     + "For example, if the current check time is 2024-11-11 and the value is "
                                     + "configured as 3, then partitions 20241111, 20241112, 20241113 will be pre-created. "
-                                    + "If any one partition exists, it'll skip creating the partition.");
+                                    + "If any one partition exists, it'll skip creating the partition. "
+                                    + "The default value is 2, which means 2 partitions will be pre-created. "
+                                    + "If the 'table.auto-partition.time-unit' is 'DAY'(default), one precreated partition is for today and another one is for tomorrow.");
 
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_RETENTION =
             key("table.auto-partition.num-retention")
                     .intType()
-                    .defaultValue(-1)
+                    .defaultValue(7)
                     .withDescription(
                             "The number of history partitions to retain for auto created partitions in each check for auto partition. "
-                                    + "The default value is -1 which means retain all partitions. "
                                     + "For example, if the current check time is 2024-11-11, time-unit is DAY, and the value is "
                                     + "configured as 3, then the history partitions 20241108, 20241109, 20241110 will be retained. "
-                                    + "The partitions earlier than 20241108 will be deleted.");
+                                    + "The partitions earlier than 20241108 will be deleted. "
+                                    + "The default value is 7.");
 
     public static final ConfigOption<Duration> TABLE_LOG_TTL =
             key("table.log.ttl")
@@ -1010,9 +1039,11 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The format of the datalake that the Fluss cluster uses as lake storage for the table."
-                                    + " It will be set with the Fluss's configuration 'datalake.format' by Fluss while creating the table. "
-                                    + "If non-null, the data distribution will follow the strategy of the corresponding datalake uses.");
+                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only 'paimon' is supported. "
+                                    + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
+                                    + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
+                                    + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
+                                    + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
 
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
@@ -1310,7 +1341,7 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("9249")
                     .withDescription(
-                            "The port the Prometheus reporter listens on, defaults to 9249. "
+                            "The port the Prometheus reporter listens on."
                                     + "In order to be able to run several instances of the reporter "
                                     + "on one host (e.g. when one TabletServer is colocated with "
                                     + "the CoordinatorServer) it is advisable to use a port range "

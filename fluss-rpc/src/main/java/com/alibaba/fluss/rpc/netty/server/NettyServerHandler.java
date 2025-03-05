@@ -124,10 +124,15 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        LOG.warn(
-                "Connection [{}] got exception in Netty server pipeline: \n{}",
-                ctx.channel().remoteAddress(),
-                ExceptionUtils.stringifyException(cause));
+        // debug level to avoid too many logs if NLB(Network Load Balancer is mounted, see
+        // more detail in #377
+        // may revert to warn level if we found warn level is necessary
+        if (LOG.isDebugEnabled()) {
+            LOG.debug(
+                    "Connection [{}] got exception in Netty server pipeline: \n{}",
+                    ctx.channel().remoteAddress(),
+                    ExceptionUtils.stringifyException(cause));
+        }
         ByteBuf byteBuf = encodeServerFailure(ctx.alloc(), ApiError.fromThrowable(cause));
         ctx.writeAndFlush(byteBuf).addListener(ChannelFutureListener.CLOSE);
     }

@@ -19,7 +19,7 @@ Tables are classified into two types based on the presence of a primary key:
   - Used for updating and managing data in business databases.
   - Support INSERT, UPDATE, and DELETE operations based on the defined primary key.
 
-A Table becomes a [Partitioned Table](../table-design/data-distribution/partitioning.md) when a partition column is defined. Data with the same partition value is stored in the same partition. Partition columns can be applied to both Log Tables and PrimaryKey Tables, but with specific considerations:
+A Table becomes a [Partitioned Table](table-design/data-distribution/partitioning.md) when a partition column is defined. Data with the same partition value is stored in the same partition. Partition columns can be applied to both Log Tables and PrimaryKey Tables, but with specific considerations:
 - **For Log Tables**, partitioning is commonly used for log data, typically based on date columns, to facilitate data separation and cleaning.
 - **For PrimaryKey Tables**, the partition column must be a subset of the primary key to ensure uniqueness.
 

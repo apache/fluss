@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.kv.wal;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -40,6 +39,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
@@ -88,7 +88,7 @@ class ArrowWalBuilderTest {
 
         // consume log records before walBuilder deallocate memory. it's safe.
         MemoryLogRecords logRecords = walBuilder.build();
-        int totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
+        long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
         assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
         // allocate multiple pages
         assertThat(totalPages - memorySegmentPool.freePages()).isGreaterThan(1);
@@ -130,7 +130,7 @@ class ArrowWalBuilderTest {
 
         // consume log records before walBuilder deallocate memory. it's safe.
         MemoryLogRecords logRecords = walBuilder.build();
-        int totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
+        long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
         assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
         // allocate one page
         assertThat(totalPages - memorySegmentPool.freePages()).isEqualTo(1);
@@ -159,7 +159,7 @@ class ArrowWalBuilderTest {
                         DEFAULT_SCHEMA_ID,
                         maxSizeInBytes,
                         DATA1_ROW_TYPE,
-                        ArrowCompressionInfo.NO_COMPRESSION),
+                        DEFAULT_COMPRESSION),
                 memorySegmentPool);
     }
 }

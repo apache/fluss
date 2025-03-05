@@ -16,11 +16,11 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
-import com.alibaba.fluss.utils.Preconditions;
-
 import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * This class represents a key that uniquely identifies (on a logical level) kv file handles for
@@ -37,7 +37,7 @@ public class SharedKvFileRegistryKey implements Serializable {
 
     /** Protected constructor to enforce that subclassing. */
     protected SharedKvFileRegistryKey(String keyString) {
-        this.keyString = Preconditions.checkNotNull(keyString);
+        this.keyString = checkNotNull(keyString);
     }
 
     /** Create a unique key based on physical id. */

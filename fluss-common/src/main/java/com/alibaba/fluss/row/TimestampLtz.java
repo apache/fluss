@@ -18,10 +18,11 @@ package com.alibaba.fluss.row;
 
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.Serializable;
 import java.time.Instant;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * An internal data structure representing data of {@link LocalZonedTimestampType}.
@@ -48,7 +49,7 @@ public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
     private final int nanoOfMillisecond;
 
     private TimestampLtz(long millisecond, int nanoOfMillisecond) {
-        Preconditions.checkArgument(nanoOfMillisecond >= 0 && nanoOfMillisecond <= 999_999);
+        checkArgument(nanoOfMillisecond >= 0 && nanoOfMillisecond <= 999_999);
         this.millisecond = millisecond;
         this.nanoOfMillisecond = nanoOfMillisecond;
     }

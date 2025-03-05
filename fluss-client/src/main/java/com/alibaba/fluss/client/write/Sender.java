@@ -37,7 +37,6 @@ import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +52,7 @@ import java.util.Set;
 
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -121,7 +121,7 @@ public class Sender implements Runnable {
         this.inFlightBatches = new HashMap<>();
 
         this.metadataUpdater = metadataUpdater;
-        Preconditions.checkNotNull(metadataUpdater.getCoordinatorServer());
+        checkNotNull(metadataUpdater.getCoordinatorServer());
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;

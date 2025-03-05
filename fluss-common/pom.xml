@@ -62,15 +62,15 @@
 
         <!-- TODO: these two dependencies need to be shaded. -->
         <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-compress</artifactId>
-            <version>1.20</version>
+            <groupId>org.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.8.0</version>
         </dependency>
 
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>
-            <version>1.4.9-1</version>
+            <version>1.5.7-1</version>
         </dependency>
 
         <!-- RocksDB dependencies -->
@@ -82,26 +82,23 @@
             <artifactId>frocksdbjni</artifactId>
         </dependency>
 
-        <!-- paimon bundle -->
-        <dependency>
-            <groupId>org.apache.paimon</groupId>
-            <artifactId>paimon-bundle</artifactId>
-            <version>${paimon.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
         <!-- test dependencies -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
         </dependency>
         <!-- test util for ProtoCodecUtilsTest -->
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
             <version>${protobuf.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- paimon bundle, only for test purpose -->
+        <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-bundle</artifactId>
+            <version>${paimon.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

@@ -5,13 +5,13 @@ sidebar_position: 1
 
 # Observability Quickstart Guides
 
-On this page, you can find the following guides to set up an observability stack **based on the instructions in the [Flink quickstart guide](/docs/quickstart/flink)**:
+On this page, you can find the following guides to set up an observability stack **based on the instructions in the [Flink quickstart guide](quickstart/flink.md)**:
 
 - [Observability with Prometheus, Loki and Grafana](#observability-with-prometheus-loki-and-grafana)
 
 :::warning
     Make sure the environment variables for the Fluss and the Quickstart version are set.
-    For further information, check the [Flink quickstart guide](/docs/quickstart/flink#starting-required-components).
+    For further information, check the [Flink quickstart guide](quickstart/flink.md#starting-required-components).
 :::
 
 ## Observability with Prometheus, Loki and Grafana
@@ -21,7 +21,7 @@ We provide a minimal quickstart configuration for application observability with
 The quickstart configuration comes with 2 metric dashboards.
 
 - `Fluss – overview`: Selected metrics to observe the overall cluster status
-- `Fluss – detail`: Majority of metrics listed in [metrics list](./monitor-metrics.md#metrics-list)
+- `Fluss – detail`: Majority of metrics listed in [metrics list](monitor-metrics.md#metrics-list)
 
 Follow the instructions below to add observability capabilities to your setup.
 
@@ -52,7 +52,7 @@ The container manifest below configures Fluss to use Logback and Loki4j. Save it
 ```dockerfile
 ARG FLUSS_VERSION
 
-FROM fluss/fluss:${FLUSS_VERSION}
+FROM fluss/fluss:$FLUSS_VERSION$
 
 # remove default logging backend from classpath and add logback to classpath
 RUN rm -rf ${FLUSS_HOME}/lib/log4j-slf4j-impl-*.jar && \
@@ -67,7 +67,7 @@ COPY fluss-quickstart-observability/slf4j/logback-loki-console.xml ${FLUSS_HOME}
 ```
 
 :::note
-Detailed configuration instructions for Fluss and Logback can be found [here](./logging.md#configuring-logback).
+Detailed configuration instructions for Fluss and Logback can be found [here](logging.md#configuring-logback).
 :::
 
 3. Additionally, you need to adapt the `docker-compose.yml` and 
@@ -84,10 +84,10 @@ To do this, you can simply copy the manifest below into your `docker-compose.yml
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss-slf4j-logback:${FLUSS_VERSION}
+    image: fluss-slf4j-logback:$FLUSS_VERSION$
     build:
       args:
-        FLUSS_VERSION: ${FLUSS_VERSION}
+        FLUSS_VERSION: $FLUSS_VERSION$
       dockerfile: fluss-slf4j-logback.Dockerfile
     command: coordinatorServer
     depends_on:
@@ -106,10 +106,10 @@ services:
         logback.configurationFile: logback-loki-console.xml
       - APP_NAME=coordinator-server
   tablet-server:
-    image: fluss-slf4j-logback:${FLUSS_VERSION}
+    image: fluss-slf4j-logback:$FLUSS_VERSION$
     build:
       args:
-        FLUSS_VERSION: ${FLUSS_VERSION}
+        FLUSS_VERSION: $FLUSS_VERSION$
       dockerfile: fluss-slf4j-logback.Dockerfile
     command: tabletServer
     depends_on:

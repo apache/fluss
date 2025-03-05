@@ -27,7 +27,6 @@ import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.compacted.CompactedRow;
 import com.alibaba.fluss.row.indexed.IndexedRow;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.crc.Crc32C;
 
 import javax.annotation.Nullable;
@@ -39,6 +38,7 @@ import static com.alibaba.fluss.record.DefaultKvRecordBatch.LENGTH_LENGTH;
 import static com.alibaba.fluss.record.DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static com.alibaba.fluss.record.DefaultKvRecordBatch.SCHEMA_ID_OFFSET;
 import static com.alibaba.fluss.record.KvRecordBatch.CURRENT_KV_MAGIC_VALUE;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** Builder for {@link DefaultKvRecordBatch} memory bytes. */
 public class KvRecordBatchBuilder implements AutoCloseable {
@@ -64,7 +64,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             int writeLimit,
             AbstractPagedOutputView pagedOutputView,
             KvFormat kvFormat) {
-        Preconditions.checkArgument(
+        checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
         this.schemaId = schemaId;

@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.fs.hdfs;
 
-import com.alibaba.fluss.utils.Preconditions;
-
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.PositionedReadable;
 import org.apache.hadoop.fs.Seekable;
@@ -26,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.InputStream;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -103,7 +102,7 @@ class HadoopDataInputStreamTest {
 
         @Override
         public void seek(long pos) {
-            Preconditions.checkArgument(pos >= 0 && pos <= count, "Position out of bounds.");
+            checkArgument(pos >= 0 && pos <= count, "Position out of bounds.");
             this.position = (int) pos;
         }
 

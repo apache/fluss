@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.DoubleColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.Float8Vector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for Double. */
 @Internal
@@ -29,7 +30,7 @@ public class ArrowDoubleColumnVector implements DoubleColumnVector {
     private final Float8Vector doubleVector;
 
     public ArrowDoubleColumnVector(Float8Vector doubleVector) {
-        this.doubleVector = Preconditions.checkNotNull(doubleVector);
+        this.doubleVector = checkNotNull(doubleVector);
     }
 
     @Override

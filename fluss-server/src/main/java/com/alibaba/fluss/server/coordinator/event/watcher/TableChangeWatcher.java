@@ -129,7 +129,9 @@ public class TableChangeWatcher {
                             TablePartition partition = PartitionZNode.decode(oldData.getData());
                             eventManager.put(
                                     new DropPartitionEvent(
-                                            partition.getTableId(), partition.getPartitionId()));
+                                            partition.getTableId(),
+                                            partition.getPartitionId(),
+                                            physicalTablePath.getPartitionName()));
                         } else {
                             // maybe table node is deleted
                             // try to parse the path as a table node

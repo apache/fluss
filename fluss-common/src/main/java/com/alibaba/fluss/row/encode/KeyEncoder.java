@@ -18,6 +18,7 @@ package com.alibaba.fluss.row.encode;
 
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.encode.paimon.PaimonKeyEncoder;
 import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;

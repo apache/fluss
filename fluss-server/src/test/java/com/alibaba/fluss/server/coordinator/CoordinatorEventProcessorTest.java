@@ -29,11 +29,9 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotResponse;
+import com.alibaba.fluss.server.coordinator.event.AccessContextEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
-import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
-import com.alibaba.fluss.server.coordinator.event.CreatePartitionEvent;
-import com.alibaba.fluss.server.coordinator.event.DropPartitionEvent;
 import com.alibaba.fluss.server.coordinator.statemachine.BucketState;
 import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
@@ -56,6 +54,8 @@ import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableIdsZNode;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -69,25 +69,25 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
-import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyBucketForPartitionInState;
-import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyBucketForTableInState;
-import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyReplicaForPartitionInState;
-import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.verifyReplicaForTableInState;
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.checkLeaderAndIsr;
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
+import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -129,7 +129,7 @@ class CoordinatorEventProcessorTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zookeeperClient);
+        metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(
@@ -143,7 +143,7 @@ class CoordinatorEventProcessorTest {
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, zookeeperClient, new Configuration());
+                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         eventProcessor =
@@ -171,10 +171,8 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testCreateAndDropTable() throws Exception {
-        CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
         // make sure all request to gateway should be successful
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                eventProcessor.getCoordinatorContext(), testCoordinatorChannelManager);
+        initCoordinatorChannel();
         // create a table,
         TablePath t1 = TablePath.of(defaultDatabase, "create_drop_t1");
         TableDescriptor tableDescriptor = TEST_TABLE;
@@ -188,11 +186,10 @@ class CoordinatorEventProcessorTest {
         TablePath t2 = TablePath.of(defaultDatabase, "create_drop_t2");
         long t2Id = metadataManager.createTable(t2, tableDescriptor, tableAssignment, false);
 
-        verifyTableCreated(coordinatorContext, t2Id, tableAssignment, nBuckets, replicationFactor);
+        verifyTableCreated(t2Id, tableAssignment, nBuckets, replicationFactor);
 
         // mock CompletedSnapshotStore
-        Set<TableBucket> tableBuckets = coordinatorContext.getAllBucketsForTable(t1Id);
-        for (TableBucket tableBucket : tableBuckets) {
+        for (TableBucket tableBucket : allTableBuckets(t1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                     new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
         }
@@ -201,15 +198,15 @@ class CoordinatorEventProcessorTest {
         // drop the table;
         metadataManager.dropTable(t1, false);
 
-        verifyTableDropped(coordinatorContext, t1Id);
+        verifyTableDropped(t1Id);
 
         // verify CompleteSnapshotStore has been removed when the table is dropped
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
 
         // replicas and buckets for t2 should still be online
-        verifyBucketForTableInState(coordinatorContext, t2Id, nBuckets, BucketState.OnlineBucket);
+        verifyBucketForTableInState(t2Id, nBuckets, BucketState.OnlineBucket);
         verifyReplicaForTableInState(
-                coordinatorContext, t2Id, nBuckets * replicationFactor, ReplicaState.OnlineReplica);
+                t2Id, nBuckets * replicationFactor, ReplicaState.OnlineReplica);
 
         // shutdown event processor and delete the table node for t2 from zk
         // to mock the case that the table hasn't been deleted completely
@@ -226,11 +223,7 @@ class CoordinatorEventProcessorTest {
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
                         new Configuration());
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()));
+        initCoordinatorChannel();
         eventProcessor.startup();
         // make sure the table can still be deleted successfully
         retry(
@@ -238,8 +231,12 @@ class CoordinatorEventProcessorTest {
                 () -> assertThat(zookeeperClient.getTableAssignment(t2Id)).isEmpty());
 
         // no replica and bucket for t2 should exist in the context
-        assertThat(coordinatorContext.getAllBucketsForTable(t2Id)).isEmpty();
-        assertThat(coordinatorContext.getAllReplicasForTable(t2Id)).isEmpty();
+        Set<TableBucket> tableBuckets = fromCtx(ctx -> ctx.getAllBucketsForTable(t2Id));
+        assertThat(tableBuckets).isEmpty();
+
+        Set<TableBucketReplica> tableBucketReplicas =
+                fromCtx(ctx -> ctx.getAllReplicasForTable(t2Id));
+        assertThat(tableBucketReplicas).isEmpty();
     }
 
     @Test
@@ -247,27 +244,17 @@ class CoordinatorEventProcessorTest {
         // make request to some server should fail, but delete will still be successful
         // finally with retry logic
         int failedServer = 0;
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()),
-                Collections.singleton(failedServer));
+        initCoordinatorChannel(failedServer);
         // create a table,
         TablePath t1 = TablePath.of(defaultDatabase, "tdrop");
         final long t1Id = createTable(t1, new int[] {0, 1, 2});
-
-        final CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
 
         // retry until the create table t1 has been handled by coordinator
         // otherwise, when receive create table event, it can't find the schema of the table
         // since it has been deleted by the following code) which cause delete
         // won't don anything
         // todo: may need to fix this case;
-        waitUtil(
-                () -> coordinatorContext.getTablePathById(t1Id) != null,
-                Duration.ofMinutes(1),
-                "Fail to wait for coordinator handling create table event for table " + t1Id);
+        retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(t1Id)).isNotNull());
 
         // drop the table;
         metadataManager.dropTable(t1, false);
@@ -281,10 +268,8 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testServerBecomeOnlineAndOfflineLine() throws Exception {
-        CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
         // make sure all request to gateway should be successful
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                eventProcessor.getCoordinatorContext(), testCoordinatorChannelManager);
+        initCoordinatorChannel();
         // assume a new server become online;
         // check the server has been added into coordinator context
         ZooKeeperClient client =
@@ -297,20 +282,23 @@ class CoordinatorEventProcessorTest {
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(coordinatorContext.getLiveTabletServers())
-                                .containsKey(newlyServerId));
+        retryVerifyContext(
+                ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
 
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                eventProcessor.getCoordinatorContext(), testCoordinatorChannelManager);
-        verifyTabletServer(coordinatorContext, newlyServerId, tabletServerRegistration);
+        initCoordinatorChannel();
+        // verify the context has the exact tablet server
+        retryVerifyContext(
+                ctx -> {
+                    ServerNode tabletServer = ctx.getLiveTabletServers().get(newlyServerId);
+                    assertThat(tabletServer.id()).isEqualTo(newlyServerId);
+                    assertThat(tabletServer.host()).isEqualTo(tabletServerRegistration.getHost());
+                    assertThat(tabletServer.port()).isEqualTo(tabletServerRegistration.getPort());
+                });
 
         // we try to assign a replica to this newly server, every thing will
         // be fine
         // t1: {bucket0: [0, 3, 2], bucket1: [3, 2, 0]}, t2: {bucket0: [3]}
-        MetadataManager metadataManager = new MetadataManager(zookeeperClient);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         TableAssignment table1Assignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 3, 2))
@@ -328,83 +316,64 @@ class CoordinatorEventProcessorTest {
                 metadataManager.createTable(table2Path, TEST_TABLE, table2Assignment, false);
 
         // retry until the table2 been created
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(
-                                        coordinatorContext.getBucketLeaderAndIsr(
-                                                new TableBucket(table2Id, 0)))
-                                .isNotEmpty());
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketLeaderAndIsr(new TableBucket(table2Id, 0)))
+                            .isNotEmpty();
+                });
 
         // now, assume the server 3 is down;
         client.close();
 
         // retry until the server has been removed from coordinator context
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(
-                                        new HashSet<>(
-                                                coordinatorContext.getLiveTabletServers().keySet()))
-                                .doesNotContain(newlyServerId));
+        retryVerifyContext(
+                ctx -> assertThat(ctx.getLiveTabletServers()).doesNotContainKey(newlyServerId));
 
         // check replica state
         // all replicas should be online but the replica in the down server
         // should be offline
         verifyReplicaOnlineOrOffline(
-                coordinatorContext,
-                table1Id,
-                table1Assignment,
-                Collections.singleton(newlyServerId));
+                table1Id, table1Assignment, Collections.singleton(newlyServerId));
         verifyReplicaOnlineOrOffline(
-                coordinatorContext,
-                table2Id,
-                table2Assignment,
-                Collections.singleton(newlyServerId));
+                table2Id, table2Assignment, Collections.singleton(newlyServerId));
 
         // now, check bucket state
         TableBucket t1Bucket0 = new TableBucket(table1Id, 0);
         TableBucket t1Bucket1 = new TableBucket(table1Id, 1);
         TableBucket t2Bucket0 = new TableBucket(table2Id, 0);
         // t1 bucket 0 should still be online since the leader is alive
-        assertThat(coordinatorContext.getBucketState(t1Bucket0)).isEqualTo(OnlineBucket);
+
+        BucketState t1Bucket0State = fromCtx(ctx -> ctx.getBucketState(t1Bucket0));
+        assertThat(t1Bucket0State).isEqualTo(OnlineBucket);
         // t1 bucket 1 should reelect a leader since the leader is not alive
         // the bucket whose leader is in the server should be online a again, but the leadership
         // should change the leader for bucket2 of t1 should change since the leader fail
-        assertThat(coordinatorContext.getBucketState(t1Bucket1)).isEqualTo(OnlineBucket);
+        BucketState t1Bucket1State = fromCtx(ctx -> ctx.getBucketState(t1Bucket1));
+        assertThat(t1Bucket1State).isEqualTo(OnlineBucket);
         // leader should change to replica2, leader epoch should be 1
-        CoordinatorTestUtils.checkLeaderAndIsr(zookeeperClient, t1Bucket1, 1, 2);
+        checkLeaderAndIsr(zookeeperClient, t1Bucket1, 1, 2);
 
         // the bucket with no any other available servers should be still offline,
         // t2 bucket0 should still be offline
-        assertThat(coordinatorContext.getBucketState(t2Bucket0)).isEqualTo(OfflineBucket);
+        BucketState t2Bucket0State = fromCtx(ctx -> ctx.getBucketState(t2Bucket0));
+        assertThat(t2Bucket0State).isEqualTo(OfflineBucket);
 
         // assume the server that comes again
         zookeeperClient.registerTabletServer(newlyServerId, tabletServerRegistration);
         // retry until the server has been added to coordinator context
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(
-                                        new HashSet<>(
-                                                coordinatorContext.getLiveTabletServers().keySet()))
-                                .contains(newlyServerId));
+        retryVerifyContext(
+                ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
 
         // make sure the bucket that remains in offline should be online again
         // since the server become online
         // bucket0 for t2 should then be online
         // retry until the state changes
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(coordinatorContext.getBucketState(t2Bucket0))
-                                .isEqualTo(OnlineBucket));
+        retryVerifyContext(
+                ctx -> assertThat(ctx.getBucketState(t2Bucket0)).isEqualTo(OnlineBucket));
 
         // make sure all the replica will be online again
-        verifyReplicaOnlineOrOffline(
-                coordinatorContext, table1Id, table1Assignment, Collections.emptySet());
-        verifyReplicaOnlineOrOffline(
-                coordinatorContext, table2Id, table2Assignment, Collections.emptySet());
+        verifyReplicaOnlineOrOffline(table1Id, table1Assignment, Collections.emptySet());
+        verifyReplicaOnlineOrOffline(table2Id, table2Assignment, Collections.emptySet());
 
         // let's restart to check everything is ok
         eventProcessor.shutdown();
@@ -416,34 +385,32 @@ class CoordinatorEventProcessorTest {
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
                         new Configuration());
-        CoordinatorContext newCoordinatorContext = eventProcessor.getCoordinatorContext();
 
         // in this test case, so make requests to gateway should always be
         // successful for when start up, it will send request to tablet servers
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()));
+        initCoordinatorChannel();
         eventProcessor.startup();
 
         // check every thing is ok
         // all replicas should be online again
-        verifyReplicaOnlineOrOffline(
-                newCoordinatorContext, table1Id, table1Assignment, Collections.emptySet());
-        verifyReplicaOnlineOrOffline(
-                newCoordinatorContext, table2Id, table2Assignment, Collections.emptySet());
+        verifyReplicaOnlineOrOffline(table1Id, table1Assignment, Collections.emptySet());
+        verifyReplicaOnlineOrOffline(table2Id, table2Assignment, Collections.emptySet());
         // all bucket should be online
-        assertThat(newCoordinatorContext.getBucketState(t1Bucket0)).isEqualTo(OnlineBucket);
-        assertThat(newCoordinatorContext.getBucketState(t1Bucket1)).isEqualTo(OnlineBucket);
-        assertThat(newCoordinatorContext.getBucketState(t2Bucket0)).isEqualTo(OnlineBucket);
+        t1Bucket0State = fromCtx(ctx -> ctx.getBucketState(t1Bucket0));
+        assertThat(t1Bucket0State).isEqualTo(OnlineBucket);
+
+        t1Bucket1State = fromCtx(ctx -> ctx.getBucketState(t1Bucket1));
+        assertThat(t1Bucket1State).isEqualTo(OnlineBucket);
+
+        t2Bucket0State = fromCtx(ctx -> ctx.getBucketState(t2Bucket0));
+        assertThat(t2Bucket0State).isEqualTo(OnlineBucket);
     }
 
     @Test
     void testRestartTriggerReplicaToOffline() throws Exception {
         // case1: coordinator server restart, and first set the replica to online
         // but the request to the replica server fail which will then cause it offline
-        MetadataManager metadataManager = new MetadataManager(zookeeperClient);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         TableAssignment tableAssignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 1, 2))
@@ -453,8 +420,7 @@ class CoordinatorEventProcessorTest {
         long table1Id = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
 
         // let's restart
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                eventProcessor.getCoordinatorContext(), testCoordinatorChannelManager);
+        initCoordinatorChannel();
         eventProcessor.shutdown();
         eventProcessor =
                 new CoordinatorEventProcessor(
@@ -464,14 +430,8 @@ class CoordinatorEventProcessorTest {
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
                         new Configuration());
-        CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
         int failedServer = 0;
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()),
-                Collections.singleton(failedServer));
+        initCoordinatorChannel(failedServer);
         eventProcessor.startup();
 
         // all buckets should be online
@@ -488,18 +448,15 @@ class CoordinatorEventProcessorTest {
                 });
 
         // check the changed leader and isr info
-        CoordinatorTestUtils.checkLeaderAndIsr(zookeeperClient, t1Bucket0, 1, 1);
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(coordinatorContext.getBucketState(t1Bucket0))
-                            .isEqualTo(OnlineBucket);
-                    assertThat(coordinatorContext.getBucketState(t1Bucket1))
-                            .isEqualTo(OnlineBucket);
+        checkLeaderAndIsr(zookeeperClient, t1Bucket0, 1, 1);
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketState(t1Bucket0)).isEqualTo(OnlineBucket);
+                    assertThat(ctx.getBucketState(t1Bucket1)).isEqualTo(OnlineBucket);
                 });
         // only replica0 will be offline
         verifyReplicaOnlineOrOffline(
-                coordinatorContext, table1Id, tableAssignment, Collections.singleton(failedServer));
+                table1Id, tableAssignment, Collections.singleton(failedServer));
     }
 
     @Test
@@ -579,61 +536,41 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testCreateAndDropPartition() throws Exception {
-        CoordinatorContext coordinatorContext = eventProcessor.getCoordinatorContext();
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_create_drop_partition");
         // make sure all request to gateway should be successful
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
-                eventProcessor.getCoordinatorContext(), testCoordinatorChannelManager);
+        initCoordinatorChannel();
         // create a partitioned table
-        TablePath tablePath = TablePath.of(defaultDatabase, "partition_table");
         TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
         long tableId =
                 metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
 
-        retry(
-                Duration.ofMinutes(1),
-                // retry util the table has been put into context
-                () -> assertThat(coordinatorContext.getTablePathById(tableId)).isNotNull());
-
-        // create partition
-        long partition1Id = zookeeperClient.getPartitionIdAndIncrement();
-        long partition2Id = zookeeperClient.getPartitionIdAndIncrement();
         int nBuckets = 3;
         int replicationFactor = 3;
-        String partition1Name = "2024";
-        String partition2Name = "2025";
         Map<Integer, BucketAssignment> assignments =
                 TableAssignmentUtils.generateAssignment(
                                 nBuckets, replicationFactor, new int[] {0, 1, 2})
                         .getBucketAssignments();
         PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
-        zookeeperClient.registerPartitionAssignment(partition1Id, partitionAssignment);
-        zookeeperClient.registerPartitionAssignment(partition2Id, partitionAssignment);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
 
-        CoordinatorEvent createPartitionEvent =
-                new CreatePartitionEvent(
-                        tablePath, tableId, partition1Id, partition1Name, partitionAssignment);
-        eventProcessor.process(createPartitionEvent);
-        createPartitionEvent =
-                new CreatePartitionEvent(
-                        tablePath, tableId, partition2Id, partition2Name, partitionAssignment);
-        eventProcessor.process(createPartitionEvent);
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        String partition1Name = partitionIdAndNameTuple2.f0.partitionName;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
         verifyPartitionCreated(
-                coordinatorContext,
                 new TablePartition(tableId, partition1Id),
                 partitionAssignment,
                 nBuckets,
                 replicationFactor);
         verifyPartitionCreated(
-                coordinatorContext,
                 new TablePartition(tableId, partition2Id),
                 partitionAssignment,
                 nBuckets,
                 replicationFactor);
 
         // mock CompletedSnapshotStore for partition1
-        Set<TableBucket> tableBuckets4partition1 =
-                coordinatorContext.getAllBucketsForPartition(tableId, partition1Id);
-        for (TableBucket tableBucket : tableBuckets4partition1) {
+        for (TableBucket tableBucket : allTableBuckets(tableId, partition1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                     new TableBucket(
                             tableBucket.getTableId(),
@@ -644,10 +581,8 @@ class CoordinatorEventProcessorTest {
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
 
         // drop the partition
-        DropPartitionEvent dropPartitionEvent = new DropPartitionEvent(tableId, partition1Id);
-        eventProcessor.process(dropPartitionEvent);
-
-        verifyPartitionDropped(coordinatorContext, tableId, partition1Id);
+        zookeeperClient.deletePartition(tablePath, partition1Name);
+        verifyPartitionDropped(tableId, partition1Id);
 
         // verify CompleteSnapshotStore has been removed when the table partition1 is dropped
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
@@ -666,54 +601,128 @@ class CoordinatorEventProcessorTest {
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
                         new Configuration());
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
+        initCoordinatorChannel();
+        eventProcessor.startup();
+        verifyPartitionDropped(tableId, partition2Id);
+    }
+
+    @Test
+    void testRestartResumeDropPartition() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_resume_drop_partition");
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+        // create a partitioned table
+        TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                TableAssignmentUtils.generateAssignment(
+                                nBuckets, replicationFactor, new int[] {0, 1, 2})
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        String partition2Name = partitionIdAndNameTuple2.f1.partitionName;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // now, drop partition2 and restart the coordinator event processor,
+        // the partition2 should be dropped
+        eventProcessor.shutdown();
+        zookeeperClient.deletePartition(tablePath, partition2Name);
+
+        // start the coordinator
+        eventProcessor =
+                new CoordinatorEventProcessor(
+                        zookeeperClient,
+                        serverMetadataCache,
+                        testCoordinatorChannelManager,
+                        autoPartitionManager,
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        new Configuration());
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        // verify partition2 is dropped
+        verifyPartitionDropped(tableId, partition2Id);
+        // verify the status of partition1
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+    }
+
+    private void initCoordinatorChannel() throws Exception {
+        makeSendLeaderAndStopRequestAlwaysSuccess(
                 testCoordinatorChannelManager,
                 Arrays.stream(zookeeperClient.getSortedTabletServerList())
                         .boxed()
                         .collect(Collectors.toSet()));
-        eventProcessor.startup();
-        verifyPartitionDropped(coordinatorContext, tableId, partition2Id);
     }
 
-    // todo: add test resume drop partition
+    private void initCoordinatorChannel(int failedServer) throws Exception {
+        makeSendLeaderAndStopRequestFailContext(
+                testCoordinatorChannelManager,
+                Arrays.stream(zookeeperClient.getSortedTabletServerList())
+                        .boxed()
+                        .collect(Collectors.toSet()),
+                Collections.singleton(failedServer));
+    }
+
+    private Tuple2<PartitionIdName, PartitionIdName> preparePartitionAssignment(
+            TablePath tablePath, long tableId, PartitionAssignment partitionAssignment)
+            throws Exception {
+        // retry util the table has been put into context
+        retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(tableId)).isNotNull());
+
+        // create partition
+        long partition1Id = zookeeperClient.getPartitionIdAndIncrement();
+        long partition2Id = zookeeperClient.getPartitionIdAndIncrement();
+        String partition1Name = "2024";
+        String partition2Name = "2025";
+        zookeeperClient.registerPartitionAssignment(partition1Id, partitionAssignment);
+        zookeeperClient.registerPartition(tablePath, tableId, partition1Name, partition1Id);
+        zookeeperClient.registerPartitionAssignment(partition2Id, partitionAssignment);
+        zookeeperClient.registerPartition(tablePath, tableId, partition2Name, partition2Id);
+
+        return Tuple2.of(
+                new PartitionIdName(partition1Id, partition1Name),
+                new PartitionIdName(partition2Id, partition2Name));
+    }
 
     private void verifyTableCreated(
-            CoordinatorContext coordinatorContext,
-            long tableId,
-            TableAssignment tableAssignment,
-            int nBuckets,
-            int replicationFactor)
+            long tableId, TableAssignment tableAssignment, int nBuckets, int replicationFactor)
             throws Exception {
         int replicasCount = nBuckets * replicationFactor;
         // retry until the all replicas in t2 is online
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    // we use method replicaCounts instead of getAllReplicasForTable in here
-                    // for use getAllReplicasForTable will cause ConcurrentModificationException
-                    // in here
-                    assertThat(replicaCounts(coordinatorContext, tableId)).isEqualTo(replicasCount);
-                    assertThat(
-                                    coordinatorContext.areAllReplicasInState(
-                                            tableId, ReplicaState.OnlineReplica))
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.replicaCounts(tableId)).isEqualTo(replicasCount);
+                    assertThat(ctx.areAllReplicasInState(tableId, ReplicaState.OnlineReplica))
                             .isTrue();
                 });
         // make sure all should be online
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        verifyBucketForTableInState(
-                                coordinatorContext, tableId, nBuckets, BucketState.OnlineBucket));
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        verifyReplicaForTableInState(
-                                coordinatorContext,
-                                tableId,
-                                nBuckets * replicationFactor,
-                                ReplicaState.OnlineReplica));
-        for (TableBucket tableBucket : coordinatorContext.getAllBucketsForTable(tableId)) {
-            CoordinatorTestUtils.checkLeaderAndIsr(
+        verifyBucketForTableInState(tableId, nBuckets, OnlineBucket);
+        verifyReplicaForTableInState(tableId, replicasCount, OnlineReplica);
+
+        for (TableBucket tableBucket : allTableBuckets(tableId, nBuckets)) {
+            checkLeaderAndIsr(
                     zookeeperClient,
                     tableBucket,
                     0,
@@ -725,7 +734,6 @@ class CoordinatorEventProcessorTest {
     }
 
     private void verifyPartitionCreated(
-            CoordinatorContext coordinatorContext,
             TablePartition tablePartition,
             TableAssignment tableAssignment,
             int nBuckets,
@@ -733,40 +741,24 @@ class CoordinatorEventProcessorTest {
             throws Exception {
         int replicasCount = nBuckets * replicationFactor;
         // retry until the all replicas in t2 is online
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    // we use method replicaCounts instead of getAllReplicasForTable in here
-                    // for use getAllReplicasForTable will cause ConcurrentModificationException
-                    // in here
-                    assertThat(replicaCounts(coordinatorContext, tablePartition))
-                            .isEqualTo(replicasCount);
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.replicaCounts(tablePartition)).isEqualTo(replicasCount);
                     assertThat(
-                                    coordinatorContext.areAllReplicasInState(
+                                    ctx.areAllReplicasInState(
                                             tablePartition, ReplicaState.OnlineReplica))
                             .isTrue();
                 });
+
         // make sure all should be online
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        verifyBucketForPartitionInState(
-                                coordinatorContext,
-                                tablePartition,
-                                nBuckets,
-                                BucketState.OnlineBucket));
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        verifyReplicaForPartitionInState(
-                                coordinatorContext,
-                                tablePartition,
-                                nBuckets * replicationFactor,
-                                ReplicaState.OnlineReplica));
+        verifyBucketForPartitionInState(tablePartition, nBuckets, BucketState.OnlineBucket);
+        verifyReplicaForPartitionInState(
+                tablePartition, nBuckets * replicationFactor, ReplicaState.OnlineReplica);
+
         for (TableBucket tableBucket :
-                coordinatorContext.getAllBucketsForPartition(
-                        tablePartition.getTableId(), tablePartition.getPartitionId())) {
-            CoordinatorTestUtils.checkLeaderAndIsr(
+                allTableBuckets(
+                        tablePartition.getTableId(), tablePartition.getPartitionId(), nBuckets)) {
+            checkLeaderAndIsr(
                     zookeeperClient,
                     tableBucket,
                     0,
@@ -777,52 +769,67 @@ class CoordinatorEventProcessorTest {
         }
     }
 
-    private void verifyTableDropped(CoordinatorContext coordinatorContext, long tableId) {
+    private void verifyTableDropped(long tableId) {
         // retry until the assignment has been deleted from zk, then it means
         // the table/partition has been deleted successfully
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty());
         // no replica and bucket for the table/partition should exist in the context
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(coordinatorContext.getAllBucketsForTable(tableId)).isEmpty());
-
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(coordinatorContext.getAllReplicasForTable(tableId)).isEmpty());
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getAllBucketsForTable(tableId)).isEmpty();
+                    assertThat(ctx.getAllReplicasForTable(tableId)).isEmpty();
+                });
     }
 
-    private void verifyPartitionDropped(
-            CoordinatorContext coordinatorContext, long tableId, long partitionId) {
+    private void verifyPartitionDropped(long tableId, long partitionId) throws Exception {
         // retry until the assignment has been deleted from zk, then it means
         // the table/partition has been deleted successfully
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty());
         // no replica and bucket for the partition should exist in the context
-        assertThat(coordinatorContext.getAllBucketsForPartition(tableId, partitionId)).isEmpty();
-        assertThat(coordinatorContext.getAllReplicasForPartition(tableId, partitionId)).isEmpty();
+        Set<TableBucket> tableBuckets =
+                fromCtx(ctx -> ctx.getAllBucketsForPartition(tableId, partitionId));
+        assertThat(tableBuckets).isEmpty();
+
+        Set<TableBucketReplica> tableBucketReplicas =
+                fromCtx(ctx -> ctx.getAllReplicasForPartition(tableId, partitionId));
+        assertThat(tableBucketReplicas).isEmpty();
+
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty());
     }
 
-    private void verifyTabletServer(
-            CoordinatorContext coordinatorContext,
-            int serverId,
-            TabletServerRegistration expectedServerRegistration) {
-        ServerNode tabletServer = coordinatorContext.getLiveTabletServers().get(serverId);
-        assertThat(tabletServer.id()).isEqualTo(serverId);
-        assertThat(tabletServer.host()).isEqualTo(expectedServerRegistration.getHost());
-        assertThat(tabletServer.port()).isEqualTo(expectedServerRegistration.getPort());
+    private void verifyBucketForTableInState(
+            long tableId, int expectedBucketCount, BucketState expectedState) {
+        retryVerifyContext(
+                ctx -> {
+                    Set<TableBucket> buckets = ctx.getAllBucketsForTable(tableId);
+                    assertThat(buckets.size()).isEqualTo(expectedBucketCount);
+                    for (TableBucket tableBucket : buckets) {
+                        assertThat(ctx.getBucketState(tableBucket)).isEqualTo(expectedState);
+                    }
+                });
+    }
+
+    private void verifyReplicaForTableInState(
+            long tableId, int expectedReplicaCount, ReplicaState expectedState) {
+        retryVerifyContext(
+                ctx -> {
+                    Set<TableBucketReplica> replicas = ctx.getAllReplicasForTable(tableId);
+                    assertThat(replicas.size()).isEqualTo(expectedReplicaCount);
+                    for (TableBucketReplica tableBucketReplica : replicas) {
+                        assertThat(ctx.getReplicaState(tableBucketReplica))
+                                .isEqualTo(expectedState);
+                    }
+                });
     }
 
     private void verifyReplicaOnlineOrOffline(
-            CoordinatorContext coordinatorContext,
-            long tableId,
-            TableAssignment assignment,
-            Set<Integer> expectedOfflineReplicas) {
+            long tableId, TableAssignment assignment, Set<Integer> expectedOfflineReplicas) {
         // iterate each bucket and the replicas
         assignment
                 .getBucketAssignments()
@@ -835,41 +842,74 @@ class CoordinatorEventProcessorTest {
                                         new TableBucketReplica(bucket, replica);
                                 // if expected to be offline
                                 if (expectedOfflineReplicas.contains(replica)) {
-                                    retry(
-                                            Duration.ofMinutes(1),
-                                            () ->
-                                                    assertThat(
-                                                                    coordinatorContext
-                                                                            .getReplicaState(
-                                                                                    bucketReplica))
+                                    retryVerifyContext(
+                                            ctx ->
+                                                    assertThat(ctx.getReplicaState(bucketReplica))
                                                             .isEqualTo(OfflineReplica));
 
                                 } else {
                                     // otherwise, should be online
-                                    retry(
-                                            Duration.ofMinutes(1),
-                                            () -> {
-                                                assertThat(
-                                                                coordinatorContext.getReplicaState(
-                                                                        bucketReplica))
-                                                        .isEqualTo(OnlineReplica);
-                                            });
+                                    retryVerifyContext(
+                                            ctx ->
+                                                    assertThat(ctx.getReplicaState(bucketReplica))
+                                                            .isEqualTo(OnlineReplica));
                                 }
                             }
                         });
     }
 
-    private int replicaCounts(CoordinatorContext coordinatorContext, long tableId) {
-        Map<Integer, List<Integer>> tableAssignments =
-                new HashMap<>(coordinatorContext.getTableAssignment(tableId));
-        return tableAssignments.values().stream().mapToInt(List::size).sum();
+    private void verifyReplicaForPartitionInState(
+            TablePartition tablePartition, int expectedReplicaCount, ReplicaState expectedState) {
+        retryVerifyContext(
+                ctx -> {
+                    Set<TableBucketReplica> replicas =
+                            ctx.getAllReplicasForPartition(
+                                    tablePartition.getTableId(), tablePartition.getPartitionId());
+                    assertThat(replicas.size()).isEqualTo(expectedReplicaCount);
+                    for (TableBucketReplica tableBucketReplica : replicas) {
+                        assertThat(ctx.getReplicaState(tableBucketReplica))
+                                .isEqualTo(expectedState);
+                    }
+                });
     }
 
-    private int replicaCounts(
-            CoordinatorContext coordinatorContext, TablePartition tablePartition) {
-        Map<Integer, List<Integer>> tableAssignments =
-                new HashMap<>(coordinatorContext.getPartitionAssignment(tablePartition));
-        return tableAssignments.values().stream().mapToInt(List::size).sum();
+    private void verifyBucketForPartitionInState(
+            TablePartition tablePartition, int expectedBucketCount, BucketState expectedState) {
+        retryVerifyContext(
+                ctx -> {
+                    Set<TableBucket> buckets =
+                            ctx.getAllBucketsForPartition(
+                                    tablePartition.getTableId(), tablePartition.getPartitionId());
+                    assertThat(buckets.size()).isEqualTo(expectedBucketCount);
+                    for (TableBucket tableBucket : buckets) {
+                        assertThat(ctx.getBucketState(tableBucket)).isEqualTo(expectedState);
+                    }
+                });
+    }
+
+    private void retryVerifyContext(Consumer<CoordinatorContext> verifyFunction) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    AccessContextEvent<Void> event =
+                            new AccessContextEvent<>(
+                                    ctx -> {
+                                        verifyFunction.accept(ctx);
+                                        return null;
+                                    });
+                    eventProcessor.getCoordinatorEventManager().put(event);
+                    try {
+                        event.getResultFuture().get(30, TimeUnit.SECONDS);
+                    } catch (Throwable t) {
+                        throw ExceptionUtils.stripExecutionException(t);
+                    }
+                });
+    }
+
+    private <T> T fromCtx(Function<CoordinatorContext, T> retriveFunction) throws Exception {
+        AccessContextEvent<T> event = new AccessContextEvent<>(retriveFunction);
+        eventProcessor.getCoordinatorEventManager().put(event);
+        return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }
 
     private long createTable(TablePath tablePath, int[] servers) {
@@ -890,8 +930,33 @@ class CoordinatorEventProcessorTest {
                 .distributedBy(3)
                 .partitionedBy("b")
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "YEAR")
+                // set to 0 to disable pre-create partition
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 0)
                 .build()
                 .withReplicationFactor(REPLICATION_FACTOR);
+    }
+
+    private static List<TableBucket> allTableBuckets(long tableId, int numBuckets) {
+        return IntStream.range(0, numBuckets)
+                .mapToObj(i -> new TableBucket(tableId, i))
+                .collect(Collectors.toList());
+    }
+
+    private static List<TableBucket> allTableBuckets(
+            long tableId, long partitionId, int numBuckets) {
+        return IntStream.range(0, numBuckets)
+                .mapToObj(i -> new TableBucket(tableId, partitionId, i))
+                .collect(Collectors.toList());
+    }
+
+    private static class PartitionIdName {
+        private final long partitionId;
+        private final String partitionName;
+
+        private PartitionIdName(long partitionId, String partitionName) {
+            this.partitionId = partitionId;
+            this.partitionName = partitionName;
+        }
     }
 }

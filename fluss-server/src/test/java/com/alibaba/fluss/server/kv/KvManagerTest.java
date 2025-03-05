@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.kv;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.TableConfig;
@@ -59,6 +58,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -268,7 +268,7 @@ final class KvManagerTest {
                 KvFormat.COMPACTED,
                 DATA1_SCHEMA_PK,
                 new TableConfig(new Configuration()),
-                ArrowCompressionInfo.NO_COMPRESSION);
+                DEFAULT_COMPRESSION);
     }
 
     private byte[] valueOf(KvRecord kvRecord) {

@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.kv;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.exception.InvalidTargetColumnException;
@@ -76,6 +75,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -175,7 +175,7 @@ class KvTabletTest {
                 KvFormat.COMPACTED,
                 schema,
                 rowMerger,
-                ArrowCompressionInfo.NO_COMPRESSION);
+                DEFAULT_COMPRESSION);
     }
 
     @Test
@@ -606,8 +606,7 @@ class KvTabletTest {
         FileLogProjection logProjection = null;
         if (doProjection) {
             logProjection = new FileLogProjection();
-            logProjection.setCurrentProjection(
-                    0L, rowType, ArrowCompressionInfo.NO_COMPRESSION, new int[] {0});
+            logProjection.setCurrentProjection(0L, rowType, DEFAULT_COMPRESSION, new int[] {0});
         }
 
         RowType readLogRowType = doProjection ? rowType.project(new int[] {0}) : rowType;
@@ -716,8 +715,7 @@ class KvTabletTest {
         FileLogProjection logProjection = null;
         if (doProjection) {
             logProjection = new FileLogProjection();
-            logProjection.setCurrentProjection(
-                    0L, rowType, ArrowCompressionInfo.NO_COMPRESSION, new int[] {0});
+            logProjection.setCurrentProjection(0L, rowType, DEFAULT_COMPRESSION, new int[] {0});
         }
         RowType readLogRowType = doProjection ? rowType.project(new int[] {0}) : rowType;
 
@@ -878,16 +876,7 @@ class KvTabletTest {
 
     private MemoryLogRecords logRecords(
             long baseOffset, List<RowKind> rowKinds, List<Object[]> values) throws Exception {
-        return createBasicMemoryLogRecords(
-                baseRowType,
-                DEFAULT_SCHEMA_ID,
-                baseOffset,
-                -1L,
-                NO_WRITER_ID,
-                NO_BATCH_SEQUENCE,
-                rowKinds,
-                values,
-                LogFormat.ARROW);
+        return logRecords(baseRowType, baseOffset, rowKinds, values);
     }
 
     private MemoryLogRecords logRecords(
@@ -902,7 +891,8 @@ class KvTabletTest {
                 NO_BATCH_SEQUENCE,
                 rowKinds,
                 values,
-                LogFormat.ARROW);
+                LogFormat.ARROW,
+                DEFAULT_COMPRESSION);
     }
 
     private void checkEqual(

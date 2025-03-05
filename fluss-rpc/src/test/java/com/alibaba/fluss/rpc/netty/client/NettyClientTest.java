@@ -20,6 +20,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 import com.alibaba.fluss.rpc.TestingGatewayService;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
@@ -186,14 +187,15 @@ final class NettyClientTest {
                     new ServerNode(
                             serverId, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
             service = new TestingGatewayService();
+            MetricGroup metricGroup = NOPMetricsGroup.newInstance();
             nettyServer =
                     new NettyServer(
                             conf,
                             serverNode.host(),
                             String.valueOf(serverNode.port()),
                             service,
-                            RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                    NOPMetricsGroup.newInstance()));
+                            metricGroup,
+                            RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
         }
     }

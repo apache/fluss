@@ -17,11 +17,12 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Data type of an array of elements with same subtype. Compared to the SQL standard, the maximum
@@ -40,8 +41,7 @@ public final class ArrayType extends DataType {
 
     public ArrayType(boolean isNullable, DataType elementType) {
         super(isNullable, DataTypeRoot.ARRAY);
-        this.elementType =
-                Preconditions.checkNotNull(elementType, "Element type must not be null.");
+        this.elementType = checkNotNull(elementType, "Element type must not be null.");
     }
 
     public ArrayType(DataType elementType) {

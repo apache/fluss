@@ -115,14 +115,15 @@ public class FlinkSourceEnumerator
     private Connection connection;
     private Admin flussAdmin;
     private BucketOffsetsRetriever bucketOffsetsRetriever;
-    private long tableId;
-    private int bucketCount;
+    private TableInfo tableInfo;
 
     // This flag will be marked as true if periodically partition discovery is disabled AND the
     // split initializing has finished.
     private boolean noMoreNewSplits = false;
 
     private boolean lakeEnabled = false;
+
+    private volatile boolean closed = false;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -179,10 +180,8 @@ public class FlinkSourceEnumerator
         flussAdmin = connection.getAdmin();
         bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
         try {
-            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            tableId = tableInfo.getTableId();
+            tableInfo = flussAdmin.getTableInfo(tablePath).get();
             lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
-            bucketCount = tableInfo.getNumBuckets();
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to get table info for %s", tablePath),
@@ -266,6 +265,10 @@ public class FlinkSourceEnumerator
 
     /** Init the splits for Fluss. */
     private void checkPartitionChanges(Set<PartitionInfo> partitionInfos, Throwable t) {
+        if (closed) {
+            // skip if the enumerator is closed to avoid unnecessary error logs
+            return;
+        }
         if (t != null) {
             LOG.error("Failed to list partitions for {}", tablePath, t);
             return;
@@ -413,8 +416,9 @@ public class FlinkSourceEnumerator
         // always assume the bucket is from 0 to bucket num
         List<SourceSplitBase> splits = new ArrayList<>();
         List<Integer> bucketsNeedInitOffset = new ArrayList<>();
-        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+            TableBucket tableBucket =
+                    new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
             if (ignoreTableBucket(tableBucket)) {
                 continue;
             }
@@ -428,7 +432,10 @@ public class FlinkSourceEnumerator
                             (bucketId, startingOffset) ->
                                     splits.add(
                                             new LogSplit(
-                                                    new TableBucket(tableId, partitionId, bucketId),
+                                                    new TableBucket(
+                                                            tableInfo.getTableId(),
+                                                            partitionId,
+                                                            bucketId),
                                                     partitionName,
                                                     startingOffset)));
         }
@@ -438,12 +445,11 @@ public class FlinkSourceEnumerator
     private List<SourceSplitBase> getLakeSplit() throws Exception {
         LakeSplitGenerator lakeSplitGenerator =
                 new LakeSplitGenerator(
-                        tableId,
-                        tablePath,
+                        tableInfo,
                         flussAdmin,
                         bucketOffsetsRetriever,
                         stoppingOffsetsInitializer,
-                        bucketCount);
+                        tableInfo.getNumBuckets());
         return lakeSplitGenerator.generateLakeSplits();
     }
 
@@ -678,6 +684,7 @@ public class FlinkSourceEnumerator
     @Override
     public void close() throws IOException {
         try {
+            closed = true;
             if (flussAdmin != null) {
                 flussAdmin.close();
             }

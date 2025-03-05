@@ -17,6 +17,7 @@
 package com.alibaba.fluss.connector.flink.sink;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.connector.flink.sink.writer.FlinkSinkWriter;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils.ValueConversion;
@@ -29,7 +30,7 @@ import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.RowLevelModificationScanContext;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
-import org.apache.flink.table.connector.sink.SinkFunctionProvider;
+import org.apache.flink.table.connector.sink.SinkV2Provider;
 import org.apache.flink.table.connector.sink.abilities.SupportsDeletePushDown;
 import org.apache.flink.table.connector.sink.abilities.SupportsPartitioning;
 import org.apache.flink.table.connector.sink.abilities.SupportsRowLevelDelete;
@@ -160,18 +161,20 @@ public class FlinkTableSink
             // else, it's full update, ignore the given target columns as we don't care the order
         }
 
-        FlinkSinkFunction sinkFunction =
-                primaryKeyIndexes.length > 0
-                        ? new UpsertSinkFunction(
+        FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter> flinkSinkWriterBuilder =
+                (primaryKeyIndexes.length > 0)
+                        ? new FlinkSink.UpsertSinkWriterBuilder(
                                 tablePath,
                                 flussConfig,
                                 tableRowType,
                                 targetColumnIndexes,
                                 ignoreDelete)
-                        : new AppendSinkFunction(
+                        : new FlinkSink.AppendSinkWriterBuilder(
                                 tablePath, flussConfig, tableRowType, ignoreDelete);
 
-        return SinkFunctionProvider.of(sinkFunction);
+        FlinkSink flinkSink = new FlinkSink(flinkSinkWriterBuilder);
+
+        return SinkV2Provider.of(flinkSink);
     }
 
     private List<String> columns(int[] columnIndexes) {

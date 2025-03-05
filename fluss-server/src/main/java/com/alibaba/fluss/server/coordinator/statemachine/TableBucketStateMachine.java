@@ -98,10 +98,7 @@ public class TableBucketStateMachine {
 
         buckets =
                 buckets.stream()
-                        .filter(
-                                tableBucket ->
-                                        !coordinatorContext.isTableQueuedForDeletion(
-                                                tableBucket.getTableId()))
+                        .filter(tableBucket -> !coordinatorContext.isToBeDeleted(tableBucket))
                         .collect(Collectors.toSet());
         handleStateChange(buckets, BucketState.OnlineBucket);
     }

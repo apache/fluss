@@ -18,7 +18,6 @@ package com.alibaba.fluss.rocksdb;
 
 import com.alibaba.fluss.utils.IOUtils;
 import com.alibaba.fluss.utils.OperatingSystem;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
@@ -31,6 +30,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** Utils for RocksDB Operations. */
 public class RocksDBOperationUtils {
@@ -68,15 +70,15 @@ public class RocksDBOperationUtils {
             if (isReadOnly) {
                 dbRef =
                         RocksDB.openReadOnly(
-                                Preconditions.checkNotNull(dbOptions),
-                                Preconditions.checkNotNull(path),
+                                checkNotNull(dbOptions),
+                                checkNotNull(path),
                                 columnFamilyDescriptors,
                                 columnFamilyHandles);
             } else {
                 dbRef =
                         RocksDB.open(
-                                Preconditions.checkNotNull(dbOptions),
-                                Preconditions.checkNotNull(path),
+                                checkNotNull(dbOptions),
+                                checkNotNull(path),
                                 columnFamilyDescriptors,
                                 columnFamilyHandles);
             }
@@ -89,7 +91,7 @@ public class RocksDBOperationUtils {
             throw new IOException("Error while opening RocksDB instance.", e);
         }
 
-        Preconditions.checkState(
+        checkState(
                 columnFamilyDescriptors.size() == columnFamilyHandles.size(),
                 "Not all requested column family handles have been created");
         return dbRef;

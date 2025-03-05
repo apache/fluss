@@ -18,12 +18,13 @@ package com.alibaba.fluss.row;
 
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.types.TimestampType;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.Serializable;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * An internal data structure representing data of {@link TimestampType}.
@@ -49,7 +50,7 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
     private final int nanoOfMillisecond;
 
     private TimestampNtz(long millisecond, int nanoOfMillisecond) {
-        Preconditions.checkArgument(nanoOfMillisecond >= 0 && nanoOfMillisecond <= 999_999);
+        checkArgument(nanoOfMillisecond >= 0 && nanoOfMillisecond <= 999_999);
         this.millisecond = millisecond;
         this.nanoOfMillisecond = nanoOfMillisecond;
     }

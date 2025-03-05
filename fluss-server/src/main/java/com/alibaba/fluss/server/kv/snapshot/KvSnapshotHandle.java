@@ -17,7 +17,6 @@
 package com.alibaba.fluss.server.kv.snapshot;
 
 import com.alibaba.fluss.server.utils.SnapshotUtil;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +24,9 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * A handle to the snapshot of a kv tablet. It contains the share file handles and the private file
@@ -120,11 +122,11 @@ public class KvSnapshotHandle {
     }
 
     public void registerKvFileHandles(SharedKvFileRegistry registry, long snapshotID) {
-        Preconditions.checkState(
+        checkState(
                 sharedKvFileRegistry != registry,
                 "The kv file handle has already registered its shared kv files to the given registry.");
 
-        sharedKvFileRegistry = Preconditions.checkNotNull(registry);
+        sharedKvFileRegistry = checkNotNull(registry);
 
         for (KvFileHandleAndLocalPath handleAndLocalPath : sharedFileHandles) {
             registry.registerReference(

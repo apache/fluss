@@ -17,7 +17,6 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.StringUtils;
 
 import java.util.ArrayList;
@@ -26,6 +25,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Data type of a sequence of fields. A field consists of a field name, field type, and an optional
@@ -48,8 +49,7 @@ public final class RowType extends DataType {
         super(isNullable, DataTypeRoot.ROW);
         this.fields =
                 Collections.unmodifiableList(
-                        new ArrayList<>(
-                                Preconditions.checkNotNull(fields, "Fields must not be null.")));
+                        new ArrayList<>(checkNotNull(fields, "Fields must not be null.")));
 
         validateFields(fields);
     }

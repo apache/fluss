@@ -22,7 +22,6 @@ import com.alibaba.fluss.server.utils.timer.DefaultTimer;
 import com.alibaba.fluss.server.utils.timer.Timer;
 import com.alibaba.fluss.server.utils.timer.TimerTask;
 import com.alibaba.fluss.utils.MapUtils;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -39,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -91,7 +91,7 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
      * @return true if the delayed operations can be completed by the caller
      */
     public boolean tryCompleteElseWatch(T operation, List<Object> watchKeys) {
-        Preconditions.checkArgument(!watchKeys.isEmpty());
+        checkArgument(!watchKeys.isEmpty());
 
         // The cost of tryComplete() is typically proportional to the number of keys. Calling
         // tryComplete() for each key is going to be expensive if there are many keys. Instead, we

@@ -52,6 +52,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -556,31 +557,55 @@ class FlinkTableSourceITCase extends FlinkTestBase {
         }
     }
 
-    @Test
-    void testReadPrimaryKeyPartitionedTable() throws Exception {
-        tEnv.executeSql(
-                "create table partitioned_table"
-                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) "
-                        + "with ('table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year')");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table");
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testReadPrimaryKeyPartitionedTable(boolean isAutoPartition) throws Exception {
+        String tableName = "read_primary_key_partitioned_table" + (isAutoPartition ? "_auto" : "");
+        String createTableDdl;
+        if (isAutoPartition) {
+            createTableDdl =
+                    String.format(
+                            "create table %s"
+                                    + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) "
+                                    + "with ('table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year')",
+                            tableName);
+        } else {
+            createTableDdl =
+                    String.format(
+                            "create table %s"
+                                    + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ",
+                            tableName);
+        }
+        tEnv.executeSql(createTableDdl);
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
         // write data into partitions and wait snapshot is done
-        Map<Long, String> partitionNameById =
-                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
+        Map<Long, String> partitionNameById;
+        if (isAutoPartition) {
+            partitionNameById =
+                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
+        } else {
+            int currentYear = LocalDate.now().getYear();
+            tEnv.executeSql(
+                    String.format(
+                            "alter table %s add partition (c = '%s')", tableName, currentYear));
+            partitionNameById =
+                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, 1);
+        }
+
         List<String> expectedRowValues =
                 writeRowsToPartition(tablePath, partitionNameById.values());
         waitUtilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from partitioned_table").collect();
+                tEnv.executeSql(String.format("select * from %s", tableName)).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
 
         // then create some new partitions, and write rows to the new partitions
-        List<String> newPartitions = Arrays.asList("2000", "2001");
-        FlinkTestBase.createPartitions(
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, newPartitions);
+        tEnv.executeSql(String.format("alter table %s add partition (c = '2000')", tableName));
+        tEnv.executeSql(String.format("alter table %s add partition (c = '2001')", tableName));
         // write data to the new partitions
-        expectedRowValues = writeRowsToPartition(tablePath, newPartitions);
+        expectedRowValues = writeRowsToPartition(tablePath, Arrays.asList("2000", "2001"));
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 

@@ -21,16 +21,14 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.AbstractCompressionCodec;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
-
-import org.apache.commons.compress.compressors.lz4.FramedLZ4CompressorInputStream;
-import org.apache.commons.compress.compressors.lz4.FramedLZ4CompressorOutputStream;
-import org.apache.commons.compress.utils.IOUtils;
+import com.alibaba.fluss.utils.IOUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
@@ -50,8 +48,8 @@ public class Lz4ArrowCompressionCodec extends AbstractCompressionCodec {
         uncompressedBuffer.getBytes(/*index=*/ 0, inBytes);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (InputStream in = new ByteArrayInputStream(inBytes);
-                OutputStream out = new FramedLZ4CompressorOutputStream(baos)) {
-            IOUtils.copy(in, out);
+                OutputStream out = new FlussLZ4BlockOutputStream(baos)) {
+            IOUtils.copyBytes(in, out);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -73,16 +71,15 @@ public class Lz4ArrowCompressionCodec extends AbstractCompressionCodec {
 
         long decompressedLength = readUncompressedLength(compressedBuffer);
 
-        byte[] inBytes =
-                new byte
-                        [(int)
+        ByteBuffer inByteBuffer =
+                compressedBuffer.nioBuffer(
+                        CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
+                        (int)
                                 (compressedBuffer.writerIndex()
-                                        - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH)];
-        compressedBuffer.getBytes(CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH, inBytes);
+                                        - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH));
         ByteArrayOutputStream out = new ByteArrayOutputStream((int) decompressedLength);
-        try (InputStream in =
-                new FramedLZ4CompressorInputStream(new ByteArrayInputStream(inBytes))) {
-            IOUtils.copy(in, out);
+        try (InputStream in = new FlussLZ4BlockInputStream(inByteBuffer)) {
+            IOUtils.copyBytes(in, out);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

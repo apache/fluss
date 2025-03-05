@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.alibaba.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
+import static com.alibaba.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPES;
 
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
@@ -69,7 +70,7 @@ public class TableDescriptorValidation {
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkTieredLog(tableConf);
-        checkAutoPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
+        checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
     }
 
     private static void checkDistribution(TableDescriptor tableDescriptor) {
@@ -170,7 +171,7 @@ public class TableDescriptorValidation {
         }
     }
 
-    private static void checkAutoPartition(
+    private static void checkPartition(
             Configuration tableConf, List<String> partitionKeys, RowType rowType) {
         boolean isPartitioned = !partitionKeys.isEmpty();
         AutoPartitionStrategy autoPartition = AutoPartitionStrategy.from(tableConf);
@@ -183,6 +184,8 @@ public class TableDescriptorValidation {
         }
 
         if (isPartitioned) {
+            // TODO Currently, we only support one partition key, multi-partition keys will be
+            // supported in next pr.
             if (partitionKeys.size() > 1) {
                 throw new InvalidTableException(
                         String.format(
@@ -190,29 +193,28 @@ public class TableDescriptorValidation {
                                 partitionKeys));
             }
 
-            // TODO: support general partitioned table
-            if (!autoPartition.isAutoPartitionEnabled()) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "Currently, partitioned table must enable auto partition, please set table property '%s' to true.",
-                                ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
+            for (String partitionKey : partitionKeys) {
+                int partitionIndex = rowType.getFieldIndex(partitionKey);
+                DataType partitionDataType = rowType.getTypeAt(partitionIndex);
+                if (!PARTITION_KEY_SUPPORTED_TYPES.contains(partitionDataType.getTypeRoot())) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Currently, partitioned table supported partition key type are %s, "
+                                            + "but got partition key '%s' with data type %s.",
+                                    PARTITION_KEY_SUPPORTED_TYPES,
+                                    partitionKey,
+                                    partitionDataType));
+                }
             }
 
-            if (autoPartition.timeUnit() == null) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "Currently, partitioned table must set auto partition time unit when auto partition is enabled, please set table property '%s'.",
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
-            }
-
-            String partitionKey = partitionKeys.get(0);
-            int partitionIndex = rowType.getFieldIndex(partitionKey);
-            DataType partitionDataType = rowType.getTypeAt(partitionIndex);
-            if (partitionDataType.getTypeRoot() != DataTypeRoot.STRING) {
-                throw new InvalidTableException(
-                        String.format(
-                                "Currently, auto partition enabled table only supports STRING type partition key, but got partition key '%s' with data type %s.",
-                                partitionKey, partitionDataType));
+            if (autoPartition.isAutoPartitionEnabled()) {
+                if (autoPartition.timeUnit() == null) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Currently, auto partitioned table must set auto partition time unit when auto "
+                                            + "partition is enabled, please set table property '%s'.",
+                                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
+                }
             }
         }
     }

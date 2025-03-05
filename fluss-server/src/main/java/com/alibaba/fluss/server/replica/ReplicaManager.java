@@ -98,7 +98,6 @@ import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.MapUtils;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 
@@ -128,6 +127,7 @@ import java.util.stream.Stream;
 
 import static com.alibaba.fluss.server.TabletManagerBase.getTableInfo;
 import static com.alibaba.fluss.utils.FileUtils.isDirectoryEmpty;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for replica. */
@@ -446,7 +446,7 @@ public class ReplicaManager {
                 multiLookupResponseCallBack -> {
                     LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
                     List<byte[]> values = result.lookupValues();
-                    Preconditions.checkState(
+                    checkState(
                             values.size() == 1,
                             "The result value for single lookup should be with size 1, "
                                     + "but the result size is {}",

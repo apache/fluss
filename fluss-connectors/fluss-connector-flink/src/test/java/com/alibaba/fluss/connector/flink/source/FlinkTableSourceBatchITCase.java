@@ -283,7 +283,7 @@ class FlinkTableSourceBatchITCase extends FlinkTestBase {
     @ValueSource(booleans = {true, false})
     void testCountPushDown(boolean partitionTable) throws Exception {
         String tableName = partitionTable ? preparePartitionedLogTable() : prepareLogTable();
-        int expectedRows = partitionTable ? 20 : 5;
+        int expectedRows = partitionTable ? 10 : 5;
         // normal scan
         String query = String.format("SELECT COUNT(*) FROM %s", tableName);
         assertThat(tEnv.explainSql(query))

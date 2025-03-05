@@ -29,6 +29,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
+
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -77,9 +81,9 @@ public class NetUtils {
         } else {
             try {
                 // We don't allow these in hostnames
-                Preconditions.checkArgument(!host.startsWith("."));
-                Preconditions.checkArgument(!host.endsWith("."));
-                Preconditions.checkArgument(!host.contains(":"));
+                checkArgument(!host.startsWith("."));
+                checkArgument(!host.endsWith("."));
+                checkArgument(!host.contains(":"));
             } catch (Exception e) {
                 throw new IllegalConfigurationException("The configured hostname is not valid", e);
             }
@@ -98,7 +102,7 @@ public class NetUtils {
      * @return host:port where host will be normalized if it is an IPv6 address
      */
     public static String unresolvedHostAndPortToNormalizedString(String host, int port) {
-        Preconditions.checkArgument(isValidHostPort(port), "Port is not within the valid range,");
+        checkArgument(isValidHostPort(port), "Port is not within the valid range,");
         return unresolvedHostToNormalizedString(host) + ":" + port;
     }
 
@@ -299,8 +303,8 @@ public class NetUtils {
         private final FileLock fileLock;
 
         public Port(int port, FileLock fileLock) throws IOException {
-            Preconditions.checkNotNull(fileLock, "FileLock should not be null");
-            Preconditions.checkState(fileLock.isValid(), "FileLock should be locked");
+            checkNotNull(fileLock, "FileLock should not be null");
+            checkState(fileLock.isValid(), "FileLock should be locked");
             this.port = port;
             this.fileLock = fileLock;
         }

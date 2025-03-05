@@ -16,13 +16,12 @@
 
 package com.alibaba.fluss.bucketing;
 
-import org.apache.paimon.utils.MurmurHashUtils;
+import com.alibaba.fluss.utils.MurmurHashUtils;
 
 /** An implementation of {@link BucketingFunction} to follow Paimon's bucketing strategy. */
 public class PaimonBucketingFunction implements BucketingFunction {
     @Override
     public int bucketing(byte[] bucketKey, int numBuckets) {
-        // TODO: remove paimon dependency in #408
         return Math.abs(MurmurHashUtils.hashBytes(bucketKey) % numBuckets);
     }
 }

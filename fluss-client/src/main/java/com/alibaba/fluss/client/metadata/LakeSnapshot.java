@@ -17,14 +17,12 @@
 package com.alibaba.fluss.client.metadata;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import java.util.Map;
 
 /**
  * A class representing the lake snapshot information of a table. It contains:
- * <li>The lake storage info
  * <li>The snapshot id and the log offset for each bucket.
  *
  * @since 0.3
@@ -32,28 +30,18 @@ import java.util.Map;
 @PublicEvolving
 public class LakeSnapshot {
 
-    private final LakeStorageInfo lakeStorageInfo;
-
     private final long snapshotId;
 
     // the specific log offset of the snapshot
     private final Map<TableBucket, Long> tableBucketsOffset;
 
-    public LakeSnapshot(
-            LakeStorageInfo lakeStorageInfo,
-            long snapshotId,
-            Map<TableBucket, Long> tableBucketsOffset) {
-        this.lakeStorageInfo = lakeStorageInfo;
+    public LakeSnapshot(long snapshotId, Map<TableBucket, Long> tableBucketsOffset) {
         this.snapshotId = snapshotId;
         this.tableBucketsOffset = tableBucketsOffset;
     }
 
     public long getSnapshotId() {
         return snapshotId;
-    }
-
-    public LakeStorageInfo getLakeStorageInfo() {
-        return lakeStorageInfo;
     }
 
     public Map<TableBucket, Long> getTableBucketsOffset() {

@@ -19,11 +19,8 @@ package com.alibaba.fluss.server;
 import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.KvSnapshotNotExistException;
-import com.alibaba.fluss.exception.LakeStorageNotConfiguredException;
 import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
 import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
@@ -31,8 +28,6 @@ import com.alibaba.fluss.exception.SecurityTokenException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
-import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -46,8 +41,6 @@ import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -87,7 +80,6 @@ import com.alibaba.fluss.server.metadata.PartitionMetadataInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TableMetadataInfo;
 import com.alibaba.fluss.server.tablet.TabletService;
-import com.alibaba.fluss.server.utils.LakeStorageUtils;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
@@ -95,7 +87,6 @@ import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,7 +96,6 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -116,6 +106,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeGetLatestKvSnapshotsResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeKvSnapshotMetadataResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -137,26 +128,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
 
-    private @Nullable final LakeStorageInfo lakeStorageInfo;
-    private @Nullable final Map<String, String> tableDataLakeProperties;
-
     public RpcServiceBase(
-            Configuration config,
             FileSystem remoteFileSystem,
             ServerType provider,
             ZooKeeperClient zkClient,
-            ServerMetadataCache metadataCache) {
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
         this.zkClient = zkClient;
         this.metadataCache = metadataCache;
-        this.metadataManager = new MetadataManager(zkClient);
-        this.lakeStorageInfo =
-                config.get(ConfigOptions.DATALAKE_FORMAT) != null
-                        ? LakeStorageUtils.getLakeStorageInfo(config)
-                        : null;
-        this.tableDataLakeProperties = getTableDataLakeProperties(config);
+        this.metadataManager = metadataManager;
     }
 
     @Override
@@ -219,7 +202,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
         GetTableInfoResponse response = new GetTableInfoResponse();
         TablePath tablePath = toTablePath(request.getTablePath());
-        TableInfo tableInfo = metadataManager.getTable(tablePath, tableDataLakeProperties);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
         response.setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                 .setSchemaId(tableInfo.getSchemaId())
                 .setTableId(tableInfo.getTableId())
@@ -414,23 +397,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
-            DescribeLakeStorageRequest request) {
-        if (lakeStorageInfo == null) {
-            throw new LakeStorageNotConfiguredException("Lake storage is not configured.");
-        }
-
-        return CompletableFuture.completedFuture(
-                RpcMessageUtils.makeDescribeLakeStorageResponse(lakeStorageInfo));
-    }
-
-    @Override
     public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
             GetLatestLakeSnapshotRequest request) {
-        if (lakeStorageInfo == null) {
-            throw new LakeStorageNotConfiguredException("Lake storage is not configured.");
-        }
-
         // get table info
         TablePath tablePath = toTablePath(request.getTablePath());
         TableInfo tableInfo = metadataManager.getTable(tablePath);
@@ -457,8 +425,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
         LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.makeGetLatestLakeSnapshotResponse(
-                        tableId, lakeStorageInfo, lakeTableSnapshot));
+                RpcMessageUtils.makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
     }
 
     private Set<ServerNode> getAllTabletServerNodes() {
@@ -495,12 +462,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     private PartitionMetadataInfo getPartitionMetadata(PhysicalTablePath partitionPath) {
         try {
-            Preconditions.checkNotNull(
+            checkNotNull(
                     partitionPath.getPartitionName(),
                     "partitionName must be not null, but get: " + partitionPath);
             AssignmentInfo assignmentInfo = getAssignmentInfo(null, partitionPath);
             List<BucketLocation> bucketLocations = new ArrayList<>();
-            Preconditions.checkNotNull(
+            checkNotNull(
                     assignmentInfo.partitionId,
                     "partition id must be not null for " + partitionPath);
             if (assignmentInfo.tableAssignment != null) {
@@ -634,7 +601,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     zkClient.getPartitionAssignment(partitionId).orElse(null),
                     partitionId);
         } else {
-            Preconditions.checkNotNull(tableId, "tableId must be not null");
+            checkNotNull(tableId, "tableId must be not null");
             return new AssignmentInfo(
                     tableId, zkClient.getTableAssignment(tableId).orElse(null), null);
         }
@@ -652,23 +619,5 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             this.tableAssignment = tableAssignment;
             this.partitionId = partitionId;
         }
-    }
-
-    @Nullable
-    private Map<String, String> getTableDataLakeProperties(Configuration configuration) {
-        Optional<DataLakeFormat> optDataLakeFormat =
-                configuration.getOptional(ConfigOptions.DATALAKE_FORMAT);
-        if (!optDataLakeFormat.isPresent()) {
-            return null;
-        }
-        Map<String, String> datalakeProperties = new HashMap<>();
-        String dataLakePrefix = "datalake." + optDataLakeFormat.get() + ".";
-        for (Map.Entry<String, String> configurationEntry : configuration.toMap().entrySet()) {
-            if (configurationEntry.getKey().startsWith(dataLakePrefix)) {
-                datalakeProperties.put(
-                        "table." + configurationEntry.getKey(), configurationEntry.getValue());
-            }
-        }
-        return datalakeProperties;
     }
 }

@@ -38,10 +38,10 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.Messag
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.ArrowUtils;
 import com.alibaba.fluss.utils.PagedMemorySegmentWritableChannel;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.IOException;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -113,7 +113,7 @@ public class ArrowWriter implements AutoCloseable {
         this.writerKey = writerKey;
         this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
-        this.provider = Preconditions.checkNotNull(provider);
+        this.provider = checkNotNull(provider);
         this.compressionCodec = compressionInfo.createCompressionCodec();
         this.compressionRatioEstimator = compressionRatioEstimator;
         this.estimatedCompressionRatio = compressionRatioEstimator.estimation();

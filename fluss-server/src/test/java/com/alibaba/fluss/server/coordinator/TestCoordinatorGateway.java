@@ -30,14 +30,16 @@ import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
+import com.alibaba.fluss.rpc.messages.CreatePartitionResponse;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -71,7 +73,6 @@ import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -84,6 +85,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getAdjustIsrData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getCommitRemoteLogManifestData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeAdjustIsrResponse;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** A {@link CoordinatorGateway} for test purpose. */
 public class TestCoordinatorGateway implements CoordinatorGateway {
@@ -125,8 +127,13 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
-            DescribeLakeStorageRequest request) {
+    public CompletableFuture<CreatePartitionResponse> createPartition(
+            CreatePartitionRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -237,7 +244,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
             return CompletableFuture.completedFuture(
                     new CommitRemoteLogManifestResponse().setCommitSuccess(false));
         }
-        Preconditions.checkNotNull(zkClient, "zkClient is null");
+        checkNotNull(zkClient, "zkClient is null");
         CommitRemoteLogManifestData commitRemoteLogManifestData =
                 getCommitRemoteLogManifestData(request);
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();

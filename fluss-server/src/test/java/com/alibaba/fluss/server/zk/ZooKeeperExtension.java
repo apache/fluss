@@ -19,7 +19,6 @@ package com.alibaba.fluss.server.zk;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.testutils.common.CustomExtension;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.apache.curator.test.TestingServer;
 import org.apache.zookeeper.server.ZooKeeperServer;
@@ -33,6 +32,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** A Junit {@link Extension} which starts a {@link ZooKeeperServer}. */
 public class ZooKeeperExtension implements CustomExtension {
@@ -82,7 +82,7 @@ public class ZooKeeperExtension implements CustomExtension {
     }
 
     private TestingServer getRunningZookeeperInstanceOrFail() {
-        Preconditions.checkState(zooKeeperServer != null);
+        checkState(zooKeeperServer != null);
         return zooKeeperServer;
     }
 

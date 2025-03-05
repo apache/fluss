@@ -24,6 +24,8 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.Compre
 
 import com.github.luben.zstd.Zstd;
 
+import java.nio.ByteBuffer;
+
 /* This file is based on source code of Apache Arrow-java Project (https://github.com/apache/arrow-java), licensed by
  * the Apache Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership. */
@@ -34,7 +36,7 @@ public class ZstdArrowCompressionCodec extends AbstractCompressionCodec {
     private final int compressionLevel;
 
     public ZstdArrowCompressionCodec() {
-        this.compressionLevel = DEFAULT_COMPRESSION_LEVEL;
+        this(DEFAULT_COMPRESSION_LEVEL);
     }
 
     public ZstdArrowCompressionCodec(int compressionLevel) {
@@ -44,20 +46,33 @@ public class ZstdArrowCompressionCodec extends AbstractCompressionCodec {
     @Override
     protected ArrowBuf doCompress(BufferAllocator allocator, ArrowBuf uncompressedBuffer) {
         long maxSize = Zstd.compressBound(uncompressedBuffer.writerIndex());
-        long dstSize = CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH + maxSize;
-        ArrowBuf compressedBuffer = allocator.buffer(dstSize);
+        ByteBuffer uncompressedDirectBuffer = uncompressedBuffer.nioBuffer();
+
+        long compressedSize = CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH + maxSize;
+        ArrowBuf compressedBuffer = allocator.buffer(compressedSize);
+        ByteBuffer compressedDirectBuffer =
+                compressedBuffer.nioBuffer(
+                        CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH, (int) maxSize);
+
+        // The reason why we use Zstd.compressDirectByteBuffer instead of Zstd.compressUnsafe used
+        // in arrow-java here is that compressUnsafe() may encounter occasional data corruption
+        // issues when dealing with large volumes of data, and the cause has not yet been
+        // determined.
         long bytesWritten =
-                Zstd.compressUnsafe(
-                        compressedBuffer.memoryAddress()
-                                + CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
-                        dstSize,
-                        /*src*/ uncompressedBuffer.memoryAddress(),
-                        /*srcSize=*/ uncompressedBuffer.writerIndex(),
-                        /*level=*/ this.compressionLevel);
+                Zstd.compressDirectByteBuffer(
+                        compressedDirectBuffer,
+                        0,
+                        (int) maxSize,
+                        uncompressedDirectBuffer,
+                        0,
+                        (int) uncompressedBuffer.writerIndex(),
+                        compressionLevel);
+
         if (Zstd.isError(bytesWritten)) {
             compressedBuffer.close();
             throw new RuntimeException("Error compressing: " + Zstd.getErrorName(bytesWritten));
         }
+
         compressedBuffer.writerIndex(CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH + bytesWritten);
         return compressedBuffer;
     }
@@ -65,20 +80,28 @@ public class ZstdArrowCompressionCodec extends AbstractCompressionCodec {
     @Override
     protected ArrowBuf doDecompress(BufferAllocator allocator, ArrowBuf compressedBuffer) {
         long decompressedLength = readUncompressedLength(compressedBuffer);
+
+        ByteBuffer compressedDirectBuffer = compressedBuffer.nioBuffer();
         ArrowBuf uncompressedBuffer = allocator.buffer(decompressedLength);
+        ByteBuffer uncompressedDirectBuffer =
+                uncompressedBuffer.nioBuffer(0, (int) decompressedLength);
+
         long decompressedSize =
-                Zstd.decompressUnsafe(
-                        uncompressedBuffer.memoryAddress(),
-                        decompressedLength,
-                        /*src=*/ compressedBuffer.memoryAddress()
-                                + CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
-                        compressedBuffer.writerIndex()
-                                - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH);
+                Zstd.decompressDirectByteBuffer(
+                        uncompressedDirectBuffer,
+                        0,
+                        (int) decompressedLength,
+                        compressedDirectBuffer,
+                        (int) CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
+                        (int)
+                                (compressedBuffer.writerIndex()
+                                        - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH));
         if (Zstd.isError(decompressedSize)) {
             uncompressedBuffer.close();
             throw new RuntimeException(
                     "Error decompressing: " + Zstd.getErrorName(decompressedSize));
         }
+
         if (decompressedLength != decompressedSize) {
             uncompressedBuffer.close();
             throw new RuntimeException(

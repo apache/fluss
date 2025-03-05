@@ -17,12 +17,13 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Data type of an associative array that maps keys (including {@code NULL}) to values (including
@@ -44,8 +45,8 @@ public final class MapType extends DataType {
 
     public MapType(boolean isNullable, DataType keyType, DataType valueType) {
         super(isNullable, DataTypeRoot.MAP);
-        this.keyType = Preconditions.checkNotNull(keyType, "Key type must not be null.");
-        this.valueType = Preconditions.checkNotNull(valueType, "Value type must not be null.");
+        this.keyType = checkNotNull(keyType, "Key type must not be null.");
+        this.valueType = checkNotNull(valueType, "Value type must not be null.");
     }
 
     public MapType(DataType keyType, DataType valueType) {

@@ -33,3 +33,6 @@ website/npm-debug.log*
 website/yarn-debug.log*
 website/yarn-error.log*
 website/package-lock.json
+website/versioned_docs
+website/versioned_sidebars
+website/versions.json

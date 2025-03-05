@@ -19,10 +19,11 @@ package com.alibaba.fluss.remote;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.util.Objects;
 import java.util.UUID;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * It describes the metadata about table bucket's remote log segment in the remote storage. This is
@@ -56,9 +57,9 @@ public class RemoteLogSegment {
             long remoteLogEndOffset,
             long maxTimestamp,
             int segmentSizeInBytes) {
-        this.physicalTablePath = Preconditions.checkNotNull(physicalTablePath);
-        this.tableBucket = Preconditions.checkNotNull(tableBucket);
-        this.remoteLogSegmentId = Preconditions.checkNotNull(remoteLogSegmentId);
+        this.physicalTablePath = checkNotNull(physicalTablePath);
+        this.tableBucket = checkNotNull(tableBucket);
+        this.remoteLogSegmentId = checkNotNull(remoteLogSegmentId);
 
         if (remoteLogStartOffset < 0) {
             throw new IllegalArgumentException(

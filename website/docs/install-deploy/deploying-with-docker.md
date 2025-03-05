@@ -22,15 +22,6 @@ Recommended configuration: 4 cores, 16GB memory.
 
 Docker and the Docker Compose plugin. All commands were tested with Docker version 27.4.0 and Docker Compose version v2.30.3.
 
-**Environment Variables**
-
-Set the following environment variables in the shell where you execute the commands.
-
-```bash
-export FLUSS_VERSION=0.5.0
-export FLUSS_QUICKSTART_FLINK_VERSION=1.20-0.5
-```
-
 ## Deploy with Docker
 
 The following is a brief overview of how to quickly create a complete Fluss testing cluster
@@ -75,7 +66,7 @@ docker run \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
 coordinator.host: coordinator-server" \
     -p 9123:9123 \
-    -d fluss/fluss:${FLUSS_VERSION} coordinatorServer
+    -d fluss/fluss:$FLUSS_VERSION$ coordinatorServer
 ```
 
 ### Start Fluss TabletServer
@@ -99,7 +90,7 @@ data.dir: /tmp/fluss/data
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9124 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:${FLUSS_VERSION} tabletServer
+    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
 
 #### Start with Multiple TabletServer
@@ -120,7 +111,7 @@ data.dir: /tmp/fluss/data/tablet-server-0
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9124 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:${FLUSS_VERSION} tabletServer
+    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
 
 2. start tablet-server-1
@@ -136,7 +127,7 @@ data.dir: /tmp/fluss/data/tablet-server-1
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9125:9125 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:${FLUSS_VERSION} tabletServer
+    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
 
 3. start tablet-server-2
@@ -152,7 +143,7 @@ data.dir: /tmp/fluss/data/tablet-server-2
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9126:9126 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:${FLUSS_VERSION} tabletServer
+    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
 
 Now all the Fluss related components are running.
@@ -180,7 +171,7 @@ docker run \
     --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
     -p 8083:8081 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION} jobmanager
+    -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ jobmanager
 ```
 
 2. start taskManager
@@ -191,7 +182,7 @@ docker run \
     --network=fluss-demo \
     --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION} taskmanager
+    -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ taskmanager
 ```
 
 #### Enter into SQL-Client
@@ -222,7 +213,7 @@ USE CATALOG fluss_catalog;
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](/docs/engine-flink/getting-started/)
+More details please refer to [Flink Getting started](engine-flink/getting-started.md)
 
 ## Deploy with Docker Compose
 
@@ -237,7 +228,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -248,7 +239,7 @@ services:
         coordinator.host: coordinator-server
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -282,7 +273,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -293,7 +284,7 @@ services:
         coordinator.host: coordinator-server
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server-0:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -309,7 +300,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-1:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -325,7 +316,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-2:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -371,7 +362,7 @@ The changed `docker-compose.yml` file is as follows:
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -382,7 +373,7 @@ services:
         coordinator.host: coordinator-server
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server-0:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -398,7 +389,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-1:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -414,7 +405,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-2:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -433,7 +424,7 @@ services:
     restart: always
     image: zookeeper:3.9.2
   jobmanager:
-    image: fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION}
+    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -444,7 +435,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   taskmanager:
-    image: fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION}
+    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -486,4 +477,4 @@ USE CATALOG fluss_catalog;
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](/docs/engine-flink/getting-started/)
+More details please refer to [Flink Getting started](engine-flink/getting-started.md)

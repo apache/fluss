@@ -39,7 +39,6 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
 import com.alibaba.fluss.utils.MathUtils;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
@@ -59,6 +58,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -636,7 +636,7 @@ public final class RecordAccumulator {
             }
 
             // the rest of the work by processing outside the lock close() is particularly expensive
-            Preconditions.checkNotNull(batch, "batch should not be null");
+            checkNotNull(batch, "batch should not be null");
             batch.close();
             size += batch.estimatedSizeInBytes();
             ready.add(batch);

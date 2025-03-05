@@ -17,7 +17,6 @@
 package com.alibaba.fluss.lakehouse.paimon.sink;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lakehouse.paimon.FlussDataTypeToPaimonDataType;
 import com.alibaba.fluss.lakehouse.paimon.source.NewTablesAddedListener;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;

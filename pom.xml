@@ -86,7 +86,7 @@
         <maven.compiler.target>${target.java.version}</maven.compiler.target>
         <test.unit.pattern>**/*Test.*</test.unit.pattern>
         <test.skip.coverage>true</test.skip.coverage>
-        <fluss.forkCount>1C</fluss.forkCount>
+        <fluss.forkCount>2</fluss.forkCount>
         <fluss.reuseForks>true</fluss.reuseForks>
 
         <!-- library versions in fluss-shaded -->
@@ -306,6 +306,13 @@
                 <groupId>com.alibaba.fluss</groupId>
                 <artifactId>fluss-shaded-zookeeper</artifactId>
                 <version>${zookeeper.version}-${fluss.shaded.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba.fluss</groupId>
+                <artifactId>fluss-test-utils</artifactId>
+                <version>${project.version}</version>
+                <scope>test</scope>
             </dependency>
 
             <dependency>
@@ -609,6 +616,9 @@
                     <trimStackTrace>false</trimStackTrace>
                     <systemPropertyVariables>
                         <forkNumber>0${surefire.forkNumber}</forkNumber>
+                        <!-- $$ ensures that surefire resolves this to the current forkNumber,
+						 	instead of maven during initialization -->
+                        <mvn.forkNumber>$${surefire.forkNumber}</mvn.forkNumber>
                         <project.basedir>${project.basedir}</project.basedir>
                         <!--suppress MavenModelInspection -->
                         <test.randomization.seed>${test.randomization.seed}
@@ -630,9 +640,7 @@
                         <junit.jupiter.execution.parallel.config.strategy>dynamic
                         </junit.jupiter.execution.parallel.config.strategy>
                     </systemPropertyVariables>
-                    <argLine>@{argLine} -Xms256m -Xmx2048m -Dmvn.forkNumber=${surefire.forkNumber}
-                        -XX:+UseG1GC
-                    </argLine>
+                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC</argLine>
                 </configuration>
                 <executions>
                     <!--execute all the unit tests-->
@@ -662,7 +670,6 @@
                             <excludes>
                                 <exclude>${test.unit.pattern}</exclude>
                             </excludes>
-                            <reuseForks>false</reuseForks>
                         </configuration>
                     </execution>
                 </executions>

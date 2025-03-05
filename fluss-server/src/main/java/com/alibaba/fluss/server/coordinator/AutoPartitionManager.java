@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ *  Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
  */
 
 package com.alibaba.fluss.server.coordinator;
@@ -21,10 +21,12 @@ import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.utils.TableAssignmentUtils;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
@@ -55,7 +57,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.alibaba.fluss.utils.AutoPartitionUtils.getPartitionString;
+import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
@@ -70,13 +73,14 @@ public class AutoPartitionManager implements AutoCloseable {
     /** scheduled executor, periodically trigger auto partition. */
     private final ScheduledExecutorService periodicExecutor;
 
-    private final ZooKeeperClient zooKeeperClient;
     private final MetadataCache metadataCache;
+    private final MetadataManager metadataManager;
     private final Clock clock;
 
     private final long periodicInterval;
     private final AtomicBoolean isClosed = new AtomicBoolean(false);
 
+    // TODO these two local cache can be removed if we introduce server cache.
     @GuardedBy("lock")
     private final Map<Long, TableInfo> autoPartitionTables = new HashMap<>();
 
@@ -86,10 +90,10 @@ public class AutoPartitionManager implements AutoCloseable {
     private final Lock lock = new ReentrantLock();
 
     public AutoPartitionManager(
-            MetadataCache metadataCache, ZooKeeperClient zooKeeperClient, Configuration conf) {
+            MetadataCache metadataCache, MetadataManager metadataManager, Configuration conf) {
         this(
                 metadataCache,
-                zooKeeperClient,
+                metadataManager,
                 conf,
                 SystemClock.getInstance(),
                 Executors.newScheduledThreadPool(
@@ -99,31 +103,78 @@ public class AutoPartitionManager implements AutoCloseable {
     @VisibleForTesting
     AutoPartitionManager(
             MetadataCache metadataCache,
-            ZooKeeperClient zooKeeperClient,
+            MetadataManager metadataManager,
             Configuration conf,
             Clock clock,
             ScheduledExecutorService periodicExecutor) {
         this.metadataCache = metadataCache;
-        this.zooKeeperClient = zooKeeperClient;
+        this.metadataManager = metadataManager;
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
     }
 
-    public void initAutoPartitionTables(Map<Long, TableInfo> tableInfos) {
-        inLock(lock, () -> autoPartitionTables.putAll(tableInfos));
+    public void initAutoPartitionTables(List<TableInfo> tableInfos) {
+        tableInfos.forEach(this::addAutoPartitionTable);
     }
 
     public void addAutoPartitionTable(TableInfo tableInfo) {
         checkNotClosed();
         long tableId = tableInfo.getTableId();
-        inLock(lock, () -> autoPartitionTables.put(tableId, tableInfo));
+        Set<String> partitions = metadataManager.getPartitions(tableInfo.getTablePath());
+        inLock(
+                lock,
+                () -> {
+                    autoPartitionTables.put(tableId, tableInfo);
+                    Set<String> partitionSet =
+                            partitionsByTable.computeIfAbsent(
+                                    tableInfo.getTableId(), k -> new TreeSet<>());
+                    checkNotNull(partitionSet, "Partition set is null.");
+                    partitionSet.addAll(partitions);
+                });
+
         // schedule auto partition for this table immediately
         periodicExecutor.schedule(() -> doAutoPartition(tableId), 0, TimeUnit.MILLISECONDS);
     }
 
     public void removeAutoPartitionTable(long tableId) {
-        inLock(lock, () -> autoPartitionTables.remove(tableId));
+        checkNotClosed();
+        inLock(
+                lock,
+                () -> {
+                    autoPartitionTables.remove(tableId);
+                    partitionsByTable.remove(tableId);
+                });
+    }
+
+    /**
+     * Try to add a partition to cache if this table is autoPartitionedTable and partition not
+     * exists in cache.
+     */
+    public void addPartition(long tableId, String partitionName) {
+        checkNotClosed();
+        inLock(
+                lock,
+                () -> {
+                    if (autoPartitionTables.containsKey(tableId)) {
+                        partitionsByTable.get(tableId).add(partitionName);
+                    }
+                });
+    }
+
+    /**
+     * Remove a partition from cache if this table is autoPartitionedTable and partition exists in
+     * cache.
+     */
+    public void removePartition(long tableId, String partitionName) {
+        checkNotClosed();
+        inLock(
+                lock,
+                () -> {
+                    if (autoPartitionTables.containsKey(tableId)) {
+                        partitionsByTable.get(tableId).remove(partitionName);
+                    }
+                });
     }
 
     public void start() {
@@ -142,23 +193,23 @@ public class AutoPartitionManager implements AutoCloseable {
     private void doAutoPartition() {
         Instant now = clock.instant();
         LOG.info("Start auto partitioning for all tables at {}.", now);
-        inLock(lock, () -> autoPartition(now, autoPartitionTables.keySet()));
+        inLock(lock, () -> doAutoPartition(now, autoPartitionTables.keySet()));
     }
 
     private void doAutoPartition(long tableId) {
         Instant now = clock.instant();
         LOG.info("Start auto partitioning for table {} at {}.", tableId, now);
-        inLock(lock, () -> autoPartition(now, Collections.singleton(tableId)));
+        inLock(lock, () -> doAutoPartition(now, Collections.singleton(tableId)));
     }
 
-    @VisibleForTesting
-    protected void autoPartition(Instant now, Set<Long> tableIds) {
+    private void doAutoPartition(Instant now, Set<Long> tableIds) {
         for (Long tableId : tableIds) {
             TreeSet<String> currentPartitions =
                     partitionsByTable.computeIfAbsent(tableId, k -> new TreeSet<>());
             TableInfo tableInfo = autoPartitionTables.get(tableId);
             dropPartitions(
                     tableInfo.getTablePath(),
+                    tableInfo.getPartitionKeys(),
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
@@ -166,11 +217,12 @@ public class AutoPartitionManager implements AutoCloseable {
         }
     }
 
-    protected void createPartitions(
+    private void createPartitions(
             TableInfo tableInfo, Instant currentInstant, TreeSet<String> currentPartitions) {
         // get the partitions needed to create
-        List<String> partitionsToPreCreate =
+        List<ResolvedPartitionSpec> partitionsToPreCreate =
                 partitionNamesToPreCreate(
+                        tableInfo.getPartitionKeys(),
                         currentInstant,
                         tableInfo.getTableConfig().getAutoPartitionStrategy(),
                         currentPartitions);
@@ -179,45 +231,35 @@ public class AutoPartitionManager implements AutoCloseable {
         }
 
         TablePath tablePath = tableInfo.getTablePath();
-        for (String partitionName : partitionsToPreCreate) {
+        for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
+            long tableId = tableInfo.getTableId();
+            int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
+            int[] servers = metadataCache.getLiveServerIds();
+            Map<Integer, BucketAssignment> bucketAssignments =
+                    TableAssignmentUtils.generateAssignment(
+                                    tableInfo.getNumBuckets(), replicaFactor, servers)
+                            .getBucketAssignments();
+            PartitionAssignment partitionAssignment =
+                    new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+
             try {
-                long tableId = tableInfo.getTableId();
-                long partitionId = zooKeeperClient.getPartitionIdAndIncrement();
-                // register partition assignments to zk first
-                registerPartitionAssignment(tableId, partitionId, tableInfo);
-                // then register the partition metadata to zk
-                zooKeeperClient.registerPartition(tablePath, tableId, partitionName, partitionId);
-                currentPartitions.add(partitionName);
+                metadataManager.createPartition(
+                        tablePath, tableId, partitionAssignment, partition, false);
+            } catch (PartitionAlreadyExistsException e) {
                 LOG.info(
-                        "Auto partitioning created partition {} for table [{}].",
-                        partitionName,
+                        "Auto partitioning skip to create partition {} for table [{}] as the partition is exist.",
+                        partition,
                         tablePath);
-            } catch (Exception e) {
-                LOG.error(
-                        "Auto partitioning failed to create partition {} for table [{}]",
-                        partitionName,
-                        tablePath,
-                        e);
             }
+
+            currentPartitions.add(partition.getPartitionName());
+            LOG.info(
+                    "Auto partitioning created partition {} for table [{}].", partition, tablePath);
         }
     }
 
-    private void registerPartitionAssignment(long tableId, long partitionId, TableInfo tableInfo)
-            throws Exception {
-        int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
-        int[] servers = metadataCache.getLiveServerIds();
-        // bucket count must exist for table has been created
-        int bucketCount = tableInfo.getNumBuckets();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(bucketCount, replicaFactor, servers)
-                        .getBucketAssignments();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(tableId, bucketAssignments);
-        // register table assignment
-        zooKeeperClient.registerPartitionAssignment(partitionId, partitionAssignment);
-    }
-
-    private static List<String> partitionNamesToPreCreate(
+    private List<ResolvedPartitionSpec> partitionNamesToPreCreate(
+            List<String> partitionKeys,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             TreeSet<String> currentPartitions) {
@@ -227,12 +269,13 @@ public class AutoPartitionManager implements AutoCloseable {
                         currentInstant, autoPartitionStrategy.timeZone().toZoneId());
 
         int partitionToPreCreate = autoPartitionStrategy.numPreCreate();
-        List<String> partitionsToCreate = new ArrayList<>();
+        List<ResolvedPartitionSpec> partitionsToCreate = new ArrayList<>();
         for (int idx = 0; idx < partitionToPreCreate; idx++) {
-            String partition = getPartitionString(currentZonedDateTime, idx, autoPartitionTimeUnit);
-            // if the partition already exists, we don't need to create it,
-            // otherwise, create it
-            if (!currentPartitions.contains(partition)) {
+            ResolvedPartitionSpec partition =
+                    generateAutoPartition(
+                            partitionKeys, currentZonedDateTime, idx, autoPartitionTimeUnit);
+            // if the partition already exists, we don't need to create it, otherwise, create it
+            if (!currentPartitions.contains(partition.getPartitionName())) {
                 partitionsToCreate.add(partition);
             }
         }
@@ -241,6 +284,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
     private void dropPartitions(
             TablePath tablePath,
+            List<String> partitionKeys,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             NavigableSet<String> currentPartitions) {
@@ -255,31 +299,37 @@ public class AutoPartitionManager implements AutoCloseable {
                         currentInstant, autoPartitionStrategy.timeZone().toZoneId());
 
         // get the earliest one partition that need to retain
-        String lastRetainPartitionName =
-                getPartitionString(
-                        currentZonedDateTime, -numToRetain, autoPartitionStrategy.timeUnit());
+        ResolvedPartitionSpec lastRetainPartition =
+                generateAutoPartition(
+                        partitionKeys,
+                        currentZonedDateTime,
+                        -numToRetain,
+                        autoPartitionStrategy.timeUnit());
 
         Iterator<String> partitionsToExpire =
-                currentPartitions.headSet(lastRetainPartitionName, false).iterator();
+                currentPartitions.headSet(lastRetainPartition.getPartitionName(), false).iterator();
 
         while (partitionsToExpire.hasNext()) {
             String partitionName = partitionsToExpire.next();
             // drop the partition
             try {
-                zooKeeperClient.deletePartition(tablePath, partitionName);
-                // only remove when zk success, this reflects to the partitionsByTable
-                partitionsToExpire.remove();
+                metadataManager.dropPartition(
+                        tablePath,
+                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
+                        false);
+            } catch (PartitionNotExistException e) {
                 LOG.info(
-                        "Auto partitioning deleted partition {} for table [{}].",
+                        "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
                         partitionName,
                         tablePath);
-            } catch (Exception e) {
-                LOG.error(
-                        "Auto partitioning failed to delete partition {} for table [{}]",
-                        partitionName,
-                        tablePath,
-                        e);
             }
+
+            // only remove when zk success, this reflects to the partitionsByTable
+            partitionsToExpire.remove();
+            LOG.info(
+                    "Auto partitioning deleted partition {} for table [{}].",
+                    partitionName,
+                    tablePath);
         }
     }
 

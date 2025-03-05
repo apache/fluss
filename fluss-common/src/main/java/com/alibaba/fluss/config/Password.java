@@ -20,6 +20,7 @@ import java.io.Serializable;
 
 /** A wrapper class for passwords to hide them while logging a config. */
 public class Password implements Serializable {
+    private static final long serialVersionUID = 1L;
     // the hidden content to be displayed
     public static final String HIDDEN_CONTENT = "******";
 

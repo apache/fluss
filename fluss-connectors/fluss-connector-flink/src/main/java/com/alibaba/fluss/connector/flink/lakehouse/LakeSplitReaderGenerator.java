@@ -17,7 +17,6 @@
 package com.alibaba.fluss.connector.flink.lakehouse;
 
 import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.reader.PaimonSnapshotAndLogSplitScanner;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.reader.PaimonSnapshotScanner;
@@ -25,7 +24,7 @@ import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAn
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
 import com.alibaba.fluss.connector.flink.source.reader.BoundedSplitReader;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
+import com.alibaba.fluss.connector.flink.utils.DataLakeUtils;
 import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.flink.util.ExceptionUtils;
@@ -120,18 +119,16 @@ public class LakeSplitReaderGenerator {
             return fileStoreTable;
         }
 
-        try (Admin admin = connection.getAdmin()) {
-            LakeStorageInfo dataLakeInfo = admin.describeLakeStorage().get();
-            try (Catalog paimonCatalog =
-                    FlinkCatalogFactory.createPaimonCatalog(
-                            Options.fromMap(dataLakeInfo.getCatalogProperties()))) {
-                fileStoreTable =
-                        (FileStoreTable)
-                                paimonCatalog.getTable(
-                                        Identifier.create(
-                                                tablePath.getDatabaseName(),
-                                                tablePath.getTableName()));
-            }
+        try (Catalog paimonCatalog =
+                FlinkCatalogFactory.createPaimonCatalog(
+                        Options.fromMap(
+                                DataLakeUtils.extractLakeCatalogProperties(
+                                        table.getTableInfo().getProperties())))) {
+            fileStoreTable =
+                    (FileStoreTable)
+                            paimonCatalog.getTable(
+                                    Identifier.create(
+                                            tablePath.getDatabaseName(), tablePath.getTableName()));
             return fileStoreTable;
         } catch (Exception e) {
             throw new FlinkRuntimeException(

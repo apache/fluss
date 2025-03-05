@@ -32,21 +32,14 @@ mkdir fluss-quickstart-flink
 cd fluss-quickstart-flink
 ```
 
-Then, set the following environment variables.
+2. Create a `docker-compose.yml` file with the following content:
 
-```bash
-export FLUSS_VERSION=0.5.0
-export FLUSS_QUICKSTART_FLINK_VERSION=1.20-0.5
-```
 
-2. Next, create a `docker-compose.yml` file with the following content:
-
-[//]: # (IMPORTANT NOTE TO CONTRIBUTORS: if you change config options or versions here, also change them in other quickstart guides that build upon this one!)
 ```yaml
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -60,7 +53,7 @@ services:
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
   tablet-server:
-    image: fluss/fluss:${FLUSS_VERSION}
+    image: fluss/fluss:$FLUSS_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -81,7 +74,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION}
+    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -92,7 +85,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION}
+    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -119,7 +112,8 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-**Note:** The `fluss/quickstart-flink` includes the [fluss-connector-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/master/flink/quick-start/) and
+**Note:** The `fluss/quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
+includes the [fluss-connector-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/1.0/flink/quick-start/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
 3. To start all containers, run:
@@ -136,9 +130,9 @@ to check whether all containers are running properly.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
-:::note 
-- If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](../maintenance/observability/quickstart.md) and then continue with this guide.
-- If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/master/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
+:::note
+- If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](maintenance/observability/quickstart.md) and then continue with this guide.
+- If you want to run with your own Flink environment, remember to download the [fluss-connector-flink](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink](https://paimon.apache.org/docs/1.0/flink/quick-start/) connector jars and then put them to `FLINK_HOME/lib/`.
 - All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
 :::
 
@@ -496,4 +490,4 @@ docker compose down -v
 to stop all containers.
 
 ## Learn more
-Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](../maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.
+Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.

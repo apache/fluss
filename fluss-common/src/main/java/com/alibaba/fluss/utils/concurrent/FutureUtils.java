@@ -19,7 +19,6 @@ package com.alibaba.fluss.utils.concurrent;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.FatalExitExceptionHandler;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.function.RunnableWithException;
 
 import org.slf4j.Logger;
@@ -46,6 +45,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -93,7 +94,7 @@ public class FutureUtils {
         private final String timeoutMsg;
 
         private Timeout(CompletableFuture<?> future, @Nullable String timeoutMsg) {
-            this.future = Preconditions.checkNotNull(future);
+            this.future = checkNotNull(future);
             this.timeoutMsg = timeoutMsg;
         }
 
@@ -123,8 +124,8 @@ public class FutureUtils {
          * @return Future of the scheduled action
          */
         private static ScheduledFuture<?> delay(Runnable runnable, long delay, TimeUnit timeUnit) {
-            Preconditions.checkNotNull(runnable);
-            Preconditions.checkNotNull(timeUnit);
+            checkNotNull(runnable);
+            checkNotNull(timeUnit);
 
             return DELAYER.schedule(runnable, delay, timeUnit);
         }
@@ -264,7 +265,7 @@ public class FutureUtils {
      */
     public static <T> ConjunctFuture<Collection<T>> combineAll(
             Collection<? extends CompletableFuture<? extends T>> futures) {
-        Preconditions.checkNotNull(futures, "futures");
+        checkNotNull(futures, "futures");
 
         return new ResultConjunctFuture<>(futures);
     }
@@ -281,7 +282,7 @@ public class FutureUtils {
      */
     public static ConjunctFuture<Void> waitForAll(
             Collection<? extends CompletableFuture<?>> futures) {
-        Preconditions.checkNotNull(futures, "futures");
+        checkNotNull(futures, "futures");
 
         return new WaitingConjunctFuture(futures);
     }
@@ -684,7 +685,7 @@ public class FutureUtils {
             CompletableFuture<?> completableFuture,
             Thread.UncaughtExceptionHandler uncaughtExceptionHandler,
             Thread.UncaughtExceptionHandler fatalErrorHandler) {
-        Preconditions.checkNotNull(completableFuture)
+        checkNotNull(completableFuture)
                 .whenComplete(
                         (ignored, throwable) -> {
                             if (throwable != null) {

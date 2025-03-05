@@ -19,13 +19,14 @@ package com.alibaba.fluss.row;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** Describe a section of memory. */
 @Internal
@@ -40,7 +41,7 @@ abstract class BinarySection implements MemoryAwareGetters, Serializable {
     public BinarySection() {}
 
     public BinarySection(MemorySegment[] segments, int offset, int sizeInBytes) {
-        Preconditions.checkArgument(segments != null);
+        checkArgument(segments != null);
         this.segments = segments;
         this.offset = offset;
         this.sizeInBytes = sizeInBytes;
@@ -51,7 +52,7 @@ abstract class BinarySection implements MemoryAwareGetters, Serializable {
     }
 
     public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
-        Preconditions.checkArgument(segments != null);
+        checkArgument(segments != null);
         this.segments = segments;
         this.offset = offset;
         this.sizeInBytes = sizeInBytes;
