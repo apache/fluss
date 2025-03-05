@@ -124,6 +124,11 @@ const config: Config = {
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
         {
+          type: 'docsVersionDropdown',
+          position: 'right',
+          dropdownActiveClassDisabled: true,
+        },
+        {
           href: 'https://github.com/alibaba/fluss',
           position: 'right',
           className: 'header-github-link',
