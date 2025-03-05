@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Paimon
 
-[Apahce Paimon](https://paimon.apache.org/) innovatively combines lake format and LSM structure, bringing efficient updates into the lake architecture.
+[Apache Paimon](https://paimon.apache.org/) innovatively combines lake format and LSM structure, bringing efficient updates into the lake architecture.
 To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as lakehouse storage. See more detail about [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 
 ## Introduction
@@ -21,7 +21,7 @@ enables you streaming consume it in Paimon way.
 ### Read by Flink
 
 For the table with option `'table.datalake.enabled' = 'true'`, there are two part of data: the data remains in Fluss and the data already in Paimon.
-Now, you have two view of the table: one view is the Paimon data which has minute-level latency, one view the full data union Fluss and Paimon data
+Now, you have two view of the table: one view is the Paimon data which has minute-level latency, one view is the full data union Fluss and Paimon data
 which is the latest within second-level latency.
 
 Flink empowers you to decide to choose which view:
@@ -54,12 +54,12 @@ SQL shows how to do that:
 -- query will union data of Fluss and Paimon
 SELECT SUM(order_count) as total_orders FROM ads_nation_purchase_power;
 ```
-The query may looks slower than only querying data in Paimon, but it queries the full data which means better data freshness. You can
+The query may look slower than only querying data in Paimon, but it queries the full data which means better data freshness. You can
 run the query multi-times, you should get different results in every one run as the data is written to the table continuously.
 
 ### Read by other engines
 
-As the tired data in Paimon compacted from Fluss is also a standard Paimon table, you can use
+As the tiered data in Paimon compacted from Fluss is also a standard Paimon table, you can use
 [any engines](https://paimon.apache.org/docs/0.9/engines/overview/) that support Paimon to read the data. Here, we take [StarRocks](https://paimon.apache.org/docs/master/engines/starrocks/) as the engine to read the data:
 
 First, create a Paimon catalog for StarRocks:

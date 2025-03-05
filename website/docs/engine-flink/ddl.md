@@ -10,7 +10,7 @@ Fluss supports creating and managing tables through the Fluss Catalog.
 ```sql 
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
-  'bootstrap.servers' = 'fluss-server-1:9123',
+  'bootstrap.servers' = 'fluss-server-1:9123'
 );
 
 USE CATALOG fluss_catalog;
@@ -23,7 +23,7 @@ The following properties can be set if using the Fluss catalog:
 | bootstrap.servers | required | (none)  | Comma separated list of Fluss servers.                      |
 | default-database  | optional | fluss   | The default database to use when switching to this catalog. |
 
-The following introduced statements assuming the the current catalog is switched to the Fluss catalog using `USE CATALOG <catalog_name>` statement.
+The following introduced statements assuming the current catalog is switched to the Fluss catalog using `USE CATALOG <catalog_name>` statement.
 
 ## Create Database
 
@@ -39,6 +39,9 @@ USE my_db;
 To delete a database, this will drop all the tables in the database as well:
 
 ```sql
+-- Flink doesn't allow drop current database, switch to Fluss default database
+USE fluss;
+-- drop the database
 DROP DATABASE my_db;
 ```
 
@@ -117,12 +120,12 @@ CREATE TABLE my_part_log_table (
 
 The supported option in "with" parameters when creating a table are as follows:
 
-| Option                             | Type     | Required | Default                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-|------------------------------------|----------|----------|-------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| bucket.num                         | int      | optional | The bucket number of Fluss cluster. | The number of buckets of a Fluss table. If you specify multiple fields, delimiter is ','. If the table is with primary key, you can't specific bucket key currently. The bucket keys will always be the primary key. If the table is not with primary key, you can specific bucket key, and when the bucket key is not specified, the data will be distributed to each bucket randomly.                                                                                                          |
-| bucket.key                         | String   | optional | (none)                              | Specific the distribution policy of the Fluss table. Data will be distributed to each bucket according to the hash value of bucket-key.                                                                                                                                                                                                                                                                                                                                                          |
-| table.*                            |          |          |                                     | All the [`table.` prefix configuration](maintenance/configuration.md) are supported to be defined in "with" options. |
-| client.*                           |          |          |                                     | All the [`client.` prefix configuration](maintenance/configuration.md) are supported to be defined in "with" options. |
+| Option                             | Type     | Required | Default                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+|------------------------------------|----------|----------|-------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| bucket.num                         | int      | optional | The bucket number of Fluss cluster. | The number of buckets of a Fluss table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| bucket.key                         | String   | optional | (none)                              | Specific the distribution policy of the Fluss table. Data will be distributed to each bucket according to the hash value of bucket-key.  If you specify multiple fields, delimiter is ','. If the table is with primary key, you can't specific bucket key currently. The bucket keys will always be the primary key(excluding partition key). If the table is not with primary key, you can specific bucket key, and when the bucket key is not specified, the data will be distributed to each bucket randomly.  |
+| table.*                            |          |          |                                     | All the [`table.` prefix configuration](/docs/maintenance/configuration.md) are supported to be defined in "with" options.                                                                                                                                                                                                                                                                                                                                                                                         |
+| client.*                           |          |          |                                     | All the [`client.` prefix configuration](/docs/maintenance/configuration.md) are supported to be defined in "with" options.                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ## Create Table Like
 
@@ -130,7 +133,7 @@ To create a table with the same schema, partitioning, and table properties as an
 
 ```sql
 -- there is a temporary datagen table
-CREATE TEMPORARY TABLE my_table (
+CREATE TEMPORARY TABLE datagen (
     user_id BIGINT,
     item_id BIGINT,
     behavior STRING,
@@ -142,7 +145,7 @@ CREATE TEMPORARY TABLE my_table (
 );
 
 -- creates Fluss table which derives the metadata from the temporary table excluding options
-CREATE TABLE my_table_like LIKE my_table (EXCLUDING OPTIONS);
+CREATE TABLE my_table LIKE datagen (EXCLUDING OPTIONS);
 ```
 For more details, refer to the [Flink CREATE TABLE](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/create/#like) documentation.
 

@@ -13,12 +13,13 @@ This page provides instructions on how to deploy a *distributed cluster* for Flu
 
 Fluss runs on all *UNIX-like environments*, e.g. **Linux**, **Mac OS X**.
 To build a distributed cluster, you need to have at least two nodes.
-This docs provides a simple example of how to deploy a distributed cluster on three nodes.
+This doc provides a simple example of how to deploy a distributed cluster on three nodes.
 
 ### Software Requirements
 
-Before you start to setup the system, make sure you have the following software installed **on each node**:
+Before you start to set up the system, make sure you have the following software installed **on each node**:
 - **Java 17** or higher (Java 8 and Java 11 are not recommended)
+- **Zookeeper 3.6.0** or higher (It is not recommended to use zookeeper versions below 3.6.0)
 
 If your cluster does not fulfill these software requirements you will need to install/upgrade it.
 
@@ -46,7 +47,7 @@ Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 wi
 Go to the [downloads page](/downloads) and download the latest Fluss release. After downloading the latest release, copy the archive to all the nodes and extract it:
 
 ```shell
-tar -xzf fluss-0.5.0-bin.tar.gz
+tar -xzf fluss-0.5.0-bin.tgz
 cd fluss-0.5.0/
 ```
 
@@ -85,7 +86,7 @@ tablet-server.id: 3
 
 :::note
 - `tablet-server.id` is the unique id of the TabletServer, if you have multiple TabletServers, you should set different id for each TabletServer.
-- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](../../maintenance/configuration/) for more details.
+- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](/docs/maintenance/configuration/) for more details.
   :::
 
 ### Starting Fluss
@@ -120,7 +121,7 @@ Using Flink SQL Client to interact with Fluss.
 
 #### Preparation
 
-You can start a Flink standalone cluster refer to [Flink Environment Preparation](/docs/engine-flink/getting-started/#preparation-when-using-flink-sql-client/)
+You can start a Flink standalone cluster refer to [Flink Environment Preparation](/docs/engine-flink/getting-started#preparation-when-using-flink-sql-client)
 
 **Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
 

@@ -40,7 +40,7 @@ To use Fluss with [Log4j 1](https://logging.apache.org/log4j/1.2/) you must ensu
 * `org.apache.logging.log4j:log4j-core`, `org.apache.logging.log4j:log4j-slf4j-impl` and `org.apache.logging.log4j:log4j-1.2-api` are not on the classpath.
 * `log4j:log4j`, `org.slf4j:slf4j-log4j12`, `org.apache.logging.log4j:log4j-to-slf4j` and `org.apache.logging.log4j:log4j-api` are on the classpath.
 
-For Fluss distributions this means you have to
+For Fluss distributions this means you have to:
 * remove the `log4j-core`, `log4j-slf4j-impl` and `log4j-1.2-api` jars from the lib directory,
 * add the `log4j`, `slf4j-log4j12` and `log4j-to-slf4j` jars to the lib directory,
 * replace all log4j properties files in the conf directory with Log4j1-compliant versions.
@@ -52,7 +52,7 @@ To use Fluss with [logback](https://logback.qos.ch/) you must ensure that:
 * `org.apache.logging.log4j:log4j-slf4j-impl` is not on the classpath,
 * `ch.qos.logback:logback-core` and `ch.qos.logback:logback-classic` are on the classpath.
 
-For Fluss distributions this means you have to
+For Fluss distributions this means you have to:
 * remove the `log4j-slf4j-impl` jar from the lib directory.
 * add the `logback-core`, and `logback-classic` jars to the lib directory.
 

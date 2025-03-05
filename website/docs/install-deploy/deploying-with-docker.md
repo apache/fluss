@@ -67,7 +67,7 @@ docker run \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
 coordinator.host: coordinator-server" \
     -p 9123:9123 \
-    -d fluss/fluss coordinatorServer
+    -d fluss/fluss:0.5.0 coordinatorServer
 ```
 
 ### Start Fluss TabletServer
@@ -91,7 +91,7 @@ data.dir: /tmp/fluss/data
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9124 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss tabletServer
+    -d fluss/fluss:0.5.0 tabletServer
 ```
 #### Start with Multiple TabletServer
 
@@ -111,7 +111,7 @@ data.dir: /tmp/fluss/data/tablet-server-0
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9124 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss tabletServer
+    -d fluss/fluss:0.5.0 tabletServer
 ```
 
 2. start tablet-server-1
@@ -127,7 +127,7 @@ data.dir: /tmp/fluss/data/tablet-server-1
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9125:9125 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss tabletServer
+    -d fluss/fluss:0.5.0 tabletServer
 ```
 
 3. start tablet-server-2
@@ -143,7 +143,7 @@ data.dir: /tmp/fluss/data/tablet-server-2
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9126:9126 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss tabletServer
+    -d fluss/fluss:0.5.0 tabletServer
 ```
 
 Now all the Fluss related components are running.
@@ -168,10 +168,10 @@ to interact with Fluss.
 docker run \
     --name jobmanager \
     --network=fluss-demo \
-    --env FLUSS_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
-    -p 8081:8081 \
+    --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
+    -p 8083:8081 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink jobmanager
+    -d fluss/quickstart-flink:1.20-0.5 jobmanager
 ```
 
 2. start taskManager
@@ -180,9 +180,9 @@ docker run \
 docker run \
     --name taskmanager \
     --network=fluss-demo \
-    --env FLUSS_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
+    --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink taskmanager
+    -d fluss/quickstart-flink:1.20-0.5 taskmanager
 ```
 
 #### Enter into SQL-Client
@@ -215,18 +215,17 @@ More details please refer to [Flink Getting started](/docs/engine-flink/getting-
 ## Deploy with Docker Compose
 
 The following is a brief overview of how to quickly create a complete Fluss testing cluster
-using the `docker-compose up` commands.
+using the `docker-compose up -d` commands in a detached mode.
 
 ### Create docker-compose.yml file
 
 #### Compose file to start Fluss cluster with one TabletServer
+You can use the following `docker-compose.yml` file to start a Fluss cluster with one `CoordinatorServer` and one `TabletServer`.
 
-To build a 1 coordinatorServer and 1 TabletServer cluster for testing propose.
-The `docker-compose.yml` file is as follows:
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -238,7 +237,7 @@ services:
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server:
     image: fluss/fluss
-    command: tabletServer
+    command: tabletServer:0.5.0
     depends_on:
       - coordinator-server
     environment:
@@ -247,6 +246,7 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server
         tablet-server.id: 0
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
@@ -265,11 +265,12 @@ volumes:
 
 #### Compose file to start Fluss cluster with multi TabletServer
 
-To build a 1 coordinatorServer and 3 TabletServer. The `docker-compose.yml` file is as follows:
+You can use the following `docker-compose.yml` file to start a Fluss cluster with one `CoordinatorServer` and three `TabletServers`.
+
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -280,7 +281,7 @@ services:
         coordinator.host: coordinator-server
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server-0:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -290,12 +291,13 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server-0
         tablet-server.id: 0
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-0
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-1:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -305,12 +307,13 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server-1
         tablet-server.id: 1
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-1
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-2:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -320,6 +323,7 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server-2
         tablet-server.id: 2
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-2
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
@@ -355,7 +359,7 @@ The changed `docker-compose.yml` file is as follows:
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -366,7 +370,7 @@ services:
         coordinator.host: coordinator-server
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server-0:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -376,12 +380,13 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server-0
         tablet-server.id: 0
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-0
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-1:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -391,12 +396,13 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server-1
         tablet-server.id: 1
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-1
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-2:
-    image: fluss/fluss
+    image: fluss/fluss:0.5.0
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -406,6 +412,7 @@ services:
         zookeeper.address: zookeeper:2181
         tablet-server.host: tablet-server-2
         tablet-server.id: 2
+        kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-2
         remote.data.dir: /tmp/fluss/remote-data
     volumes:
@@ -414,9 +421,9 @@ services:
     restart: always
     image: zookeeper:3.9.2
   jobmanager:
-    image: fluss/quickstart-flink
+    image: fluss/quickstart-flink:1.20-0.5
     ports:
-      - "8081:8081"
+      - "8083:8081"
     command: jobmanager
     environment:
       - |
@@ -425,7 +432,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   taskmanager:
-    image: fluss/quickstart-flink
+    image: fluss/quickstart-flink:1.20-0.5
     depends_on:
       - jobmanager
     command: taskmanager
@@ -443,6 +450,7 @@ volumes:
       type: "tmpfs"
       device: "tmpfs"
 ```
+Save the `docker-compose.yaml` script and execute the `docker-compose up -d` command in the same directory to create the cluster.
 
 #### Enter into SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:

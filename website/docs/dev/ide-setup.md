@@ -68,7 +68,7 @@ adding a Copyright profile:
     See the License for the specific language governing permissions and
     limitations under the License.
    ```
-4. Go to "Editor" → "Copyright" and choose the "Fluss" profile as the default profile for this
+4. Go to "Editor" → "Copyright" and choose the "Alibaba" profile as the default profile for this
    project.
 5. Click "Apply".
 
@@ -77,7 +77,7 @@ adding a Copyright profile:
 Go to "Settings" → "Plugins" and select the "Marketplace" tab. Search for the following plugins,
 install them, and restart the IDE if prompted:
 
-* [Save Actions](https://plugins.jetbrains.com/plugin/7642-save-actions)
+* [Save Actions X](https://plugins.jetbrains.com/plugin/22113-save-actions-x)
 * [Checkstyle-IDEA](https://plugins.jetbrains.com/plugin/1065-checkstyle-idea)
 
 You will also need to install the [google-java-format](https://github.com/google/google-java-format)
@@ -99,16 +99,16 @@ It is recommended to automatically format your code by applying the following se
 1. Go to "Settings" → "Other Settings" → "google-java-format Settings".
 2. Tick the checkbox to enable the plugin.
 3. Change the code style to "Android Open Source Project (AOSP) style".
-6. Go to "Settings" → "Tools" → "Actions on Save".
-7. Under "Formatting Actions", select "Optimize imports" and "Reformat code".
-8. From the "All file types list" next to "Reformat code", select Java and Scala.
+4. Go to "Settings" → "Tools" → "Actions on Save".
+5. Under "Formatting Actions", select "Optimize imports" and "Reformat code".
+6. From the "All file types list" next to "Reformat code", select Java and Scala.
 
 For earlier IntelliJ IDEA versions:
 
-6. Go to "Settings" → "Other Settings" → "Save Actions".
-7. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
-8. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
-9. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
+4. Go to "Settings" → "Other Settings" → "Save Actions".
+5. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
+6. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
+7. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
 
 You can also format the whole project via Maven by using `mvn spotless:apply`.
 
@@ -119,7 +119,7 @@ You can also format the whole project via Maven by using `mvn spotless:apply`.
 
 1. Go to "Settings" → "Tools" → "Checkstyle".
 2. Set "Scan Scope" to "Only Java sources (including tests)".
-3. For "Checkstyle Version" select "10.18.2".
+3. For "Checkstyle Version" select "9.3".
 4. Under "Configuration File" click the "+" icon to add a new configuration.
 5. Set "Description" to "Fluss".
 6. Select "Use a local Checkstyle file" and point it to `tools/maven/checkstyle.xml` located within

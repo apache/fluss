@@ -34,8 +34,7 @@ When writing records into log table, Fluss will assign each record to a specific
 
 
 ## Data Consumption
-For log tables, you can consume the data produced in real-time, with the consumption order of the data in each bucket matching the order in which the data was written to the Fluss table.
-Specifically:
+Log Tables in Fluss allow real-time data consumption, preserving the order of data within each bucket as it was written to the Fluss table. Specifically:
 - For two data records from the same table and the same bucket, the data that was written to the Fluss table first will be consumed first.
 - For two data records from the same partition but different buckets, the consumption order is not guaranteed because different buckets may be processed concurrently by different data consumption jobs.
 

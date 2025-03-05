@@ -49,6 +49,6 @@ as the log data for the primary table data.
 - **.log:** Compact arrangement of log data.
 
 ### KvTablet
-Each bucket of the PrimaryKey table needs to generate a KvTablet. Underlying, each KvTablet correspond to an embedded RocksDB instance. RocksDB is a LSM (log structured merge) engine which helps KvTablet supports high-performance updates and lookup query.
+Each bucket of the PrimaryKey table needs to generate a KvTablet. Underlying, each KvTablet corresponds to an embedded RocksDB instance. RocksDB is an LSM (log structured merge) engine which helps KvTablet supports high-performance updates and lookup query.
 
 
