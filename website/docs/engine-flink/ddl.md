@@ -161,7 +161,7 @@ For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto P
 
 ### Options
 
-The supported option in `WITH` parameters when creating a table are listed in [Connector Options](/docs/engine-flink/options.md) page.
+The supported option in `WITH` parameters when creating a table are listed in [Connector Options](engine-flink/options.md) page.
 
 ## Create Table Like
 
