@@ -210,7 +210,7 @@ USE CATALOG my_fluss;
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](/docs/engine-flink/getting-started/)
+More details please refer to [Flink Getting started](engine-flink/getting-started.md)
 
 ## Deploy with Docker Compose
 
@@ -472,4 +472,4 @@ USE CATALOG my_fluss;
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](/docs/engine-flink/getting-started/)
+More details please refer to [Flink Getting started](engine-flink/getting-started.md)

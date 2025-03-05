@@ -7,7 +7,7 @@ sidebar_position: 1
 A bucketing strategy is a data distribution technique that divides table data into small pieces 
 and distributes the data to multiple hosts and services.
 
-When creating a Fluss table, you can specify the number of buckets by setting `'bucket.num' = '<num>'` property for the table, see more details in [DDL](/docs/engine-flink/ddl.md).
+When creating a Fluss table, you can specify the number of buckets by setting `'bucket.num' = '<num>'` property for the table, see more details in [DDL](engine-flink/ddl.md).
 Currently, Fluss supports 3 bucketing strategies: **Hash Bucketing**, **Sticky Bucketing** and **Round-Robin Bucketing**.
 Primary-Key Tables only allow to use **Hash Bucketing**. Log Tables use **Sticky Bucketing** by default but can use other two bucketing strategies.
 

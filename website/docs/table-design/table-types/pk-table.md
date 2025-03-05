@@ -61,7 +61,7 @@ Then write to the `k` and `v2` columns with the data `+I(1, 't1')`, `+I(2, 't2')
 
 ## Data Queries
 
-For primary key tables, Fluss supports querying data directly based on the key. Please refer to the [Flink Reads](../../engine-flink/reads.md) for detailed instructions.
+For primary key tables, Fluss supports querying data directly based on the key. Please refer to the [Flink Reads](engine-flink/reads.md) for detailed instructions.
 
 ## Changelog Generation
 
@@ -88,4 +88,4 @@ If the data written to the primary-key table is sequentially `+I(1, 2.0, 'apple'
 ## Data Consumption
 For a primary key table, the default consumption method is a full snapshot followed by incremental data. First, the snapshot data of the table is consumed, followed by the binlog data of the table.
 
-It is also possible to only consume the binlog data of the table. For more details, please refer to the [Flink Reads](../../engine-flink/reads.md)
+It is also possible to only consume the binlog data of the table. For more details, please refer to the [Flink Reads](engine-flink/reads.md)

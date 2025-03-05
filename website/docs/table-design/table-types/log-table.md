@@ -40,5 +40,5 @@ Log Tables in Fluss allow real-time data consumption, preserving the order of da
 
 
 ## Log Tiering
-Log Table supports tiering data to different storage tiers. See more details about [Remote Log](/docs/maintenance/tiered-storage/remote-storage/).
+Log Table supports tiering data to different storage tiers. See more details about [Remote Log](maintenance/tiered-storage/remote-storage.md).
 
