@@ -2,15 +2,16 @@
 sidebar_position: 1
 ---
 
-# PrimaryKey Table
+# Primary Key Table
 
 ## Basic Concept
 
-PrimaryKey Table in Fluss ensure the uniqueness of the specified primary key and supports `INSERT`, `UPDATE`,
+Primary Key tables in Fluss ensure the uniqueness of the specified primary key and supports `INSERT`, `UPDATE`,
 and `DELETE` operations.
 
-A PrimaryKey Table is created by specifying a `PRIMARY KEY` clause in the `CREATE TABLE` statement. For example, the
-following Flink SQL statement creates a PrimaryKey Table with `shop_id` and `user_id` as the primary key and distributes
+A Primary Key table is created by specifying a `PRIMARY KEY` clause in the `CREATE TABLE` statement. For example, the
+following Flink SQL statement creates a Primary Key table with `shop_id` and `user_id` as the primary key and
+distributes
 the data into 4 buckets:
 
 ```sql title="Flink SQL"
@@ -22,26 +23,25 @@ CREATE TABLE pk_table
     total_amount INT,
     PRIMARY KEY (shop_id, user_id) NOT ENFORCED
 ) WITH (
-    'bucket.num' = '4'
-);
+      'bucket.num' = '4'
+      );
 ```
 
-In Fluss primary key table, each row of data has a unique primary key.
-If multiple entries with the same primary key are written to the Fluss primary key table, only the last entry will be
-retained.
+In Fluss Primary Key tables, each data row is uniquely identified by a primary key. If multiple records with the same
+primary key are inserted, only the most recent record will be retained.
 
 For [Partitioned PrimaryKey Table](table-design/data-distribution/partitioning.md), the primary key must contain the
 partition key.
 
 ## Bucket Assigning
 
-For primary key tables, Fluss always determines which bucket the data belongs to based on the hash value of the primary
+For Primary Key tables, Fluss always determines which bucket the data belongs to based on the hash value of the primary
 key for each record.
 Data with the same hash value will be distributed to the same bucket.
 
 ## Partial Update
 
-For primary key tables, Fluss supports partial column updates, allowing you to write only a subset of columns to
+For Primary Key tables, Fluss supports partial column updates, allowing you to write only a subset of columns to
 incrementally update the data and ultimately achieve complete data. Note that the columns being written must include the
 primary key column.
 
@@ -75,22 +75,24 @@ follows:
 
 ## Merge Engines
 
-The **Merge Engine** in Fluss is a core component designed to efficiently handle and consolidate data updates for PrimaryKey Tables.
-It offers users the flexibility to define how incoming data records are merged with existing records sharing the same primary key.
+The **Merge Engine** in Fluss is a core component designed to efficiently handle and consolidate data updates for
+Primary Key Tables.
+It offers users the flexibility to define how incoming data records are merged with existing records sharing the same
+primary key.
 The default merge engine in Fluss retains the latest record for a given primary key.
-However, users can specify a different merge engine to customize the merging behavior according to their specific use cases
+However, users can specify a different merge engine to customize the merging behavior according to their specific use
+cases
 
 The following merge engines are supported:
 
 1. [FirstRow Merge Engine](/docs/table-design/table-types/pk-table/merge-engines/first-row)
 2. [Versioned Merge Engine](/docs/table-design/table-types/pk-table/merge-engines/versioned)
 
-
 ## Changelog Generation
 
 Fluss will capture the changes when inserting, updating, deleting records on the primary-key table, which is known as
 the changelog. Downstream consumers can directly consume the changelog to obtain the changes in the table. For example,
-consider the following primary key table in Fluss:
+consider the following Primary Key table in Fluss:
 
 ```sql title="Flink SQL"
 CREATE TABLE T
@@ -115,20 +117,23 @@ be generated.
 
 ## Data Queries
 
-For primary key tables, Fluss supports various kinds of querying abilities.
+For Primary Key tables, Fluss supports various kinds of querying abilities.
 
 ### Reads
 
-For a primary key table, the default read method is a full snapshot followed by incremental data. First, the
+For a Primary Key table, the default read method is a full snapshot followed by incremental data. First, the
 snapshot data of the table is consumed, followed by the binlog data of the table.
 
-It is also possible to only consume the binlog data of the table. For more details, please refer to the [Flink Reads](/docs/engine-flink/reads.md)
+It is also possible to only consume the binlog data of the table. For more details, please refer to
+the [Flink Reads](/docs/engine-flink/reads.md)
 
 ### Lookup
 
-Fluss primary key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique row. it always used in [Flink Lookup Join](/docs/engine-flink//lookups.md#lookup).
+Fluss Primary Key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique
+row. it always used in [Flink Lookup Join](/docs/engine-flink//lookups.md#lookup).
 
 ### Prefix Lookup
 
-Fluss primary key table can also do prefix lookup by the prefix subset primary keys. Unlike lookup, prefix lookup
-will scan data based on the prefix of primary keys and may return multiple rows. It always used in [Flink Prefix Lookup Join](/docs/engine-flink/lookups.md#prefix-lookup).
+Fluss Primary Key table can also do prefix lookup by the prefix subset primary keys. Unlike lookup, prefix lookup
+will scan data based on the prefix of primary keys and may return multiple rows. It always used
+in [Flink Prefix Lookup Join](/docs/engine-flink/lookups.md#prefix-lookup).
