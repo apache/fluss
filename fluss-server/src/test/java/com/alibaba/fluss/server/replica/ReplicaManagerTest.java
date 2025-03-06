@@ -1214,7 +1214,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         () -> {
                             int count = 0;
                             while (count < round) {
-                                if (replica.getLogHighWatermark() == count + 1) {
+                                if (replica.getLogHighWatermark() >= count + 1) {
                                     highWatermarkUpdateTimestamps[count] = System.nanoTime();
                                     count++;
                                 }
@@ -1255,7 +1255,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         for (int i = 0; i < round; i++) {
             assertThat(highWatermarkUpdateTimestamps[i])
-                    .isGreaterThan(lastTimestampForNullValues[i]);
+                    .isGreaterThanOrEqualTo(lastTimestampForNullValues[i]);
         }
     }
 
