@@ -16,15 +16,10 @@
 
 package com.alibaba.fluss.kafka;
 
-import static org.apache.kafka.common.protocol.ApiKeys.API_VERSIONS;
-import static org.apache.kafka.common.protocol.ApiKeys.PRODUCE;
-
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
-
-import lombok.extern.slf4j.Slf4j;
 
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.AbstractRequest;
@@ -33,6 +28,8 @@ import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ProduceRequest;
 import org.apache.kafka.common.requests.RequestAndSize;
 import org.apache.kafka.common.requests.RequestHeader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
@@ -40,8 +37,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Slf4j
+import static org.apache.kafka.common.protocol.ApiKeys.API_VERSIONS;
+import static org.apache.kafka.common.protocol.ApiKeys.PRODUCE;
+
 public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
+    private static final Logger log = LoggerFactory.getLogger(KafkaCommandDecoder.class);
 
     // Need to use a Queue to store the inflight responses, because Kafka clients require the
     // responses to be sent in order.
