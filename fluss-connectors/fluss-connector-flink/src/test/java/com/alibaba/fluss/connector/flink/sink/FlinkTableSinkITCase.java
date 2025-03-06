@@ -454,12 +454,13 @@ class FlinkTableSinkITCase {
         String sourceName = isPrimaryKeyTable ? "source_primary_key_table" : "source_log_table";
         org.apache.flink.table.api.Table cdcSourceData =
                 tEnv.fromChangelogStream(
-                        env.fromData(
-                                Row.ofKind(RowKind.INSERT, 1, 3501L, "Tim"),
-                                Row.ofKind(RowKind.DELETE, 1, 3501L, "Tim"),
-                                Row.ofKind(RowKind.INSERT, 2, 3502L, "Fabian"),
-                                Row.ofKind(RowKind.UPDATE_BEFORE, 2, 3502L, "Fabian"),
-                                Row.ofKind(RowKind.UPDATE_AFTER, 3, 3503L, "coco")));
+                        env.fromCollection(
+                                Arrays.asList(
+                                        Row.ofKind(RowKind.INSERT, 1, 3501L, "Tim"),
+                                        Row.ofKind(RowKind.DELETE, 1, 3501L, "Tim"),
+                                        Row.ofKind(RowKind.INSERT, 2, 3502L, "Fabian"),
+                                        Row.ofKind(RowKind.UPDATE_BEFORE, 2, 3502L, "Fabian"),
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 3, 3503L, "coco"))));
         tEnv.createTemporaryView(String.format("%s", sourceName), cdcSourceData);
 
         tEnv.executeSql(

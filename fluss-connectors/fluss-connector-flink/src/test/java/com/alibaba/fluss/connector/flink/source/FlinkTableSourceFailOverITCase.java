@@ -29,7 +29,6 @@ import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.StateBackendOptions;
-import org.apache.flink.configuration.StateRecoveryOptions;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -195,7 +194,7 @@ class FlinkTableSourceFailOverITCase {
                                     SavepointFormatType.CANONICAL)
                             .get();
 
-            tEnv.getConfig().set(StateRecoveryOptions.SAVEPOINT_PATH, savepointPath);
+            tEnv.getConfig().set("execution.savepoint.path", savepointPath);
             insertResult =
                     tEnv.executeSql("insert into result_table select * from test_partitioned");
             // append a new row again to check if the source can restore the state correctly
