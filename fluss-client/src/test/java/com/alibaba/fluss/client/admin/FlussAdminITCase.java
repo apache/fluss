@@ -46,6 +46,7 @@ import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -773,6 +774,19 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                     .getTableName())
                     .isEqualTo("test_table_1");
         }
+    }
+
+    @Test
+    void testListOffsets() throws Exception {
+        TablePath newTablePath = TablePath.of("test_db", "new_table");
+        createTable(newTablePath, DEFAULT_TABLE_DESCRIPTOR, true);
+        ListOffsetsResult listOffsetsResult =
+                admin.listOffsets(
+                        PhysicalTablePath.of(newTablePath),
+                        Arrays.asList(0, 1, 2),
+                        new OffsetSpec.LatestSpec());
+        assertThat(listOffsetsResult.all().get().values())
+                .hasSameElementsAs(Arrays.asList(0L, 0L, 0L));
     }
 
     private void assertHasTabletServerNumber(int tabletServerNumber) {

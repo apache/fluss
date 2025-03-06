@@ -16,6 +16,10 @@
 
 package com.alibaba.fluss.client.admin;
 
+import com.alibaba.fluss.client.admin.internal.AdminApiFuture;
+import com.alibaba.fluss.client.admin.internal.AdminApiHandler;
+import com.alibaba.fluss.client.admin.internal.AdminApiWorkflow;
+import com.alibaba.fluss.client.admin.internal.ListOffsetsHandler;
 import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
@@ -37,7 +41,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
@@ -52,29 +55,20 @@ import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesResponse;
-import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesResponse;
-import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.utils.MapUtils;
-
-import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
@@ -346,74 +340,18 @@ public class FlussAdmin implements Admin {
             metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
-        Map<Integer, ListOffsetsRequest> requestMap =
-                prepareListOffsetsRequests(
-                        metadataUpdater, tableId, partitionId, buckets, offsetSpec);
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
-        for (int bucket : buckets) {
-            bucketToOffsetMap.put(bucket, new CompletableFuture<>());
-        }
 
-        sendListOffsetsRequest(metadataUpdater, client, requestMap, bucketToOffsetMap);
-        return new ListOffsetsResult(bucketToOffsetMap);
+        AdminApiFuture.SimpleAdminApiFuture<Integer, Long> future =
+                ListOffsetsHandler.newFuture(buckets);
+        AdminApiHandler<Integer, Long> handler =
+                new ListOffsetsHandler(metadataUpdater, tableId, partitionId, offsetSpec, client);
+        AdminApiWorkflow<Integer, Long> adminApiDriver = new AdminApiWorkflow<>(future, handler);
+        CompletableFuture.runAsync(adminApiDriver::maybeSendRequests);
+        return new ListOffsetsResult(future.all());
     }
 
     @Override
     public void close() {
         // nothing to do yet
-    }
-
-    private static Map<Integer, ListOffsetsRequest> prepareListOffsetsRequests(
-            MetadataUpdater metadataUpdater,
-            long tableId,
-            @Nullable Long partitionId,
-            Collection<Integer> buckets,
-            OffsetSpec offsetSpec) {
-        Map<Integer, List<Integer>> nodeForBucketList = new HashMap<>();
-        for (Integer bucketId : buckets) {
-            int leader = metadataUpdater.leaderFor(new TableBucket(tableId, partitionId, bucketId));
-            nodeForBucketList.computeIfAbsent(leader, k -> new ArrayList<>()).add(bucketId);
-        }
-
-        Map<Integer, ListOffsetsRequest> listOffsetsRequests = new HashMap<>();
-        nodeForBucketList.forEach(
-                (leader, ids) ->
-                        listOffsetsRequests.put(
-                                leader,
-                                makeListOffsetsRequest(tableId, partitionId, ids, offsetSpec)));
-        return listOffsetsRequests;
-    }
-
-    private static void sendListOffsetsRequest(
-            MetadataUpdater metadataUpdater,
-            RpcClient client,
-            Map<Integer, ListOffsetsRequest> leaderToRequestMap,
-            Map<Integer, CompletableFuture<Long>> bucketToOffsetMap) {
-        leaderToRequestMap.forEach(
-                (leader, request) -> {
-                    TabletServerGateway gateway =
-                            GatewayClientProxy.createGatewayProxy(
-                                    () -> metadataUpdater.getTabletServer(leader),
-                                    client,
-                                    TabletServerGateway.class);
-                    gateway.listOffsets(request)
-                            .thenAccept(
-                                    r -> {
-                                        for (PbListOffsetsRespForBucket resp :
-                                                r.getBucketsRespsList()) {
-                                            if (resp.hasErrorCode()) {
-                                                bucketToOffsetMap
-                                                        .get(resp.getBucketId())
-                                                        .completeExceptionally(
-                                                                ApiError.fromErrorMessage(resp)
-                                                                        .exception());
-                                            } else {
-                                                bucketToOffsetMap
-                                                        .get(resp.getBucketId())
-                                                        .complete(resp.getOffset());
-                                            }
-                                        }
-                                    });
-                });
     }
 }

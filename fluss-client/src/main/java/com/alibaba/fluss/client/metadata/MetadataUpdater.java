@@ -25,6 +25,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -135,7 +136,7 @@ public class MetadataUpdater {
             }
 
             if (serverNode == null) {
-                throw new FlussRuntimeException(
+                throw new LeaderNotAvailableException(
                         "Leader not found after retry  "
                                 + MAX_RETRY_TIMES
                                 + " times for table bucket: "
