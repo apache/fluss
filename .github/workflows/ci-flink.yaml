@@ -1,0 +1,55 @@
+################################################################################
+# Copyright (c) 2024 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+name: Tests for Flink
+on:
+  push:
+    branches:
+      - main
+      - release-**
+      - ci-**
+  pull_request:
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [1.19, 1.18]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Build
+        run: mvn -T 1C -B clean install -DskipTests -Pflink-${{ matrix.version }}
+      - name: Test Flink ${{ matrix.version }}
+        timeout-minutes: 60
+        run: |
+          mvn -B verify -Pflink-${{ matrix.version }} -pl fluss-connectors/fluss-connector-flink -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
+        env:
+          MAVEN_OPTS: -Xmx4096m
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: logs-flink-${{ matrix.version }}-test-${{ github.run_number}}#${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fluss-logs/*

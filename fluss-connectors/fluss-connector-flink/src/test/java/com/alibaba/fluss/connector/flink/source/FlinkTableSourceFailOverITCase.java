@@ -44,6 +44,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.annotation.Nullable;
+
 import java.io.File;
 import java.time.Duration;
 import java.time.Year;
@@ -96,8 +98,13 @@ class FlinkTableSourceFailOverITCase {
         conn.close();
     }
 
-    private StreamTableEnvironment initTableEnvironment() {
-        StreamExecutionEnvironment execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+    private StreamTableEnvironment initTableEnvironment(@Nullable String savepointPath) {
+        Configuration conf = new Configuration();
+        if (savepointPath != null) {
+            conf.setString("execution.savepoint.path", savepointPath);
+        }
+        StreamExecutionEnvironment execEnv =
+                StreamExecutionEnvironment.getExecutionEnvironment(conf);
         execEnv.setParallelism(1);
         StreamTableEnvironment tEnv =
                 StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
@@ -128,7 +135,7 @@ class FlinkTableSourceFailOverITCase {
         cluster.before();
 
         try {
-            StreamTableEnvironment tEnv = initTableEnvironment();
+            StreamTableEnvironment tEnv = initTableEnvironment(null);
             tEnv.executeSql(
                     "create table test_partitioned ("
                             + "a int, b varchar"
@@ -194,7 +201,7 @@ class FlinkTableSourceFailOverITCase {
                                     SavepointFormatType.CANONICAL)
                             .get();
 
-            tEnv.getConfig().set("execution.savepoint.path", savepointPath);
+            tEnv = initTableEnvironment(savepointPath);
             insertResult =
                     tEnv.executeSql("insert into result_table select * from test_partitioned");
             // append a new row again to check if the source can restore the state correctly

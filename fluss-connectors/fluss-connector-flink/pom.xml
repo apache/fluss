@@ -30,7 +30,6 @@
     <name>Fluss : Connector : Flink</name>
 
     <properties>
-        <scala.binary.version>2.12</scala.binary.version>
         <flink.major.version>1.20</flink.major.version>
         <flink.minor.version>1.20.1</flink.minor.version>
     </properties>

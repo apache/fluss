@@ -31,6 +31,11 @@
         <module>fluss-lakehouse-paimon</module>
         <module>fluss-lakehouse-cli</module>
     </modules>
+
+    <properties>
+        <flink.version>1.20.1</flink.version>
+    </properties>
+
     <packaging>pom</packaging>
 
 
