@@ -32,6 +32,7 @@
     <properties>
         <scala.binary.version>2.12</scala.binary.version>
         <flink.major.version>1.20</flink.major.version>
+        <flink.minor.version>1.20.1</flink.minor.version>
     </properties>
 
     <dependencies>
@@ -46,21 +47,21 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-core</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>provided</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-common</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>provided</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-runtime</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>provided</scope>
         </dependency>
 
@@ -68,7 +69,7 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-base</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
         </dependency>
 
         <!-- Paimon -->
@@ -82,7 +83,7 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-files</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -104,7 +105,7 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-test-utils</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -127,7 +128,7 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-common</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>test</scope>
             <type>test-jar</type>
         </dependency>
@@ -135,7 +136,7 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-test-utils</artifactId>
-            <version>${flink.version}</version>
+            <version>${flink.minor.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -154,6 +155,24 @@
         </dependency>
 
     </dependencies>
+
+    <profiles>
+        <profile>
+            <id>flink-1.18</id>
+            <properties>
+                <flink.major.version>1.18</flink.major.version>
+                <flink.minor.version>1.18.1</flink.minor.version>
+            </properties>
+        </profile>
+        
+        <profile>
+            <id>flink-1.19</id>
+            <properties>
+                <flink.major.version>1.19</flink.major.version>
+                <flink.minor.version>1.19.2</flink.minor.version>
+            </properties>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
