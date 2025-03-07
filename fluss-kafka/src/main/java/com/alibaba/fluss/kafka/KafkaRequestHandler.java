@@ -73,10 +73,12 @@ public final class KafkaRequestHandler extends KafkaCommandDecoder {
                                 .setMaxVersion(apiKey.latestVersion());
                 if (apiKey.equals(ApiKeys.METADATA)) {
                     // Not support TopicId
-                    apiVersionData.setMaxVersion((short) 11);
+                    short v = apiKey.latestVersion() > 11 ? 11 : apiKey.latestVersion();
+                    apiVersionData.setMaxVersion(v);
                 } else if (apiKey.equals(ApiKeys.FETCH)) {
                     // Not support TopicId
-                    apiVersionData.setMaxVersion((short) 12);
+                    short v = apiKey.latestVersion() > 12 ? 12 : apiKey.latestVersion();
+                    apiVersionData.setMaxVersion(v);
                 }
                 data.apiKeys().add(apiVersionData);
             }
