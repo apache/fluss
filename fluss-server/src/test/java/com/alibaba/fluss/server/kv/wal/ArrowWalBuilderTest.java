@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.kv.wal;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -40,6 +39,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
@@ -159,7 +159,7 @@ class ArrowWalBuilderTest {
                         DEFAULT_SCHEMA_ID,
                         maxSizeInBytes,
                         DATA1_ROW_TYPE,
-                        ArrowCompressionInfo.NO_COMPRESSION),
+                        DEFAULT_COMPRESSION),
                 memorySegmentPool);
     }
 }

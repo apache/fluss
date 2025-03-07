@@ -165,7 +165,7 @@ public final class FlussClusterExtension
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
                 createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zooKeeperClient);
+        metadataManager = new MetadataManager(zooKeeperClient, clusterConf);
         Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(
@@ -222,9 +222,9 @@ public final class FlussClusterExtension
                 coordinatorServer = new CoordinatorServer(conf);
                 coordinatorServer.start();
                 coordinatorServerNode =
-                        // we use -1 as coordinator server id
+                        // TODO, Currently, we use 0 as coordinator server id.
                         new ServerNode(
-                                -1, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
+                                0, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
             }
         } else {
             // start the existing coordinator server
@@ -551,6 +551,10 @@ public final class FlussClusterExtension
         int preCreatePartitions = ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue();
         // wait util table partition is created
         return waitUntilPartitionsCreated(tablePath, preCreatePartitions);
+    }
+
+    public Map<String, Long> waitUtilPartitionAllReady(TablePath tablePath, int expectCount) {
+        return waitUntilPartitionsCreated(tablePath, expectCount);
     }
 
     public Map<String, Long> waitUntilPartitionsCreated(TablePath tablePath, int expectCount) {

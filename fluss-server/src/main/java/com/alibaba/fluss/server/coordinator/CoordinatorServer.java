@@ -142,13 +142,15 @@ public class CoordinatorServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
+            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
                             remoteFileSystem,
                             zkClient,
                             this::getCoordinatorEventManager,
-                            metadataCache);
+                            metadataCache,
+                            metadataManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -168,7 +170,8 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            this.autoPartitionManager = new AutoPartitionManager(metadataCache, zkClient, conf);
+            this.autoPartitionManager =
+                    new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -216,7 +219,7 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void createDefaultDatabase() {
-        MetadataManager metadataManager = new MetadataManager(zkClient);
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
         List<String> databases = metadataManager.listDatabases();
         if (databases.isEmpty()) {
             metadataManager.createDatabase(

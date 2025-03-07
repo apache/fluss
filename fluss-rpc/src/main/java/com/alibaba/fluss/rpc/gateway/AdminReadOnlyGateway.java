@@ -19,8 +19,6 @@ package com.alibaba.fluss.rpc.gateway;
 import com.alibaba.fluss.rpc.RpcGateway;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -178,15 +176,6 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     @RPC(api = ApiKeys.LIST_PARTITION_INFOS)
     CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
             ListPartitionInfosRequest request);
-
-    /**
-     * Describe the lake storage used for Fluss.
-     *
-     * @return a future returns lake storage info
-     */
-    @RPC(api = ApiKeys.DESCRIBE_LAKE_STORAGE)
-    CompletableFuture<DescribeLakeStorageResponse> describeLakeStorage(
-            DescribeLakeStorageRequest request);
 
     /**
      * Get the latest lake snapshot for the given table.

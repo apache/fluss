@@ -929,8 +929,7 @@ public class ConfigOptions {
     public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
             key("table.log.arrow.compression.type")
                     .enumType(ArrowCompressionType.class)
-                    // TODO: change to ZSTD by default when it is stable
-                    .defaultValue(ArrowCompressionType.NONE)
+                    .defaultValue(ArrowCompressionType.ZSTD)
                     .withDescription(
                             "The compression type of the log records if the log format is set to 'ARROW'. "
                                     + "The candidate compression type is "
@@ -1040,9 +1039,11 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The format of the datalake that the Fluss cluster uses as lake storage for the table."
-                                    + " It will be set with the Fluss's configuration 'datalake.format' by Fluss while creating the table. "
-                                    + "If non-null, the data distribution will follow the strategy of the corresponding datalake uses.");
+                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only 'paimon' is supported. "
+                                    + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
+                                    + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
+                                    + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
+                                    + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
 
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")

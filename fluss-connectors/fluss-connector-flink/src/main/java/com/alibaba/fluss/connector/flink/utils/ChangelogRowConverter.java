@@ -18,25 +18,33 @@ package com.alibaba.fluss.connector.flink.utils;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.types.RowType;
-
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.utils.JoinedRowData;
 
-public class ChangelogRowConverter extends FlussRowToFlinkRowConverter {
+/** Changelog converter that adds metadata columns using JoinedRowData. */
+public class ChangelogRowConverter implements RecordToFlinkRowConverter {
+    private final FlussRowToFlinkRowConverter converter;
+
     public ChangelogRowConverter(RowType rowType) {
-        super(rowType);
+        this.converter = new FlussRowToFlinkRowConverter(rowType);
     }
 
-    public RowData toFlinkRowData(ScanRecord scanRecord) {
-        RowData baseRowData = super.toFlinkRowData(scanRecord);
-        GenericRowData rowWithMetadata = new GenericRowData(baseRowData.getArity() + 3);
-        rowWithMetadata.setRowKind(baseRowData.getRowKind());
+    @Override
+    public RowData convert(ScanRecord scanRecord) {
+        RowData baseRowData = converter.toFlinkRowData(scanRecord);
 
-        for (int i = 0; i < baseRowData.getArity(); i++) {
-            rowWithMetadata.setField(i, baseRowData.getRawValue(i));
-        }
+        GenericRowData enrichedRow = new GenericRowData(baseRowData.getArity() + 3);
 
-        int baseArity = baseRowData.getArity();
+        // Add metadata fields
+        enrichedRow.setField(baseRowData.getArity(), determineRowKind(scanRecord));
+        enrichedRow.setField(baseRowData.getArity() + 1, scanRecord.logOffset());
+        enrichedRow.setField(baseRowData.getArity() + 2, scanRecord.timestamp());
+
+        return new JoinedRowData(baseRowData, enrichedRow);
+    }
+
+    private String determineRowKind(ScanRecord scanRecord) {
         String changeType;
         switch (scanRecord.getRowKind()) {
             case INSERT:
@@ -55,10 +63,6 @@ public class ChangelogRowConverter extends FlussRowToFlinkRowConverter {
                 changeType = "+I";
                 break;
         }
-        rowWithMetadata.setField(baseArity, changeType);
-        rowWithMetadata.setField(baseArity + 1, scanRecord.logOffset());
-        rowWithMetadata.setField(baseArity + 2, scanRecord.timestamp());
-
-        return rowWithMetadata;
+        return changeType;
     }
 }

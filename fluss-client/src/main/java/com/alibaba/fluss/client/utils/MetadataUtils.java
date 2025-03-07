@@ -153,7 +153,7 @@ public class MetadataUtils {
                                     newPartitionIdByPath,
                                     newTablePathToTableInfo);
                         })
-                .get(5, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
+                .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
         // RpcClient, it will let the get() block forever. So we
         // time out here
     }

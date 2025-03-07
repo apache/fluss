@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -82,10 +83,13 @@ public class TableRegistration {
     public TableInfo toTableInfo(
             TablePath tablePath,
             SchemaInfo schemaInfo,
-            @Nullable Map<String, String> additionalProperties) {
+            @Nullable Map<String, String> defaultTableLakeOptions) {
         Configuration properties = Configuration.fromMap(this.properties);
-        if (additionalProperties != null) {
-            additionalProperties.forEach(properties::setString);
+        if (defaultTableLakeOptions != null) {
+            if (properties.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
+                // only make the lake options visible when the datalake is enabled on the table
+                defaultTableLakeOptions.forEach(properties::setString);
+            }
         }
         return new TableInfo(
                 tablePath,

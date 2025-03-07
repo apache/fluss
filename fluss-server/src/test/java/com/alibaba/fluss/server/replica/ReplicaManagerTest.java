@@ -46,6 +46,7 @@ import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.entity.StopReplicaData;
 import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
+import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
@@ -64,6 +65,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -1161,6 +1163,100 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         + "The latest known leader epoch is 2 for table bucket "
                                         + "TableBucket{tableId=150001, bucket=1}."));
         replicaManager.getReplicaOrException(tb);
+    }
+
+    @Test
+    void testKvDataVisibility() throws Exception {
+        // The CDC log is only visible after the KV has been flushed to RocksDB. In other words,
+        // when we can read the CDC log, the associated kv record must have been
+        // inserted/updated/deleted in RocksDB. The reason for ensuring this visibility is that we
+        // first buffer the data in memory before flushing it to RocksDB. Thus, we need to guarantee
+        // visibility.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        RocksDBKv rocksDBKv = replica.getKvTablet().getRocksDBKv();
+        long beginTime = System.nanoTime();
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        // retry send kv records to kv store, if the highWatermark increased, the kv record must be
+        // visible in rocksdb.
+        int round = 1000;
+        Thread writerThread =
+                new Thread(
+                        () -> {
+                            CompletableFuture<List<PutKvResultForBucket>> future;
+                            for (int i = 0; i < round; i++) {
+                                future = new CompletableFuture<>();
+                                Object[] key = {i};
+                                Object[] value = {i, "a"};
+                                // don't wait for the result.
+                                try {
+                                    replicaManager.putRecordsToKv(
+                                            20000,
+                                            -1,
+                                            Collections.singletonMap(
+                                                    tb,
+                                                    genKvRecordBatch(
+                                                            Collections.singletonList(
+                                                                    Tuple2.of(key, value)))),
+                                            null,
+                                            future::complete);
+                                } catch (Exception e) {
+                                    throw new RuntimeException(e);
+                                }
+                            }
+                        });
+
+        long[] highWatermarkUpdateTimestamps = new long[round];
+        Thread readWatermarkThead =
+                new Thread(
+                        () -> {
+                            int count = 0;
+                            while (count < round) {
+                                if (replica.getLogHighWatermark() >= count + 1) {
+                                    highWatermarkUpdateTimestamps[count] = System.nanoTime();
+                                    count++;
+                                }
+                            }
+                        });
+
+        long[] lastTimestampForNullValues = new long[round];
+        Thread getKvThread =
+                new Thread(
+                        () -> {
+                            int count = 0;
+                            long lastTimestampForNullValue = beginTime;
+                            while (count < round) {
+                                Object[] key = {count};
+                                byte[] keyBytes = keyEncoder.encodeKey(row(key));
+                                try {
+                                    long timestamp = System.nanoTime();
+                                    if (rocksDBKv.get(keyBytes) == null) {
+                                        lastTimestampForNullValue = timestamp;
+                                    } else {
+                                        lastTimestampForNullValues[count] =
+                                                lastTimestampForNullValue;
+                                        count++;
+                                    }
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            }
+                        });
+
+        writerThread.start();
+        readWatermarkThead.start();
+        getKvThread.start();
+
+        writerThread.join();
+        readWatermarkThead.join();
+        getKvThread.join();
+
+        for (int i = 0; i < round; i++) {
+            assertThat(highWatermarkUpdateTimestamps[i])
+                    .isGreaterThanOrEqualTo(lastTimestampForNullValues[i]);
+        }
     }
 
     @Test

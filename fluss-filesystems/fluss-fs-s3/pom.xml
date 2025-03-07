@@ -240,6 +240,10 @@
         </dependency>
 
 
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+        </dependency>
         <!-- for the behavior test suite -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>

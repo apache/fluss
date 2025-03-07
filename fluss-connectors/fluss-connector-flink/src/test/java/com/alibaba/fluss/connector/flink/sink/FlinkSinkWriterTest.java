@@ -26,6 +26,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobInfo;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.operators.MailboxExecutor;
@@ -185,14 +186,32 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             return OptionalLong.empty();
         }
 
-        @Override
         public JobInfo getJobInfo() {
             fail(UNEXPECTED_METHOD_CALL_MESSAGE);
             return null;
         }
 
-        @Override
         public TaskInfo getTaskInfo() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return null;
+        }
+
+        public int getSubtaskId() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return 0;
+        }
+
+        public int getNumberOfParallelSubtasks() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return 0;
+        }
+
+        public int getAttemptNumber() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return 0;
+        }
+
+        public JobID getJobId() {
             fail(UNEXPECTED_METHOD_CALL_MESSAGE);
             return null;
         }

@@ -92,7 +92,7 @@ SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 
 ## Data Type Mapping
 When integrate with Paimon, Fluss automatically converts between Fluss data type and Paimon data type.
-The following content shows the mapping between [Fluss data type](../../table-design/data-types.md) and Paimon data type:
+The following content shows the mapping between [Fluss data type](table-design/data-types.md) and Paimon data type:
 
 | Fluss Data Type               | Paimon Data Type              |
 |-------------------------------|-------------------------------|

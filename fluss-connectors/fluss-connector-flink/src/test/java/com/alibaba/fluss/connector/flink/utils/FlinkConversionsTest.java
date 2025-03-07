@@ -164,12 +164,11 @@ class FlinkConversionsTest {
         options.put("k1", "v1");
         options.put("k2", "v2");
         CatalogTable flinkTable =
-                CatalogTable.newBuilder()
-                        .schema(Schema.newBuilder().fromResolvedSchema(schema).build())
-                        .comment("test comment")
-                        .partitionKeys(Collections.emptyList())
-                        .options(options)
-                        .build();
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "test comment",
+                        Collections.emptyList(),
+                        options);
 
         // check the converted table
         TableDescriptor flussTable =

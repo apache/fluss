@@ -68,6 +68,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
@@ -173,7 +174,8 @@ public class DataTestUtils {
                 batchSequence,
                 rowKinds,
                 objects,
-                LogFormat.ARROW);
+                LogFormat.ARROW,
+                DEFAULT_COMPRESSION);
     }
 
     public static MemoryLogRecords genIndexedMemoryLogRecords(List<IndexedRow> rows)
@@ -369,7 +371,8 @@ public class DataTestUtils {
                 NO_BATCH_SEQUENCE,
                 rowKinds,
                 objects,
-                logFormat);
+                logFormat,
+                DEFAULT_COMPRESSION);
     }
 
     public static MemoryLogRecords createBasicMemoryLogRecords(
@@ -381,7 +384,8 @@ public class DataTestUtils {
             int batchSequence,
             List<RowKind> rowKinds,
             List<Object[]> objects,
-            LogFormat logFormat)
+            LogFormat logFormat,
+            ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
         return createMemoryLogRecords(
                 rowType,
@@ -392,7 +396,8 @@ public class DataTestUtils {
                 batchSequence,
                 rowKinds,
                 objects,
-                logFormat);
+                logFormat,
+                arrowCompressionInfo);
     }
 
     public static MemoryLogRecords createMemoryLogRecords(
@@ -404,7 +409,8 @@ public class DataTestUtils {
             int batchSequence,
             List<RowKind> rowKinds,
             List<Object[]> objects,
-            LogFormat logFormat)
+            LogFormat logFormat,
+            ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
         if (logFormat == LogFormat.ARROW) {
             List<InternalRow> rows =
@@ -417,7 +423,8 @@ public class DataTestUtils {
                     writerId,
                     batchSequence,
                     rowKinds,
-                    rows);
+                    rows,
+                    arrowCompressionInfo);
         } else {
             return createIndexedMemoryLogRecords(
                     offsetBase,
@@ -466,17 +473,14 @@ public class DataTestUtils {
             long writerId,
             int batchSequence,
             List<RowKind> rowKinds,
-            List<InternalRow> rows)
+            List<InternalRow> rows,
+            ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
         try (BufferAllocator allocator = new RootAllocator(Integer.MAX_VALUE);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator)) {
             ArrowWriter writer =
                     provider.getOrCreateWriter(
-                            1L,
-                            schemaId,
-                            Integer.MAX_VALUE,
-                            rowType,
-                            ArrowCompressionInfo.NO_COMPRESSION);
+                            1L, schemaId, Integer.MAX_VALUE, rowType, arrowCompressionInfo);
             MemoryLogRecordsArrowBuilder builder =
                     MemoryLogRecordsArrowBuilder.builder(
                             baseLogOffset,

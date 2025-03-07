@@ -88,8 +88,6 @@
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
         </dependency>
 
         <!-- for the HDFS mini cluster test suite -->

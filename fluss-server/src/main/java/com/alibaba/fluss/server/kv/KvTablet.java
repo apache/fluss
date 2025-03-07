@@ -556,4 +556,10 @@ public final class KvTablet {
     KvPreWriteBuffer getKvPreWriteBuffer() {
         return kvPreWriteBuffer;
     }
+
+    // only for testing.
+    @VisibleForTesting
+    public RocksDBKv getRocksDBKv() {
+        return rocksDBKv;
+    }
 }

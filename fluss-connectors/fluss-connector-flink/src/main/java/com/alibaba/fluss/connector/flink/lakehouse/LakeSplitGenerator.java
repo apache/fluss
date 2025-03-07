@@ -25,7 +25,7 @@ import com.alibaba.fluss.connector.flink.source.split.LogSplit;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metadata.TableInfo;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
@@ -48,6 +48,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.connector.flink.utils.DataLakeUtils.extractLakeCatalogProperties;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -57,22 +58,19 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
  */
 public class LakeSplitGenerator {
 
-    private final long tableId;
-    private final TablePath tablePath;
+    private final TableInfo tableInfo;
     private final Admin flussAdmin;
     private final OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever;
     private final OffsetsInitializer stoppingOffsetInitializer;
     private final int bucketCount;
 
     public LakeSplitGenerator(
-            long tableId,
-            TablePath tablePath,
+            TableInfo tableInfo,
             Admin flussAdmin,
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever,
             OffsetsInitializer stoppingOffsetInitializer,
             int bucketCount) {
-        this.tableId = tableId;
-        this.tablePath = tablePath;
+        this.tableInfo = tableInfo;
         this.flussAdmin = flussAdmin;
         this.bucketOffsetsRetriever = bucketOffsetsRetriever;
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
@@ -81,16 +79,18 @@ public class LakeSplitGenerator {
 
     public List<SourceSplitBase> generateLakeSplits() throws Exception {
         // get the file store
-        LakeSnapshot lakeSnapshotInfo = flussAdmin.getLatestLakeSnapshot(tablePath).get();
+        LakeSnapshot lakeSnapshotInfo =
+                flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
         FileStoreTable fileStoreTable =
                 getTable(
                         lakeSnapshotInfo.getSnapshotId(),
-                        lakeSnapshotInfo.getLakeStorageInfo().getCatalogProperties());
+                        extractLakeCatalogProperties(tableInfo.getProperties()));
         boolean isLogTable = fileStoreTable.schema().primaryKeys().isEmpty();
         boolean isPartitioned = !fileStoreTable.schema().partitionKeys().isEmpty();
 
         if (isPartitioned) {
-            List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
+            List<PartitionInfo> partitionInfos =
+                    flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
             Map<Long, String> partitionNameById =
                     partitionInfos.stream()
                             .collect(
@@ -152,7 +152,8 @@ public class LakeSplitGenerator {
                     generateSplitForLogSnapshot(
                             fileStoreTable, splitGenerator, partitionId, partitionName));
             for (int bucket = 0; bucket < bucketCount; bucket++) {
-                TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+                TableBucket tableBucket =
+                        new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
                 long stoppingOffset = bucketEndOffset.get(bucket);
                 if (snapshotLogOffset == null) {
@@ -175,7 +176,8 @@ public class LakeSplitGenerator {
         } else {
             // it's primary key table
             for (int bucket = 0; bucket < bucketCount; bucket++) {
-                TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+                TableBucket tableBucket =
+                        new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
                 long stoppingOffset = bucketEndOffset.get(bucket);
                 splits.add(
@@ -205,7 +207,7 @@ public class LakeSplitGenerator {
         }
         // for snapshot splits, we always use bucket = -1 ad the bucket since we can't get bucket in
         // paimon's log table
-        TableBucket tableBucket = new TableBucket(tableId, partitionId, -1);
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, -1);
         // snapshot splits + one log split
         for (FileStoreSourceSplit fileStoreSourceSplit : splitGenerator.createSplits(scan.plan())) {
             splits.add(new PaimonSnapshotSplit(tableBucket, partitionName, fileStoreSourceSplit));
@@ -219,7 +221,7 @@ public class LakeSplitGenerator {
         checkState(
                 partitionKeys.size() == 1,
                 "Must only one partition key for paimon table %, but got %s, the partition keys are: ",
-                tablePath,
+                tableInfo.getTablePath(),
                 partitionKeys.size(),
                 partitionKeys.size());
         return Collections.singletonMap(partitionKeys.get(0), partitionName);
@@ -297,7 +299,8 @@ public class LakeSplitGenerator {
             return (FileStoreTable)
                     catalog.getTable(
                                     Identifier.create(
-                                            tablePath.getDatabaseName(), tablePath.getTableName()))
+                                            tableInfo.getTablePath().getDatabaseName(),
+                                            tableInfo.getTablePath().getTableName()))
                             .copy(
                                     Collections.singletonMap(
                                             CoreOptions.SCAN_SNAPSHOT_ID.key(),

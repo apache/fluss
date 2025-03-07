@@ -84,8 +84,20 @@ public class PhysicalTablePath implements Serializable {
      * Returns true if the database name, table name and the optional partition name are all valid.
      */
     public boolean isValid() {
-        return getTablePath().isValid()
-                && (partitionName == null || detectInvalidName(partitionName) == null);
+        if (!getTablePath().isValid()) {
+            return false;
+        }
+
+        if (partitionName != null) {
+            String[] partitionValues = partitionName.split("\\$");
+            for (String partitionValue : partitionValues) {
+                if (detectInvalidName(partitionValue) != null) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     @Override

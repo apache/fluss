@@ -46,6 +46,10 @@
         <!-- test dependencies -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>

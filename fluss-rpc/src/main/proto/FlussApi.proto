@@ -19,6 +19,13 @@ package fluss;
 option java_package = "com.alibaba.fluss.rpc.messages";
 option optimize_for = LITE_RUNTIME;
 
+/**
+* NOTICE: To ensure a smooth upgrade to Proto3 syntax while maintaining backward compatibility in
+* the future, please adhere to the following limitations:
+* 1. DO NOT USE "default" keyword, proto3 removes the support of "default"
+* 2. DO NOT USE "enum" type
+ */
+
 // the message indicates a failed request of a server failure.
 message ErrorResponse {
   required int32 error_code = 1;
@@ -343,10 +350,9 @@ message GetLatestLakeSnapshotRequest {
 }
 
 message GetLatestLakeSnapshotResponse {
-  required PbLakeStorageInfo lakehouse_storage_info = 1;
-  required int64 table_id = 2;
-  required int64 snapshotId = 3;
-  repeated PbLakeSnapshotForBucket bucket_snapshots = 4;
+  required int64 table_id = 1;
+  required int64 snapshotId = 2;
+  repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
 }
 
 message GetFileSystemSecurityTokenRequest {
@@ -357,13 +363,6 @@ message GetFileSystemSecurityTokenResponse {
   required bytes token = 2;
   optional int64 expiration_time = 3;
   repeated PbKeyValue addition_info = 4;
-}
-
-message DescribeLakeStorageRequest {
-}
-
-message DescribeLakeStorageResponse {
-  required PbLakeStorageInfo lakehouse_storage_info = 1;
 }
 
 // init writer request and response
@@ -381,6 +380,24 @@ message ListPartitionInfosRequest {
 message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
 }
+
+// create partition request and response
+message CreatePartitionRequest {
+  required PbTablePath table_path = 1;
+  required PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message CreatePartitionResponse {}
+
+// drop partition request and response
+message DropPartitionRequest {
+  required PbTablePath table_path = 1;
+  required PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message DropPartitionResponse {}
 
 // commit remote log manifest request and response
 message CommitRemoteLogManifestRequest {
@@ -718,7 +735,6 @@ message PbPartitionInfo {
   required string partition_name = 2;
 }
 
-message PbLakeStorageInfo {
-  required string lake_storage_type = 1;
-  repeated PbKeyValue catalog_properties = 2;
+message PbPartitionSpec {
+  repeated PbKeyValue partition_key_values = 1;
 }

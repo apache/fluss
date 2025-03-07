@@ -31,7 +31,7 @@ number of order of variables. Variables are case-sensitive.
 
 ## Reporter
 
-For information on how to set up Fluss's metric reporters please take a look at the [Metric Reporters](./metric-reporters.md) page.
+For information on how to set up Fluss's metric reporters please take a look at the [Metric Reporters](metric-reporters.md) page.
 
 ## Metrics List
 

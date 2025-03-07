@@ -60,6 +60,7 @@ class LakeTableManagerITCase {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
+                        .property("table.datalake.enabled", "true")
                         .build();
 
         TablePath tablePath = TablePath.of("fluss", "test_lake_table");

@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -79,7 +80,7 @@ class TableChangeWatcherTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zookeeperClient);
+        metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
     }
 
@@ -207,8 +208,8 @@ class TableChangeWatcherTest {
         metadataManager.dropTable(tablePath, false);
 
         // drop partitions event
-        expectedEvents.add(new DropPartitionEvent(tableId, 1L));
-        expectedEvents.add(new DropPartitionEvent(tableId, 2L));
+        expectedEvents.add(new DropPartitionEvent(tableId, 1L, "2011"));
+        expectedEvents.add(new DropPartitionEvent(tableId, 2L, "2022"));
         // drop table event
         expectedEvents.add(new DropTableEvent(tableId, true));
 

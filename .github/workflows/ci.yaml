@@ -37,7 +37,7 @@ jobs:
       - name: Test
         timeout-minutes: 60
         run: |
-          mvn -B verify -Ptest-coverage
+          mvn -B verify -Ptest-coverage -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
         env:
           MAVEN_OPTS: -Xmx4096m
           ARTIFACTS_OSS_ENDPOINT: ${{ secrets.ARTIFACTS_OSS_ENDPOINT }}
@@ -47,3 +47,9 @@ jobs:
           ARTIFACTS_OSS_SECRET_KEY: ${{ secrets.ARTIFACTS_OSS_SECRET_KEY }}
           ARTIFACTS_OSS_STS_ENDPOINT: ${{ secrets.ARTIFACTS_OSS_STS_ENDPOINT }}
           ARTIFACTS_OSS_ROLE_ARN: ${{ secrets.ARTIFACTS_OSS_ROLE_ARN }}
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: logs-test-${{ github.run_number}}#${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fluss-logs/*

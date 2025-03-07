@@ -46,7 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link Cluster}. */
 class ClusterTest {
     private static final ServerNode COORDINATOR_SERVER =
-            new ServerNode(-1, "localhost", 98, ServerType.COORDINATOR);
+            new ServerNode(0, "localhost", 98, ServerType.COORDINATOR);
     private static final ServerNode[] NODES =
             new ServerNode[] {
                 new ServerNode(0, "localhost", 99, ServerType.TABLET_SERVER),

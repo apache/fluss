@@ -201,7 +201,7 @@ public class ReplicaTestBase {
     private void initMetadataCache(ServerMetadataCache metadataCache) {
         metadataCache.updateMetadata(
                 new ClusterMetadataInfo(
-                        Optional.of(new ServerNode(-1, "localhost", 1234, ServerType.COORDINATOR)),
+                        Optional.of(new ServerNode(0, "localhost", 1234, ServerType.COORDINATOR)),
                         new HashSet<>(
                                 Arrays.asList(
                                         new ServerNode(
