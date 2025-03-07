@@ -599,7 +599,6 @@ public class FlinkSourceEnumerator
                         removedPartitions.add(p);
                     }
                 });
-        ;
 
         if (!removedPartitions.isEmpty()) {
             LOG.info("Discovered removed partitions: {}", removedPartitions);
