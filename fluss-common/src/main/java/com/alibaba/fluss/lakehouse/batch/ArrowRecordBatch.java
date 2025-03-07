@@ -16,4 +16,12 @@
 
 package com.alibaba.fluss.lakehouse.batch;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
+/**
+ * The Arrow implementation of the RecordBatch interface.
+ *
+ * @since 0.7
+ */
+@PublicEvolving
 public class ArrowRecordBatch implements RecordBatch {}

@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.lakehouse.committer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -25,7 +27,9 @@ import java.util.List;
  *
  * @param <WriteResult> the type of the write result
  * @param <CommittableT> the type of the committable object
+ * @since 0.7
  */
+@PublicEvolving
 public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable {
 
     /**

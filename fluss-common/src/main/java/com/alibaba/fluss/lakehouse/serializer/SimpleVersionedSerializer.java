@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.lakehouse.serializer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.io.IOException;
 
 /**
@@ -24,7 +26,9 @@ import java.io.IOException;
  * and deserialize a byte array to an object.
  *
  * @param <E> the type of the object to be serialized and deserialized
+ * @since 0.7
  */
+@PublicEvolving
 public interface SimpleVersionedSerializer<E> {
 
     /**

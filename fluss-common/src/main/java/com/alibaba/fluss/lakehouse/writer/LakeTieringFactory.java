@@ -16,10 +16,9 @@
 
 package com.alibaba.fluss.lakehouse.writer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
 import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
-
-import org.apache.flink.api.connector.sink2.Committer;
-import org.apache.flink.api.connector.sink2.CommitterInitContext;
 
 import java.io.IOException;
 
@@ -30,7 +29,9 @@ import java.io.IOException;
  *
  * @param <WriteResult> the type of the write result
  * @param <CommitableT> the type of the committable object
+ * @since 0.7
  */
+@PublicEvolving
 public interface LakeTieringFactory<WriteResult, CommitableT> {
 
     /**
@@ -53,12 +54,10 @@ public interface LakeTieringFactory<WriteResult, CommitableT> {
     /**
      * Creates a lake committer to commit to Paimon/Iceberg.
      *
-     * @param committerInitContext the context for initializing the committer
      * @return the lake committer
      * @throws IOException if an I/O error occurs
      */
-    Committer<CommitableT> createLakeCommitter(CommitterInitContext committerInitContext)
-            throws IOException;
+    LakeCommitter<WriteResult, CommitableT> createLakeCommitter() throws IOException;
 
     /**
      * Returns the serializer for committable objects.

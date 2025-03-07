@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.lakehouse.writer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.record.LogRecord;
 
 import java.io.Closeable;
@@ -26,7 +27,9 @@ import java.io.IOException;
  * ensure resources are released after use.
  *
  * @param <WriteResult> the type of the write result
+ * @since 0.7
  */
+@PublicEvolving
 public interface LakeWriter<WriteResult> extends Closeable {
     /**
      * Writes a record to the lake.

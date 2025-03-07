@@ -16,5 +16,12 @@
 
 package com.alibaba.fluss.lakehouse.batch;
 
-/** The RecordBatch interface represents a batch of records. */
+import com.alibaba.fluss.annotation.PublicEvolving;
+
+/**
+ * The RecordBatch interface represents a batch of records.
+ *
+ * @since 0.7
+ */
+@PublicEvolving
 public interface RecordBatch {}

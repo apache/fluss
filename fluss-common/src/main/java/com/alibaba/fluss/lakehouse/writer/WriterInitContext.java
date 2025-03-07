@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.lakehouse.writer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -24,7 +25,10 @@ import javax.annotation.Nullable;
 /**
  * The WriterInitContext interface provides the context needed to create a LakeWriter. It includes
  * methods to obtain the table path, table bucket, and an optional partition.
+ *
+ * @since 0.7
  */
+@PublicEvolving
 public interface WriterInitContext {
 
     /**

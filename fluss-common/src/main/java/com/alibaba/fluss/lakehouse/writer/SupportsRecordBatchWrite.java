@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.lakehouse.writer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.lakehouse.batch.RecordBatch;
 
 import java.io.IOException;
@@ -23,7 +24,10 @@ import java.io.IOException;
 /**
  * The SupportsRecordBatchWrite interface for writing batches of records. It provides a method to
  * write a batch of records to the underlying storage.
+ *
+ * @since 0.7
  */
+@PublicEvolving
 public interface SupportsRecordBatchWrite {
 
     /**
