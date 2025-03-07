@@ -17,9 +17,9 @@
 package com.alibaba.fluss.connector.flink.source.enumerator.initializer;
 
 import com.alibaba.fluss.client.admin.Admin;
+import com.alibaba.fluss.client.admin.ListOffsetsResult;
 import com.alibaba.fluss.client.admin.OffsetSpec;
 import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.flink.util.FlinkRuntimeException;
@@ -68,11 +68,13 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
     private Map<Integer, Long> listOffsets(
             @Nullable String partitionName, Collection<Integer> buckets, OffsetSpec offsetSpec) {
         try {
-            return flussAdmin
-                    .listOffsets(
-                            PhysicalTablePath.of(tablePath, partitionName), buckets, offsetSpec)
-                    .all()
-                    .get();
+            final ListOffsetsResult result;
+            if (partitionName == null) {
+                result = flussAdmin.listOffsets(tablePath, buckets, offsetSpec);
+            } else {
+                result = flussAdmin.listOffsets(tablePath, partitionName, buckets, offsetSpec);
+            }
+            return result.all().get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlinkRuntimeException(

@@ -22,6 +22,7 @@ import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.BytesViewLogRecords;
@@ -1134,16 +1135,29 @@ public class RpcMessageUtils {
     }
 
     public static ListPartitionInfosResponse toListPartitionInfosResponse(
-            Map<String, Long> partitionNameAndIds) {
+            List<String> partitionKeys, Map<String, Long> partitionNameAndIds) {
         ListPartitionInfosResponse listPartitionsResponse = new ListPartitionInfosResponse();
-
         for (Map.Entry<String, Long> partitionNameAndId : partitionNameAndIds.entrySet()) {
+            ResolvedPartitionSpec spec =
+                    ResolvedPartitionSpec.fromPartitionName(
+                            partitionKeys, partitionNameAndId.getKey());
             listPartitionsResponse
                     .addPartitionsInfo()
                     .setPartitionId(partitionNameAndId.getValue())
-                    .setPartitionName(partitionNameAndId.getKey());
+                    .setPartitionSpec(makePbPartitionSpec(spec));
         }
         return listPartitionsResponse;
+    }
+
+    public static PbPartitionSpec makePbPartitionSpec(ResolvedPartitionSpec spec) {
+        PbPartitionSpec pbPartitionSpec = new PbPartitionSpec();
+        for (int i = 0; i < spec.getPartitionKeys().size(); i++) {
+            pbPartitionSpec
+                    .addPartitionKeyValue()
+                    .setKey(spec.getPartitionKeys().get(i))
+                    .setValue(spec.getPartitionValues().get(i));
+        }
+        return pbPartitionSpec;
     }
 
     public static CommitLakeTableSnapshotData getCommitLakeTableSnapshotData(

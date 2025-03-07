@@ -16,10 +16,10 @@
 
 package com.alibaba.fluss.connector.flink.source.enumerator.initializer;
 
-import com.alibaba.fluss.client.admin.FlussAdmin;
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.admin.OffsetSpec;
 import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
@@ -101,7 +101,8 @@ public interface OffsetsInitializer extends Serializable {
      * @param timestamp the timestamp (milliseconds) to start the scan.
      * @return an {@link OffsetsInitializer} which initializes the offsets based on the given
      *     timestamp.
-     * @see FlussAdmin#listOffsets(PhysicalTablePath, Collection, OffsetSpec)
+     * @see Admin#listOffsets(TablePath, Collection, OffsetSpec)
+     * @see Admin#listOffsets(TablePath, String, Collection, OffsetSpec)
      */
     static OffsetsInitializer timestamp(long timestamp) {
         return new TimestampOffsetsInitializer(timestamp);

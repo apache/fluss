@@ -392,8 +392,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             ListPartitionInfosRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         Map<String, Long> partitionNameAndIds = metadataManager.listPartitions(tablePath);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.toListPartitionInfosResponse(partitionNameAndIds));
+                RpcMessageUtils.toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
     }
 
     @Override

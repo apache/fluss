@@ -21,7 +21,6 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -298,8 +297,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
         }
 
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
-
         long firstStartTimestamp = System.currentTimeMillis();
         int batchRecordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
@@ -324,7 +321,13 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from firstStartTimestamp, which smaller than the first batch commit
             // timestamp.
             subscribeFromTimestamp(
-                    physicalTablePath, partitionId, table, logScanner, admin, firstStartTimestamp);
+                    tablePath,
+                    partitionName,
+                    partitionId,
+                    table,
+                    logScanner,
+                    admin,
+                    firstStartTimestamp);
             List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
@@ -348,7 +351,13 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from secondStartTimestamp, which larger than the second batch commit
             // timestamp, return the data of second batch.
             subscribeFromTimestamp(
-                    physicalTablePath, partitionId, table, logScanner, admin, secondStartTimestamp);
+                    tablePath,
+                    partitionName,
+                    partitionId,
+                    table,
+                    logScanner,
+                    admin,
+                    secondStartTimestamp);
             rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
@@ -387,7 +396,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             partitionId = partitionNameAndIds.get(partitionName);
             FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
         }
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
 
         int batchRecordSize = 10;
         try (Table table = conn.getTable(tablePath)) {
@@ -399,7 +407,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
             LogScanner logScanner = createLogScanner(table);
             // try to fetch from the latest offsets. For the first batch, it cannot get any data.
-            subscribeFromLatestOffset(physicalTablePath, partitionId, table, logScanner, admin);
+            subscribeFromLatestOffset(
+                    tablePath, partitionName, partitionId, table, logScanner, admin);
             assertThat(logScanner.poll(Duration.ofSeconds(1)).isEmpty()).isTrue();
 
             // 2. write the second batch.

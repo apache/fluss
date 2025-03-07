@@ -40,7 +40,7 @@ import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PartitionSpec;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -324,6 +324,8 @@ public interface Admin extends AutoCloseable {
      * </ul>
      *
      * @param tablePath the table path of the table.
+     * @param partitionName the partition name, see {@link ResolvedPartitionSpec#getPartitionName}
+     *     for the format of the partition name.
      */
     CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath tablePath, String partitionName);
 
@@ -363,12 +365,26 @@ public interface Admin extends AutoCloseable {
      * List offset for the specified buckets. This operation enables to find the beginning offset,
      * end offset as well as the offset matching a timestamp in buckets.
      *
-     * @param physicalTablePath the physical table path of the buckets.
+     * @param tablePath the table path of the table.
      * @param buckets the buckets to fetch offset.
      * @param offsetSpec the offset spec to fetch.
      */
     ListOffsetsResult listOffsets(
-            PhysicalTablePath physicalTablePath,
+            TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec);
+
+    /**
+     * List offset for the specified buckets. This operation enables to find the beginning offset,
+     * end offset as well as the offset matching a timestamp in buckets.
+     *
+     * @param tablePath the table path of the table.
+     * @param partitionName the partition name of the partition,see {@link
+     *     ResolvedPartitionSpec#getPartitionName} * for the format of the partition name.
+     * @param buckets the buckets to fetch offset.
+     * @param offsetSpec the offset spec to fetch.
+     */
+    ListOffsetsResult listOffsets(
+            TablePath tablePath,
+            String partitionName,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec);
 }

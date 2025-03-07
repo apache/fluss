@@ -19,7 +19,10 @@ package com.alibaba.fluss.connector.flink.utils;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
+import com.alibaba.fluss.client.admin.ListOffsetsResult;
 import com.alibaba.fluss.client.admin.OffsetSpec;
+import com.alibaba.fluss.client.admin.OffsetSpec.EarliestSpec;
+import com.alibaba.fluss.client.admin.OffsetSpec.LatestSpec;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.Scan;
 import com.alibaba.fluss.client.table.scanner.batch.BatchScanUtils;
@@ -30,7 +33,6 @@ import com.alibaba.fluss.connector.flink.source.lookup.FlinkLookupFunction;
 import com.alibaba.fluss.connector.flink.source.lookup.LookupNormalizer;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.PartitionInfo;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -377,50 +379,7 @@ public class PushdownUtils {
             }
 
             List<CompletableFuture<Long>> countFutureList =
-                    partitionInfos.stream()
-                            .map(
-                                    partitionInfo -> {
-                                        CompletableFuture<Map<Integer, Long>>
-                                                earliestOffsetsResultFuture =
-                                                        flussAdmin
-                                                                .listOffsets(
-                                                                        PhysicalTablePath.of(
-                                                                                tablePath,
-                                                                                partitionInfo
-                                                                                                != null
-                                                                                        ? partitionInfo
-                                                                                                .getPartitionName()
-                                                                                        : null),
-                                                                        buckets,
-                                                                        new OffsetSpec
-                                                                                .EarliestSpec())
-                                                                .all();
-                                        CompletableFuture<Map<Integer, Long>> latestOffsetsResult =
-                                                flussAdmin
-                                                        .listOffsets(
-                                                                PhysicalTablePath.of(
-                                                                        tablePath,
-                                                                        partitionInfo != null
-                                                                                ? partitionInfo
-                                                                                        .getPartitionName()
-                                                                                : null),
-                                                                buckets,
-                                                                new OffsetSpec.LatestSpec())
-                                                        .all();
-                                        return earliestOffsetsResultFuture.thenCombine(
-                                                latestOffsetsResult,
-                                                (earliestOffsets, latestOffsets) -> {
-                                                    long count = 0;
-                                                    for (int bucket : earliestOffsets.keySet()) {
-                                                        count +=
-                                                                latestOffsets.get(bucket)
-                                                                        - earliestOffsets.get(
-                                                                                bucket);
-                                                    }
-                                                    return count;
-                                                });
-                                    })
-                            .collect(Collectors.toList());
+                    offsetLengthes(flussAdmin, tablePath, partitionInfos, buckets);
             // wait for all the response
             CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
             long count = 0;
@@ -432,6 +391,49 @@ public class PushdownUtils {
             throw new FlussRuntimeException(e);
         }
     }
+
+    private static List<CompletableFuture<Long>> offsetLengthes(
+            Admin flussAdmin,
+            TablePath tablePath,
+            List<PartitionInfo> partitionInfos,
+            Collection<Integer> buckets) {
+        List<CompletableFuture<Long>> list = new ArrayList<>();
+        for (@Nullable PartitionInfo info : partitionInfos) {
+            String partitionName = info != null ? info.getPartitionName() : null;
+            ListOffsetsResult earliestOffsets =
+                    listOffsets(flussAdmin, tablePath, buckets, new EarliestSpec(), partitionName);
+            ListOffsetsResult latestOffsets =
+                    listOffsets(flussAdmin, tablePath, buckets, new LatestSpec(), partitionName);
+            CompletableFuture<Long> apply =
+                    earliestOffsets
+                            .all()
+                            .thenCombine(
+                                    latestOffsets.all(),
+                                    (earliestOffsetsMap, latestOffsetsMap) -> {
+                                        long count = 0;
+                                        for (int bucket : earliestOffsetsMap.keySet()) {
+                                            count +=
+                                                    latestOffsetsMap.get(bucket)
+                                                            - earliestOffsetsMap.get(bucket);
+                                        }
+                                        return count;
+                                    });
+            list.add(apply);
+        }
+        return list;
+    }
+
+    private static ListOffsetsResult listOffsets(
+            Admin flussAdmin,
+            TablePath tablePath,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec,
+            @Nullable String partitionName) {
+        return partitionName == null
+                ? flussAdmin.listOffsets(tablePath, buckets, offsetSpec)
+                : flussAdmin.listOffsets(tablePath, partitionName, buckets, offsetSpec);
+    }
+
     // ------------------------------------------------------------------------------------------
 
     /** A structure represents a source field equal literal expression. */

@@ -32,7 +32,6 @@ import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionSpec;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -54,6 +53,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
@@ -136,7 +136,8 @@ public abstract class ClientToServerITCaseBase {
     }
 
     protected static void subscribeFromTimestamp(
-            PhysicalTablePath physicalTablePath,
+            TablePath tablePath,
+            @Nullable String partitionName,
             @Nullable Long partitionId,
             Table table,
             LogScanner logScanner,
@@ -144,12 +145,7 @@ public abstract class ClientToServerITCaseBase {
             long timestamp)
             throws Exception {
         Map<Integer, Long> offsetsMap =
-                admin.listOffsets(
-                                physicalTablePath,
-                                getAllBuckets(table),
-                                new TimestampSpec(timestamp))
-                        .all()
-                        .get();
+                listOffsets(tablePath, partitionName, table, admin, new TimestampSpec(timestamp));
         if (partitionId != null) {
             offsetsMap.forEach(
                     (bucketId, offset) -> logScanner.subscribe(partitionId, bucketId, offset));
@@ -158,17 +154,30 @@ public abstract class ClientToServerITCaseBase {
         }
     }
 
+    private static Map<Integer, Long> listOffsets(
+            TablePath tablePath,
+            String partitionName,
+            Table table,
+            Admin admin,
+            OffsetSpec offsetSpec)
+            throws InterruptedException, ExecutionException {
+        return partitionName == null
+                ? admin.listOffsets(tablePath, getAllBuckets(table), offsetSpec).all().get()
+                : admin.listOffsets(tablePath, partitionName, getAllBuckets(table), offsetSpec)
+                        .all()
+                        .get();
+    }
+
     protected static void subscribeFromLatestOffset(
-            PhysicalTablePath physicalTablePath,
+            TablePath tablePath,
+            @Nullable String partitionName,
             @Nullable Long partitionId,
             Table table,
             LogScanner logScanner,
             Admin admin)
             throws Exception {
         Map<Integer, Long> offsetsMap =
-                admin.listOffsets(physicalTablePath, getAllBuckets(table), new LatestSpec())
-                        .all()
-                        .get();
+                listOffsets(tablePath, partitionName, table, admin, new LatestSpec());
         if (partitionId != null) {
             offsetsMap.forEach(
                     (bucketId, offset) -> logScanner.subscribe(partitionId, bucketId, offset));

@@ -30,6 +30,7 @@ import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecords;
@@ -52,6 +53,7 @@ import com.alibaba.fluss.rpc.messages.PbKeyValue;
 import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
@@ -386,7 +388,7 @@ public class ClientRpcMessageUtils {
                 .setTableName(tablePath.getTableName());
         List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
         partitionSpec
-                .getPartitionSpec()
+                .getSpecMap()
                 .forEach(
                         (partitionKey, value) ->
                                 pbPartitionKeyAndValues.add(
@@ -405,7 +407,7 @@ public class ClientRpcMessageUtils {
                 .setTableName(tablePath.getTableName());
         List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
         partitionSpec
-                .getPartitionSpec()
+                .getSpecMap()
                 .forEach(
                         (partitionKey, value) ->
                                 pbPartitionKeyAndValues.add(
@@ -420,7 +422,8 @@ public class ClientRpcMessageUtils {
                         pbPartitionInfo ->
                                 new PartitionInfo(
                                         pbPartitionInfo.getPartitionId(),
-                                        pbPartitionInfo.getPartitionName()))
+                                        toResolvedPartitionSpec(
+                                                pbPartitionInfo.getPartitionSpec())))
                 .collect(Collectors.toList());
     }
 
@@ -429,5 +432,23 @@ public class ClientRpcMessageUtils {
                 .collect(
                         java.util.stream.Collectors.toMap(
                                 PbKeyValue::getKey, PbKeyValue::getValue));
+    }
+
+    public static PbPartitionSpec makePbPartitionSpec(PartitionSpec partitionSpec) {
+        Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
+        List<PbKeyValue> pbKeyValues = new ArrayList<>(partitionSpecMap.size());
+        partitionSpecMap.forEach(
+                (key, value) -> pbKeyValues.add(new PbKeyValue().setKey(key).setValue(value)));
+        return new PbPartitionSpec().addAllPartitionKeyValues(pbKeyValues);
+    }
+
+    public static ResolvedPartitionSpec toResolvedPartitionSpec(PbPartitionSpec pbPartitionSpec) {
+        List<String> partitionKeys = new ArrayList<>();
+        List<String> partitionValues = new ArrayList<>();
+        for (PbKeyValue pbKeyValue : pbPartitionSpec.getPartitionKeyValuesList()) {
+            partitionKeys.add(pbKeyValue.getKey());
+            partitionValues.add(pbKeyValue.getValue());
+        }
+        return new ResolvedPartitionSpec(partitionKeys, partitionValues);
     }
 }

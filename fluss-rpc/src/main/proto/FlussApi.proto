@@ -732,7 +732,7 @@ message PbRemoteLogSegment {
 
 message PbPartitionInfo {
   required int64 partition_id = 1;
-  required string partition_name = 2;
+  required PbPartitionSpec partition_spec = 2;
 }
 
 message PbPartitionSpec {

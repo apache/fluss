@@ -29,19 +29,32 @@ import java.util.Objects;
 @PublicEvolving
 public class PartitionInfo {
     private final long partitionId;
-    private final String partitionName;
+    private final ResolvedPartitionSpec partitionSpec;
 
-    public PartitionInfo(long partitionId, String partitionName) {
+    public PartitionInfo(long partitionId, ResolvedPartitionSpec partitionSpec) {
         this.partitionId = partitionId;
-        this.partitionName = partitionName;
+        this.partitionSpec = partitionSpec;
     }
 
+    /** Get the partition id. The id is globally unique in the Fluss cluster. */
     public long getPartitionId() {
         return partitionId;
     }
 
+    /**
+     * Get the partition name. The partition name is like table name to reference the partition. The
+     * format of partition name follows {@link ResolvedPartitionSpec#getPartitionName()}.
+     */
     public String getPartitionName() {
-        return partitionName;
+        return partitionSpec.getPartitionName();
+    }
+
+    public ResolvedPartitionSpec getResolvedPartitionSpec() {
+        return partitionSpec;
+    }
+
+    public PartitionSpec getPartitionSpec() {
+        return partitionSpec.toPartitionSpec();
     }
 
     @Override
@@ -53,16 +66,16 @@ public class PartitionInfo {
             return false;
         }
         PartitionInfo that = (PartitionInfo) o;
-        return partitionId == that.partitionId && Objects.equals(partitionName, that.partitionName);
+        return partitionId == that.partitionId && Objects.equals(partitionSpec, that.partitionSpec);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(partitionId, partitionName);
+        return Objects.hash(partitionId, partitionSpec);
     }
 
     @Override
     public String toString() {
-        return "Partition{name='" + partitionName + '\'' + ", id=" + partitionId + '}';
+        return "Partition{name='" + getPartitionName() + '\'' + ", id=" + partitionId + '}';
     }
 }

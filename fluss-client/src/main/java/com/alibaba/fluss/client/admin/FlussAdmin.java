@@ -334,6 +334,20 @@ public class FlussAdmin implements Admin {
 
     @Override
     public ListOffsetsResult listOffsets(
+            TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec) {
+        return listOffsets(PhysicalTablePath.of(tablePath), buckets, offsetSpec);
+    }
+
+    @Override
+    public ListOffsetsResult listOffsets(
+            TablePath tablePath,
+            String partitionName,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec) {
+        return listOffsets(PhysicalTablePath.of(tablePath, partitionName), buckets, offsetSpec);
+    }
+
+    private ListOffsetsResult listOffsets(
             PhysicalTablePath physicalTablePath,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec) {
