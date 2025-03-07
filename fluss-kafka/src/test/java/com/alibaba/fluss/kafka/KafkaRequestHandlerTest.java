@@ -1,0 +1,110 @@
+/*
+ * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.alibaba.fluss.kafka;
+
+import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+
+import org.apache.kafka.common.protocol.ApiKeys;
+import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.requests.AbstractResponse;
+import org.apache.kafka.common.requests.ApiVersionsRequest;
+import org.apache.kafka.common.requests.ApiVersionsResponse;
+import org.apache.kafka.common.requests.RequestHeader;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+
+public class KafkaRequestHandlerTest {
+
+    @Test
+    public void testKafkaApiVersionsNotSupported() {
+        KafkaRequestHandler handler = new KafkaRequestHandler();
+        short latestVersion = ApiKeys.API_VERSIONS.latestVersion();
+        ApiVersionsRequest apiVersionsRequest =
+                new ApiVersionsRequest.Builder().build(latestVersion);
+        ChannelHandlerContext ctx = Mockito.mock(ChannelHandlerContext.class);
+        Mockito.doReturn(ByteBufAllocator.DEFAULT).when(ctx).alloc();
+        KafkaRequest request =
+                new KafkaRequest(
+                        ApiKeys.API_VERSIONS,
+                        (short) (latestVersion + 1), // unsupported version
+                        new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
+                        apiVersionsRequest,
+                        ByteBufAllocator.DEFAULT.buffer(),
+                        ctx,
+                        new CompletableFuture<>());
+        handler.handleApiVersionsRequest(request);
+
+        ByteBuf responseBuffer = request.serialize();
+        ApiVersionsResponse response =
+                (ApiVersionsResponse)
+                        AbstractResponse.parseResponse(
+                                responseBuffer.nioBuffer(), request.header());
+        Map<Errors, Integer> errorCounts = response.errorCounts();
+        Assertions.assertEquals(1, errorCounts.size());
+        Assertions.assertEquals(1, errorCounts.get(Errors.UNSUPPORTED_VERSION));
+    }
+
+    @Test
+    public void testKafkaApiVersionsRequest() {
+        KafkaRequestHandler handler = new KafkaRequestHandler();
+        short latestVersion = ApiKeys.API_VERSIONS.latestVersion();
+        ApiVersionsRequest apiVersionsRequest =
+                new ApiVersionsRequest.Builder().build(latestVersion);
+        ChannelHandlerContext ctx = Mockito.mock(ChannelHandlerContext.class);
+        Mockito.doReturn(ByteBufAllocator.DEFAULT).when(ctx).alloc();
+        KafkaRequest request =
+                new KafkaRequest(
+                        ApiKeys.API_VERSIONS,
+                        latestVersion,
+                        new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
+                        apiVersionsRequest,
+                        ByteBufAllocator.DEFAULT.buffer(),
+                        ctx,
+                        new CompletableFuture<>());
+        handler.handleApiVersionsRequest(request);
+
+        ByteBuf responseBuffer = request.serialize();
+        ApiVersionsResponse response =
+                (ApiVersionsResponse)
+                        AbstractResponse.parseResponse(
+                                responseBuffer.nioBuffer(), request.header());
+        Map<Errors, Integer> errorCounts = response.errorCounts();
+        Assertions.assertEquals(1, errorCounts.size());
+        Assertions.assertEquals(1, errorCounts.get(Errors.NONE));
+        response.data()
+                .apiKeys()
+                .forEach(
+                        apiVersion -> {
+                            if (ApiKeys.METADATA.id == apiVersion.apiKey()) {
+                                Assertions.assertEquals((short) 11, apiVersion.maxVersion());
+                            } else if (ApiKeys.FETCH.id == apiVersion.apiKey()) {
+                                Assertions.assertEquals((short) 12, apiVersion.maxVersion());
+                            } else {
+                                Assertions.assertEquals(
+                                        apiVersion.minVersion(), apiVersion.minVersion());
+                                Assertions.assertEquals(
+                                        apiVersion.maxVersion(), apiVersion.maxVersion());
+                            }
+                        });
+    }
+}
