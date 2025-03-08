@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakestorage;
+package com.alibaba.fluss.lakehouse.lakestorage;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
