@@ -106,7 +106,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
 
         Metric currentSendTime = interceptingOperatorMetricGroup.get(MetricNames.CURRENT_SEND_TIME);
         assertThat(currentSendTime).isInstanceOf(Gauge.class);
-        assertThat(((Gauge<Long>) currentSendTime).getValue()).isGreaterThan(0);
+        // the default send latency is -1, so check it is >= 0, as the latency maybe very small 0ms
+        assertThat(((Gauge<Long>) currentSendTime).getValue()).isGreaterThanOrEqualTo(0);
 
         Metric numRecordSend = interceptingOperatorMetricGroup.get(MetricNames.NUM_RECORDS_SEND);
         assertThat(numRecordSend).isInstanceOf(Counter.class);

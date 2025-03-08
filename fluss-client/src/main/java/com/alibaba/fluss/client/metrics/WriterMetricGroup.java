@@ -42,9 +42,8 @@ public class WriterMetricGroup extends AbstractMetricGroup {
     private final Histogram bytesPerBatch;
     private final Histogram recordPerBatch;
 
-    private volatile long sendLatencyInMs;
-
-    private volatile long batchQueueTimeMs;
+    private volatile long sendLatencyInMs = -1;
+    private volatile long batchQueueTimeMs = -1;
 
     public WriterMetricGroup(ClientMetricGroup parent) {
         super(parent.getMetricRegistry(), makeScope(parent, name), parent);
