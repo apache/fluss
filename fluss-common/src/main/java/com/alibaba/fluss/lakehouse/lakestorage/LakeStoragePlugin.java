@@ -20,7 +20,11 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.plugin.Plugin;
 
-/** A Plugin to create instances of {@link LakeStorage}. */
+/**
+ * A Plugin to create instances of {@link LakeStorage}.
+ *
+ * @since 0.7
+ */
 @PublicEvolving
 public interface LakeStoragePlugin extends Plugin {
 

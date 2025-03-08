@@ -22,6 +22,8 @@ import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
 /**
  * The LakeStorage interface defines how to implement lakehouse storage system such as Paimon and
  * Iceberg. It provides a method to create a lake tiering factory.
+ *
+ * @since 0.7
  */
 @PublicEvolving
 public interface LakeStorage {
