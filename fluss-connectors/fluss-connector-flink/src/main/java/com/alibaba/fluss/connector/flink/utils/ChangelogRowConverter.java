@@ -21,10 +21,15 @@ import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.utils.JoinedRowData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Changelog converter that adds metadata columns using JoinedRowData. */
 public class ChangelogRowConverter implements RecordToFlinkRowConverter {
+    private static final Logger LOG = LoggerFactory.getLogger(ChangelogRowConverter.class);
     private final FlussRowToFlinkRowConverter converter;
 
     public ChangelogRowConverter(RowType rowType) {
@@ -33,16 +38,23 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
 
     @Override
     public RowData convert(ScanRecord scanRecord) {
-        RowData baseRowData = converter.toFlinkRowData(scanRecord);
+        try {
+            // Get the base data from the physical table
+            RowData baseRowData = converter.toFlinkRowData(scanRecord);
 
-        GenericRowData enrichedRow = new GenericRowData(baseRowData.getArity() + 3);
+            // Create metadata row
+            GenericRowData metadataRow = new GenericRowData(3);
+            metadataRow.setField(0, StringData.fromString(determineRowKind(scanRecord)));
+            metadataRow.setField(1, scanRecord.logOffset());
+            metadataRow.setField(2, TimestampData.fromEpochMillis(scanRecord.timestamp()));
 
-        // Add metadata fields
-        enrichedRow.setField(baseRowData.getArity(), determineRowKind(scanRecord));
-        enrichedRow.setField(baseRowData.getArity() + 1, scanRecord.logOffset());
-        enrichedRow.setField(baseRowData.getArity() + 2, scanRecord.timestamp());
-
-        return new JoinedRowData(baseRowData, enrichedRow);
+            // Join metadata and base data
+            return new JoinedRowData(metadataRow, baseRowData);
+        } catch (Exception e) {
+            // For debugging - log the error
+            LOG.error("Error converting record: {}", e.getMessage(), e);
+            throw e;
+        }
     }
 
     private String determineRowKind(ScanRecord scanRecord) {

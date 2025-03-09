@@ -1120,4 +1120,110 @@ class FlinkTableSourceITCase extends FlinkTestBase {
             return row(newValues);
         }
     }
+
+    @Test
+    void testReadChangelogDataDirectly() throws Exception {
+        // Create a primary key table
+        tEnv.executeSql(
+                "create table direct_changelog_test (a int not null primary key not enforced, b varchar, c bigint)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "direct_changelog_test");
+
+        // Write initial data
+        List<InternalRow> rows =
+                Arrays.asList(row(1, "v1", 100L), row(2, "v2", 200L), row(3, "v3", 300L));
+        writeRows(tablePath, rows, false);
+
+        // Wait until snapshot is complete
+        waitUtilAllBucketFinishSnapshot(admin, tablePath);
+
+        // Update data to generate changelog entries
+        List<InternalRow> updateRows = Arrays.asList(row(1, "v1_updated", 101L));
+        writeRows(tablePath, updateRows, false);
+
+        // Try using the assertResultsIgnoreOrder helper that's already in your codebase
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("SELECT a, b, c FROM direct_changelog_test").collect();
+
+        // Expected results - this should be 4 rows total
+        List<String> expected =
+                Arrays.asList("+I[1, v1_updated, 101]", "+I[2, v2, 200]", "+I[3, v3, 300]");
+
+        assertResultsIgnoreOrder(rowIter, expected, true);
+    }
+
+    @Test
+    void testReadChangelogTable() throws Exception {
+        // Create a primary key table
+        tEnv.executeSql(
+                "create table changelog_test (a int not null primary key not enforced, b varchar, c bigint)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "changelog_test");
+
+        // Write initial data
+        List<InternalRow> rows =
+                Arrays.asList(row(1, "v1", 100L), row(2, "v2", 200L), row(3, "v3", 300L));
+        writeRows(tablePath, rows, false);
+
+        // Wait until snapshot is complete
+        waitUtilAllBucketFinishSnapshot(admin, tablePath);
+
+        // Update data to generate changelog entries
+        List<InternalRow> updateRows =
+                Arrays.asList(row(1, "v1_updated", 101L), row(4, "v4", 400L));
+        writeRows(tablePath, updateRows, false);
+
+        // Test reading all columns including metadata from changelog table
+        CloseableIterator<Row> rowIterAll =
+                tEnv.executeSql("SELECT * FROM changelog_test$changelog").collect();
+
+        // Verify we can read the rows
+        List<Row> results = new ArrayList<>();
+        while (rowIterAll.hasNext()) {
+            results.add(rowIterAll.next());
+        }
+
+        // Verify number of rows (3 initial + 2 updates)
+        assertThat(results).hasSize(5);
+
+        // Verify structure
+        for (Row row : results) {
+            // Should have 6 fields (3 metadata + 3 data)
+            assertThat(row.getArity()).isEqualTo(6);
+
+            // First field should be the change type
+            String changeType = row.getField(0).toString();
+            assertThat(changeType).isIn("+I", "-U", "+U", "-D");
+        }
+
+        // Test reading only data columns
+        CloseableIterator<Row> rowIterData =
+                tEnv.executeSql("SELECT a, b, c FROM changelog_test$changelog").collect();
+
+        List<String> expectedDataRows =
+                Arrays.asList(
+                        "+I[1, v1, 100]",
+                        "+I[2, v2, 200]",
+                        "+I[3, v3, 300]",
+                        "+I[1, v1_updated, 101]",
+                        "+I[4, v4, 400]");
+
+        assertResultsIgnoreOrder(rowIterData, expectedDataRows, true);
+
+        // Test reading mixed metadata and data columns
+        CloseableIterator<Row> rowIterMixed =
+                tEnv.executeSql("SELECT _change_type, a, b FROM changelog_test$changelog")
+                        .collect();
+
+        List<Row> mixedResults = new ArrayList<>();
+        while (rowIterMixed.hasNext()) {
+            mixedResults.add(rowIterMixed.next());
+        }
+
+        // Should have same number of rows
+        assertThat(mixedResults).hasSize(5);
+
+        // Each row should have 3 fields
+        for (Row row : mixedResults) {
+            assertThat(row.getArity()).isEqualTo(3);
+        }
+    }
 }

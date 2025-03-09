@@ -308,7 +308,7 @@ public class FlinkCatalog implements Catalog {
 
                 Map<String, String> options = new HashMap<>(originalTable.getOptions());
                 options.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
-                options.put("changelog", "true");
+                options.put("enable.changelog", "true");
 
                 return CatalogTable.newBuilder()
                         .schema(changeLogSchema)

@@ -72,6 +72,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         }
         boolean enableChangelog = false;
         if (tableName.contains(CHANGELOG_TABLE_SPLITTER)) {
+            tableName = tableName.substring(0, tableName.indexOf(CHANGELOG_TABLE_SPLITTER));
             enableChangelog = true;
         }
 
@@ -119,9 +120,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions
                         .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
                         .toMillis();
-
+        TablePath tablePath = TablePath.of(tableIdentifier.getDatabaseName(), tableName);
         return new FlinkTableSource(
-                toFlussTablePath(context.getObjectIdentifier()),
+                tablePath,
                 toFlussClientConfig(tableOptions, context.getConfiguration()),
                 tableOutputType,
                 primaryKeyIndexes,
