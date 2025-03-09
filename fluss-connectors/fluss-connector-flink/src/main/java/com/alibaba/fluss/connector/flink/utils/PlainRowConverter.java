@@ -18,6 +18,7 @@ package com.alibaba.fluss.connector.flink.utils;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.types.RowType;
+
 import org.apache.flink.table.data.RowData;
 
 /** Direct converter that uses FlussRowToFlinkRowConverter to convert records without metadata. */

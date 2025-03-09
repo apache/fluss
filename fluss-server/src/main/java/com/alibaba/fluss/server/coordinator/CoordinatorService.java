@@ -70,6 +70,7 @@ import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
+
 import java.io.UncheckedIOException;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;

@@ -26,6 +26,7 @@ import com.alibaba.fluss.connector.flink.utils.ChangelogRowConverter;
 import com.alibaba.fluss.connector.flink.utils.PlainRowConverter;
 import com.alibaba.fluss.connector.flink.utils.RecordToFlinkRowConverter;
 import com.alibaba.fluss.types.RowType;
+
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;
 import org.apache.flink.table.data.RowData;
@@ -48,8 +49,8 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
     private final RecordToFlinkRowConverter converter;
     private LakeRecordRecordEmitter lakeRecordRecordEmitter;
 
-    public FlinkRecordEmitter(RowType rowType, boolean isChangeLogMode) {
-        if (isChangeLogMode) {
+    public FlinkRecordEmitter(RowType rowType, boolean enableChangeLog) {
+        if (enableChangeLog) {
             this.converter = new ChangelogRowConverter(rowType);
         } else {
             this.converter = new PlainRowConverter(rowType);

@@ -34,6 +34,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.IOUtils;
+
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
@@ -66,6 +67,7 @@ import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
 
 import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -301,11 +303,7 @@ public class FlinkCatalog implements Catalog {
                                         DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE())
                                 .withComment(
                                         "the timestamp associated when the change was happended")
-                                .primaryKey(
-                                        originalSchema
-                                                .getPrimaryKey()
-                                                .orElse(null)
-                                                .getColumnNames())
+                                .fromSchema(originalSchema)
                                 .build();
 
                 Map<String, String> options = new HashMap<>(originalTable.getOptions());

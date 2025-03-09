@@ -106,6 +106,12 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
+    public static final ConfigOption<Boolean> CHANGELOG =
+            ConfigOptions.key("enable.changelog")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Whether the table is a changelog table");
+
     // --------------------------------------------------------------------------------------------
     // table storage specific options
     // --------------------------------------------------------------------------------------------

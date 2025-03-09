@@ -56,7 +56,7 @@ public class FlinkSourceReader
             SourceReaderContext context,
             @Nullable int[] projectedFields,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
-            boolean isChangelog) {
+            boolean enableChangelog) {
         super(
                 elementsQueue,
                 new FlinkSourceFetcherManager(
@@ -70,7 +70,7 @@ public class FlinkSourceReader
                                         flinkSourceReaderMetrics),
                         (ignore) -> {}),
                 // InternalRow into Flink RowData with the additional metadata columns
-                new FlinkRecordEmitter(sourceOutputType, isChangelog),
+                new FlinkRecordEmitter(sourceOutputType, enableChangelog),
                 context.getConfiguration(),
                 context);
     }

@@ -55,7 +55,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
@@ -111,7 +113,7 @@ class FlinkCatalogTest {
                 new FlinkCatalog(
                         CATALOG_NAME,
                         DEFAULT_DB,
-                        String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
+                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
                         Thread.currentThread().getContextClassLoader());
         catalog.open();
     }
@@ -442,5 +444,67 @@ class FlinkCatalogTest {
         CatalogBaseTable tableCreated = catalog.getTable(tablePath);
         checkEqualsRespectSchema((CatalogTable) tableCreated, table);
         catalog.dropTable(tablePath, false);
+    }
+
+    @Test
+    void testGetChangelogTable() throws Exception {
+        // Create a base table first
+        String baseTableName = "base_table";
+        Map<String, String> options = new HashMap<>();
+        options.put(BUCKET_NUMBER.key(), "1");
+
+        ObjectPath baseTablePath = new ObjectPath(DEFAULT_DB, baseTableName);
+        ResolvedSchema baseSchema = createSchema(); // Use the existing schema creation method
+        CatalogTable baseTable = this.newCatalogTable(baseSchema, options);
+        catalog.createTable(baseTablePath, baseTable, false);
+
+        // Verify the base table exists
+        assertThat(catalog.tableExists(baseTablePath)).isTrue();
+
+        // Get the changelog table
+        String changelogTableName = baseTableName + "$changelog";
+        ObjectPath changelogTablePath = new ObjectPath(DEFAULT_DB, changelogTableName);
+
+        CatalogBaseTable changelogTable = catalog.getTable(changelogTablePath);
+
+        // Verify the changelog table properties
+        assertThat(changelogTable).isNotNull();
+        assertThat(changelogTable).isInstanceOf(CatalogTable.class);
+
+        // Get the schema and column names
+        Schema schema = ((CatalogTable) changelogTable).getUnresolvedSchema();
+        List<String> columnNames =
+                schema.getColumns().stream()
+                        .map(Schema.UnresolvedColumn::getName)
+                        .collect(Collectors.toList());
+
+        // Verify system columns exist and are at the beginning of the schema in the correct order
+        assertThat(columnNames.get(0)).isEqualTo("_change_type");
+        assertThat(columnNames.get(1)).isEqualTo("_log_offset");
+        assertThat(columnNames.get(2)).isEqualTo("_commit_timestamp");
+
+        // Get data types from columns (depending on how your Schema API works)
+        // todo Using string comparison as a fallback discuss with team
+
+        String schemaString = schema.toString();
+        assertThat(schemaString).contains("_change_type` STRING");
+        assertThat(schemaString).contains("_log_offset` BIGINT");
+        assertThat(schemaString).contains("_commit_timestamp` TIMESTAMP_LTZ");
+
+        // Verify original columns from the base table follow the system columns
+        assertThat(columnNames.subList(3, columnNames.size()))
+                .containsExactlyInAnyOrder("first", "second", "third");
+
+        // Verify primary key is preserved
+        List<String> primaryKeyColumns =
+                ((CatalogTable) changelogTable)
+                        .getUnresolvedSchema()
+                        .getPrimaryKey()
+                        .map(pk -> pk.getColumnNames())
+                        .orElse(Collections.emptyList());
+        assertThat(primaryKeyColumns).containsExactlyInAnyOrder("first", "third");
+
+        // Clean up
+        catalog.dropTable(baseTablePath, false);
     }
 }

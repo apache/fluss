@@ -315,4 +315,64 @@ class TableDescriptorTest {
                 .hasMessage(
                         "Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
     }
+
+    @Test
+    void testChangelogTable() {
+        // Test a valid changelog table descriptor (with primary key)
+        TableDescriptor validChangelogTable =
+                TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .property("table.changelog.enabled", "true")
+                        .build();
+
+        // Verify properties and schema
+        assertThat(validChangelogTable.getProperties())
+                .containsEntry("table.changelog.enabled", "true");
+        assertThat(validChangelogTable.getSchema().getPrimaryKey()).isPresent();
+
+        // Test a changelog table descriptor without primary key
+        Schema schemaWithoutPK =
+                Schema.newBuilder()
+                        .column("f0", DataTypes.STRING())
+                        .column("f1", DataTypes.BIGINT())
+                        .build();
+
+        TableDescriptor invalidChangelogTable =
+                TableDescriptor.builder()
+                        .schema(schemaWithoutPK)
+                        .property("table.changelog.enabled", "true")
+                        .build();
+
+        // Verify lack of primary key
+        assertThat(invalidChangelogTable.getSchema().getPrimaryKey()).isEmpty();
+
+        // Test schemas with reserved column names
+        Schema.Builder schemaWithReservedColumn =
+                Schema.newBuilder()
+                        .column("f0", DataTypes.STRING())
+                        .column("_change_type", DataTypes.STRING())
+                        .primaryKey("f0");
+
+        // Verify column exists in schema
+        assertThat(schemaWithReservedColumn.build().getColumnNames()).contains("_change_type");
+
+        // Test with other reserved column names
+        Schema schemaWithReservedColumn2 =
+                Schema.newBuilder()
+                        .column("f0", DataTypes.STRING())
+                        .column("_log_offset", DataTypes.BIGINT())
+                        .primaryKey("f0")
+                        .build();
+
+        assertThat(schemaWithReservedColumn2.getColumnNames()).contains("_log_offset");
+
+        Schema schemaWithReservedColumn3 =
+                Schema.newBuilder()
+                        .column("f0", DataTypes.STRING())
+                        .column("_commit_timestamp", DataTypes.TIMESTAMP())
+                        .primaryKey("f0")
+                        .build();
+
+        assertThat(schemaWithReservedColumn3.getColumnNames()).contains("_commit_timestamp");
+    }
 }

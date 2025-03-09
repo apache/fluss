@@ -18,6 +18,7 @@ package com.alibaba.fluss.connector.flink.utils;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.types.RowType;
+
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.utils.JoinedRowData;

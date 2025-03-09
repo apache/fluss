@@ -70,9 +70,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             lakeTableFactory = mayInitLakeTableFactory();
             return lakeTableFactory.createDynamicTableSource(context, tableName);
         }
-        boolean isChangelog = false;
+        boolean enableChangelog = false;
         if (tableName.contains(CHANGELOG_TABLE_SPLITTER)) {
-            isChangelog = true;
+            enableChangelog = true;
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
@@ -135,7 +135,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionDiscoveryIntervalMs,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                isChangelog);
+                enableChangelog);
     }
 
     @Override
@@ -182,6 +182,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
+                                FlinkConnectorOptions.CHANGELOG,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,

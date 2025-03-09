@@ -96,7 +96,7 @@ public class FlinkTableSource
     // will be empty if no partition key
     private final int[] partitionKeyIndexes;
     private final boolean streaming;
-    private final boolean isChangelog;
+    private final boolean enableChangelog;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
 
     // options for lookup source
@@ -139,7 +139,7 @@ public class FlinkTableSource
             long scanPartitionDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
-            boolean isChangelog) {
+            boolean enableChangelog) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -157,7 +157,7 @@ public class FlinkTableSource
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
         this.mergeEngineType = mergeEngineType;
-        this.isChangelog = isChangelog;
+        this.enableChangelog = enableChangelog;
     }
 
     @Override
@@ -265,7 +265,7 @@ public class FlinkTableSource
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         streaming,
-                        isChangelog);
+                        enableChangelog);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -355,7 +355,7 @@ public class FlinkTableSource
                         scanPartitionDiscoveryIntervalMs,
                         isDataLakeEnabled,
                         mergeEngineType,
-                        isChangelog);
+                        enableChangelog);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;

@@ -17,6 +17,7 @@
 package com.alibaba.fluss.connector.flink.utils;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
+
 import org.apache.flink.table.data.RowData;
 
 /** Interface for converting scan records to Flink row data. */
