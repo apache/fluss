@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
  *
  * <p>The current record attributes are depicted below:
  *
- * <p>----------- | RowKind (0-3) | Unused (4-7) |---------------
+ * <p>----------- | ChangeType (0-3) | Unused (4-7) |---------------
  *
  * <p>The offset compute the difference relative to the base offset and of the batch that this
  * record is contained in.
@@ -113,9 +113,9 @@ public class IndexedLogRecord implements LogRecord {
     }
 
     @Override
-    public RowKind getRowKind() {
+    public ChangeType getChangeType() {
         byte attributes = segment.get(offset + LENGTH_LENGTH);
-        return RowKind.fromByteValue(attributes);
+        return ChangeType.fromByteValue(attributes);
     }
 
     @Override
@@ -131,7 +131,7 @@ public class IndexedLogRecord implements LogRecord {
     }
 
     /** Write the record to input `target` and return its size. */
-    public static int writeTo(OutputView outputView, RowKind rowKind, IndexedRow row)
+    public static int writeTo(OutputView outputView, ChangeType changeType, IndexedRow row)
             throws IOException {
         int sizeInBytes = calculateSizeInBytes(row);
 
@@ -140,7 +140,7 @@ public class IndexedLogRecord implements LogRecord {
         outputView.writeInt(sizeInBytes);
 
         // write attributes.
-        outputView.writeByte(rowKind.toByteValue());
+        outputView.writeByte(changeType.toByteValue());
 
         // write internal row.
         serializeInternalRow(outputView, row);

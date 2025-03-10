@@ -118,7 +118,7 @@ CREATE TABLE my_part_log_table (
 ) PARTITIONED BY (dt);
 ```
 :::note
-After the Partitioned (PrimaryKey/Log) Table is created, you need first manually create the corresponding partition using the [Add Partition](/docs/engine-flink/ddl.md#add-partition) statement
+After the Partitioned (PrimaryKey/Log) Table is created, you need first manually create the corresponding partition using the [Add Partition](engine-flink/ddl.md#add-partition) statement
 before you write/read data into this partition.
 :::
 
@@ -157,18 +157,11 @@ CREATE TABLE my_auto_part_log_table (
 );
 ```
 
-For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning Options](/docs/table-design/data-distribution/partitioning/#auto-partitioning-options).
+For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning Options](table-design/data-distribution/partitioning.md#auto-partitioning-options).
 
 ### Options
 
-The supported option in "with" parameters when creating a table are as follows:
-
-| Option                             | Type     | Required | Default                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-|------------------------------------|----------|----------|-------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| bucket.num                         | int      | optional | The bucket number of Fluss cluster. | The number of buckets of a Fluss table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| bucket.key                         | String   | optional | (none)                              | Specific the distribution policy of the Fluss table. Data will be distributed to each bucket according to the hash value of bucket-key.  If you specify multiple fields, delimiter is ','. If the table is with primary key, you can't specific bucket key currently. The bucket keys will always be the primary key(excluding partition key). If the table is not with primary key, you can specific bucket key, and when the bucket key is not specified, the data will be distributed to each bucket randomly.  |
-| table.*                            |          |          |                                     | All the [`table.` prefix configuration](/docs/maintenance/configuration.md) are supported to be defined in "with" options.                                                                                                                                                                                                                                                                                                                                                                                         |
-| client.*                           |          |          |                                     | All the [`client.` prefix configuration](/docs/maintenance/configuration.md) are supported to be defined in "with" options.                                                                                                                                                                                                                                                                                                                                                                                        |
+The supported option in `WITH` parameters when creating a table are listed in [Connector Options](engine-flink/options.md) page.
 
 ## Create Table Like
 

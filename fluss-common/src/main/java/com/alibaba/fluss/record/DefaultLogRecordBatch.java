@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -76,9 +76,9 @@ import java.util.NoSuchElementException;
  * <p>The current attributes are given below:
  *
  * <pre>
- * -------------------
- * |  Unused (0-8)   |
- * -------------------
+ * ------------------------------------------
+ * |  Unused (1-7)   |  AppendOnly Flag (0) |
+ * ------------------------------------------
  * </pre>
  *
  * @since 0.1
@@ -104,7 +104,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     static final int COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
     public static final int CRC_OFFSET = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
     protected static final int SCHEMA_ID_OFFSET = CRC_OFFSET + CRC_LENGTH;
-    static final int ATTRIBUTES_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
+    public static final int ATTRIBUTES_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
     static final int LAST_OFFSET_DELTA_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
     static final int WRITE_CLIENT_ID_OFFSET = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
     static final int BATCH_SEQUENCE_OFFSET = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
@@ -112,8 +112,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     static final int RECORDS_OFFSET = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
 
     public static final int RECORD_BATCH_HEADER_SIZE = RECORDS_OFFSET;
-    public static final int ARROW_ROWKIND_OFFSET = RECORD_BATCH_HEADER_SIZE;
+    public static final int ARROW_CHANGETYPE_OFFSET = RECORD_BATCH_HEADER_SIZE;
     public static final int LOG_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
+
+    public static final byte APPEND_ONLY_FLAG_MASK = 0x01;
 
     private MemorySegment segment;
     private int position;
@@ -300,41 +302,81 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     private CloseableIterator<LogRecord> columnRecordIterator(
             RowType rowType, VectorSchemaRoot root, BufferAllocator allocator, long timestamp) {
-        int rowKindOffset = position + ARROW_ROWKIND_OFFSET;
-        RowKindVector rowKindVector = new RowKindVector(segment, rowKindOffset, getRecordCount());
-        int arrowOffset = rowKindOffset + rowKindVector.sizeInBytes();
-        int arrowLength = sizeInBytes() - ARROW_ROWKIND_OFFSET - rowKindVector.sizeInBytes();
-        ArrowReader reader =
-                ArrowUtils.createArrowReader(
-                        segment, arrowOffset, arrowLength, root, allocator, rowType);
-        return new LogRecordIterator() {
-            int rowId = 0;
+        boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+        if (isAppendOnly) {
+            // append only batch, no change type vector,
+            // the start of the arrow data is the beginning of the batch records
+            int arrowOffset = position + RECORD_BATCH_HEADER_SIZE;
+            int arrowLength = sizeInBytes() - RECORD_BATCH_HEADER_SIZE;
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(
+                            segment, arrowOffset, arrowLength, root, allocator, rowType);
+            return new ArrowLogRecordIterator(reader, timestamp) {
+                @Override
+                protected ChangeType getChangeType(int rowId) {
+                    return ChangeType.APPEND_ONLY;
+                }
+            };
+        } else {
+            // with change type, decode the change type vector first,
+            // the arrow data starts after the change type vector
+            int changeTypeOffset = position + ARROW_CHANGETYPE_OFFSET;
+            ChangeTypeVector changeTypeVector =
+                    new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
+            int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
+            int arrowLength =
+                    sizeInBytes() - ARROW_CHANGETYPE_OFFSET - changeTypeVector.sizeInBytes();
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(
+                            segment, arrowOffset, arrowLength, root, allocator, rowType);
+            return new ArrowLogRecordIterator(reader, timestamp) {
+                @Override
+                protected ChangeType getChangeType(int rowId) {
+                    return changeTypeVector.getChangeType(rowId);
+                }
+            };
+        }
+    }
 
-            @Override
-            public boolean hasNext() {
-                return rowId < reader.getRowCount();
-            }
+    /** The basic implementation for Arrow log record iterator. */
+    private abstract class ArrowLogRecordIterator extends LogRecordIterator {
+        private final ArrowReader reader;
+        private final long timestamp;
+        private int rowId = 0;
 
-            @Override
-            protected LogRecord readNext(long baseOffset) {
-                RowKind rowKind = rowKindVector.getRowKind(rowId);
-                LogRecord record =
-                        new GenericRecord(
-                                baseOffset + rowId, timestamp, rowKind, reader.read(rowId));
-                rowId++;
-                return record;
-            }
+        private ArrowLogRecordIterator(ArrowReader reader, long timestamp) {
+            this.reader = reader;
+            this.timestamp = timestamp;
+        }
 
-            @Override
-            protected boolean ensureNoneRemaining() {
-                return true;
-            }
+        protected abstract ChangeType getChangeType(int rowId);
 
-            @Override
-            public void close() {
-                reader.close();
-            }
-        };
+        @Override
+        public boolean hasNext() {
+            return rowId < reader.getRowCount();
+        }
+
+        @Override
+        protected LogRecord readNext(long baseOffset) {
+            LogRecord record =
+                    new GenericRecord(
+                            baseOffset + rowId,
+                            timestamp,
+                            getChangeType(rowId),
+                            reader.read(rowId));
+            rowId++;
+            return record;
+        }
+
+        @Override
+        protected boolean ensureNoneRemaining() {
+            return true;
+        }
+
+        @Override
+        public void close() {
+            reader.close();
+        }
     }
 
     /** Default log record iterator. */

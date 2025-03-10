@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ import java.util.List;
 
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_ROWKIND_OFFSET;
+import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_CHANGETYPE_OFFSET;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
@@ -146,12 +146,12 @@ class ArrowReaderWriterTest {
                     new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024));
 
             // skip arrow batch header.
-            int size = writer.serializeToOutputView(pagedOutputView, ARROW_ROWKIND_OFFSET);
+            int size = writer.serializeToOutputView(pagedOutputView, ARROW_CHANGETYPE_OFFSET);
             MemorySegment segment = MemorySegment.allocateHeapMemory(writer.estimatedSizeInBytes());
 
             assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
-            firstSegment.copyTo(ARROW_ROWKIND_OFFSET, segment, 0, size);
+            firstSegment.copyTo(ARROW_CHANGETYPE_OFFSET, segment, 0, size);
 
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -164,12 +164,11 @@ class FlinkConversionsTest {
         options.put("k1", "v1");
         options.put("k2", "v2");
         CatalogTable flinkTable =
-                CatalogTable.newBuilder()
-                        .schema(Schema.newBuilder().fromResolvedSchema(schema).build())
-                        .comment("test comment")
-                        .partitionKeys(Collections.emptyList())
-                        .options(options)
-                        .build();
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "test comment",
+                        Collections.emptyList(),
+                        options);
 
         // check the converted table
         TableDescriptor flussTable =

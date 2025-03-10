@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -222,9 +222,9 @@ public final class FlussClusterExtension
                 coordinatorServer = new CoordinatorServer(conf);
                 coordinatorServer.start();
                 coordinatorServerNode =
-                        // we use -1 as coordinator server id
+                        // TODO, Currently, we use 0 as coordinator server id.
                         new ServerNode(
-                                -1, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
+                                0, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
             }
         } else {
             // start the existing coordinator server

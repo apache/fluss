@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link Cluster}. */
 class ClusterTest {
     private static final ServerNode COORDINATOR_SERVER =
-            new ServerNode(-1, "localhost", 98, ServerType.COORDINATOR);
+            new ServerNode(0, "localhost", 98, ServerType.COORDINATOR);
     private static final ServerNode[] NODES =
             new ServerNode[] {
                 new ServerNode(0, "localhost", 99, ServerType.TABLET_SERVER),

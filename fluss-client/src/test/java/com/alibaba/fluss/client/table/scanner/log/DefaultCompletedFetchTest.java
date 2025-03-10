@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +22,11 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.FileLogProjection;
 import com.alibaba.fluss.record.FileLogRecords;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.types.DataTypes;
@@ -181,7 +181,7 @@ public class DefaultCompletedFetchTest {
             Object[] expectObject = expectedObjects.get(i);
             ScanRecord actualRecord = scanRecords.get(i);
             assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             InternalRow row = actualRecord.getRow();
             assertThat(row.getInt(0)).isEqualTo(expectObject[0]);
             assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
@@ -197,7 +197,7 @@ public class DefaultCompletedFetchTest {
             Object[] expectObject = expectedObjects.get(i);
             ScanRecord actualRecord = scanRecords.get(i);
             assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             InternalRow row = actualRecord.getRow();
             assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
             assertThat(row.getInt(1)).isEqualTo(expectObject[0]);

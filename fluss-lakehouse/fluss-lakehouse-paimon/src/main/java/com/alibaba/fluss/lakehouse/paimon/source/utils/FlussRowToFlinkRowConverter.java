@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package com.alibaba.fluss.lakehouse.paimon.source.utils;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.InternalRow;
@@ -50,7 +51,7 @@ public class FlussRowToFlinkRowConverter {
     }
 
     public RowData toFlinkRowData(ScanRecord scanRecord) {
-        return toFlinkRowData(scanRecord.getRow(), toFlinkRowKind(scanRecord.getRowKind()));
+        return toFlinkRowData(scanRecord.getRow(), toFlinkRowKind(scanRecord.getChangeType()));
     }
 
     private RowData toFlinkRowData(InternalRow flussRow, RowKind rowKind) {
@@ -63,8 +64,8 @@ public class FlussRowToFlinkRowConverter {
         return genericRowData;
     }
 
-    private RowKind toFlinkRowKind(com.alibaba.fluss.record.RowKind rowKind) {
-        switch (rowKind) {
+    private RowKind toFlinkRowKind(ChangeType changeType) {
+        switch (changeType) {
             case APPEND_ONLY:
             case INSERT:
                 return RowKind.INSERT;
@@ -75,7 +76,7 @@ public class FlussRowToFlinkRowConverter {
             case DELETE:
                 return RowKind.DELETE;
             default:
-                throw new IllegalArgumentException("Unsupported row kind: " + rowKind);
+                throw new IllegalArgumentException("Unsupported change type: " + changeType);
         }
     }
 

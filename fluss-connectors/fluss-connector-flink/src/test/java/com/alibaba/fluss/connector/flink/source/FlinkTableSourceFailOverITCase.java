@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2024 Alibaba Group Holding Ltd.
+ *  Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@ import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.StateBackendOptions;
-import org.apache.flink.configuration.StateRecoveryOptions;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -44,6 +43,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+
+import javax.annotation.Nullable;
 
 import java.io.File;
 import java.time.Duration;
@@ -97,8 +98,13 @@ class FlinkTableSourceFailOverITCase {
         conn.close();
     }
 
-    private StreamTableEnvironment initTableEnvironment() {
-        StreamExecutionEnvironment execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+    private StreamTableEnvironment initTableEnvironment(@Nullable String savepointPath) {
+        Configuration conf = new Configuration();
+        if (savepointPath != null) {
+            conf.setString("execution.savepoint.path", savepointPath);
+        }
+        StreamExecutionEnvironment execEnv =
+                StreamExecutionEnvironment.getExecutionEnvironment(conf);
         execEnv.setParallelism(1);
         StreamTableEnvironment tEnv =
                 StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
@@ -129,7 +135,7 @@ class FlinkTableSourceFailOverITCase {
         cluster.before();
 
         try {
-            StreamTableEnvironment tEnv = initTableEnvironment();
+            StreamTableEnvironment tEnv = initTableEnvironment(null);
             tEnv.executeSql(
                     "create table test_partitioned ("
                             + "a int, b varchar"
@@ -195,7 +201,7 @@ class FlinkTableSourceFailOverITCase {
                                     SavepointFormatType.CANONICAL)
                             .get();
 
-            tEnv.getConfig().set(StateRecoveryOptions.SAVEPOINT_PATH, savepointPath);
+            tEnv = initTableEnvironment(savepointPath);
             insertResult =
                     tEnv.executeSql("insert into result_table select * from test_partitioned");
             // append a new row again to check if the source can restore the state correctly

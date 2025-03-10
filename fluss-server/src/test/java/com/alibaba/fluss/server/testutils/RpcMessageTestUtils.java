@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@ package com.alibaba.fluss.server.testutils;
 
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -308,9 +308,9 @@ public class RpcMessageTestUtils {
             long bucketId,
             Long highWatermark,
             List<Object[]> expectedRecords) {
-        List<Tuple2<RowKind, Object[]>> expectedFieldAndRowKind =
+        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
                 expectedRecords.stream()
-                        .map(val -> Tuple2.of(RowKind.APPEND_ONLY, val))
+                        .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                         .collect(Collectors.toList());
         assertFetchLogResponse(
                 response,
@@ -328,7 +328,7 @@ public class RpcMessageTestUtils {
             long tableId,
             long bucketId,
             Long highWatermark,
-            List<Tuple2<RowKind, Object[]>> expectedFieldAndRowKind) {
+            List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind) {
         assertFetchLogResponse(
                 response,
                 DATA1_ROW_TYPE,
@@ -363,7 +363,7 @@ public class RpcMessageTestUtils {
             long tableId,
             long bucketId,
             Long highWatermark,
-            List<Tuple2<RowKind, Object[]>> expectedRecords,
+            List<Tuple2<ChangeType, Object[]>> expectedRecords,
             Integer errorCode,
             @Nullable String errorMessage) {
         assertThat(response.getTablesRespsCount()).isEqualTo(1);
@@ -389,9 +389,9 @@ public class RpcMessageTestUtils {
 
     public static void assertLimitScanResponse(
             LimitScanResponse limitScanResponse, RowType rowType, List<Object[]> expectedRecords) {
-        List<Tuple2<RowKind, Object[]>> expectedFieldAndRowKind =
+        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
                 expectedRecords.stream()
-                        .map(val -> Tuple2.of(RowKind.APPEND_ONLY, val))
+                        .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                         .collect(Collectors.toList());
         MemoryLogRecords resultRecords =
                 MemoryLogRecords.pointToBytes(limitScanResponse.getRecords());

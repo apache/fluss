@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,12 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordTestUtils;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.KvTablet;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -162,12 +162,12 @@ final class ReplicaTest extends ReplicaTestBase {
                 logRecords(
                         4,
                         Arrays.asList(
-                                RowKind.UPDATE_BEFORE,
-                                RowKind.UPDATE_AFTER,
-                                RowKind.UPDATE_BEFORE,
-                                RowKind.UPDATE_AFTER,
-                                RowKind.UPDATE_BEFORE,
-                                RowKind.UPDATE_AFTER),
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER),
                         Arrays.asList(
                                 // for k1
                                 new Object[] {2, null},
@@ -206,10 +206,10 @@ final class ReplicaTest extends ReplicaTestBase {
                 logRecords(
                         0L,
                         Arrays.asList(
-                                RowKind.INSERT,
-                                RowKind.UPDATE_BEFORE,
-                                RowKind.UPDATE_AFTER,
-                                RowKind.INSERT),
+                                ChangeType.INSERT,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.INSERT),
                         Arrays.asList(
                                 new Object[] {1, "a"},
                                 new Object[] {1, "a"},
@@ -233,11 +233,11 @@ final class ReplicaTest extends ReplicaTestBase {
                 logRecords(
                         currentOffset,
                         Arrays.asList(
-                                RowKind.DELETE,
-                                RowKind.UPDATE_BEFORE,
-                                RowKind.UPDATE_AFTER,
-                                RowKind.UPDATE_BEFORE,
-                                RowKind.UPDATE_AFTER),
+                                ChangeType.DELETE,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER),
                         Arrays.asList(
                                 // for k1
                                 new Object[] {2, "b"},
@@ -264,7 +264,7 @@ final class ReplicaTest extends ReplicaTestBase {
         expected =
                 logRecords(
                         currentOffset,
-                        Arrays.asList(RowKind.INSERT, RowKind.DELETE, RowKind.INSERT),
+                        Arrays.asList(ChangeType.INSERT, ChangeType.DELETE, ChangeType.INSERT),
                         Arrays.asList(
                                 // for k1
                                 new Object[] {1, "a1"},
@@ -298,7 +298,7 @@ final class ReplicaTest extends ReplicaTestBase {
         expected =
                 logRecords(
                         currentOffset,
-                        Arrays.asList(RowKind.DELETE, RowKind.INSERT),
+                        Arrays.asList(ChangeType.DELETE, ChangeType.INSERT),
                         Arrays.asList(new Object[] {1, "a1"}, new Object[] {1, "aaa"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
@@ -531,7 +531,7 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     private static MemoryLogRecords logRecords(
-            long baseOffset, List<RowKind> rowKinds, List<Object[]> values) throws Exception {
+            long baseOffset, List<ChangeType> changeTypes, List<Object[]> values) throws Exception {
         return createBasicMemoryLogRecords(
                 DATA1_ROW_TYPE,
                 DEFAULT_SCHEMA_ID,
@@ -539,7 +539,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 -1L,
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
-                rowKinds,
+                changeTypes,
                 values,
                 LogFormat.ARROW,
                 DEFAULT_COMPRESSION);

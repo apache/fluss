@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.paimon.KeyValueFileStore;
@@ -192,8 +192,8 @@ public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
         for (ScanRecord scanRecord : scanRecords) {
             InternalRow paimonRow = new ScanRecordWrapper(scanRecord);
             boolean isDelete =
-                    scanRecord.getRowKind() == RowKind.DELETE
-                            || scanRecord.getRowKind() == RowKind.UPDATE_BEFORE;
+                    scanRecord.getChangeType() == ChangeType.DELETE
+                            || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
             KeyValueRow keyValueRow = new KeyValueRow(keyIndexesInRow, paimonRow, isDelete);
             InternalRow keyRow = keyValueRow.keyRow();
             // upsert the key value row

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
@@ -104,7 +104,7 @@ public class RemoteLogScannerITCase {
         while (rowList.size() < recordSize) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (ScanRecord scanRecord : scanRecords) {
-                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 InternalRow row = scanRecord.getRow();
                 rowList.add(row(row.getInt(0), row.getString(1)));
             }
@@ -155,7 +155,7 @@ public class RemoteLogScannerITCase {
         while (count < expectedSize) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (ScanRecord scanRecord : scanRecords) {
-                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                 if (count % 2 == 0) {
@@ -178,7 +178,7 @@ public class RemoteLogScannerITCase {
         while (count < expectedSize) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (ScanRecord scanRecord : scanRecords) {
-                assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
                 if (count % 2 == 0) {

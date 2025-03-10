@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -392,8 +392,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             ListPartitionInfosRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         Map<String, Long> partitionNameAndIds = metadataManager.listPartitions(tablePath);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.toListPartitionInfosResponse(partitionNameAndIds));
+                RpcMessageUtils.toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
     }
 
     @Override

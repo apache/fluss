@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -96,7 +96,7 @@ public class FlinkConnectorOptions {
                     .durationType()
                     .defaultValue(Duration.ofSeconds(10))
                     .withDescription(
-                            "The interval in milliseconds for the Fluss source to discover "
+                            "The time interval for the Fluss source to discover "
                                     + "the new partitions for partitioned table while scanning."
                                     + " A non-positive value disables the partition discovery.");
 

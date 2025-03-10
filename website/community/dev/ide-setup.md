@@ -58,7 +58,7 @@ adding a Copyright profile:
 3. Add the following text as the license text:
 
    ```
-    Copyright (c) 2024 Alibaba Group Holding Ltd.
+    Copyright (c) 2025 Alibaba Group Holding Ltd.
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.

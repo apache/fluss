@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package com.alibaba.fluss.connector.flink.lakehouse.paimon.reader;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.record.ChangeType;
 
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Decimal;
@@ -29,11 +30,11 @@ import org.apache.paimon.types.RowKind;
 /** A wrapper of {@link ScanRecord} which bridges {@link ScanRecord} to Paimon' internal row. */
 public class ScanRecordWrapper implements InternalRow {
 
-    private final com.alibaba.fluss.record.RowKind rowKind;
+    private final ChangeType changeType;
     private final com.alibaba.fluss.row.InternalRow flussRow;
 
     public ScanRecordWrapper(ScanRecord scanRecord) {
-        this.rowKind = scanRecord.getRowKind();
+        this.changeType = scanRecord.getChangeType();
         this.flussRow = scanRecord.getRow();
     }
 
@@ -44,7 +45,7 @@ public class ScanRecordWrapper implements InternalRow {
 
     @Override
     public RowKind getRowKind() {
-        switch (rowKind) {
+        switch (changeType) {
             case INSERT:
                 return RowKind.INSERT;
             case UPDATE_BEFORE:

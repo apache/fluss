@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,27 +20,27 @@ import com.alibaba.fluss.memory.MemorySegment;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
-/** A writer for {@link RowKindVector}. */
-public class RowKindVectorWriter {
+/** A writer for {@link ChangeTypeVector}. */
+public class ChangeTypeVectorWriter {
 
     private final MemorySegment segment;
     private final int capacity;
     private final int startPosition;
     private int recordsCount = 0;
 
-    public RowKindVectorWriter(MemorySegment segment, int startPosition) {
+    public ChangeTypeVectorWriter(MemorySegment segment, int startPosition) {
         checkArgument(segment.size() >= startPosition, "The start position is out of bound.");
         this.segment = segment;
         this.capacity = segment.size() - startPosition;
         this.startPosition = startPosition;
     }
 
-    public void writeRowKind(RowKind rowKind) {
+    public void writeChangeType(ChangeType changeType) {
         if (recordsCount > capacity) {
             // TODO: support AbstractPagedOutputView to have extendable capacity
-            throw new IllegalStateException("The row kind vector is full.");
+            throw new IllegalStateException("The change type vector is full.");
         }
-        segment.put(startPosition + recordsCount, rowKind.toByteValue());
+        segment.put(startPosition + recordsCount, changeType.toByteValue());
         recordsCount++;
     }
 

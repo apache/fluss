@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,8 +22,8 @@ import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
@@ -58,7 +58,7 @@ public final class IndexedLogWriteBatch extends WriteBatch {
         super(tableBucket, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView);
+                MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);
     }
 
     @Override
@@ -76,7 +76,7 @@ public final class IndexedLogWriteBatch extends WriteBatch {
         if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
             return false;
         } else {
-            recordsBuilder.append(RowKind.APPEND_ONLY, row);
+            recordsBuilder.append(ChangeType.APPEND_ONLY, row);
             recordCount++;
             callbacks.add(callback);
             return true;

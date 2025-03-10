@@ -41,7 +41,7 @@ We have listed them in the table below the figure.
             </td>
             <td>
                 <ul>
-                    <li>[Flink Connector](/docs/engine-flink/getting-started/)</li>
+                    <li>[Flink Connector](engine-flink/getting-started.md)</li>
                 </ul>
             </td>
         </tr>
@@ -60,9 +60,9 @@ We have listed them in the table below the figure.
             </td>
             <td rowspan="2">
                 <ul>
-                    <li>[Local Cluster](/docs/install-deploy/deploying-local-cluster/)</li>
-                    <li>[Distributed Cluster](/docs/install-deploy/deploying-distributed-cluster/)</li>
-                    <li>[Docker run / Docker compose](/docs/install-deploy/deploying-with-docker/)</li>
+                    <li>[Local Cluster](install-deploy/deploying-local-cluster.md)</li>
+                    <li>[Distributed Cluster](install-deploy/deploying-distributed-cluster.md)</li>
+                    <li>[Docker run / Docker compose](install-deploy/deploying-with-docker.md)</li>
                 </ul>
             </td>
         </tr>
@@ -101,9 +101,9 @@ We have listed them in the table below the figure.
                 Fluss uses file systems as remote storage to store snapshots for Primary-Key Table and store tiered log segments for Log Table.
             </td>
             <td>
-            <li>[HDFS](/docs/maintenance/filesystems/hdfs/)</li>
-            <li>[Aliyun OSS](/docs/maintenance/filesystems/oss/)</li>
-            <li>[Amazon S3](/docs/maintenance/filesystems/s3/)</li>
+            <li>[HDFS](maintenance/filesystems/hdfs.md)</li>
+            <li>[Aliyun OSS](maintenance/filesystems/oss.md)</li>
+            <li>[Amazon S3](maintenance/filesystems/s3.md)</li>
             </td>
         </tr>
         <tr>
@@ -114,7 +114,7 @@ We have listed them in the table below the figure.
                by query engines such as Flink, Spark, StarRocks, Trino.
             </td>
             <td>
-            <li>[Paimon](/docs/maintenance/tiered-storage/lakehouse-storage/)</li>
+            <li>[Paimon](maintenance/tiered-storage/lakehouse-storage.md)</li>
             <li>[Iceberg (Roadmap)](/roadmap/)</li>
             </td>
         </tr>
@@ -124,8 +124,8 @@ We have listed them in the table below the figure.
                 CoordinatorServer/TabletServer report internal metrics and Fluss client (e.g., connector in Flink jobs) can report additional, client specific metrics as well.
             </td>
             <td>
-               <li>[JMX](/docs/maintenance/observability/metric-reporters#jmx)</li>
-               <li>[Prometheus](/docs/maintenance/observability/metric-reporters#prometheus)</li>
+               <li>[JMX](maintenance/observability/metric-reporters.md#jmx)</li>
+               <li>[Prometheus](maintenance/observability/metric-reporters.md#prometheus)</li>
             </td>
         </tr>
     </tbody>
@@ -134,9 +134,9 @@ We have listed them in the table below the figure.
 ## How to deploy Fluss
 
 Fluss can be deployed in three different ways:
-- [Local Cluster](/docs/install-deploy/deploying-local-cluster/)
-- [Distributed Cluster](/docs/install-deploy/deploying-distributed-cluster/)
-- [Docker run/ Docker compose](/docs/install-deploy/deploying-with-docker/)
+- [Local Cluster](install-deploy/deploying-local-cluster.md)
+- [Distributed Cluster](install-deploy/deploying-distributed-cluster.md)
+- [Docker run/ Docker compose](install-deploy/deploying-with-docker.md)
 
 **NOTE**:
 - Local Cluster is for testing purpose only.

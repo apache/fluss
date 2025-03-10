@@ -136,8 +136,9 @@ SELECT COUNT(*) FROM log_table;
 
 ## Read Options
 
-### scan.startup.mode
-The scan startup mode enables you to specify the starting point for data consumption. Fluss currently supports the following `scan.startup.mode` options:
+### Start Reading Position
+
+The config option `scan.startup.mode` enables you to specify the starting point for data consumption. Fluss currently supports the following `scan.startup.mode` options:
 - `full` (default): For primary key tables, it first consumes the full data set and then consumes incremental data. For log tables, it starts consuming from the earliest offset.
 - `earliest`: For primary key tables, it starts consuming from the earliest changelog offset; for log tables, it starts consuming from the earliest log offset.
 - `latest`: For primary key tables, it starts consuming from the latest changelog offset; for log tables, it starts consuming from the latest log offset.
@@ -164,8 +165,7 @@ SELECT * FROM log_table
 'scan.startup.timestamp' = '2023-12-09 23:09:12') */;
 ```
 
-### scan.partition.discovery.interval
-The interval in milliseconds for the Fluss source to discover the new partitions for partitioned table while scanning.  The default value is 10s. A non-positive value disables the partition discovery.
+
 
 
 

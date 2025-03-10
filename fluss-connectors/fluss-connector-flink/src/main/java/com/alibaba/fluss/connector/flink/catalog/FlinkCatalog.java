@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -389,21 +389,11 @@ public class FlinkCatalog implements Catalog {
 
         try {
             TablePath tablePath = toTablePath(objectPath);
-            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
-            List<String> partitionKeys = tableInfo.getPartitionKeys();
-
             List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
             List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
-                String[] partitionValues = partitionInfo.getPartitionName().split("\\$");
-                checkArgument(
-                        partitionKeys.size() == partitionValues.length,
-                        "partition values size not equals to partition keys size");
-                Map<String, String> flinkPartitionSpec = new HashMap<>();
-                for (int i = 0; i < partitionKeys.size(); i++) {
-                    flinkPartitionSpec.put(partitionKeys.get(i), partitionValues[i]);
-                }
-                catalogPartitionSpecs.add(new CatalogPartitionSpec(flinkPartitionSpec));
+                catalogPartitionSpecs.add(
+                        new CatalogPartitionSpec(partitionInfo.getPartitionSpec().getSpecMap()));
             }
             return catalogPartitionSpecs;
         } catch (Exception e) {

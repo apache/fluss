@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,13 @@ syntax = "proto2";
 package fluss;
 option java_package = "com.alibaba.fluss.rpc.messages";
 option optimize_for = LITE_RUNTIME;
+
+/**
+* NOTICE: To ensure a smooth upgrade to Proto3 syntax while maintaining backward compatibility in
+* the future, please adhere to the following limitations:
+* 1. DO NOT USE "default" keyword, proto3 removes the support of "default"
+* 2. DO NOT USE "enum" type
+ */
 
 // the message indicates a failed request of a server failure.
 message ErrorResponse {
@@ -725,7 +732,7 @@ message PbRemoteLogSegment {
 
 message PbPartitionInfo {
   required int64 partition_id = 1;
-  required string partition_name = 2;
+  required PbPartitionSpec partition_spec = 2;
 }
 
 message PbPartitionSpec {

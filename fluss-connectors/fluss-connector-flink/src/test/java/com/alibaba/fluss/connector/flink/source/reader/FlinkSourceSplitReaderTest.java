@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.CompactedKeyEncoder;
 import com.alibaba.fluss.types.DataTypes;
@@ -192,7 +192,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             for (int i = 0; i < internalRows.size(); i++) {
                 expected.add(
                         new RecordAndPos(
-                                new ScanRecord(i, i, RowKind.APPEND_ONLY, internalRows.get(i))));
+                                new ScanRecord(i, i, ChangeType.APPEND_ONLY, internalRows.get(i))));
             }
 
             TableBucket tableBucket = new TableBucket(tableId, 0);
@@ -253,11 +253,11 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 for (InternalRow row : kvRows) {
                     records.add(
                             new RecordAndPos(
-                                    new ScanRecord(offset++, -1, RowKind.UPDATE_BEFORE, row)));
+                                    new ScanRecord(offset++, -1, ChangeType.UPDATE_BEFORE, row)));
 
                     records.add(
                             new RecordAndPos(
-                                    new ScanRecord(offset++, -1, RowKind.UPDATE_AFTER, row)));
+                                    new ScanRecord(offset++, -1, ChangeType.UPDATE_AFTER, row)));
                 }
                 expectedRecords.put(splitId, records);
             }

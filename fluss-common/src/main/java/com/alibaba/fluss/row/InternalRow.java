@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 package com.alibaba.fluss.row;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 
@@ -78,7 +78,7 @@ public interface InternalRow {
     /**
      * Returns the number of fields in this row.
      *
-     * <p>The number does not include {@link RowKind}. It is kept separately.
+     * <p>The number does not include {@link ChangeType}. It is kept separately.
      */
     int getFieldCount();
 

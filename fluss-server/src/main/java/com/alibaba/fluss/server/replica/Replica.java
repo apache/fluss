@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -932,12 +932,16 @@ public final class Replica {
             }
         }
 
+        // when the watermark can be advanced, we may need to flush kv first if it's kv replica,
+        // and then update highWatermark.
+        // TODO The flushKV and updateHighWatermark need to be atomic operation. See
+        // https://github.com/alibaba/fluss/issues/513
+        mayFlushKv(newHighWatermark.getMessageOffset());
+
         Optional<LogOffsetMetadata> oldWatermark =
                 leaderLog.maybeIncrementHighWatermark(newHighWatermark);
         if (oldWatermark.isPresent()) {
             LOG.debug("High watermark update from {} to {}.", oldWatermark.get(), newHighWatermark);
-            // when watermark advanced, we may need to flush kv if it's kv replica
-            mayFlushKv(newHighWatermark.getMessageOffset());
             return true;
         } else {
             return false;

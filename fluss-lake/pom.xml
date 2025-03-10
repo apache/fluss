@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (c) 2024 Alibaba Group Holding Ltd.
+  ~ Copyright (c) 2025 Alibaba Group Holding Ltd.
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -22,13 +22,12 @@
     <parent>
         <groupId>com.alibaba.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.6-SNAPSHOT</version>
+        <version>0.7-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-lake</artifactId>
     <name>Fluss : Lake :</name>
     <modules>
-        <module>fluss-lake-common</module>
     </modules>
     <packaging>pom</packaging>
 </project>

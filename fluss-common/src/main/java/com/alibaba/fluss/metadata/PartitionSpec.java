@@ -41,7 +41,7 @@ public class PartitionSpec {
         this.partitionSpec = Collections.unmodifiableMap(partitionSpec);
     }
 
-    public Map<String, String> getPartitionSpec() {
+    public Map<String, String> getSpecMap() {
         return partitionSpec;
     }
 

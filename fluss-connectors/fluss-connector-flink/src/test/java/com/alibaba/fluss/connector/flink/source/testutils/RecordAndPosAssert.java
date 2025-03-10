@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,9 +50,9 @@ public class RecordAndPosAssert extends AbstractAssert<RecordAndPosAssert, Recor
         assertThat(actual.record().logOffset())
                 .as("RecordAndPos#reocrd()#getOffset()")
                 .isEqualTo(expected.record().logOffset());
-        assertThat(actual.record().getRowKind())
-                .as("RecordAndPos#reocrd()#getRowKind()")
-                .isEqualTo(expected.record().getRowKind());
+        assertThat(actual.record().getChangeType())
+                .as("RecordAndPos#reocrd()#getChangeType()")
+                .isEqualTo(expected.record().getChangeType());
         assertThatRow(actual.record().getRow())
                 .withSchema(rowType)
                 .isEqualTo(expected.record().getRow());

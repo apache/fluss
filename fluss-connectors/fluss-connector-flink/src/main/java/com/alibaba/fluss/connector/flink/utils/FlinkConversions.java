@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.StringUtils;
@@ -298,8 +299,8 @@ public class FlinkConversions {
         return (org.apache.flink.configuration.ConfigOption<T>) option;
     }
 
-    public static RowKind toFlinkRowKind(com.alibaba.fluss.record.RowKind rowKind) {
-        switch (rowKind) {
+    public static RowKind toFlinkRowKind(ChangeType changeType) {
+        switch (changeType) {
             case APPEND_ONLY:
             case INSERT:
                 return RowKind.INSERT;
@@ -310,7 +311,7 @@ public class FlinkConversions {
             case DELETE:
                 return RowKind.DELETE;
             default:
-                throw new IllegalArgumentException("Unsupported row kind: " + rowKind);
+                throw new IllegalArgumentException("Unsupported change type: " + changeType);
         }
     }
 

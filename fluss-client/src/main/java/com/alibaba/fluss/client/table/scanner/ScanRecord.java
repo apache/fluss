@@ -17,8 +17,8 @@
 package com.alibaba.fluss.client.table.scanner;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.InternalRow;
 
 import java.util.Objects;
@@ -31,17 +31,17 @@ public class ScanRecord implements LogRecord {
 
     private final long offset;
     private final long timestamp;
-    private final RowKind rowKind;
+    private final ChangeType changeType;
     private final InternalRow row;
 
     public ScanRecord(InternalRow row) {
-        this(INVALID, INVALID, RowKind.INSERT, row);
+        this(INVALID, INVALID, ChangeType.INSERT, row);
     }
 
-    public ScanRecord(long offset, long timestamp, RowKind rowKind, InternalRow row) {
+    public ScanRecord(long offset, long timestamp, ChangeType changeType, InternalRow row) {
         this.offset = offset;
         this.timestamp = timestamp;
-        this.rowKind = rowKind;
+        this.changeType = changeType;
         this.row = row;
     }
 
@@ -57,8 +57,8 @@ public class ScanRecord implements LogRecord {
     }
 
     @Override
-    public RowKind getRowKind() {
-        return rowKind;
+    public ChangeType getChangeType() {
+        return changeType;
     }
 
     @Override
@@ -75,16 +75,18 @@ public class ScanRecord implements LogRecord {
             return false;
         }
         ScanRecord that = (ScanRecord) o;
-        return offset == that.offset && rowKind == that.rowKind && Objects.equals(row, that.row);
+        return offset == that.offset
+                && changeType == that.changeType
+                && Objects.equals(row, that.row);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(offset, rowKind, row);
+        return Objects.hash(offset, changeType, row);
     }
 
     @Override
     public String toString() {
-        return rowKind.shortString() + row.toString() + "@" + offset;
+        return changeType.shortString() + row.toString() + "@" + offset;
     }
 }

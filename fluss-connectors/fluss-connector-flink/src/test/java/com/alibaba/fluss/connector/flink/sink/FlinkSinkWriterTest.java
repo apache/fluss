@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobInfo;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.operators.MailboxExecutor;
@@ -105,7 +106,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
 
         Metric currentSendTime = interceptingOperatorMetricGroup.get(MetricNames.CURRENT_SEND_TIME);
         assertThat(currentSendTime).isInstanceOf(Gauge.class);
-        assertThat(((Gauge<Long>) currentSendTime).getValue()).isGreaterThan(0);
+        // the default send latency is -1, so check it is >= 0, as the latency maybe very small 0ms
+        assertThat(((Gauge<Long>) currentSendTime).getValue()).isGreaterThanOrEqualTo(0);
 
         Metric numRecordSend = interceptingOperatorMetricGroup.get(MetricNames.NUM_RECORDS_SEND);
         assertThat(numRecordSend).isInstanceOf(Counter.class);
@@ -185,14 +187,32 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             return OptionalLong.empty();
         }
 
-        @Override
         public JobInfo getJobInfo() {
             fail(UNEXPECTED_METHOD_CALL_MESSAGE);
             return null;
         }
 
-        @Override
         public TaskInfo getTaskInfo() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return null;
+        }
+
+        public int getSubtaskId() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return 0;
+        }
+
+        public int getNumberOfParallelSubtasks() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return 0;
+        }
+
+        public int getAttemptNumber() {
+            fail(UNEXPECTED_METHOD_CALL_MESSAGE);
+            return 0;
+        }
+
+        public JobID getJobId() {
             fail(UNEXPECTED_METHOD_CALL_MESSAGE);
             return null;
         }

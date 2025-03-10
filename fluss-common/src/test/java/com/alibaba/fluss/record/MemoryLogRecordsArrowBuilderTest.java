@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -106,25 +106,25 @@ public class MemoryLogRecordsArrowBuilderTest {
                         1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024);
-        List<RowKind> rowKinds =
-                DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
+        List<ChangeType> changeTypes =
+                DATA1.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
         List<InternalRow> rows =
                 DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
         List<Object[]> expectedResult = new ArrayList<>();
         while (!builder.isFull()) {
             int rndIndex = RandomUtils.nextInt(0, DATA1.size());
-            builder.append(rowKinds.get(rndIndex), rows.get(rndIndex));
+            builder.append(changeTypes.get(rndIndex), rows.get(rndIndex));
             expectedResult.add(DATA1.get(rndIndex));
         }
         assertThat(builder.isFull()).isTrue();
-        assertThatThrownBy(() -> builder.append(RowKind.APPEND_ONLY, rows.get(0)))
+        assertThatThrownBy(() -> builder.append(ChangeType.APPEND_ONLY, rows.get(0)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage(
                         "The arrow batch size is full and it shouldn't accept writing new rows, it's a bug.");
 
         builder.setWriterState(1L, 0);
         builder.close();
-        assertThatThrownBy(() -> builder.append(RowKind.APPEND_ONLY, rows.get(0)))
+        assertThatThrownBy(() -> builder.append(ChangeType.APPEND_ONLY, rows.get(0)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage(
                         "Tried to append a record, but MemoryLogRecordsArrowBuilder is closed for record appends");
@@ -158,7 +158,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer1, 10, 1024);
         for (Object[] data : dataSet) {
-            builder.append(RowKind.APPEND_ONLY, row(data));
+            builder.append(ChangeType.APPEND_ONLY, row(data));
         }
         builder.close();
         MemoryLogRecords records1 = MemoryLogRecords.pointToBytesView(builder.build());
@@ -172,7 +172,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         MemoryLogRecordsArrowBuilder builder2 =
                 createMemoryLogRecordsArrowBuilder(0, writer2, 10, 1024);
         for (Object[] data : dataSet) {
-            builder2.append(RowKind.APPEND_ONLY, row(data));
+            builder2.append(ChangeType.APPEND_ONLY, row(data));
         }
         builder2.close();
         MemoryLogRecords records2 = MemoryLogRecords.pointToBytesView(builder2.build());
@@ -211,13 +211,13 @@ public class MemoryLogRecordsArrowBuilderTest {
                         1L, DEFAULT_SCHEMA_ID, 1024, DATA1_ROW_TYPE, NO_COMPRESSION);
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024);
-        List<RowKind> rowKinds =
-                DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
+        List<ChangeType> changeTypes =
+                DATA1.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
         List<InternalRow> rows =
                 DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
         while (!builder.isFull()) {
             int rndIndex = RandomUtils.nextInt(0, DATA1.size());
-            builder.append(rowKinds.get(rndIndex), rows.get(rndIndex));
+            builder.append(changeTypes.get(rndIndex), rows.get(rndIndex));
         }
         assertThat(builder.isFull()).isTrue();
 
@@ -305,14 +305,14 @@ public class MemoryLogRecordsArrowBuilderTest {
                         1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
         MemoryLogRecordsArrowBuilder builder =
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024);
-        List<RowKind> rowKinds =
-                DATA1.stream().map(row -> RowKind.APPEND_ONLY).collect(Collectors.toList());
+        List<ChangeType> changeTypes =
+                DATA1.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
         List<InternalRow> rows =
                 DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
         List<Object[]> expectedResult = new ArrayList<>();
         while (!builder.isFull()) {
             int rndIndex = RandomUtils.nextInt(0, DATA1.size());
-            builder.append(rowKinds.get(rndIndex), rows.get(rndIndex));
+            builder.append(changeTypes.get(rndIndex), rows.get(rndIndex));
             expectedResult.add(DATA1.get(rndIndex));
         }
         assertThat(builder.isFull()).isTrue();

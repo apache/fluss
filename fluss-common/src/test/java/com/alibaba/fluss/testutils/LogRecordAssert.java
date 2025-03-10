@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,9 +46,9 @@ public class LogRecordAssert extends AbstractAssert<LogRecordAssert, LogRecord> 
 
     public LogRecordAssert isEqualTo(LogRecord expected) {
         assertThat(actual.logOffset()).as("LogRecord#logOffset()").isEqualTo(expected.logOffset());
-        assertThat(actual.getRowKind())
-                .as("LogRecord#getRowKind()")
-                .isEqualTo(expected.getRowKind());
+        assertThat(actual.getChangeType())
+                .as("LogRecord#getChangeType()")
+                .isEqualTo(expected.getChangeType());
         InternalRow actualRow = actual.getRow();
         InternalRow expectedRow = expected.getRow();
         if (actualRow instanceof IndexedRow && expectedRow instanceof IndexedRow) {

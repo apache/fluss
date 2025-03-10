@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,10 +31,10 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.MeterView;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordReadContext;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
@@ -308,12 +308,12 @@ public final class KvTablet {
                                     BinaryRow newRow = currentMerger.delete(oldRow);
                                     // if newRow is null, it means the row should be deleted
                                     if (newRow == null) {
-                                        walBuilder.append(RowKind.DELETE, oldRow);
+                                        walBuilder.append(ChangeType.DELETE, oldRow);
                                         kvPreWriteBuffer.delete(key, logOffset++);
                                     } else {
                                         // otherwise, it's a partial update, should produce -U,+U
-                                        walBuilder.append(RowKind.UPDATE_BEFORE, oldRow);
-                                        walBuilder.append(RowKind.UPDATE_AFTER, newRow);
+                                        walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
+                                        walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
                                         kvPreWriteBuffer.put(
                                                 key,
                                                 ValueEncoder.encodeValue(schemaId, newRow),
@@ -334,8 +334,8 @@ public final class KvTablet {
                                         // happens (no update/delete), and input should be ignored
                                         continue;
                                     }
-                                    walBuilder.append(RowKind.UPDATE_BEFORE, oldRow);
-                                    walBuilder.append(RowKind.UPDATE_AFTER, newRow);
+                                    walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
+                                    walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
                                     // logOffset is for -U, logOffset + 1 is for +U, we need to use
                                     // the log offset for +U
                                     kvPreWriteBuffer.put(
@@ -348,7 +348,7 @@ public final class KvTablet {
                                     // TODO: we should add guarantees that all non-specified columns
                                     //  of the input row are set to null.
                                     BinaryRow newRow = kvRecord.getRow();
-                                    walBuilder.append(RowKind.INSERT, newRow);
+                                    walBuilder.append(ChangeType.INSERT, newRow);
                                     kvPreWriteBuffer.put(
                                             key,
                                             ValueEncoder.encodeValue(schemaId, newRow),
@@ -555,5 +555,11 @@ public final class KvTablet {
     @VisibleForTesting
     KvPreWriteBuffer getKvPreWriteBuffer() {
         return kvPreWriteBuffer;
+    }
+
+    // only for testing.
+    @VisibleForTesting
+    public RocksDBKv getRocksDBKv() {
+        return rocksDBKv;
     }
 }

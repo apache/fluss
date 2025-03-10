@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -127,8 +127,8 @@ class FlinkMetricsITCase extends FlinkTestBase {
         assertThat(metricsList).hasSize(1);
         Metric sendLatencyMetrics = metricsList.get(0).f2;
         assertThat(sendLatencyMetrics).isInstanceOf(Gauge.class);
-        // just check send latency is greater than 0
-        assertThat((Long) ((Gauge<?>) sendLatencyMetrics).getValue()).isGreaterThan(0);
+        // the default send latency is -1, so check it is >= 0, as the latency maybe very small 0ms
+        assertThat((Long) ((Gauge<?>) sendLatencyMetrics).getValue()).isGreaterThanOrEqualTo(0);
 
         // test scan
         tableResult = tEnv.executeSql("select * from test");

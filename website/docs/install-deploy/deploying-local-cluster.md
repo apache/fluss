@@ -25,8 +25,8 @@ Go to the [downloads page](/downloads) and download the latest Fluss release. Ma
 package **matching your Java version**. After downloading the latest release, extract it:
 
 ```shell
-tar -xzf fluss-<fluss-version>-bin.tgz
-cd fluss-<fluss-version>/
+tar -xzf fluss-$FLUSS_VERSION$-bin.tgz
+cd fluss-$FLUSS_VERSION$/
 ```
 
 ## Starting Fluss Local Cluster
@@ -49,7 +49,7 @@ Using Flink SQL Client to interact with Fluss.
 
 #### Preparation
 
-You can start a Flink standalone cluster refer to [Flink Environment Preparation](/docs/engine-flink/getting-started#preparation-when-using-flink-sql-client)
+You can start a Flink standalone cluster refer to [Flink Environment Preparation](engine-flink/getting-started.md#preparation-when-using-flink-sql-client)
 
 **Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
 
@@ -66,4 +66,4 @@ CREATE CATALOG fluss_catalog WITH (
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](/docs/engine-flink/getting-started/)
+More details please refer to [Flink Getting started](engine-flink/getting-started.md)

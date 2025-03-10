@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ class IndexedLogRecordTest extends LogTestBase {
         writer.writeString(BinaryString.fromString("abc"));
         row.pointTo(writer.segment(), 0, writer.position());
 
-        IndexedLogRecord.writeTo(outputView, RowKind.APPEND_ONLY, row);
+        IndexedLogRecord.writeTo(outputView, ChangeType.APPEND_ONLY, row);
         // Test read from.
         IndexedLogRecord defaultLogRecord =
                 IndexedLogRecord.readFrom(
@@ -56,7 +56,7 @@ class IndexedLogRecordTest extends LogTestBase {
         assertThat(defaultLogRecord.getSizeInBytes()).isEqualTo(17);
         assertThat(defaultLogRecord.logOffset()).isEqualTo(1000);
         assertThat(defaultLogRecord.timestamp()).isEqualTo(10001);
-        assertThat(defaultLogRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+        assertThat(defaultLogRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
         assertThat(defaultLogRecord.getRow()).isEqualTo(row);
     }
 
@@ -64,7 +64,7 @@ class IndexedLogRecordTest extends LogTestBase {
     void testWriteToAndReadFromWithRandomData() throws IOException {
         // Test write to.
         IndexedRow row = TestInternalRowGenerator.genIndexedRowForAllType();
-        IndexedLogRecord.writeTo(outputView, RowKind.APPEND_ONLY, row);
+        IndexedLogRecord.writeTo(outputView, ChangeType.APPEND_ONLY, row);
         DataType[] allColTypes =
                 TestInternalRowGenerator.createAllRowType().getChildren().toArray(new DataType[0]);
 
@@ -79,7 +79,7 @@ class IndexedLogRecordTest extends LogTestBase {
 
         assertThat(defaultLogRecord.logOffset()).isEqualTo(1000);
         assertThat(defaultLogRecord.timestamp()).isEqualTo(10001);
-        assertThat(defaultLogRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+        assertThat(defaultLogRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
         assertThat(defaultLogRecord.getRow()).isEqualTo(row);
     }
 }

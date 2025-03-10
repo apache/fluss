@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,14 +21,14 @@ import com.alibaba.fluss.row.columnar.ByteColumnVector;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
-/** An on-memory row kind vector. */
-public class RowKindVector implements ByteColumnVector {
+/** An on-memory change type vector. */
+public class ChangeTypeVector implements ByteColumnVector {
 
     private final MemorySegment segment;
     private final int position;
     private final int recordCount;
 
-    public RowKindVector(MemorySegment segment, int position, int recordCount) {
+    public ChangeTypeVector(MemorySegment segment, int position, int recordCount) {
         checkArgument(position >= 0, "position must be >= 0");
         checkArgument(recordCount >= 0, "recordCount must be >= 0");
         this.segment = segment;
@@ -42,9 +42,9 @@ public class RowKindVector implements ByteColumnVector {
         return segment.get(position + i);
     }
 
-    /** Get the row kind at i-th position. */
-    public RowKind getRowKind(int i) {
-        return RowKind.fromByteValue(getByte(i));
+    /** Get the change type at i-th position. */
+    public ChangeType getChangeType(int i) {
+        return ChangeType.fromByteValue(getByte(i));
     }
 
     public int sizeInBytes() {
@@ -53,7 +53,7 @@ public class RowKindVector implements ByteColumnVector {
 
     @Override
     public boolean isNullAt(int i) {
-        // row kind is never null
+        // change type is never null
         return true;
     }
 
@@ -65,7 +65,7 @@ public class RowKindVector implements ByteColumnVector {
             if (i > 0) {
                 builder.append(", ");
             }
-            builder.append(getRowKind(i));
+            builder.append(getChangeType(i));
         }
         builder.append("]");
         return builder.toString();

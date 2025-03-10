@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import com.alibaba.fluss.annotation.PublicStable;
  * @since 0.1
  */
 @PublicStable
-public enum RowKind {
+public enum ChangeType {
 
     // Note: Enums have no stable hash code across different JVMs, use toByteValue() for
     // this purpose.
@@ -61,16 +61,16 @@ public enum RowKind {
     private final byte value;
 
     /**
-     * Creates a {@link RowKind} enum with the given short string and byte value representation of
-     * the {@link RowKind}.
+     * Creates a {@link ChangeType} enum with the given short string and byte value representation
+     * of the {@link ChangeType}.
      */
-    RowKind(String shortString, byte value) {
+    ChangeType(String shortString, byte value) {
         this.shortString = shortString;
         this.value = value;
     }
 
     /**
-     * Returns a short string representation of this {@link RowKind}.
+     * Returns a short string representation of this {@link ChangeType}.
      *
      * <ul>
      *   <li>"+A" represents {@link #APPEND_ONLY}.
@@ -85,7 +85,7 @@ public enum RowKind {
     }
 
     /**
-     * Returns the byte value representation of this {@link RowKind}. The byte value is used for
+     * Returns the byte value representation of this {@link ChangeType}. The byte value is used for
      * serialization and deserialization.
      *
      * <ul>
@@ -101,12 +101,12 @@ public enum RowKind {
     }
 
     /**
-     * Creates a {@link RowKind} from the given byte value. Each {@link RowKind} has a byte value
-     * representation.
+     * Creates a {@link ChangeType} from the given byte value. Each {@link ChangeType} has a byte
+     * value representation.
      *
-     * @see #toByteValue() for mapping of byte value and {@link RowKind}.
+     * @see #toByteValue() for mapping of byte value and {@link ChangeType}.
      */
-    public static RowKind fromByteValue(byte value) {
+    public static ChangeType fromByteValue(byte value) {
         switch (value) {
             case 0:
                 return APPEND_ONLY;
@@ -120,7 +120,7 @@ public enum RowKind {
                 return DELETE;
             default:
                 throw new UnsupportedOperationException(
-                        "Unsupported byte value '" + value + "' for row kind.");
+                        "Unsupported byte value '" + value + "' for change type.");
         }
     }
 }

@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.row.encode.paimon;
 
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.types.DataType;
@@ -52,7 +52,7 @@ public class PaimonKeyEncoder implements KeyEncoder {
     public byte[] encodeKey(InternalRow row) {
         paimonBinaryRowWriter.reset();
         // always be RowKind.INSERT for bucketed row
-        paimonBinaryRowWriter.writeRowKind(RowKind.INSERT);
+        paimonBinaryRowWriter.writeChangeType(ChangeType.INSERT);
         // iterate all the fields of the row, and encode each field
         for (int i = 0; i < fieldGetters.length; i++) {
             fieldEncoders[i].writeField(

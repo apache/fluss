@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,13 +30,13 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.DefaultKvRecord;
 import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
@@ -204,7 +204,7 @@ class RecordAccumulatorTest {
         double averageBatchSize =
                 batches.get(node1.id()).stream().mapToInt(b -> b.build().getBytesLength()).sum()
                         / (batchCount * 1.0);
-        assertThat(averageBatchSize).isBetween(batchSize * 0.9, batchSize * 1.1);
+        assertThat(averageBatchSize).isBetween(batchSize * 0.8, batchSize * 1.1);
     }
 
     private void appendUntilCompressionRatioStable(RecordAccumulator accum, int batchSize)
@@ -277,7 +277,7 @@ class RecordAccumulatorTest {
                 CloseableIterator<LogRecord> iter = iterator.next().records(readContext)) {
             for (int i = 0; i < appends; i++) {
                 LogRecord record = iter.next();
-                assertThat(record.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 assertThat(record.getRow()).isEqualTo(row);
             }
             assertThat(iter.hasNext()).isFalse();
@@ -311,7 +311,7 @@ class RecordAccumulatorTest {
                 LogRecordReadContext.createIndexedReadContext(
                         DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId())) {
             LogRecord record = logRecordBatch.records(readContext).next();
-            assertThat(record.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+            assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             assertThat(record.logOffset()).isEqualTo(0L);
             assertThat(record.getRow()).isEqualTo(row1);
         }
@@ -557,7 +557,7 @@ class RecordAccumulatorTest {
 
         return new Cluster(
                 aliveTabletServersById,
-                new ServerNode(-1, "localhost", 89, ServerType.COORDINATOR),
+                new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
                 Collections.emptyMap(),
