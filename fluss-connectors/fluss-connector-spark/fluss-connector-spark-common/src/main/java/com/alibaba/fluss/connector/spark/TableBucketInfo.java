@@ -18,22 +18,22 @@ package com.alibaba.fluss.connector.spark;
 
 import com.alibaba.fluss.metadata.TableBucket;
 
-public class RichTableBucket {
+public class TableBucketInfo {
     private TableBucket tableBucket;
     private String partitionName;
     private long snapshotId;
 
-    public RichTableBucket(TableBucket tableBucket, String partitionName, long snapshotId) {
+    public TableBucketInfo(TableBucket tableBucket, String partitionName, long snapshotId) {
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
         this.snapshotId = snapshotId;
     }
 
-    public RichTableBucket(TableBucket tableBucket) {
+    public TableBucketInfo(TableBucket tableBucket) {
         this(tableBucket, null, 0);
     }
 
-    public RichTableBucket(TableBucket tableBucket, String partitionName) {
+    public TableBucketInfo(TableBucket tableBucket, String partitionName) {
         this(tableBucket, partitionName, 0);
     }
 
