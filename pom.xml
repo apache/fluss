@@ -591,7 +591,6 @@
                         <!-- Configuration Files. -->
                         <exclude>**/fluss-bin/conf/servers</exclude>
                         <!-- Website Files. -->
-                        <exclude>**/*.md</exclude>
                         <exclude>website/**/_category_.json</exclude>
                         <exclude>website/package.json</exclude>
                         <exclude>website/package-lock.json</exclude>
