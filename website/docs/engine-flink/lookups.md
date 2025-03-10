@@ -15,6 +15,19 @@ Flink lookup joins are important because they enable efficient, real-time enrich
 
 ### Examples
 1. Create two tables.
+
+```sql title="Flink SQL"
+USE CATALOG fluss_catalog;
+```
+
+```sql title="Flink SQL"
+CREATE DATABASE my_db;
+```
+
+```sql title="Flink SQL"
+USE my_db;
+```
+
 ```sql title="Flink SQL"
 CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
   `o_orderkey` INT NOT NULL,
@@ -46,13 +59,6 @@ CREATE TABLE `fluss_catalog`.`my_db`.`customer` (
 ```
 
 2. Perform lookup join.
-```sql title="Flink SQL"
-USE CATALOG fluss_catalog;
-```
-
-```sql title="Flink SQL"
-USE my_db;
-```
 
 ```sql title="Flink SQL"
 CREATE TEMPORARY TABLE lookup_join_sink
@@ -135,8 +141,21 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 
 ### Examples
 1. Create two tables.
+
 ```sql title="Flink SQL"
-CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
+USE CATALOG fluss_catalog;
+```
+
+```sql title="Flink SQL"
+CREATE DATABASE my_db;
+```
+
+```sql title="Flink SQL"
+USE my_db;
+```
+
+```sql title="Flink SQL"
+CREATE TABLE `fluss_catalog`.`my_db`.`orders_with_dt` (
   `o_orderkey` INT NOT NULL,
   `o_custkey` INT NOT NULL,
   `o_orderstatus` CHAR(1) NOT NULL,
@@ -154,7 +173,7 @@ CREATE TABLE `fluss_catalog`.`my_db`.`orders` (
 ```sql title="Flink SQL"
 -- primary keys are (c_custkey, c_nationkey)
 -- bucket key is (c_custkey)
-CREATE TABLE `fluss_catalog`.`my_db`.`customer` (
+CREATE TABLE `fluss_catalog`.`my_db`.`customer_with_bucket_key` (
   `c_custkey` INT NOT NULL,
   `c_name` STRING NOT NULL,
   `c_address` STRING NOT NULL,
@@ -170,16 +189,9 @@ CREATE TABLE `fluss_catalog`.`my_db`.`customer` (
 ```
 
 2. Perform prefix lookup.
-```sql title="Flink SQL"
-USE CATALOG fluss_catalog;
-```
 
 ```sql title="Flink SQL"
-USE my_db;
-```
-
-```sql title="Flink SQL"
-CREATE TEMPORARY TABLE lookup_join_sink
+CREATE TEMPORARY TABLE prefix_lookup_join_sink
 (
    order_key INT NOT NULL,
    order_totalprice DECIMAL(15, 2) NOT NULL,
@@ -190,11 +202,11 @@ CREATE TEMPORARY TABLE lookup_join_sink
 
 ```sql title="Flink SQL"
 -- prefix look up join in asynchronous mode.
-INSERT INTO lookup_join_sink
+INSERT INTO prefix_lookup_join_sink
 SELECT `o`.`o_orderkey`, `o`.`o_totalprice`, `c`.`c_name`, `c`.`c_address`
 FROM 
-(SELECT `orders`.*, proctime() AS ptime FROM `orders`) AS `o`
-LEFT JOIN `customer`
+(SELECT `orders_with_dt`.*, proctime() AS ptime FROM `orders_with_dt`) AS `o`
+LEFT JOIN `customer_with_bucket_key`
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey`;
 
@@ -203,11 +215,11 @@ ON `o`.`o_custkey` = `c`.`c_custkey`;
 
 ```sql title="Flink SQL"
 -- prefix look up join in synchronous mode.
-INSERT INTO lookup_join_sink
+INSERT INTO prefix_lookup_join_sink
 SELECT `o`.`o_orderkey`, `o`.`o_totalprice`, `c`.`c_name`, `c`.`c_address`
 FROM 
-(SELECT `orders`.*, proctime() AS ptime FROM `orders`) AS `o`
-LEFT JOIN `customer` /*+ OPTIONS('lookup.async' = 'false') */
+(SELECT `orders_with_dt`.*, proctime() AS ptime FROM `orders_with_dt`) AS `o`
+LEFT JOIN `customer_with_bucket_key` /*+ OPTIONS('lookup.async' = 'false') */
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey`;
 ```
@@ -219,7 +231,7 @@ Continuing from the previous prefix lookup example, if our dimension table is a 
 ```sql title="Flink SQL"
 -- primary keys are (c_custkey, c_nationkey, dt)
 -- bucket key is (c_custkey)
-CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned` (
+CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned_with_bukcet_key` (
   `c_custkey` INT NOT NULL,
   `c_name` STRING NOT NULL,
   `c_address` STRING NOT NULL,
@@ -242,11 +254,11 @@ WITH (
 To do a prefix lookup with the Fluss partitioned primary key table, the prefix lookup join key is in pattern of
 `a prefix subset of primary keys (excluding partition key)` + `partition key`.
 ```sql title="Flink SQL"
-INSERT INTO lookup_join_sink
+INSERT INTO prefix_lookup_join_sink
 SELECT `o`.`o_orderkey`, `o`.`o_totalprice`, `c`.`c_name`, `c`.`c_address`
 FROM 
-(SELECT `orders`.*, proctime() AS ptime FROM `orders`) AS `o`
-LEFT JOIN `customer_partitioned`
+(SELECT `orders_with_dt`.*, proctime() AS ptime FROM `orders_with_dt`) AS `o`
+LEFT JOIN `customer_partitioned_with_bukcet_key`
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 

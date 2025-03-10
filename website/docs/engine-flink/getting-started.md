@@ -25,7 +25,10 @@ Fluss only supports Apache Flink's Table API.
 | [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
 | [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
-| [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |                                                                   |
+| [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |
+| [SQL show partitions](ddl.md#show-partitions)     | ✔️    |                                        |
+| [SQL add partiiton](ddl.md#add-partition)         | ✔️    |                                        |
+| [SQL drop partiiton](ddl.md#drop-partition)       | ✔️    |                                        |
 | [SQL select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
 | [SQL insert into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
 | [SQL lookup join](lookups.md)                     | ✔️    |                                        |
