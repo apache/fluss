@@ -151,11 +151,15 @@ public class SparkInternalRow extends org.apache.spark.sql.catalyst.InternalRow 
 
     @Override
     public ArrayData getArray(int ordinal) {
+        // TODO, fluss support array type
+        // https://github.com/alibaba/fluss/issues/168
         return null;
     }
 
     @Override
     public MapData getMap(int ordinal) {
+        // TODO, fluss support map type
+        https: // github.com/alibaba/fluss/issues/169
         return null;
     }
 

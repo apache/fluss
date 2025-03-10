@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -90,8 +91,11 @@ public class SparkCatalogITCase {
         spark = SparkSession.builder().config(sparkConf).getOrCreate();
         spark.sparkContext().setLogLevel("WARN");
 
-        Connection connection = ConnectionFactory.createConnection(flussConf);
-        admin = connection.getAdmin();
+        try (Connection connection = ConnectionFactory.createConnection(flussConf)) {
+            admin = connection.getAdmin();
+        } catch (Exception e) {
+            throw new FlussRuntimeException(e);
+        }
     }
 
     @AfterAll

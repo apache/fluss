@@ -947,7 +947,7 @@
                             <toggleOffOn />
 
                             <scalafmt>
-                                <version>3.4.3</version>
+                                <version>${spotless.scalafmt.version}</version>
                                 <file>${maven.multiModuleProjectDirectory}/.scalafmt.conf</file>
                             </scalafmt>
                         </scala>

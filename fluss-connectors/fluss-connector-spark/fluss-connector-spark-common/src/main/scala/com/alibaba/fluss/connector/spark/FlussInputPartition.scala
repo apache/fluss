@@ -36,15 +36,11 @@ object FlussInputPartition {
   }
 }
 
-case class FlussOffsetRange(
-    richTableBucket: RichTableBucket,
-    fromOffset: Long,
-    untilOffset: Long,
-    preferredLoc: Option[String] = None) {
-  def tableBucket: TableBucket = richTableBucket.getTableBucket
+case class FlussOffsetRange(tableBucketInfo: TableBucketInfo, fromOffset: Long, untilOffset: Long) {
+  def tableBucket: TableBucket = tableBucketInfo.getTableBucket
 
-  def partitionName: String = richTableBucket.getPartitionName
-  def snapshotId: Long = richTableBucket.getSnapshotId
+  def partitionName: String = tableBucketInfo.getPartitionName
+  def snapshotId: Long = tableBucketInfo.getSnapshotId
 
   /** ignore snapshot offset */
   def size: Long = untilOffset - fromOffset
