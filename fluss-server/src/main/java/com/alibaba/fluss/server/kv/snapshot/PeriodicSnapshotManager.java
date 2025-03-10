@@ -177,34 +177,36 @@ public class PeriodicSnapshotManager implements Closeable {
         // of using guardedExecutor
         guardedExecutor.execute(
                 () -> {
-                    LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
-                    long triggerTime = System.currentTimeMillis();
+                    if (started) {
+                        LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
+                        long triggerTime = System.currentTimeMillis();
 
-                    Optional<SnapshotRunnable> snapshotRunnableOptional;
-                    try {
-                        snapshotRunnableOptional = target.initSnapshot();
-                    } catch (Exception e) {
-                        LOG.error("Fail to init snapshot during triggering snapshot.", e);
-                        return;
-                    }
-                    if (snapshotRunnableOptional.isPresent()) {
-                        SnapshotRunnable runnable = snapshotRunnableOptional.get();
-                        asyncOperationsThreadPool.execute(
-                                () ->
-                                        asyncSnapshotPhase(
-                                                triggerTime,
-                                                runnable.getSnapshotId(),
-                                                runnable.getCoordinatorEpoch(),
-                                                runnable.getBucketLeaderEpoch(),
-                                                runnable.getSnapshotLocation(),
-                                                runnable.getSnapshotRunnable()));
-                    } else {
-                        scheduleNextSnapshot();
-                        LOG.debug(
-                                "TableBucket {} has no data updates since last snapshot, "
-                                        + "skip this one and schedule the next one in {} seconds",
-                                tableBucket,
-                                periodicSnapshotDelay / 1000);
+                        Optional<SnapshotRunnable> snapshotRunnableOptional;
+                        try {
+                            snapshotRunnableOptional = target.initSnapshot();
+                        } catch (Exception e) {
+                            LOG.error("Fail to init snapshot during triggering snapshot.", e);
+                            return;
+                        }
+                        if (snapshotRunnableOptional.isPresent()) {
+                            SnapshotRunnable runnable = snapshotRunnableOptional.get();
+                            asyncOperationsThreadPool.execute(
+                                    () ->
+                                            asyncSnapshotPhase(
+                                                    triggerTime,
+                                                    runnable.getSnapshotId(),
+                                                    runnable.getCoordinatorEpoch(),
+                                                    runnable.getBucketLeaderEpoch(),
+                                                    runnable.getSnapshotLocation(),
+                                                    runnable.getSnapshotRunnable()));
+                        } else {
+                            scheduleNextSnapshot();
+                            LOG.debug(
+                                    "TableBucket {} has no data updates since last snapshot, "
+                                            + "skip this one and schedule the next one in {} seconds",
+                                    tableBucket,
+                                    periodicSnapshotDelay / 1000);
+                        }
                     }
                 });
     }

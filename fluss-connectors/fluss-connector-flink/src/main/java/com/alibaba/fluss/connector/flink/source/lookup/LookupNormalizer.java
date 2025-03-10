@@ -16,25 +16,28 @@
 
 package com.alibaba.fluss.connector.flink.source.lookup;
 
+import com.alibaba.fluss.client.lookup.LookupType;
+import com.alibaba.fluss.utils.ArrayUtils;
+
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.RowData.FieldGetter;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.flink.util.Preconditions.checkArgument;
 
 /**
  * A utility class to normalize the lookup key row to match the Fluss key fields order and drop the
@@ -50,8 +53,6 @@ public class LookupNormalizer implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    public static final LookupNormalizer NOOP_NORMALIZER = new LookupNormalizer(null, null, null);
-
     /** Mapping from normalized key index to the lookup key index (in the lookup row). */
     @Nullable private final FieldGetter[] normalizedKeyGetters;
 
@@ -61,10 +62,22 @@ public class LookupNormalizer implements Serializable {
     /** The field getter to get the remaining condition result from the lookup result row. */
     @Nullable private final FieldGetter[] resultFieldGetters;
 
+    /**
+     * The lookup request type (primary key lookup or prefix lookup) requested from Flink to Fluss.
+     */
+    private final LookupType lookupType;
+
+    /** The indexes of the lookup keys in the lookup key row. */
+    private final int[] lookupKeyIndexes;
+
     private LookupNormalizer(
+            LookupType lookupType,
+            int[] lookupKeyIndexes,
             @Nullable FieldGetter[] normalizedKeyGetters,
             @Nullable FieldGetter[] conditionFieldGetters,
             @Nullable FieldGetter[] resultFieldGetters) {
+        this.lookupType = lookupType;
+        this.lookupKeyIndexes = lookupKeyIndexes;
         this.normalizedKeyGetters = normalizedKeyGetters;
         this.conditionFieldGetters = conditionFieldGetters;
         this.resultFieldGetters = resultFieldGetters;
@@ -76,6 +89,20 @@ public class LookupNormalizer implements Serializable {
         }
     }
 
+    /**
+     * Returns the lookup type (primary key lookup, or prefix key lookup) requested from Flink to
+     * Fluss.
+     */
+    public LookupType getLookupType() {
+        return lookupType;
+    }
+
+    /** Returns the indexes of the normalized lookup keys. */
+    public int[] getLookupKeyIndexes() {
+        return lookupKeyIndexes;
+    }
+
+    /** Normalize the lookup key row to match the request key and the key fields order. */
     public RowData normalizeLookupKey(RowData lookupKey) {
         if (normalizedKeyGetters == null) {
             return lookupKey;
@@ -139,78 +166,173 @@ public class LookupNormalizer implements Serializable {
 
     // --------------------------------------------------------------------------------------------
 
-    /** Validate the lookup key indexes and primary keys, and create a {@link LookupNormalizer}. */
+    /** Create a {@link LookupNormalizer} for primary key lookup. */
+    public static LookupNormalizer createPrimaryKeyLookupNormalizer(
+            int[] primaryKeys, RowType schema) {
+        List<String> primaryKeyNames = fieldNames(primaryKeys, schema);
+        return createLookupNormalizer(
+                primaryKeyNames, primaryKeyNames, primaryKeys, schema, LookupType.LOOKUP);
+    }
+
+    /**
+     * Validate the lookup key indexes and primary keys, and create a {@link LookupNormalizer}.
+     *
+     * @param lookupKeyIndexes the indexes of the lookup keys in the table row
+     * @param primaryKeys the indexes of the primary keys of the table
+     * @param bucketKeys the indexes of the bucket keys of the table, must be a part of primary keys
+     * @param partitionKeys the indexes of the partition keys of the table, maybe empty if the table
+     *     is not partitioned
+     * @param schema the schema of the table
+     */
     public static LookupNormalizer validateAndCreateLookupNormalizer(
             int[][] lookupKeyIndexes,
             int[] primaryKeys,
+            int[] bucketKeys,
+            int[] partitionKeys,
             RowType schema,
             @Nullable int[] projectedFields) {
         if (primaryKeys.length == 0) {
             throw new UnsupportedOperationException(
                     "Fluss lookup function only support lookup table with primary key.");
         }
-        // we compare string names rather than int index for better error message and readability,
-        // the length of lookup key and primary key shouldn't be large, so the overhead is low.
-        String[] columnNames = schema.getFieldNames().toArray(new String[0]);
-        String[] primaryKeyNames =
-                Arrays.stream(primaryKeys).mapToObj(i -> columnNames[i]).toArray(String[]::new);
+        // bucket keys must not be empty
+        if (bucketKeys.length == 0 || !ArrayUtils.isSubset(primaryKeys, bucketKeys)) {
+            throw new IllegalArgumentException(
+                    "Illegal bucket keys: "
+                            + Arrays.toString(bucketKeys)
+                            + ", must be a part of primary keys: "
+                            + Arrays.toString(primaryKeys));
+        }
+        // partition keys can be empty
+        if (partitionKeys.length != 0 && !ArrayUtils.isSubset(primaryKeys, partitionKeys)) {
+            throw new IllegalArgumentException(
+                    "Illegal partition keys: "
+                            + Arrays.toString(partitionKeys)
+                            + ", must be a part of primary keys: "
+                            + Arrays.toString(primaryKeys));
+        }
 
-        // get the lookup keys
+        int[] lookupKeysBeforeProjection = new int[lookupKeyIndexes.length];
         int[] lookupKeys = new int[lookupKeyIndexes.length];
-        String[] lookupKeyNames = new String[lookupKeyIndexes.length];
-        for (int i = 0; i < lookupKeyNames.length; i++) {
+        for (int i = 0; i < lookupKeysBeforeProjection.length; i++) {
             int[] innerKeyArr = lookupKeyIndexes[i];
-            Preconditions.checkArgument(
-                    innerKeyArr.length == 1, "Do not support nested lookup keys");
+            checkArgument(innerKeyArr.length == 1, "Do not support nested lookup keys");
             // lookupKeyIndexes passed by Flink is key indexed after projection pushdown,
-            // we need to project on client side, so restore the lookup key indexes before pushdown
+            // we restore the lookup key indexes before pushdown to easier compare with primary
+            // keys.
             if (projectedFields != null) {
-                lookupKeys[i] = projectedFields[innerKeyArr[0]];
+                lookupKeysBeforeProjection[i] = projectedFields[innerKeyArr[0]];
             } else {
-                lookupKeys[i] = innerKeyArr[0];
+                lookupKeysBeforeProjection[i] = innerKeyArr[0];
             }
-            lookupKeyNames[i] = columnNames[innerKeyArr[0]];
+            lookupKeys[i] = innerKeyArr[0];
+        }
+        List<String> lookupKeyNames = fieldNames(lookupKeysBeforeProjection, schema);
+        List<String> primaryKeyNames = fieldNames(primaryKeys, schema);
+
+        if (new HashSet<>(lookupKeyNames).containsAll(primaryKeyNames)) {
+            // primary key lookup.
+            return createLookupNormalizer(
+                    lookupKeyNames, primaryKeyNames, lookupKeys, schema, LookupType.LOOKUP);
+        } else {
+            // the encoding primary key is the primary key without partition keys.
+            int[] encodedPrimaryKeys = ArrayUtils.removeSet(primaryKeys, partitionKeys);
+            // the table support prefix lookup iff the bucket key is a prefix of the encoding pk
+            boolean supportPrefixLookup = ArrayUtils.isPrefix(encodedPrimaryKeys, bucketKeys);
+            if (supportPrefixLookup) {
+                // try to create prefix lookup normalizer
+                // TODO: support prefix lookup with arbitrary part of prefix of primary key
+                int[] expectedLookupKeys =
+                        ArrayUtils.intersection(
+                                primaryKeys, ArrayUtils.concat(bucketKeys, partitionKeys));
+                return createLookupNormalizer(
+                        lookupKeyNames,
+                        fieldNames(expectedLookupKeys, schema),
+                        lookupKeys,
+                        schema,
+                        LookupType.PREFIX_LOOKUP);
+            } else {
+                // throw exception for tables that doesn't support prefix lookup
+                throw new TableException(
+                        "The Fluss lookup function supports lookup tables where the lookup keys include all primary keys, the primary keys are "
+                                + primaryKeyNames
+                                + ", but the lookup keys are "
+                                + lookupKeyNames);
+            }
+        }
+    }
+
+    /**
+     * Create a {@link LookupNormalizer}.
+     *
+     * <p>Note: We compare string names rather than int index for better error message and
+     * readability, the length of lookup key and keys (primary key or index key) shouldn't be large,
+     * so the overhead is low.
+     *
+     * @param originalLookupKeys the original lookup keys that is determined by Flink.
+     * @param expectedLookupKeys the expected lookup keys to lookup Fluss.
+     */
+    private static LookupNormalizer createLookupNormalizer(
+            List<String> originalLookupKeys,
+            List<String> expectedLookupKeys,
+            int[] lookupKeyIndexes,
+            RowType schema,
+            LookupType lookupType) {
+        if (originalLookupKeys.equals(expectedLookupKeys)) {
+            int[] normalizedLookupKeys = fieldIndexes(expectedLookupKeys, schema);
+            return new LookupNormalizer(lookupType, normalizedLookupKeys, null, null, null);
         }
 
-        if (Arrays.equals(lookupKeys, primaryKeys)) {
-            return NOOP_NORMALIZER;
+        FieldGetter[] normalizedKeyGetters = new FieldGetter[expectedLookupKeys.size()];
+        for (int i = 0; i < expectedLookupKeys.size(); i++) {
+            String expectedKey = expectedLookupKeys.get(i);
+            LogicalType fieldType = schema.getTypeAt(schema.getFieldIndex(expectedKey));
+            int idxInLookupKey = findIndex(originalLookupKeys, expectedKey);
+            normalizedKeyGetters[i] = RowData.createFieldGetter(fieldType, idxInLookupKey);
         }
 
-        FieldGetter[] normalizedKeyGetters = new FieldGetter[primaryKeys.length];
-        for (int i = 0; i < primaryKeyNames.length; i++) {
-            LogicalType fieldType = schema.getTypeAt(primaryKeys[i]);
-            int lookupKeyIndex = findIndex(lookupKeyNames, primaryKeyNames[i]);
-            normalizedKeyGetters[i] = RowData.createFieldGetter(fieldType, lookupKeyIndex);
-        }
-
-        Set<Integer> primaryKeySet = Arrays.stream(primaryKeys).boxed().collect(Collectors.toSet());
         List<FieldGetter> conditionFieldGetters = new ArrayList<>();
         List<FieldGetter> resultFieldGetters = new ArrayList<>();
-        for (int i = 0; i < lookupKeys.length; i++) {
-            if (!primaryKeySet.contains(i)) {
-                LogicalType fieldType = schema.getTypeAt(lookupKeys[i]);
+        for (int i = 0; i < originalLookupKeys.size(); i++) {
+            String originalKey = originalLookupKeys.get(i);
+            if (!expectedLookupKeys.contains(originalKey)) {
+                LogicalType fieldType = schema.getTypeAt(schema.getFieldIndex(originalKey));
+                // get the condition field from the original lookup key row
                 conditionFieldGetters.add(RowData.createFieldGetter(fieldType, i));
-                resultFieldGetters.add(RowData.createFieldGetter(fieldType, lookupKeys[i]));
+                // get the result field from the lookup result row (projected)
+                resultFieldGetters.add(RowData.createFieldGetter(fieldType, lookupKeyIndexes[i]));
             }
         }
 
         return new LookupNormalizer(
+                lookupType,
+                fieldIndexes(expectedLookupKeys, schema),
                 normalizedKeyGetters,
                 conditionFieldGetters.toArray(new FieldGetter[0]),
                 resultFieldGetters.toArray(new FieldGetter[0]));
     }
 
-    private static int findIndex(String[] columnNames, String key) {
-        for (int i = 0; i < columnNames.length; i++) {
-            if (columnNames[i].equals(key)) {
+    private static int findIndex(List<String> columnNames, String key) {
+        for (int i = 0; i < columnNames.size(); i++) {
+            if (columnNames.get(i).equals(key)) {
                 return i;
             }
         }
         throw new TableException(
-                "Fluss lookup function only supports lookup table with lookup keys contain all primary keys."
-                        + " Can't find primary key '"
+                "The Fluss lookup function supports lookup tables where the lookup keys include all primary keys or all bucket keys."
+                        + " Can't find expected key '"
                         + key
                         + "' in lookup keys "
-                        + Arrays.toString(columnNames));
+                        + columnNames);
+    }
+
+    private static List<String> fieldNames(int[] fieldIndexes, RowType schema) {
+        return Arrays.stream(fieldIndexes)
+                .mapToObj(i -> schema.getFields().get(i).getName())
+                .collect(Collectors.toList());
+    }
+
+    private static int[] fieldIndexes(List<String> fieldNames, RowType schema) {
+        return fieldNames.stream().mapToInt(schema::getFieldIndex).toArray();
     }
 }

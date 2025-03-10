@@ -34,7 +34,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.encode.KeyEncoder;
+import com.alibaba.fluss.row.encode.CompactedKeyEncoder;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.types.DataTypes;
 
@@ -58,9 +58,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for {@link FlinkSourceEnumerator}. */
@@ -166,26 +165,17 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     0,
                     Collections.singletonList(
                             new HybridSnapshotLogSplit(
-                                    bucket0,
-                                    null,
-                                    Collections.emptyList(),
-                                    bucketIdToNumRecords.get(0))));
+                                    bucket0, null, 0L, bucketIdToNumRecords.get(0))));
             expectedAssignment.put(
                     1,
                     Collections.singletonList(
                             new HybridSnapshotLogSplit(
-                                    bucket1,
-                                    null,
-                                    Collections.emptyList(),
-                                    bucketIdToNumRecords.get(1))));
+                                    bucket1, null, 0L, bucketIdToNumRecords.get(1))));
             expectedAssignment.put(
                     2,
                     Collections.singletonList(
                             new HybridSnapshotLogSplit(
-                                    bucket2,
-                                    null,
-                                    Collections.emptyList(),
-                                    bucketIdToNumRecords.get(2))));
+                                    bucket2, null, 0L, bucketIdToNumRecords.get(2))));
             checkSplitAssignmentIgnoreSnapshotFiles(expectedAssignment, actualAssignment);
         }
     }
@@ -207,7 +197,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
         TablePath path1 = TablePath.of(DEFAULT_DB, "test-non-pk-table");
         admin.createTable(path1, nonPkTableDescriptor, true).get();
-        long tableId = admin.getTable(path1).get().getTableId();
+        long tableId = admin.getTableInfo(path1).get().getTableId();
 
         // test get snapshot log split and the assignment
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
@@ -405,19 +395,25 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
             enumerator.start();
-            // register all readers
-            for (int i = 0; i < numSubtasks; i++) {
-                registerReader(context, enumerator, i);
-            }
 
-            // invoke partition discovery callable again and there should assignments.
+            // invoke partition discovery callable again and there should be pending assignments.
             runPeriodicPartitionDiscovery(context);
+
+            // register two readers
+            registerReader(context, enumerator, 0);
+            registerReader(context, enumerator, 1);
+
+            // invoke partition discovery callable again, shouldn't produce RemovePartitionEvent.
+            runPeriodicPartitionDiscovery(context);
+            assertThat(context.getSentSourceEvent()).isEmpty();
+
+            // now, register the third reader
+            registerReader(context, enumerator, 2);
 
             // check the assignments
             Map<Integer, List<SourceSplitBase>> expectedAssignment =
                     expectAssignments(enumerator, tableId, partitionNameByIds);
-            Map<Integer, List<SourceSplitBase>> actualAssignments =
-                    getLastReadersAssignments(context);
+            Map<Integer, List<SourceSplitBase>> actualAssignments = getReadersAssignments(context);
             checkAssignmentIgnoreOrder(actualAssignments, expectedAssignment);
 
             // now, create a new partition and runPeriodicPartitionDiscovery again,
@@ -514,13 +510,13 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             // test splits for same non-partitioned bucket, should assign to same task
             TableBucket t1 = new TableBucket(tableId, 0);
             SourceSplitBase s1 = new LogSplit(t1, null, 1);
-            SourceSplitBase s2 = new HybridSnapshotLogSplit(t1, null, Collections.emptyList(), 1);
+            SourceSplitBase s2 = new HybridSnapshotLogSplit(t1, null, 0L, 1);
             assertThat(enumerator.getSplitOwner(s1)).isEqualTo(enumerator.getSplitOwner(s2));
 
             // test splits for same partitioned bucket, should assign to same task
             t1 = new TableBucket(tableId, 1L, 0);
             s1 = new LogSplit(t1, "p1", 1);
-            s2 = new HybridSnapshotLogSplit(t1, "p1", Collections.emptyList(), 2);
+            s2 = new HybridSnapshotLogSplit(t1, "p1", 0L, 2);
             assertThat(enumerator.getSplitOwner(s1)).isEqualTo(enumerator.getSplitOwner(s2));
 
             // test splits for partitioned bucket
@@ -645,20 +641,20 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
     private static Map<Integer, Integer> putRows(TablePath tablePath, int rowsNum)
             throws Exception {
-        KeyEncoder keyEncoder =
-                new KeyEncoder(
-                        DEFAULT_PK_TABLE_SCHEMA.toRowType(),
+        CompactedKeyEncoder keyEncoder =
+                new CompactedKeyEncoder(
+                        DEFAULT_PK_TABLE_SCHEMA.getRowType(),
                         DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
         Map<Integer, Integer> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.getUpsertWriter();
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rowsNum; i++) {
-                InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
+                InternalRow row = row(i, "v" + i);
                 upsertWriter.upsert(row);
 
-                byte[] key = keyEncoder.encode(row);
-                int bucketId = hashBucketAssigner.assignBucket(key, null);
+                byte[] key = keyEncoder.encodeKey(row);
+                int bucketId = hashBucketAssigner.assignBucket(key);
 
                 bucketRows.merge(bucketId, 1, Integer::sum);
             }

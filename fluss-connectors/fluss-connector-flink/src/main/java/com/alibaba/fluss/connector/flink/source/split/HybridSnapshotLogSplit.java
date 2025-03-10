@@ -16,12 +16,10 @@
 
 package com.alibaba.fluss.connector.flink.source.split;
 
-import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -40,19 +38,19 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
     public HybridSnapshotLogSplit(
             TableBucket tableBucket,
             @Nullable String partitionName,
-            List<FsPathAndFileName> snapshotFiles,
+            long snapshotId,
             long logStartingOffset) {
-        this(tableBucket, partitionName, snapshotFiles, 0, false, logStartingOffset);
+        this(tableBucket, partitionName, snapshotId, 0, false, logStartingOffset);
     }
 
     public HybridSnapshotLogSplit(
             TableBucket tableBucket,
             @Nullable String partitionName,
-            List<FsPathAndFileName> snapshotFiles,
+            long snapshotId,
             long recordsToSkip,
             boolean isSnapshotFinished,
             long logStartingOffset) {
-        super(tableBucket, partitionName, snapshotFiles, recordsToSkip);
+        super(tableBucket, partitionName, snapshotId, recordsToSkip);
         this.isSnapshotFinished = isSnapshotFinished;
         this.logStartingOffset = logStartingOffset;
     }
@@ -94,10 +92,18 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
     @Override
     public String toString() {
         return "HybridSnapshotLogSplit{"
-                + "recordsToSkip="
-                + recordsToSkip
-                + ", tableBucket="
+                + "tableBucket="
                 + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + "', snapshotId="
+                + snapshotId
+                + "isSnapshotFinished="
+                + isSnapshotFinished
+                + ", logStartingOffset="
+                + logStartingOffset
+                + ", recordsToSkip="
+                + recordsToSkip
                 + '}';
     }
 }

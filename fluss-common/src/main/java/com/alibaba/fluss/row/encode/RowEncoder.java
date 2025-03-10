@@ -22,6 +22,7 @@ import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.types.RowType;
 
 /**
  * An encoder to write {@link BinaryRow binary format InternalRow}. It's used to write row
@@ -37,6 +38,14 @@ import com.alibaba.fluss.types.DataType;
  */
 @PublicEvolving
 public interface RowEncoder extends AutoCloseable {
+
+    /**
+     * Create a {@link RowEncoder} for encoding Java objects to a {@link MemorySegment} backed
+     * {@link InternalRow}.
+     */
+    static RowEncoder create(KvFormat kvFormat, RowType rowType) {
+        return create(kvFormat, rowType.getChildren().toArray(new DataType[0]));
+    }
 
     /**
      * Create a {@link RowEncoder} for encoding Java objects to a {@link MemorySegment} backed

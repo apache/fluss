@@ -25,6 +25,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
 import java.time.temporal.TemporalAccessor;
+import java.util.TimeZone;
 
 import static java.time.temporal.ChronoField.DAY_OF_MONTH;
 import static java.time.temporal.ChronoField.HOUR_OF_DAY;
@@ -52,6 +53,13 @@ public class DateTimeUtils {
 
     /** The number of milliseconds in an hour. */
     private static final long MILLIS_PER_HOUR = 3600000L; // = 60 * 60 * 1000
+
+    /**
+     * The number of milliseconds in a day.
+     *
+     * <p>This is the modulo 'mask' used when converting TIMESTAMP values to DATE and TIME values.
+     */
+    public static final long MILLIS_PER_DAY = 86400000L; // = 24 * 60 * 60 * 1000
 
     private static final DateTimeFormatter DEFAULT_TIMESTAMP_FORMATTER =
             new DateTimeFormatterBuilder()
@@ -243,6 +251,19 @@ public class DateTimeUtils {
                 + minute * (int) MILLIS_PER_MINUTE
                 + second * (int) MILLIS_PER_SECOND
                 + milli;
+    }
+
+    /**
+     * Converts the Java type used for UDF parameters of SQL DATE type ({@link java.sql.Date}) to
+     * internal representation (int).
+     */
+    public static int toInternal(java.sql.Date date) {
+        long ts = date.getTime() + TimeZone.getDefault().getOffset(date.getTime());
+        return (int) (ts / MILLIS_PER_DAY);
+    }
+
+    public static int toInternal(LocalDate date) {
+        return ymdToUnixDate(date.getYear(), date.getMonthValue(), date.getDayOfMonth());
     }
 
     private static boolean isInteger(String s) {

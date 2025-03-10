@@ -17,8 +17,6 @@
 package com.alibaba.fluss.rpc.netty.server;
 
 import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
@@ -106,23 +104,6 @@ public final class RpcRequest {
 
     public long getStartTimeMs() {
         return startTimeMs;
-    }
-
-    /**
-     * Get the request priority in {@link RequestChannel}. The higher priority of this request, the
-     * higher the result will be.
-     *
-     * <p>Currently, we only consider the FetchLogRequest from follower as high priority in order to
-     * make sure the data is replicated to the follower as soon as possible, which can maintain the
-     * stability of the cluster when the network load is high.
-     */
-    public int getPriority() {
-        if (apiKey == ApiKeys.FETCH_LOG.id
-                && ((FetchLogRequest) message).getFollowerServerId() >= 0) {
-            return 1;
-        }
-
-        return 0;
     }
 
     @Override

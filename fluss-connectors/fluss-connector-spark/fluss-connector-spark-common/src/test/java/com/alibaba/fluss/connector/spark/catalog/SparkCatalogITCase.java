@@ -56,6 +56,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -268,10 +269,10 @@ public class SparkCatalogITCase {
         sql("DESCRIBE TABLE fluss_catalog." + DB + "." + TABLE);
 
         // check fluss datatype
-        TableInfo tableInfo = admin.getTable(TablePath.of(DB, TABLE)).join();
-        assertThat(tableInfo.getTableDescriptor().hasPrimaryKey()).isFalse();
-        assertThat(tableInfo.getTableDescriptor().getPartitionKeys()).isEmpty();
-        List<Schema.Column> columns = tableInfo.getTableDescriptor().getSchema().getColumns();
+        TableInfo tableInfo = admin.getTableInfo(TablePath.of(DB, TABLE)).join();
+        assertThat(tableInfo.hasPrimaryKey()).isFalse();
+        assertThat(tableInfo.getPartitionKeys()).isEmpty();
+        List<Schema.Column> columns = tableInfo.getSchema().getColumns();
         assertThat(columns.size()).isEqualTo(14);
 
         assertThat(columns.get(0).getName()).isEqualTo("int_field");
@@ -347,20 +348,59 @@ public class SparkCatalogITCase {
 
         sql("DESCRIBE TABLE fluss_catalog." + DB + "." + TABLE);
 
-        TableInfo tableInfo = admin.getTable(TablePath.of(DB, TABLE)).join();
+        TableInfo tableInfo = admin.getTableInfo(TablePath.of(DB, TABLE)).join();
         // check primary key
-        assertThat(tableInfo.getTableDescriptor().hasPrimaryKey()).isTrue();
-        List<String> primaryKey =
-                tableInfo.getTableDescriptor().getSchema().getPrimaryKey().get().getColumnNames();
+        assertThat(tableInfo.hasPrimaryKey()).isTrue();
+        List<String> primaryKey = tableInfo.getSchema().getPrimaryKey().get().getColumnNames();
         assertThat(primaryKey.size()).isEqualTo(2);
         assertThat(primaryKey.get(0)).isEqualTo("int_field");
         assertThat(primaryKey.get(1)).isEqualTo("string_field");
         // check partition key
-        List<String> partitionKeys = tableInfo.getTableDescriptor().getPartitionKeys();
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
         assertThat(partitionKeys.size()).isEqualTo(1);
         assertThat(partitionKeys.get(0)).isEqualTo("string_field");
-        List<Schema.Column> columns = tableInfo.getTableDescriptor().getSchema().getColumns();
+        List<Schema.Column> columns = tableInfo.getSchema().getColumns();
         assertThat(columns.size()).isEqualTo(14);
+    }
+
+    @Test
+    public void testPartitionedTable() {
+        sql("CREATE DATABASE fluss_catalog." + DB);
+        String tableName = "test_partitioned_table";
+        sql(String.format("create table %s (a int, b string) partitioned by (b)", tableName));
+        List<String> tables =
+                sql("SHOW TABLES IN fluss_catalog." + DB).collectAsList().stream()
+                        .map(row -> row.getString(1))
+                        .collect(Collectors.toList());
+        assertThat(tables.size()).isEqualTo(1);
+        assertThat(tables.get(0)).isEqualTo(tableName);
+
+        TableInfo tableInfo = admin.getTableInfo(TablePath.of(DB, tableName)).join();
+
+        // 1. check partition key
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+        assertThat(partitionKeys.size()).isEqualTo(1);
+        assertThat(partitionKeys.get(0)).isEqualTo("b");
+        List<Schema.Column> columns = tableInfo.getSchema().getColumns();
+        assertThat(columns.size()).isEqualTo(2);
+
+        // 2. add partitions.
+        List<String> expectedShowPartitionsResult = Arrays.asList("+I[b=1]", "+I[b=2]", "+I[b=3]");
+        List<String> result =
+                sql("show partitions test_partitioned_table").collectAsList().stream()
+                        .map(Row::toString)
+                        .collect(Collectors.toList());
+        assertThat(result).isEqualTo(expectedShowPartitionsResult);
+
+        // 3. drop partitions.
+        sql("alter table test_partitioned_table drop partition (b = 1)").collectAsList();
+
+        expectedShowPartitionsResult = Arrays.asList("+I[b=2]", "+I[b=3]");
+        result =
+                sql("show partitions test_partitioned_table").collectAsList().stream()
+                        .map(Row::toString)
+                        .collect(Collectors.toList());
+        assertThat(result).isEqualTo(expectedShowPartitionsResult);
     }
 
     @Test

@@ -48,7 +48,7 @@ public class PartialUpdater {
         for (int pkIndex : schema.getPrimaryKeyIndexes()) {
             primaryKeyCols.set(pkIndex);
         }
-        this.fieldDataTypes = schema.toRowType().getChildren().toArray(new DataType[0]);
+        this.fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
         sanityCheck(schema, targetColumns);
 
         // getter for the fields in row
@@ -81,7 +81,7 @@ public class PartialUpdater {
                     throw new InvalidTargetColumnException(
                             String.format(
                                     "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
-                                    schema.toRowType().getFieldNames().get(i)));
+                                    schema.getRowType().getFieldNames().get(i)));
                 }
             }
         }

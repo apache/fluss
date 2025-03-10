@@ -17,7 +17,6 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.StringUtils;
 
 import java.util.ArrayList;
@@ -26,6 +25,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Data type of a sequence of fields. A field consists of a field name, field type, and an optional
@@ -48,8 +49,7 @@ public final class RowType extends DataType {
         super(isNullable, DataTypeRoot.ROW);
         this.fields =
                 Collections.unmodifiableList(
-                        new ArrayList<>(
-                                Preconditions.checkNotNull(fields, "Fields must not be null.")));
+                        new ArrayList<>(checkNotNull(fields, "Fields must not be null.")));
 
         validateFields(fields);
     }
@@ -84,13 +84,22 @@ public final class RowType extends DataType {
     }
 
     public RowType project(int[] projectFields) {
-        if (projectFields.length == 0) {
-            return this;
-        }
-
         List<DataField> projectedFields = new ArrayList<>();
         for (int projectField : projectFields) {
             projectedFields.add(this.fields.get(projectField));
+        }
+        return new RowType(this.isNullable(), projectedFields);
+    }
+
+    public RowType project(List<String> projectFields) {
+        List<DataField> projectedFields = new ArrayList<>();
+        for (String projectField : projectFields) {
+            int index = getFieldIndex(projectField);
+            if (index == -1) {
+                throw new IllegalArgumentException(
+                        String.format("Field %s does not exist in the row type.", projectField));
+            }
+            projectedFields.add(this.fields.get(index));
         }
         return new RowType(this.isNullable(), projectedFields);
     }

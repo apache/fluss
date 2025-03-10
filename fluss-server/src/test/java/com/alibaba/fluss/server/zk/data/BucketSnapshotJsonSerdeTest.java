@@ -28,15 +28,16 @@ class BucketSnapshotJsonSerdeTest extends JsonSerdeTestBase<BucketSnapshot> {
     @Override
     protected BucketSnapshot[] createObjects() {
         return new BucketSnapshot[] {
-            new BucketSnapshot("oss://test/a1"), new BucketSnapshot("oss://test/a2"),
+            new BucketSnapshot(-1, -1, "oss://test/a1"),
+            new BucketSnapshot(1L, 1002L, "oss://test/a2"),
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"path\":\"oss://test/a1\"}",
-            "{\"version\":1,\"path\":\"oss://test/a2\"}"
+            "{\"version\":1,\"snapshot_id\":-1,\"log_offset\":-1,\"metadata_path\":\"oss://test/a1\"}",
+            "{\"version\":1,\"snapshot_id\":1,\"log_offset\":1002,\"metadata_path\":\"oss://test/a2\"}"
         };
     }
 }

@@ -20,14 +20,16 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 import com.alibaba.fluss.rpc.TestingGatewayService;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
+import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.netty.server.NettyServer;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
@@ -80,16 +82,16 @@ final class NettyClientTest {
 
     @Test
     void testSendIncompleteRequest() {
-        GetTableRequest getTableRequest = new GetTableRequest();
+        GetTableInfoRequest request = new GetTableInfoRequest();
 
         // get table request without table path.
         assertThatThrownBy(
                         () ->
                                 nettyClient
-                                        .sendRequest(serverNode, ApiKeys.GET_TABLE, getTableRequest)
+                                        .sendRequest(serverNode, ApiKeys.GET_TABLE_INFO, request)
                                         .get())
                 .isInstanceOf(ExecutionException.class)
-                .hasMessageContaining("Failed to encode request for 'GET_TABLE(1007)'")
+                .hasMessageContaining("Failed to encode request for 'GET_TABLE_INFO(1007)'")
                 .hasRootCauseMessage("Some required fields are missing");
     }
 
@@ -164,20 +166,36 @@ final class NettyClientTest {
                 .isEqualTo(serverNode);
     }
 
+    @Test
+    void testBindFailureDetection() {
+        Throwable ex = new java.net.BindException();
+        assertThat(NettyUtils.isBindFailure(ex)).isTrue();
+
+        ex = new Exception(new java.net.BindException());
+        assertThat(NettyUtils.isBindFailure(ex)).isTrue();
+
+        ex = new Exception();
+        assertThat(NettyUtils.isBindFailure(ex)).isFalse();
+
+        ex = new RuntimeException();
+        assertThat(NettyUtils.isBindFailure(ex)).isFalse();
+    }
+
     private void buildNettyServer(int serverId) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort()) {
             serverNode =
                     new ServerNode(
                             serverId, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
             service = new TestingGatewayService();
+            MetricGroup metricGroup = NOPMetricsGroup.newInstance();
             nettyServer =
                     new NettyServer(
                             conf,
                             serverNode.host(),
                             String.valueOf(serverNode.port()),
                             service,
-                            RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                    NOPMetricsGroup.newInstance()));
+                            metricGroup,
+                            RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
         }
     }

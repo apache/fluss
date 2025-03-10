@@ -5,10 +5,10 @@ sidebar_position: 3
 # Lakehouse Storage
 
 Lakehouse represents a new, open architecture that combines the best elements of data lakes and data warehouses.
-Lakehouse combines data lake scalability and cost-effectiveness with data warehouse reliability and preformance.
+Lakehouse combines data lake scalability and cost-effectiveness with data warehouse reliability and performance.
 
 Fluss leverages the well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, Delta Lake as
-the tiered storage layer. Currently, only Apache Paimon is supported, but more kinds of Lakehouse storage support are on the ways.
+the tiered storage layer. Currently, only Apache Paimon is supported, but more kinds of Lakehouse storage support are on the way.
 
 Fluss's datalake tiering service will compact Fluss's data to the Lakehouse storage continuously. The data in Lakehouse storage can be read both by Fluss's client in a streaming manner and accessed directly
 by external systems such as Flink, Spark, StarRocks and others. With data tiered in Lakehouse storage, Fluss
@@ -23,11 +23,11 @@ Lakehouse Storage disabled by default, you must enable it manually.
 First, you must configure the lakehouse storage in `server.yaml`. Take Paimon
 as an example, you must configure the following configurations:
 ```yaml
-lakehouse.storage: paimon
+datalake.format: paimon
 
 # the catalog config about Paimon, assuming using Filesystem catalog
-paimon.catalog.type: filesystem
-paimon.catalog.warehouse: /tmp/paimon_data_warehouse
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /tmp/paimon_data_warehouse
 ```
 
 ### Start The Datalake Tiering Service

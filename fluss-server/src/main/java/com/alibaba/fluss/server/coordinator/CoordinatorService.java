@@ -21,9 +21,14 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.metadata.Schema;
+import com.alibaba.fluss.metadata.DataLakeFormat;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.PartitionSpec;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
@@ -36,10 +41,14 @@ import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
+import com.alibaba.fluss.rpc.messages.CreatePartitionResponse;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.server.RpcServiceBase;
@@ -55,41 +64,45 @@ import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
+import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DataTypeRoot;
-import com.alibaba.fluss.utils.AutoPartitionStrategy;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import javax.annotation.Nullable;
 
-import java.util.Optional;
+import java.io.UncheckedIOException;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getCommitLakeTableSnapshotData;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.getPartitionSpec;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.utils.PartitionUtils.validatePartitionSpec;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
-
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
+
+    // null if the cluster hasn't configured datalake format
+    private final @Nullable DataLakeFormat dataLakeFormat;
 
     public CoordinatorService(
             Configuration conf,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             Supplier<EventManager> eventManagerSupplier,
-            ServerMetadataCache metadataCache) {
-        super(conf, remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataCache);
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager) {
+        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataCache, metadataManager);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.eventManagerSupplier = eventManagerSupplier;
+        this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
     }
 
     @Override
@@ -110,7 +123,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         } catch (InvalidDatabaseException e) {
             return FutureUtils.failedFuture(e);
         }
-        metadataManager.createDatabase(request.getDatabaseName(), request.isIgnoreIfExists());
+
+        DatabaseDescriptor databaseDescriptor;
+        if (request.getDatabaseJson() != null) {
+            databaseDescriptor = DatabaseDescriptor.fromJsonBytes(request.getDatabaseJson());
+        } else {
+            databaseDescriptor = DatabaseDescriptor.builder().build();
+        }
+        metadataManager.createDatabase(
+                request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -124,80 +145,80 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
-        CreateTableResponse response = new CreateTableResponse();
         TablePath tablePath = toTablePath(request.getTablePath());
+        tablePath.validate();
+
+        TableDescriptor tableDescriptor;
         try {
-            tablePath.validate();
-        } catch (InvalidTableException | InvalidDatabaseException e) {
-            return FutureUtils.failedFuture(e);
-        }
-
-        TableDescriptor tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
-
-        int bucketCount = defaultBucketNumber;
-        // not set distribution
-        if (!tableDescriptor.getTableDistribution().isPresent()) {
-            tableDescriptor = tableDescriptor.copy(defaultBucketNumber);
-        } else {
-            Optional<Integer> optBucketCount =
-                    tableDescriptor.getTableDistribution().get().getBucketCount();
-            // not set bucket number
-            if (!optBucketCount.isPresent()) {
-                tableDescriptor = tableDescriptor.copy(defaultBucketNumber);
+            tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
+        } catch (Exception e) {
+            if (e instanceof UncheckedIOException) {
+                throw new InvalidTableException(
+                        "Failed to parse table descriptor: " + e.getMessage());
             } else {
-                bucketCount = optBucketCount.get();
+                // wrap the validate message to InvalidTableException
+                throw new InvalidTableException(e.getMessage());
             }
         }
+
+        // apply system defaults if the config is not set
+        tableDescriptor = applySystemDefaults(tableDescriptor);
+
+        // the distribution and bucket count must be set now
+        //noinspection OptionalGetWithoutIsPresent
+        int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;
         // only when it's no partitioned table do we generate the assignment for it
         if (!tableDescriptor.isPartitioned()) {
-            int replicaFactor = tableDescriptor.getReplicationFactor(defaultReplicationFactor);
+            // the replication factor must be set now
+            int replicaFactor = tableDescriptor.getReplicationFactor();
             int[] servers = metadataCache.getLiveServerIds();
             tableAssignment =
                     TableAssignmentUtils.generateAssignment(bucketCount, replicaFactor, servers);
-        } else {
-            sanityCheckPartitionedTable(tableDescriptor);
         }
 
         // then create table;
         metadataManager.createTable(
                 tablePath, tableDescriptor, tableAssignment, request.isIgnoreIfExists());
 
-        return CompletableFuture.completedFuture(response);
+        return CompletableFuture.completedFuture(new CreateTableResponse());
     }
 
-    private void sanityCheckPartitionedTable(TableDescriptor tableDescriptor) {
-        AutoPartitionStrategy autoPartitionStrategy = tableDescriptor.getAutoPartitionStrategy();
-        if (!autoPartitionStrategy.isAutoPartitionEnabled()) {
-            throw new InvalidTableException(
-                    String.format(
-                            "Currently, partitioned table must enable auto partition, please set table property '%s' to true.",
-                            ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
-        } else if (autoPartitionStrategy.timeUnit() == null) {
-            throw new InvalidTableException(
-                    String.format(
-                            "Currently, partitioned table must set auto partition time unit when auto partition is enabled, please set table property '%s'.",
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
+    private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {
+        TableDescriptor newDescriptor = tableDescriptor;
+
+        // not set bucket num
+        if (!newDescriptor.getTableDistribution().isPresent()
+                || !newDescriptor.getTableDistribution().get().getBucketCount().isPresent()) {
+            newDescriptor = newDescriptor.withBucketCount(defaultBucketNumber);
         }
 
-        if (tableDescriptor.getPartitionKeys().size() > 1) {
+        // not set replication factor
+        Map<String, String> properties = newDescriptor.getProperties();
+        if (!properties.containsKey(ConfigOptions.TABLE_REPLICATION_FACTOR.key())) {
+            newDescriptor = newDescriptor.withReplicationFactor(defaultReplicationFactor);
+        }
+
+        // override the datalake format if the table hasn't set it and the cluster configured
+        if (dataLakeFormat != null
+                && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
+            newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+        }
+
+        // lake table can only be enabled when the cluster configures datalake format
+        String dataLakeEnabledValue =
+                newDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        boolean dataLakeEnabled = Boolean.parseBoolean(dataLakeEnabledValue);
+        if (dataLakeEnabled && dataLakeFormat == null) {
             throw new InvalidTableException(
                     String.format(
-                            "Currently, partitioned table only supports one partition key, but got partition keys %s.",
-                            tableDescriptor.getPartitionKeys()));
+                            "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
-        String partitionKey = tableDescriptor.getPartitionKeys().get(0);
-        Schema schema = tableDescriptor.getSchema();
-        int partitionIndex = schema.getColumnNames().indexOf(partitionKey);
-        DataType partitionDataType = schema.getColumns().get(partitionIndex).getDataType();
-        if (partitionDataType.getTypeRoot() != DataTypeRoot.STRING) {
-            throw new InvalidTableException(
-                    String.format(
-                            "Currently, partitioned table only supports STRING type partition key, but got partition key '%s' with data type %s.",
-                            partitionKey, partitionDataType));
-        }
+
+        return newDescriptor;
     }
 
     @Override
@@ -205,6 +226,64 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DropTableResponse response = new DropTableResponse();
         metadataManager.dropTable(
                 toTablePath(request.getTablePath()), request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<CreatePartitionResponse> createPartition(
+            CreatePartitionRequest request) {
+        CreatePartitionResponse response = new CreatePartitionResponse();
+        TablePath tablePath = toTablePath(request.getTablePath());
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
+            throw new TableNotPartitionedException(
+                    "Only partitioned table support create partition.");
+        }
+
+        // first, validate the partition spec, and get resolved partition spec.
+        PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
+        validatePartitionSpec(tableInfo, partitionSpec);
+        ResolvedPartitionSpec partitionToCreate =
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        tableInfo.getPartitionKeys(), partitionSpec);
+
+        // second, generate the PartitionAssignment.
+        int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
+        int[] servers = metadataCache.getLiveServerIds();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                TableAssignmentUtils.generateAssignment(
+                                tableInfo.getNumBuckets(), replicaFactor, servers)
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+
+        metadataManager.createPartition(
+                tableInfo.getTablePath(),
+                tableInfo.getTableId(),
+                partitionAssignment,
+                partitionToCreate,
+                request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
+        DropPartitionResponse response = new DropPartitionResponse();
+        TablePath tablePath = toTablePath(request.getTablePath());
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
+            throw new TableNotPartitionedException(
+                    "Only partitioned table support drop partition.");
+        }
+
+        // first, validate the partition spec.
+        PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
+        validatePartitionSpec(tableInfo, partitionSpec);
+        ResolvedPartitionSpec partitionToDrop =
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        tableInfo.getPartitionKeys(), partitionSpec);
+
+        metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 

@@ -17,12 +17,13 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * The config builder is used to create a {@link ConfigOption}.
@@ -99,7 +100,7 @@ public class ConfigBuilder {
      * @return The builder for the config option with the given key.
      */
     public static ConfigBuilder key(String key) {
-        Preconditions.checkNotNull(key);
+        checkNotNull(key);
         return new ConfigBuilder(key);
     }
 

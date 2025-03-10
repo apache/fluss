@@ -17,31 +17,18 @@
 package com.alibaba.fluss.connector.spark.utils;
 
 import com.alibaba.fluss.config.ConfigOption;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.FlussConfigUtils;
 import com.alibaba.fluss.connector.spark.SparkConnectorOptions;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.types.BigIntType;
-import com.alibaba.fluss.types.BooleanType;
-import com.alibaba.fluss.types.BytesType;
-import com.alibaba.fluss.types.CharType;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DateType;
-import com.alibaba.fluss.types.DecimalType;
-import com.alibaba.fluss.types.DoubleType;
-import com.alibaba.fluss.types.FloatType;
-import com.alibaba.fluss.types.IntType;
-import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.types.SmallIntType;
-import com.alibaba.fluss.types.StringType;
-import com.alibaba.fluss.types.TimestampType;
-import com.alibaba.fluss.types.TinyIntType;
 
-import org.apache.spark.sql.connector.expressions.Expressions;
 import org.apache.spark.sql.connector.expressions.Transform;
-import org.apache.spark.sql.types.Metadata;
-import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
+import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -79,7 +66,9 @@ public class SparkConversions {
                                                 field ->
                                                         new Schema.Column(
                                                                 field.name(),
-                                                                SparkConversions.toFlussType(field),
+                                                                SparkTypeUtils.toFlussType(
+                                                                                field.dataType())
+                                                                        .copy(field.nullable()),
                                                                 field.getComment()
                                                                         .getOrElse(() -> null)))
                                         .collect(Collectors.toList()))
@@ -134,89 +123,6 @@ public class SparkConversions {
                 .build();
     }
 
-    /** Convert Fluss's schema to Spark's schema. */
-    public static StructType toSparkSchema(Schema flussSchema) {
-        StructField[] fields = new StructField[flussSchema.getColumns().size()];
-        for (int i = 0; i < flussSchema.getColumns().size(); i++) {
-            fields[i] = toSparkStructField(flussSchema.getColumns().get(i));
-        }
-        return new StructType(fields);
-    }
-
-    /** Convert Fluss's partition keys to Spark's transforms. */
-    public static Transform[] toSparkTransforms(List<String> partitionKeys) {
-        if (partitionKeys == null || partitionKeys.isEmpty()) {
-            return new Transform[0];
-        }
-        Transform[] transforms = new Transform[partitionKeys.size()];
-        for (int i = 0; i < partitionKeys.size(); i++) {
-            transforms[i] = Expressions.identity(partitionKeys.get(i));
-        }
-        return transforms;
-    }
-
-    /** Convert Fluss's column to Spark's field. */
-    public static StructField toSparkStructField(Schema.Column flussColumn) {
-        StructField field =
-                new StructField(
-                        flussColumn.getName(),
-                        toSparkType(flussColumn.getDataType()),
-                        flussColumn.getDataType().isNullable(),
-                        Metadata.empty());
-        return flussColumn.getComment().isPresent()
-                ? field.withComment(flussColumn.getComment().get())
-                : field;
-    }
-
-    /** Convert Fluss's type to Spark's type. */
-    public static org.apache.spark.sql.types.DataType toSparkType(DataType flussDataType) {
-        return flussDataType.accept(FlussTypeToSparkType.INSTANCE);
-    }
-
-    /** Convert Spark's type to Fluss's type. */
-    public static DataType toFlussType(StructField sparkField) {
-        org.apache.spark.sql.types.DataType sparkType = sparkField.dataType();
-        boolean isNullable = sparkField.nullable();
-        if (sparkType instanceof org.apache.spark.sql.types.CharType) {
-            return new CharType(
-                    isNullable, ((org.apache.spark.sql.types.CharType) sparkType).length());
-        } else if (sparkType instanceof org.apache.spark.sql.types.StringType) {
-            return new StringType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.BooleanType) {
-            return new BooleanType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.BinaryType) {
-            return new BytesType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.DecimalType) {
-            return new DecimalType(
-                    isNullable,
-                    ((org.apache.spark.sql.types.DecimalType) sparkType).precision(),
-                    ((org.apache.spark.sql.types.DecimalType) sparkType).scale());
-        } else if (sparkType instanceof org.apache.spark.sql.types.ByteType) {
-            return new TinyIntType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.ShortType) {
-            return new SmallIntType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.IntegerType) {
-            return new IntType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.LongType) {
-            return new BigIntType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.FloatType) {
-            return new FloatType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.DoubleType) {
-            return new DoubleType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.DateType) {
-            return new DateType(isNullable);
-        } else if (sparkType instanceof org.apache.spark.sql.types.TimestampType) {
-            // spark only support 6 digits of precision
-            return new LocalZonedTimestampType(isNullable, 6);
-        } else if (sparkType instanceof org.apache.spark.sql.types.TimestampNTZType) {
-            // spark only support 6 digits of precision
-            return new TimestampType(isNullable, 6);
-        } else {
-            // TODO: support more data type
-            throw new UnsupportedOperationException("Unsupported data type: " + sparkType);
-        }
-    }
-
     private static Map<String, String> convertSparkOptionsToFlussTableProperties(
             Map<String, String> options) {
         Map<String, String> properties = new HashMap<>();
@@ -226,5 +132,25 @@ public class SparkConversions {
             }
         }
         return properties;
+    }
+
+    public static Configuration toFlussClientConfig(CaseInsensitiveStringMap options) {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                SparkConnectorOptions.BOOTSTRAP_SERVERS.key(),
+                options.get(SparkConnectorOptions.BOOTSTRAP_SERVERS.key()));
+        // forward all client configs
+        for (ConfigOption<?> option : FlussConfigUtils.CLIENT_OPTIONS.values()) {
+            if (options.get(option.key()) != null) {
+                flussConfig.setString(option.key(), options.get(option.key()));
+            }
+        }
+
+        // pass io tmp dir to fluss client.
+        flussConfig.setString(
+                ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR,
+                new File(options.get(SparkConnectorOptions.TMP_DIRS.key()), "/fluss")
+                        .getAbsolutePath());
+        return flussConfig;
     }
 }

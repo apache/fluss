@@ -18,7 +18,6 @@ package com.alibaba.fluss.plugin;
 
 import com.alibaba.fluss.plugin.jar.pluginb.TestServiceB;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Lists;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +34,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DefaultPluginManager}. */
@@ -63,14 +63,14 @@ public class DefaultPluginManagerTest extends PluginTestBase {
         final Path pluginRootFolderPath = pluginRootFolder.toPath();
         final File pluginAFolder = new File(pluginRootFolder, "A");
         final File pluginBFolder = new File(pluginRootFolder, "B");
-        Preconditions.checkState(pluginAFolder.mkdirs());
-        Preconditions.checkState(pluginBFolder.mkdirs());
+        checkState(pluginAFolder.mkdirs());
+        checkState(pluginBFolder.mkdirs());
         Files.copy(locateJarFile(PLUGIN_A).toPath(), Paths.get(pluginAFolder.toString(), PLUGIN_A));
         Files.copy(locateJarFile(PLUGIN_B).toPath(), Paths.get(pluginBFolder.toString(), PLUGIN_B));
         final PluginFinder descriptorsFactory =
                 new DirectoryBasedPluginFinder(pluginRootFolderPath);
         descriptors = descriptorsFactory.findPlugins();
-        Preconditions.checkState(descriptors.size() == 2);
+        checkState(descriptors.size() == 2);
     }
 
     @Test

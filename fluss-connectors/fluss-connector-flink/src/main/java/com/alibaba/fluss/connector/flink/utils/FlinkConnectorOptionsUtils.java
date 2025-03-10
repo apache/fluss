@@ -22,10 +22,12 @@ import com.alibaba.fluss.connector.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
+import org.apache.flink.table.types.logical.RowType;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Optional;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
@@ -60,6 +62,30 @@ public class FlinkConnectorOptionsUtils {
         }
         return options;
     }
+
+    public static int[] getBucketKeyIndexes(ReadableConfig tableOptions, RowType schema) {
+        Optional<String> bucketKey = tableOptions.getOptional(FlinkConnectorOptions.BUCKET_KEY);
+        if (!bucketKey.isPresent()) {
+            // log tables don't have bucket key by default
+            return new int[0];
+        }
+
+        String[] keys = bucketKey.get().split(",");
+        int[] indexes = new int[keys.length];
+        for (int i = 0; i < keys.length; i++) {
+            int index = schema.getFieldIndex(keys[i].trim());
+            if (index < 0) {
+                throw new ValidationException(
+                        String.format(
+                                "Field '%s' not found in the schema. Available fields are: %s",
+                                keys[i].trim(), schema.getFieldNames()));
+            }
+            indexes[i] = index;
+        }
+        return indexes;
+    }
+
+    // ----------------------------------------------------------------------------------------
 
     private static void validateScanStartupMode(ReadableConfig tableOptions) {
         ScanStartupMode scanStartupMode = tableOptions.get(SCAN_STARTUP_MODE);

@@ -17,10 +17,11 @@
 package com.alibaba.fluss.fs;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.WrappingProxy;
 
 import java.io.IOException;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * This class is a {@link WrappingProxy} for {@link FSDataInputStream} that is used to implement a
@@ -40,8 +41,8 @@ public class ClosingFSDataInputStream extends FSDataInputStreamWrapper
     private ClosingFSDataInputStream(
             FSDataInputStream delegate, SafetyNetCloseableRegistry registry, String debugInfo) {
         super(delegate);
-        this.registry = Preconditions.checkNotNull(registry);
-        this.debugInfo = Preconditions.checkNotNull(debugInfo);
+        this.registry = checkNotNull(registry);
+        this.debugInfo = checkNotNull(debugInfo);
         this.closed = false;
     }
 

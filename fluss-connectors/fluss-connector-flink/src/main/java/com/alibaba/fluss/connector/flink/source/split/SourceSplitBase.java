@@ -32,7 +32,7 @@ public abstract class SourceSplitBase implements SourceSplit {
 
     protected final TableBucket tableBucket;
 
-    @Nullable private final String partitionName;
+    @Nullable protected final String partitionName;
 
     public SourceSplitBase(TableBucket tableBucket, @Nullable String partitionName) {
         this.tableBucket = tableBucket;

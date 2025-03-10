@@ -35,7 +35,7 @@ public class UnionIterator<T> implements Iterator<T>, Iterable<T> {
 
     private Iterator<T> currentIterator;
 
-    private ArrayList<Iterator<T>> furtherIterators = new ArrayList<>();
+    private final ArrayList<Iterator<T>> furtherIterators = new ArrayList<>();
 
     private int nextIterator;
 

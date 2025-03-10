@@ -21,7 +21,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
-import org.apache.flink.util.Preconditions;
 
 import javax.annotation.Nullable;
 
@@ -31,6 +30,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** An implementation of {@link RecordsWithSplitIds} which contains records from multiple splits. */
 public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPos> {
@@ -55,18 +56,9 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     private @Nullable TableBucket currentTableBucket;
     private @Nullable Long currentSplitStoppingOffset;
 
-    // for multiple splits
-    public FlinkRecordsWithSplitIds(
-            Map<String, CloseableIterator<RecordAndPos>> splitRecords,
-            Iterator<String> splitIterator,
-            Iterator<TableBucket> tableBucketIterator,
+    public static FlinkRecordsWithSplitIds emptyRecords(
             FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
-        this(
-                splitRecords,
-                splitIterator,
-                tableBucketIterator,
-                new HashSet<>(),
-                flinkSourceReaderMetrics);
+        return new FlinkRecordsWithSplitIds(Collections.emptySet(), flinkSourceReaderMetrics);
     }
 
     // only for single split
@@ -132,13 +124,13 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     @Nullable
     @Override
     public RecordAndPos nextRecordFromSplit() {
-        Preconditions.checkNotNull(
+        checkNotNull(
                 currentRecordIterator,
                 "Make sure nextSplit() did not return null before "
                         + "iterate over the records split.");
         if (currentRecordIterator.hasNext()) {
             RecordAndPos recordAndPos = currentRecordIterator.next();
-            long offset = recordAndPos.record().getOffset();
+            long offset = recordAndPos.record().logOffset();
             // the record current offset is not less than the stopping offset,
             // shouldn't emit it
             if (offset >= currentSplitStoppingOffset) {

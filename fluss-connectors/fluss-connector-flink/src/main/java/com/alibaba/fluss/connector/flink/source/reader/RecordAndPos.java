@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.connector.flink.source.reader;
 
-import com.alibaba.fluss.client.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.connector.flink.source.emitter.FlinkRecordEmitter;
 
 import java.util.Objects;

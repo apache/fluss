@@ -53,9 +53,9 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
             Configuration conf, ReplicaManager replicaManager, ServerNode localNode) {
         this.replicaManager = replicaManager;
         this.localNode = localNode;
-        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
         this.maxFetchSizeForBucket =
-                (int) conf.get(ConfigOptions.LOG_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
     }
 
     @Override
@@ -93,7 +93,7 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     public Optional<FetchLogRequest> buildFetchLogRequest(
             Map<TableBucket, BucketFetchStatus> replicas) {
         return RemoteLeaderEndpoint.buildFetchLogRequest(
-                replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket);
+                replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket, -1, -1);
     }
 
     @Override

@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -76,9 +77,15 @@ public class LookupClient {
     }
 
     public CompletableFuture<byte[]> lookup(TableBucket tableBucket, byte[] keyBytes) {
-        Lookup lookup = new Lookup(tableBucket, keyBytes);
+        LookupQuery lookup = new LookupQuery(tableBucket, keyBytes);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
+    }
+
+    public CompletableFuture<List<byte[]>> prefixLookup(TableBucket tableBucket, byte[] keyBytes) {
+        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tableBucket, keyBytes);
+        lookupQueue.appendLookup(prefixLookup);
+        return prefixLookup.future();
     }
 
     public void close(Duration timeout) {

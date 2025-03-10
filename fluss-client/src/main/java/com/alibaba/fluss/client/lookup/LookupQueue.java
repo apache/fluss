@@ -28,29 +28,33 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A queue that buffers the pending lookup operations and provides a list of {@link Lookup} when
- * call method {@link #drain()}.
+ * A queue that buffers the pending lookup operations and provides a list of {@link LookupQuery}
+ * when call method {@link #drain()}.
  */
 @ThreadSafe
 @Internal
 class LookupQueue {
 
     private volatile boolean closed;
-    private final ArrayBlockingQueue<Lookup> lookupQueue;
+    // buffering both the Lookup and PrefixLookup.
+    private final ArrayBlockingQueue<AbstractLookupQuery<?>> lookupQueue;
     private final int maxBatchSize;
+    private final long batchTimeoutNanos;
 
     LookupQueue(Configuration conf) {
         this.lookupQueue =
                 new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
+        this.batchTimeoutNanos = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
         this.closed = false;
     }
 
-    void appendLookup(Lookup lookup) {
+    void appendLookup(AbstractLookupQuery<?> lookup) {
         if (closed) {
             throw new IllegalStateException(
                     "Can not append lookup operation since the LookupQueue is closed.");
         }
+
         try {
             lookupQueue.put(lookup);
         } catch (InterruptedException e) {
@@ -62,22 +66,37 @@ class LookupQueue {
         return !lookupQueue.isEmpty();
     }
 
-    /** Drain a batch of {@link Lookup}s from the lookup queue. */
-    List<Lookup> drain() throws Exception {
-        List<Lookup> lookups = new ArrayList<>(maxBatchSize);
-        Lookup firstLookup = lookupQueue.poll(300, TimeUnit.MILLISECONDS);
-        if (firstLookup != null) {
-            lookups.add(firstLookup);
-            lookupQueue.drainTo(lookups, maxBatchSize - 1);
+    /** Drain a batch of {@link LookupQuery}s from the lookup queue. */
+    List<AbstractLookupQuery<?>> drain() throws Exception {
+        final long startNanos = System.nanoTime();
+        List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(maxBatchSize);
+        int count = 0;
+        while (true) {
+            long waitNanos = batchTimeoutNanos - (System.nanoTime() - startNanos);
+            if (waitNanos <= 0) {
+                break;
+            }
+
+            AbstractLookupQuery<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+            if (lookup == null) {
+                break;
+            }
+            lookupOperations.add(lookup);
+            count++;
+            int transferred = lookupQueue.drainTo(lookupOperations, maxBatchSize - count);
+            count += transferred;
+            if (count >= maxBatchSize) {
+                break;
+            }
         }
-        return lookups;
+        return lookupOperations;
     }
 
-    /** Drain all the {@link Lookup}s from the lookup queue. */
-    List<Lookup> drainAll() {
-        List<Lookup> lookups = new ArrayList<>(lookupQueue.size());
-        lookupQueue.drainTo(lookups);
-        return lookups;
+    /** Drain all the {@link LookupQuery}s from the lookup queue. */
+    List<AbstractLookupQuery<?>> drainAll() {
+        List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
+        lookupQueue.drainTo(lookupOperations);
+        return lookupOperations;
     }
 
     public void close() {

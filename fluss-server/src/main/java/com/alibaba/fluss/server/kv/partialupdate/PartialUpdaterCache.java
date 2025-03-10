@@ -24,6 +24,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.Arrays;
+
 /** The cache for {@link PartialUpdater}. */
 @ThreadSafe
 public class PartialUpdaterCache {
@@ -37,22 +39,15 @@ public class PartialUpdaterCache {
         this.rowPartialUpdaters = Caffeine.newBuilder().maximumSize(5).build();
     }
 
+    // TODO: extend to tableId and schemaId when the cache is shared across all tables
     public PartialUpdater getOrCreatePartialUpdater(
-            long tableId, int schemaId, KvFormat kvFormat, Schema schema, int[] targetColumns) {
+            KvFormat kvFormat, Schema schema, int[] targetColumns) {
         return rowPartialUpdaters.get(
-                getPartialUpdaterKey(tableId, schemaId, targetColumns),
+                getPartialUpdaterKey(targetColumns),
                 k -> new PartialUpdater(kvFormat, schema, targetColumns));
     }
 
-    private String getPartialUpdaterKey(long tableId, int schemaId, int[] targetColumns) {
-        StringBuilder builder = new StringBuilder();
-        builder.append(tableId).append("-").append(schemaId).append("-");
-        for (int i = 0; i < targetColumns.length; i++) {
-            builder.append(targetColumns[i]);
-            if (i < targetColumns.length - 1) {
-                builder.append("-");
-            }
-        }
-        return builder.toString();
+    private String getPartialUpdaterKey(int[] targetColumns) {
+        return Arrays.toString(targetColumns);
     }
 }

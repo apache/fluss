@@ -20,7 +20,8 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,13 +29,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ExecutorThreadFactoryTest {
 
     @Test
-    void testThreadWithWithCustomExceptionHandler() {
-        AtomicBoolean hasHandledUncaughtException = new AtomicBoolean(false);
+    void testThreadWithWithCustomExceptionHandler() throws Exception {
+        CompletableFuture<Throwable> errorFuture = new CompletableFuture<>();
         ExecutorThreadFactory executorThreadFactory =
                 new ExecutorThreadFactory.Builder()
                         .setPoolName("test-executor-thread-factory-pool-custom")
                         .setThreadPriority(1)
-                        .setExceptionHandler(new TestExceptionHandler(hasHandledUncaughtException))
+                        .setExceptionHandler(new TestExceptionHandler(errorFuture))
                         .build();
         Thread thread =
                 executorThreadFactory.newThread(
@@ -42,10 +43,9 @@ public class ExecutorThreadFactoryTest {
                             throw new RuntimeException("throw exception");
                         });
         thread.start();
-        // TestExceptionHandler should set hasHandledUncaughtException to true
-        while (!hasHandledUncaughtException.get()) {
-            System.out.println("wait");
-        }
+
+        Throwable throwable = errorFuture.get(1, TimeUnit.MINUTES);
+        assertThat(throwable).isInstanceOf(RuntimeException.class).hasMessage("throw exception");
     }
 
     @Test
@@ -67,15 +67,15 @@ public class ExecutorThreadFactoryTest {
 
     private static class TestExceptionHandler implements Thread.UncaughtExceptionHandler {
 
-        private final AtomicBoolean hasHandledUncaughtException;
+        private final CompletableFuture<Throwable> errorFuture;
 
-        public TestExceptionHandler(AtomicBoolean hasHandledUncaughtException) {
-            this.hasHandledUncaughtException = hasHandledUncaughtException;
+        public TestExceptionHandler(CompletableFuture<Throwable> errorFuture) {
+            this.errorFuture = errorFuture;
         }
 
         @Override
         public void uncaughtException(Thread t, Throwable e) {
-            hasHandledUncaughtException.set(true);
+            errorFuture.complete(e);
         }
     }
 }

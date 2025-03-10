@@ -17,12 +17,15 @@
 package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.lang.reflect.Field;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -95,9 +98,8 @@ public class MemoryUtils {
      * @return native memory address wrapped by the given {@link ByteBuffer}
      */
     static long getByteBufferAddress(ByteBuffer buffer) {
-        Preconditions.checkNotNull(buffer, "buffer is null");
-        Preconditions.checkArgument(
-                buffer.isDirect(), "Can't get address of a non-direct ByteBuffer.");
+        checkNotNull(buffer, "buffer is null");
+        checkArgument(buffer.isDirect(), "Can't get address of a non-direct ByteBuffer.");
 
         long offHeapAddress;
         try {
@@ -106,8 +108,8 @@ public class MemoryUtils {
             throw new Error("Could not access direct byte buffer address field.", t);
         }
 
-        Preconditions.checkState(offHeapAddress > 0, "negative pointer or size");
-        Preconditions.checkState(
+        checkState(offHeapAddress > 0, "negative pointer or size");
+        checkState(
                 offHeapAddress < Long.MAX_VALUE - Integer.MAX_VALUE,
                 "Segment initialized with too large address: "
                         + offHeapAddress

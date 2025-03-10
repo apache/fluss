@@ -18,25 +18,24 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.memory.ManagedPagedOutputView;
+import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
 import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A batch of log records managed in ARROW format that is or will be sent to server by {@link
@@ -48,17 +47,17 @@ import java.util.stream.Collectors;
 @Internal
 public class ArrowLogWriteBatch extends WriteBatch {
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
-    private final ManagedPagedOutputView outputView;
+    private final AbstractPagedOutputView outputView;
 
     public ArrowLogWriteBatch(
             TableBucket tableBucket,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
-            MemorySegment initMemorySegment,
-            MemorySegmentPool memorySegmentSource) {
-        super(tableBucket, physicalTablePath);
-        this.outputView = new ManagedPagedOutputView(initMemorySegment, memorySegmentSource);
+            AbstractPagedOutputView outputView,
+            long createdMs) {
+        super(tableBucket, physicalTablePath, createdMs);
+        this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView);
     }
@@ -66,13 +65,12 @@ public class ArrowLogWriteBatch extends WriteBatch {
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
-        Preconditions.checkArgument(
+        checkArgument(
                 writeRecord.getTargetColumns() == null,
                 "target columns must be null for log record");
-        Preconditions.checkArgument(
-                writeRecord.getKey() == null, "key must be null for log record");
-        Preconditions.checkNotNull(row != null, "row must not be null for log record");
-        Preconditions.checkNotNull(callback, "write callback must be not null");
+        checkArgument(writeRecord.getKey() == null, "key must be null for log record");
+        checkNotNull(row != null, "row must not be null for log record");
+        checkNotNull(callback, "write callback must be not null");
         if (recordsBuilder.isFull() || recordsBuilder.isClosed()) {
             return false;
         } else {
@@ -81,20 +79,6 @@ public class ArrowLogWriteBatch extends WriteBatch {
             callbacks.add(callback);
             return true;
         }
-    }
-
-    @Override
-    public void serialize() {
-        try {
-            recordsBuilder.serialize();
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to serialize Arrow batch to memory buffer.", e);
-        }
-    }
-
-    @Override
-    public boolean trySerialize() {
-        return recordsBuilder.trySerialize();
     }
 
     @Override
@@ -118,15 +102,13 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public int sizeInBytes() {
-        return recordsBuilder.getSizeInBytes();
+    public int estimatedSizeInBytes() {
+        return recordsBuilder.estimatedSizeInBytes();
     }
 
     @Override
-    public List<MemorySegment> memorySegments() {
-        return outputView.getSegmentBytesViewList().stream()
-                .map(MemorySegmentBytesView::getMemorySegment)
-                .collect(Collectors.toList());
+    public List<MemorySegment> pooledMemorySegments() {
+        return outputView.allocatedPooledSegments();
     }
 
     @Override

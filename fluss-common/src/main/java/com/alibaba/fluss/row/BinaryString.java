@@ -22,7 +22,6 @@ import com.alibaba.fluss.memory.MemorySegment;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
@@ -525,7 +524,7 @@ public final class BinaryString extends BinarySection
                 // fallback
                 return javaToUpperCase();
             }
-            int upper = Character.toUpperCase((int) b);
+            int upper = Character.toUpperCase(b);
             if (upper > 127) {
                 // fallback
                 return javaToUpperCase();
@@ -559,7 +558,7 @@ public final class BinaryString extends BinarySection
                 // fallback
                 return javaToLowerCase();
             }
-            int lower = Character.toLowerCase((int) b);
+            int lower = Character.toLowerCase(b);
             if (lower > 127) {
                 // fallback
                 return javaToLowerCase();
@@ -808,13 +807,9 @@ public final class BinaryString extends BinarySection
     }
 
     public static int defaultEncodeUTF8(String str, byte[] bytes) {
-        try {
-            byte[] buffer = str.getBytes("UTF-8");
-            System.arraycopy(buffer, 0, bytes, 0, buffer.length);
-            return buffer.length;
-        } catch (UnsupportedEncodingException e) {
-            throw new RuntimeException("encodeUTF8 error", e);
-        }
+        byte[] buffer = str.getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(buffer, 0, bytes, 0, buffer.length);
+        return buffer.length;
     }
 
     public static String decodeUTF8(byte[] input, int offset, int byteLen) {

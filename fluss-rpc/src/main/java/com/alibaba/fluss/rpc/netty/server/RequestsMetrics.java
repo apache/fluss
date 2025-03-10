@@ -64,7 +64,11 @@ public class RequestsMetrics {
     public static RequestsMetrics createTabletServerRequestMetrics(MetricGroup serverMetricsGroup) {
         List<ApiKeys> apiKeys =
                 Arrays.asList(
-                        ApiKeys.PRODUCE_LOG, ApiKeys.PUT_KV, ApiKeys.LOOKUP, ApiKeys.FETCH_LOG);
+                        ApiKeys.PRODUCE_LOG,
+                        ApiKeys.PUT_KV,
+                        ApiKeys.LOOKUP,
+                        ApiKeys.FETCH_LOG,
+                        ApiKeys.PREFIX_LOOKUP);
         return new RequestsMetrics(serverMetricsGroup, apiKeys);
     }
 
@@ -93,6 +97,8 @@ public class RequestsMetrics {
                 return "putKv";
             case LOOKUP:
                 return "lookup";
+            case PREFIX_LOOKUP:
+                return "prefixLookup";
             case FETCH_LOG:
                 return isFromFollower ? "fetchLogFollower" : "fetchLogClient";
             default:

@@ -17,12 +17,13 @@
 package com.alibaba.fluss.types;
 
 import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.utils.Preconditions;
 
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -44,7 +45,7 @@ public abstract class DataType implements Serializable {
 
     public DataType(boolean isNullable, DataTypeRoot typeRoot) {
         this.isNullable = isNullable;
-        this.typeRoot = Preconditions.checkNotNull(typeRoot);
+        this.typeRoot = checkNotNull(typeRoot);
     }
 
     /** Returns whether a value of this type can be {@code null}. */

@@ -22,15 +22,13 @@ import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.utils.MathUtils;
 
-import javax.annotation.Nullable;
-
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** The bucket assigner use round-robin strategy. */
 @Internal
-public class RoundRobinBucketAssigner implements BucketAssigner {
+public class RoundRobinBucketAssigner extends DynamicBucketAssigner {
     private final PhysicalTablePath physicalTablePath;
     private final AtomicInteger counter = new AtomicInteger(new Random().nextInt());
 
@@ -39,12 +37,7 @@ public class RoundRobinBucketAssigner implements BucketAssigner {
     }
 
     @Override
-    public void close() {
-        // do nothing now.
-    }
-
-    @Override
-    public int assignBucket(@Nullable byte[] key, Cluster cluster) {
+    public int assignBucket(Cluster cluster) {
         int nextValue = counter.getAndIncrement();
         List<BucketLocation> bucketsForTable =
                 cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
@@ -61,5 +54,10 @@ public class RoundRobinBucketAssigner implements BucketAssigner {
     @Override
     public boolean abortIfBatchFull() {
         return false;
+    }
+
+    @Override
+    public void onNewBatch(Cluster cluster, int prevBucketId) {
+        // do nothing
     }
 }

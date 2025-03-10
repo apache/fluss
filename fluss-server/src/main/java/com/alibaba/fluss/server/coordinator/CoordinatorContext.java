@@ -189,6 +189,21 @@ public class CoordinatorContext {
                                                         new TableBucket(tableId, bucket), server));
                                     }
                                 }));
+        // Iterate over partitioned tables
+        partitionAssignments.forEach(
+                (tablePartition, assignments) ->
+                        assignments.forEach(
+                                (bucket, replicas) -> {
+                                    if (replicas.contains(server)) {
+                                        replicasInServer.add(
+                                                new TableBucketReplica(
+                                                        new TableBucket(
+                                                                tablePartition.getTableId(),
+                                                                tablePartition.getPartitionId(),
+                                                                bucket),
+                                                        server));
+                                    }
+                                }));
         return replicasInServer;
     }
 
@@ -202,6 +217,10 @@ public class CoordinatorContext {
 
     public void putPartition(long partitionId, String partitionName) {
         this.partitionNameById.put(partitionId, partitionName);
+    }
+
+    public TableInfo getTableInfoById(long tableId) {
+        return this.tableInfoById.get(tableId);
     }
 
     public TablePath getTablePathById(long tableId) {
@@ -384,6 +403,16 @@ public class CoordinatorContext {
     }
 
     @VisibleForTesting
+    protected int replicaCounts(long tableId) {
+        return getTableAssignment(tableId).values().stream().mapToInt(List::size).sum();
+    }
+
+    @VisibleForTesting
+    protected int replicaCounts(TablePartition tablePartition) {
+        return getPartitionAssignment(tablePartition).values().stream().mapToInt(List::size).sum();
+    }
+
+    @VisibleForTesting
     protected Map<Integer, List<Integer>> getPartitionAssignment(TablePartition tablePartition) {
         return partitionAssignments.getOrDefault(tablePartition, Collections.emptyMap());
     }
@@ -441,15 +470,6 @@ public class CoordinatorContext {
         }
     }
 
-    private boolean isToBeDeleted(TableBucket tableBucket) {
-        if (tableBucket.getPartitionId() == null) {
-            return isTableQueuedForDeletion(tableBucket.getTableId());
-        } else {
-            return isPartitionQueuedForDeletion(
-                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
-        }
-    }
-
     public void putBucketStateIfNotExists(TableBucket tableBucket, BucketState targetState) {
         bucketStates.putIfAbsent(tableBucket, targetState);
     }
@@ -491,6 +511,15 @@ public class CoordinatorContext {
 
     public Set<TablePartition> getPartitionsToBeDeleted() {
         return partitionsToBeDeleted;
+    }
+
+    public boolean isToBeDeleted(TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() == null) {
+            return isTableQueuedForDeletion(tableBucket.getTableId());
+        } else {
+            return isPartitionQueuedForDeletion(
+                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
+        }
     }
 
     public boolean isTableQueuedForDeletion(long tableId) {

@@ -18,8 +18,11 @@ package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.compression.ArrowCompressionType;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
+import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.utils.ArrayUtils;
 
 import java.time.Duration;
@@ -227,6 +230,48 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> BACKGROUND_THREADS =
+            key("server.background.threads")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The number of threads to use for various background processing tasks.");
+
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_MEMORY_SIZE =
+            key("server.buffer.memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("256mb"))
+                    .withDescription(
+                            "The total bytes of memory the server can use, e.g, buffer write-ahead-log rows.");
+
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_PAGE_SIZE =
+            key("server.buffer.page-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("128kb"))
+                    .withDescription(
+                            "Size of every page in memory buffers ('"
+                                    + SERVER_BUFFER_MEMORY_SIZE.key()
+                                    + "').");
+
+    public static final ConfigOption<MemorySize> SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE =
+            key("server.buffer.per-request-memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("16mb"))
+                    .withDescription(
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closes multiple of "
+                                    + SERVER_BUFFER_PAGE_SIZE.key()
+                                    + "It must be greater than or equal to "
+                                    + SERVER_BUFFER_PAGE_SIZE.key()
+                                    + ". "
+                                    + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
+
+    public static final ConfigOption<Duration> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
+            key("server.buffer.wait-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
+                    .withDescription(
+                            "Defines how long the buffer pool will block when waiting for segments to become available.");
+
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------
@@ -251,27 +296,26 @@ public class ConfigOptions {
     //  ZooKeeper Client Settings
     // ------------------------------------------------------------------------
 
-    public static final ConfigOption<Integer> ZOOKEEPER_SESSION_TIMEOUT =
+    public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
-                    .intType()
-                    .defaultValue(60000)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(60_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.session-timeout")
-                    .withDescription(
-                            "Defines the session timeout for the ZooKeeper session in ms.");
+                    .withDescription("Defines the session timeout for the ZooKeeper session.");
 
-    public static final ConfigOption<Integer> ZOOKEEPER_CONNECTION_TIMEOUT =
+    public static final ConfigOption<Duration> ZOOKEEPER_CONNECTION_TIMEOUT =
             key("zookeeper.client.connection-timeout")
-                    .intType()
-                    .defaultValue(15000)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(15_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.connection-timeout")
-                    .withDescription("Defines the connection timeout for ZooKeeper in ms.");
+                    .withDescription("Defines the connection timeout for ZooKeeper.");
 
-    public static final ConfigOption<Integer> ZOOKEEPER_RETRY_WAIT =
+    public static final ConfigOption<Duration> ZOOKEEPER_RETRY_WAIT =
             key("zookeeper.client.retry-wait")
-                    .intType()
-                    .defaultValue(5000)
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(5_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.retry-wait")
-                    .withDescription("Defines the pause between consecutive retries in ms.");
+                    .withDescription("Defines the pause between consecutive retries.");
 
     public static final ConfigOption<Integer> ZOOKEEPER_MAX_RETRY_ATTEMPTS =
             key("zookeeper.client.max-retry-attempts")
@@ -378,6 +422,14 @@ public class ConfigOptions {
                             "The purge number (in number of requests) of the write operation manager, "
                                     + "the default value is 1000.");
 
+    public static final ConfigOption<Integer> LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER =
+            key("log.replica.fetch-operation-purge-number")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "The purge number (in number of requests) of the fetch log operation manager, "
+                                    + "the default value is 1000.");
+
     public static final ConfigOption<Integer> LOG_REPLICA_FETCHER_NUMBER =
             key("log.replica.fetcher-number")
                     .intType()
@@ -390,31 +442,54 @@ public class ConfigOptions {
                                     + "tablet server at the cost of higher CPU and memory utilization.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_FETCH_BACKOFF_INTERVAL =
-            key("log.replica.fetch-backoff-interval")
+            key("log.replica.fetch.backoff-interval")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(1))
-                    .withDescription("The amount of time to sleep when fetch bucket error occurs.");
+                    .withDescription("The amount of time to sleep when fetch bucket error occurs.")
+                    .withFallbackKeys("log.replica.fetch-backoff-interval");
 
-    public static final ConfigOption<MemorySize> LOG_FETCH_MAX_BYTES =
-            key("log.fetch.max-bytes")
+    public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES =
+            key("log.replica.fetch.max-bytes")
                     .memoryType()
                     .defaultValue(MemorySize.parse("16mb"))
                     .withDescription(
-                            "The maximum amount of data the server should return for a fetch request. "
-                                    + "Records are fetched in batches for log scanner or follower, for one request batch, "
-                                    + "and if the first record batch in the first non-empty bucket of the fetch is "
-                                    + "larger than this value, the record batch will still be returned to ensure that "
-                                    + "the fetch can make progress. As such, this is not a absolute maximum. Note that "
-                                    + "the fetcher performs multiple fetches in parallel.");
+                            "The maximum amount of data the server should return for a fetch request from follower. "
+                                    + "Records are fetched in batches, and if the first record batch in the first "
+                                    + "non-empty bucket of the fetch is larger than this value, the record batch "
+                                    + "will still be returned to ensure that the fetch can make progress. As such, "
+                                    + "this is not a absolute maximum. Note that the fetcher performs multiple fetches "
+                                    + "in parallel.")
+                    .withDeprecatedKeys("log.fetch.max-bytes");
 
-    public static final ConfigOption<MemorySize> LOG_FETCH_MAX_BYTES_FOR_BUCKET =
-            key("log.fetch.max-bytes-for-bucket")
+    public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET =
+            key("log.replica.fetch.max-bytes-for-bucket")
                     .memoryType()
                     .defaultValue(MemorySize.parse("1mb"))
                     .withDescription(
-                            "The maximum amount of data the server should return for a table bucket in fetch request. "
-                                    + "Records are fetched in batches for consumer or follower, for one request batch, "
-                                    + "the max bytes size is config by this option.");
+                            "The maximum amount of data the server should return for a table bucket in fetch request "
+                                    + "from follower. Records are fetched in batches, the max bytes size is "
+                                    + "config by this option.")
+                    .withDeprecatedKeys("log.fetch.max-bytes-for-bucket");
+
+    public static final ConfigOption<Duration> LOG_REPLICA_FETCH_WAIT_MAX_TIME =
+            key("log.replica.fetch.wait-max-time")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(500))
+                    .withDescription(
+                            "The maximum time to wait for enough bytes to be available for a fetch log request "
+                                    + "from follower to response. This value should always be less than the "
+                                    + "'log.replica.max-lag-time' at all times to prevent frequent shrinking of ISR for "
+                                    + "low throughput tables");
+
+    public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MIN_BYTES =
+            key("log.replica.fetch.min-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1b"))
+                    .withDescription(
+                            "The minimum bytes expected for each fetch log request from follower to response. "
+                                    + "If not enough bytes, wait up to "
+                                    + LOG_REPLICA_FETCH_WAIT_MAX_TIME.key()
+                                    + " time to return.");
 
     public static final ConfigOption<Integer> LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER =
             key("log.replica.min-in-sync-replicas-number")
@@ -556,19 +631,29 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BUFFER_MEMORY_SIZE.key()
                                     + "').");
 
+    public static final ConfigOption<MemorySize> CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE =
+            key("client.writer.buffer.per-request-memory-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("16mb"))
+                    .withDescription(
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closes multiple of "
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + "It must be greater than or equal to "
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + ". "
+                                    + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_BUFFER_WAIT_TIMEOUT =
+            key("client.writer.buffer.wait-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
+                    .withDescription(
+                            "Defines how long the writer will block when waiting for segments to become available.");
+
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BATCH_SIZE =
             key("client.writer.batch-size")
                     .memoryType()
                     .defaultValue(MemorySize.parse("2mb"))
-                    .withDescription(
-                            "The writer or walBuilder will attempt to batch records together into one batch for"
-                                    + " the same bucket. This helps performance on both the client and the server.");
-
-    @Deprecated
-    public static final ConfigOption<MemorySize> CLIENT_WRITER_LEGACY_BATCH_SIZE =
-            key("client.writer.legacy.batch-size")
-                    .memoryType()
-                    .defaultValue(MemorySize.parse("64kb"))
                     .withDescription(
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
@@ -590,8 +675,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BATCH_SIZE.key()
                                     + " worth of rows for a bucket it will be sent immediately regardless of this setting, "
                                     + "however if we have fewer than this many bytes accumulated for this bucket we will delay"
-                                    + " for the specified time waiting for more records to show up. This setting defaults "
-                                    + "to 100ms");
+                                    + " for the specified time waiting for more records to show up.");
 
     public static final ConfigOption<NoKeyAssigner> CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER =
             key("client.writer.bucket.no-key-assigner")
@@ -677,7 +761,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_ENABLE_IDEMPOTENCE.key()
                                     + " is set to true. When the number of inflight "
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
-                                    + "requests to complete before sending out new requests. This setting defaults to 5");
+                                    + "requests to complete before sending out new requests.");
 
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
@@ -707,10 +791,48 @@ public class ConfigOptions {
                                     + "The Scanner will cache the records from each fetch request and returns "
                                     + "them incrementally from each poll.");
 
+    public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
+            key("client.scanner.log.fetch.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("16mb"))
+                    .withDescription(
+                            "The maximum amount of data the server should return for a fetch request from client. "
+                                    + "Records are fetched in batches, and if the first record batch in the first "
+                                    + "non-empty bucket of the fetch is larger than this value, the record batch "
+                                    + "will still be returned to ensure that the fetch can make progress. As such, "
+                                    + "this is not a absolute maximum.");
+
+    public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET =
+            key("client.scanner.log.fetch.max-bytes-for-bucket")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1mb"))
+                    .withDescription(
+                            "The maximum amount of data the server should return for a table bucket in fetch request "
+                                    + "from client. Records are fetched in batches, the max bytes size is config by "
+                                    + "this option.");
+
+    public static final ConfigOption<Duration> CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME =
+            key("client.scanner.log.fetch.wait-max-time")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(500))
+                    .withDescription(
+                            "The maximum time to wait for enough bytes to be available for a fetch log "
+                                    + "request from client to response.");
+
+    public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MIN_BYTES =
+            key("client.scanner.log.fetch.min-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1b"))
+                    .withDescription(
+                            "The minimum bytes expected for each fetch log request from client to response. "
+                                    + "If not enough bytes, wait up to "
+                                    + CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME.key()
+                                    + " time to return.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
-                    .defaultValue(256)
+                    .defaultValue(25600)
                     .withDescription("The maximum number of pending lookup operations.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
@@ -726,6 +848,14 @@ public class ConfigOptions {
                     .defaultValue(128)
                     .withDescription(
                             "The maximum number of unacknowledged lookup requests for lookup operations.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_BATCH_TIMEOUT =
+            key("client.lookup.batch-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The maximum time to wait for the lookup batch to full, if this timeout is reached, "
+                                    + "the lookup batch will be closed to send.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
@@ -796,6 +926,23 @@ public class ConfigOptions {
                             "The format of the log records in log store. The default value is 'arrow'. "
                                     + "The supported formats are 'arrow' and 'indexed'.");
 
+    public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
+            key("table.log.arrow.compression.type")
+                    .enumType(ArrowCompressionType.class)
+                    .defaultValue(ArrowCompressionType.ZSTD)
+                    .withDescription(
+                            "The compression type of the log records if the log format is set to 'ARROW'. "
+                                    + "The candidate compression type is "
+                                    + Arrays.toString(ArrowCompressionType.values()));
+
+    public static final ConfigOption<Integer> TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL =
+            key("table.log.arrow.compression.zstd.level")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The compression level of ZSTD for the log records if the log format is set to 'ARROW' "
+                                    + "and the compression type is set to 'ZSTD'. The valid range is 1 to 22.");
+
     public static final ConfigOption<KvFormat> TABLE_KV_FORMAT =
             key("table.kv.format")
                     .enumType(KvFormat.class)
@@ -815,9 +962,10 @@ public class ConfigOptions {
     public static final ConfigOption<AutoPartitionTimeUnit> TABLE_AUTO_PARTITION_TIME_UNIT =
             key("table.auto-partition.time-unit")
                     .enumType(AutoPartitionTimeUnit.class)
-                    .noDefaultValue()
+                    .defaultValue(AutoPartitionTimeUnit.DAY)
                     .withDescription(
                             "The time granularity for auto created partitions. "
+                                    + "The default value is 'DAY'. "
                                     + "Valid values are 'HOUR', 'DAY', 'MONTH', 'QUARTER', 'YEAR'. "
                                     + "If the value is 'HOUR', the partition format for "
                                     + "auto created is yyyyMMddHH. "
@@ -840,23 +988,25 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_PRECREATE =
             key("table.auto-partition.num-precreate")
                     .intType()
-                    .defaultValue(4)
+                    .defaultValue(2)
                     .withDescription(
                             "The number of partitions to pre-create for auto created partitions in each check for auto partition. "
                                     + "For example, if the current check time is 2024-11-11 and the value is "
                                     + "configured as 3, then partitions 20241111, 20241112, 20241113 will be pre-created. "
-                                    + "If any one partition exists, it'll skip creating the partition.");
+                                    + "If any one partition exists, it'll skip creating the partition. "
+                                    + "The default value is 2, which means 2 partitions will be pre-created. "
+                                    + "If the 'table.auto-partition.time-unit' is 'DAY'(default), one precreated partition is for today and another one is for tomorrow.");
 
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_RETENTION =
             key("table.auto-partition.num-retention")
                     .intType()
-                    .defaultValue(-1)
+                    .defaultValue(7)
                     .withDescription(
                             "The number of history partitions to retain for auto created partitions in each check for auto partition. "
-                                    + "The default value is -1 which means retain all partitions. "
                                     + "For example, if the current check time is 2024-11-11, time-unit is DAY, and the value is "
                                     + "configured as 3, then the history partitions 20241108, 20241109, 20241110 will be retained. "
-                                    + "The partitions earlier than 20241108 will be deleted.");
+                                    + "The partitions earlier than 20241108 will be deleted. "
+                                    + "The default value is 7.");
 
     public static final ConfigOption<Duration> TABLE_LOG_TTL =
             key("table.log.ttl")
@@ -883,6 +1033,36 @@ public class ConfigOptions {
                             "Whether enable lakehouse storage for the table. Disabled by default. "
                                     + "When this option is set to ture and the datalake tiering service is up,"
                                     + " the table will be tiered and compacted into datalake format stored on lakehouse storage.");
+
+    public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
+            key("table.datalake.format")
+                    .enumType(DataLakeFormat.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only 'paimon' is supported. "
+                                    + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
+                                    + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
+                                    + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
+                                    + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
+
+    public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
+            key("table.merge-engine")
+                    .enumType(MergeEngineType.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "Defines the merge engine for the primary key table. By default, primary key table doesn't have merge engine. "
+                                    + "The supported merge engines are 'first_row' and 'versioned'. "
+                                    + "The 'first_row' merge engine will keep the first row of the same primary key. "
+                                    + "The 'versioned' merge engine will keep the row with the largest version of the same primary key.");
+
+    public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
+            // we may need to introduce "del-column" in the future to support delete operation
+            key("table.merge-engine.versioned.ver-column")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The column name of the version column for the 'versioned' merge engine. "
+                                    + "If the merge engine is set to 'versioned', the version column must be set.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
@@ -1015,18 +1195,18 @@ public class ConfigOptions {
                                     + "For more information, please refer to %s https://github.com/facebook/rocksdb/wiki/Leveled-Compaction#level_compaction_dynamic_level_bytes-is-true"
                                     + "RocksDB's doc.");
 
-    public static final ConfigOption<List<CompressionType>> KV_COMPRESSION_PER_LEVEL =
+    public static final ConfigOption<List<KvCompressionType>> KV_COMPRESSION_PER_LEVEL =
             key("kv.rocksdb.compression.per.level")
-                    .enumType(CompressionType.class)
+                    .enumType(KvCompressionType.class)
                     .asList()
                     .defaultValues(
-                            CompressionType.LZ4,
-                            CompressionType.LZ4,
-                            CompressionType.LZ4,
-                            CompressionType.LZ4,
-                            CompressionType.LZ4,
-                            CompressionType.ZSTD,
-                            CompressionType.ZSTD)
+                            KvCompressionType.LZ4,
+                            KvCompressionType.LZ4,
+                            KvCompressionType.LZ4,
+                            KvCompressionType.LZ4,
+                            KvCompressionType.LZ4,
+                            KvCompressionType.ZSTD,
+                            KvCompressionType.ZSTD)
                     .withDescription(
                             "A comma-separated list of Compression Type. Different levels can have different "
                                     + "compression policies. In many cases, lower levels use fast compression algorithms,"
@@ -1161,7 +1341,7 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("9249")
                     .withDescription(
-                            "The port the Prometheus reporter listens on, defaults to 9249. "
+                            "The port the Prometheus reporter listens on."
                                     + "In order to be able to run several instances of the reporter "
                                     + "on one host (e.g. when one TabletServer is colocated with "
                                     + "the CoordinatorServer) it is advisable to use a port range "
@@ -1185,12 +1365,12 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
-    public static final ConfigOption<String> LAKEHOUSE_STORAGE =
-            key("lakehouse.storage")
-                    .stringType()
+    public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
+            key("datalake.format")
+                    .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The kind of lakehouse storage used by of Fluss such as Paimon, Iceberg, Hudi. "
+                            "The datalake format used by Fluss to be as lake storage, such as Paimon, Iceberg, Hudi. "
                                     + "Now, only support Paimon.");
 
     /**
@@ -1225,7 +1405,7 @@ public class ConfigOptions {
     }
 
     /** Compression type for Fluss's kv. Currently only exposes the following compression type. */
-    public enum CompressionType {
+    public enum KvCompressionType {
         NO,
         SNAPPY,
         LZ4,

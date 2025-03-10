@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.RpcServer;
@@ -141,13 +142,15 @@ public class CoordinatorServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
+            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
                             remoteFileSystem,
                             zkClient,
                             this::getCoordinatorEventManager,
-                            metadataCache);
+                            metadataCache,
+                            metadataManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -155,6 +158,7 @@ public class CoordinatorServer extends ServerBase {
                             conf.getString(ConfigOptions.COORDINATOR_HOST),
                             conf.getString(ConfigOptions.COORDINATOR_PORT),
                             coordinatorService,
+                            serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
                                     serverMetricGroup));
             rpcServer.start();
@@ -166,13 +170,8 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            CompletedSnapshotStoreManager bucketSnapshotManager =
-                    new CompletedSnapshotStoreManager(
-                            conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
-                            conf.getInt(ConfigOptions.COORDINATOR_IO_POOL_SIZE),
-                            zkClient);
-
-            this.autoPartitionManager = new AutoPartitionManager(metadataCache, zkClient, conf);
+            this.autoPartitionManager =
+                    new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -185,9 +184,9 @@ public class CoordinatorServer extends ServerBase {
                             zkClient,
                             metadataCache,
                             coordinatorChannelManager,
-                            bucketSnapshotManager,
                             autoPartitionManager,
-                            serverMetricGroup);
+                            serverMetricGroup,
+                            conf);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
@@ -214,18 +213,17 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void registerCoordinatorLeader() throws Exception {
-        // set server id
-        String serverId = UUID.randomUUID().toString();
         CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress(serverId, rpcServer.getHostname(), rpcServer.getPort());
+                new CoordinatorAddress(this.serverId, rpcServer.getHostname(), rpcServer.getPort());
         zkClient.registerCoordinatorLeader(coordinatorAddress);
     }
 
     private void createDefaultDatabase() {
-        MetaDataManager metaDataManager = new MetaDataManager(zkClient);
-        List<String> databases = metaDataManager.listDatabases();
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+        List<String> databases = metadataManager.listDatabases();
         if (databases.isEmpty()) {
-            metaDataManager.createDatabase(DEFAULT_DATABASE, true);
+            metadataManager.createDatabase(
+                    DEFAULT_DATABASE, DatabaseDescriptor.builder().build(), true);
             LOG.info("Created default database '{}' because no database exists.", DEFAULT_DATABASE);
         }
     }

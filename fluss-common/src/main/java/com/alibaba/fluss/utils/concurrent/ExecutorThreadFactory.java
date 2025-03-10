@@ -17,12 +17,13 @@
 package com.alibaba.fluss.utils.concurrent;
 
 import com.alibaba.fluss.utils.FatalExitExceptionHandler;
-import com.alibaba.fluss.utils.Preconditions;
 
 import javax.annotation.Nullable;
 
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -102,7 +103,7 @@ public class ExecutorThreadFactory implements ThreadFactory {
             final int threadPriority,
             @Nullable final Thread.UncaughtExceptionHandler exceptionHandler,
             @Nullable final ClassLoader threadContextClassLoader) {
-        this.namePrefix = Preconditions.checkNotNull(poolName, "poolName") + "-thread-";
+        this.namePrefix = checkNotNull(poolName, "poolName") + "-thread-";
         this.threadPriority = threadPriority;
         this.exceptionHandler = exceptionHandler;
 

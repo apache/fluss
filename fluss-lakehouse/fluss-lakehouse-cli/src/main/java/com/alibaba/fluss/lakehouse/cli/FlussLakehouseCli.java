@@ -19,6 +19,7 @@ package com.alibaba.fluss.lakehouse.cli;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.GlobalConfiguration;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.apache.flink.client.cli.CliFrontend;
@@ -74,8 +75,15 @@ public class FlussLakehouseCli {
                     GlobalConfiguration.loadConfiguration(
                             configDirAndDynamicConfig.f0, configDirAndDynamicConfig.f1);
 
-            // get config for lake storage
-            Map<String, String> lakeStorageConfig = getLakeStorageConfig(globalConfiguration);
+            // validate datalake format
+            DataLakeFormat datalakeFormat = globalConfiguration.get(ConfigOptions.DATALAKE_FORMAT);
+            if (datalakeFormat == null) {
+                throw new IllegalArgumentException(
+                        "The datalake format is not set,"
+                                + " please set the configuration "
+                                + ConfigOptions.DATALAKE_FORMAT.key());
+            }
+
             // get config for fluss source, now only bootstrap server is required
             String flussBootstrapServer = getFlussBootStrapServers(globalConfiguration);
 
@@ -92,14 +100,7 @@ public class FlussLakehouseCli {
             flinkConfig.set(PipelineOptions.NAME, DEFAULT_PIPELINE_NAME);
 
             // now, start execute
-            retCode =
-                    run(
-                            runAction,
-                            jarFile,
-                            flussBootstrapServer,
-                            lakeStorageConfig,
-                            flinkConfig,
-                            dynamicConfigs);
+            retCode = run(runAction, jarFile, flussBootstrapServer, flinkConfig, dynamicConfigs);
         } catch (Throwable t) {
             t.printStackTrace(System.err);
         }
@@ -124,13 +125,12 @@ public class FlussLakehouseCli {
             String runAction,
             String jarFile,
             String flussBootstrapServer,
-            Map<String, String> lakeStorageConfig,
             org.apache.flink.configuration.Configuration flinkConfig,
             Map<String, String> dynamicConfigs) {
         List<CustomCommandLine> customCommandLines = new ArrayList<>();
         customCommandLines.add(new DefaultCLI());
 
-        CliFrontend cliFrontend = new FlussCliFronted(flinkConfig, customCommandLines);
+        CliFrontend cliFrontend = new FlussCliFrontend(flinkConfig, customCommandLines);
         // let's combine fluss config and lake config as arguments
         List<String> arguments =
                 new ArrayList<>(
@@ -139,33 +139,12 @@ public class FlussLakehouseCli {
                                 jarFile,
                                 "--" + ConfigOptions.BOOTSTRAP_SERVERS.key(),
                                 flussBootstrapServer));
-        for (Map.Entry<String, String> entry : lakeStorageConfig.entrySet()) {
-            arguments.add("--" + entry.getKey());
-            arguments.add(entry.getValue());
-        }
         for (Map.Entry<String, String> entry : dynamicConfigs.entrySet()) {
             arguments.add("--" + entry.getKey());
             arguments.add(entry.getValue());
         }
         String[] newArgs = arguments.toArray(new String[0]);
         return cliFrontend.parseAndRun(newArgs);
-    }
-
-    private static Map<String, String> getLakeStorageConfig(Configuration configuration) {
-        String lakeStorage = configuration.get(ConfigOptions.LAKEHOUSE_STORAGE);
-        if (lakeStorage == null) {
-            throw new IllegalArgumentException(
-                    "The lake storage is not set,"
-                            + " please set the configuration "
-                            + ConfigOptions.LAKEHOUSE_STORAGE.key());
-        }
-        Map<String, String> lakeStorageConfig = new HashMap<>();
-        for (Map.Entry<String, String> entry : configuration.toMap().entrySet()) {
-            if (entry.getKey().startsWith(lakeStorage)) {
-                lakeStorageConfig.put(entry.getKey(), entry.getValue());
-            }
-        }
-        return lakeStorageConfig;
     }
 
     private static String getFlussBootStrapServers(Configuration configuration) {

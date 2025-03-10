@@ -25,7 +25,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 
 /**
  * A initializer that initialize the buckets to the earliest offsets. The offsets initialization are

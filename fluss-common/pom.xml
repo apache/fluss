@@ -60,6 +60,19 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
+        <!-- TODO: these two dependencies need to be shaded. -->
+        <dependency>
+            <groupId>org.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.8.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+            <version>1.5.7-1</version>
+        </dependency>
+
         <!-- RocksDB dependencies -->
         <!-- todo: currently, we package rocksdb in here directly, but in the future,
         the rocksdb should be provided as a kv plugin to used by client & server.
@@ -73,14 +86,19 @@
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
         </dependency>
         <!-- test util for ProtoCodecUtilsTest -->
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
             <version>${protobuf.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- paimon bundle, only for test purpose -->
+        <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-bundle</artifactId>
+            <version>${paimon.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

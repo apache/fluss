@@ -25,9 +25,12 @@ public class DropPartitionEvent implements CoordinatorEvent {
 
     private final long partitionId;
 
-    public DropPartitionEvent(long tableId, long partitionId) {
+    private final String partitionName;
+
+    public DropPartitionEvent(long tableId, long partitionId, String partitionName) {
         this.tableId = tableId;
         this.partitionId = partitionId;
+        this.partitionName = partitionName;
     }
 
     public long getTableId() {
@@ -36,6 +39,10 @@ public class DropPartitionEvent implements CoordinatorEvent {
 
     public long getPartitionId() {
         return partitionId;
+    }
+
+    public String getPartitionName() {
+        return partitionName;
     }
 
     @Override
@@ -47,16 +54,25 @@ public class DropPartitionEvent implements CoordinatorEvent {
             return false;
         }
         DropPartitionEvent that = (DropPartitionEvent) o;
-        return tableId == that.tableId && Objects.equals(partitionId, that.partitionId);
+        return tableId == that.tableId
+                && Objects.equals(partitionId, that.partitionId)
+                && Objects.equals(partitionName, that.partitionName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, partitionId);
+        return Objects.hash(tableId, partitionId, partitionName);
     }
 
     @Override
     public String toString() {
-        return "DropPartitionEvent{" + "tableId=" + tableId + ", partitionId=" + partitionId + '}';
+        return "DropPartitionEvent{"
+                + "tableId="
+                + tableId
+                + ", partitionId="
+                + partitionId
+                + ", partitionName='"
+                + partitionName
+                + '}';
     }
 }

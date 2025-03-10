@@ -17,7 +17,6 @@
 package com.alibaba.fluss.server.tablet;
 
 import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -41,6 +40,8 @@ import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
+import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -48,6 +49,7 @@ import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.server.RpcServiceBase;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.entity.FetchData;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
@@ -61,8 +63,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.getFetchLogData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeLookupResponse;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makePrefixLookupResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toLookupData;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.toPrefixLookupData;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase implements TabletServerGateway {
@@ -71,13 +77,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final ReplicaManager replicaManager;
 
     public TabletService(
-            Configuration config,
             int serverId,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             ReplicaManager replicaManager,
-            ServerMetadataCache metadataCache) {
-        super(config, remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataCache);
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager) {
+        super(remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataCache, metadataManager);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
     }
@@ -108,9 +114,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
-        Map<TableBucket, FetchData> fetchLogData = RpcMessageUtils.getFetchLogData(request);
-        FetchParams fetchParams =
-                new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
+        Map<TableBucket, FetchData> fetchLogData = getFetchLogData(request);
+        FetchParams fetchParams;
+        if (request.hasMinBytes()) {
+            fetchParams =
+                    new FetchParams(
+                            request.getFollowerServerId(),
+                            request.getMaxBytes(),
+                            request.getMinBytes(),
+                            request.hasMaxWaitMs()
+                                    ? request.getMaxWaitMs()
+                                    : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE);
+        } else {
+            fetchParams = new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
+        }
         replicaManager.fetchLogRecords(
                 fetchParams,
                 fetchLogData,
@@ -137,8 +154,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
-        replicaManager.multiLookupValues(
-                lookupData, value -> response.complete(makeLookupResponse(value)));
+        replicaManager.lookups(lookupData, value -> response.complete(makeLookupResponse(value)));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
+        replicaManager.prefixLookups(
+                toPrefixLookupData(request),
+                value -> response.complete(makePrefixLookupResponse(value)));
         return response;
     }
 

@@ -31,7 +31,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-import static com.alibaba.fluss.client.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 
 /** The default implementation for offsets retriever. */
 public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
@@ -52,7 +52,7 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
     @Override
     public Map<Integer, Long> earliestOffsets(
             @Nullable String partitionName, Collection<Integer> buckets) {
-        Map<Integer, Long> bucketWithOffset = new HashMap<>();
+        Map<Integer, Long> bucketWithOffset = new HashMap<>(buckets.size());
         for (Integer bucket : buckets) {
             bucketWithOffset.put(bucket, EARLIEST_OFFSET);
         }

@@ -22,8 +22,12 @@ import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.connector.flink.lakehouse.LakeCatalog;
+import com.alibaba.fluss.connector.flink.utils.DataLakeUtils;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -62,6 +66,7 @@ import org.apache.flink.table.factories.Factory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -69,6 +74,12 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.connector.flink.utils.FlinkConversions.toFlussDatabase;
+import static com.alibaba.fluss.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
+import static com.alibaba.fluss.utils.CatalogExceptionUtils.isPartitionInvalid;
+import static com.alibaba.fluss.utils.CatalogExceptionUtils.isPartitionNotExist;
+import static com.alibaba.fluss.utils.CatalogExceptionUtils.isTableNotExist;
+import static com.alibaba.fluss.utils.CatalogExceptionUtils.isTableNotPartitioned;
 import static org.apache.flink.util.Preconditions.checkArgument;
 
 /** A Flink Catalog for fluss. */
@@ -76,13 +87,13 @@ public class FlinkCatalog implements Catalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
 
-    private final ClassLoader classLoader;
+    protected final ClassLoader classLoader;
 
-    private final String catalogName;
-    private final @Nullable String defaultDatabase;
-    private final String bootstrapServers;
-    private Connection connection;
-    private Admin admin;
+    protected final String catalogName;
+    protected final @Nullable String defaultDatabase;
+    protected final String bootstrapServers;
+    protected Connection connection;
+    protected Admin admin;
 
     private volatile @Nullable LakeCatalog lakeCatalog;
 
@@ -143,7 +154,17 @@ public class FlinkCatalog implements Catalog {
         if (!databaseExists(databaseName)) {
             throw new DatabaseNotExistException(getName(), databaseName);
         }
-        return new CatalogDatabaseImpl(Collections.emptyMap(), null);
+        try {
+            DatabaseDescriptor databaseDescriptor =
+                    admin.getDatabaseInfo(databaseName).get().getDatabaseDescriptor();
+            return new CatalogDatabaseImpl(
+                    databaseDescriptor.getCustomProperties(),
+                    databaseDescriptor.getComment().orElse(null));
+        } catch (Exception e) {
+            throw new CatalogException(
+                    String.format("Failed to get database %s in %s", databaseName, getName()),
+                    ExceptionUtils.stripExecutionException(e));
+        }
     }
 
     @Override
@@ -163,7 +184,7 @@ public class FlinkCatalog implements Catalog {
             String databaseName, CatalogDatabase database, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException, CatalogException {
         try {
-            admin.createDatabase(databaseName, ignoreIfExists).get();
+            admin.createDatabase(databaseName, toFlussDatabase(database), ignoreIfExists).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isDatabaseAlreadyExist(t)) {
@@ -181,7 +202,7 @@ public class FlinkCatalog implements Catalog {
     public void dropDatabase(String databaseName, boolean ignoreIfNotExists, boolean cascade)
             throws DatabaseNotExistException, DatabaseNotEmptyException, CatalogException {
         try {
-            admin.deleteDatabase(databaseName, ignoreIfNotExists, cascade).get();
+            admin.dropDatabase(databaseName, ignoreIfNotExists, cascade).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isDatabaseNotExist(t)) {
@@ -236,13 +257,13 @@ public class FlinkCatalog implements Catalog {
             // table name contains $lake, means to read from datalake
             if (tableName.contains(LAKE_TABLE_SPLITTER)) {
                 tableInfo =
-                        admin.getTable(
+                        admin.getTableInfo(
                                         TablePath.of(
                                                 objectPath.getDatabaseName(),
                                                 tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
                                 .get();
                 // we need to make sure the table enable datalake
-                if (!tableInfo.getTableDescriptor().isDataLakeEnabled()) {
+                if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
                     throw new UnsupportedOperationException(
                             String.format(
                                     "Table %s is not datalake enabled.",
@@ -250,9 +271,10 @@ public class FlinkCatalog implements Catalog {
                                             objectPath.getDatabaseName(),
                                             tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
-                return getLakeTable(objectPath.getDatabaseName(), tableName);
+                return getLakeTable(
+                        objectPath.getDatabaseName(), tableName, tableInfo.getProperties());
             } else {
-                tableInfo = admin.getTable(tablePath).get();
+                tableInfo = admin.getTableInfo(tablePath).get();
             }
 
             // should be as a fluss table
@@ -263,7 +285,7 @@ public class FlinkCatalog implements Catalog {
             return catalogTable.copy(newOptions);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (CatalogExceptionUtils.isTableNotExist(t)) {
+            if (isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else {
                 throw new CatalogException(
@@ -272,9 +294,10 @@ public class FlinkCatalog implements Catalog {
         }
     }
 
-    private CatalogBaseTable getLakeTable(String databaseName, String tableName)
+    protected CatalogBaseTable getLakeTable(
+            String databaseName, String tableName, Configuration properties)
             throws TableNotExistException, CatalogException {
-        mayInitLakeCatalogCatalog();
+        mayInitLakeCatalogCatalog(properties);
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
         if (tableComponents.length == 1) {
             // should be pattern like table_name$lake
@@ -304,10 +327,10 @@ public class FlinkCatalog implements Catalog {
             throws TableNotExistException, CatalogException {
         TablePath tablePath = toTablePath(objectPath);
         try {
-            admin.deleteTable(tablePath, ignoreIfNotExists).get();
+            admin.dropTable(tablePath, ignoreIfNotExists).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (CatalogExceptionUtils.isTableNotExist(t)) {
+            if (isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else {
                 throw new CatalogException(
@@ -359,8 +382,44 @@ public class FlinkCatalog implements Catalog {
     @Override
     public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
-        // TODO: use admin.listPartitionInfos()
-        return Collections.emptyList();
+        // TODO lake table should support.
+        if (objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
+            return Collections.emptyList();
+        }
+
+        try {
+            TablePath tablePath = toTablePath(objectPath);
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            List<String> partitionKeys = tableInfo.getPartitionKeys();
+
+            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+            List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                String[] partitionValues = partitionInfo.getPartitionName().split("\\$");
+                checkArgument(
+                        partitionKeys.size() == partitionValues.length,
+                        "partition values size not equals to partition keys size");
+                Map<String, String> flinkPartitionSpec = new HashMap<>();
+                for (int i = 0; i < partitionKeys.size(); i++) {
+                    flinkPartitionSpec.put(partitionKeys.get(i), partitionValues[i]);
+                }
+                catalogPartitionSpecs.add(new CatalogPartitionSpec(flinkPartitionSpec));
+            }
+            return catalogPartitionSpecs;
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (isTableNotPartitioned(t)) {
+                throw new TableNotPartitionedException(getName(), objectPath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to list partitions of table %s in %s",
+                                objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
@@ -368,6 +427,8 @@ public class FlinkCatalog implements Catalog {
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, CatalogException {
+        // TODO, list partitions by catalogPartitionSpec. Trace by
+        // https://github.com/alibaba/fluss/issues/514
         throw new UnsupportedOperationException();
     }
 
@@ -400,14 +461,69 @@ public class FlinkCatalog implements Catalog {
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, PartitionAlreadyExistsException,
                     CatalogException {
-        throw new UnsupportedOperationException();
+        TablePath tablePath = toTablePath(objectPath);
+        PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
+        try {
+            admin.createPartition(tablePath, partitionSpec, b).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (isTableNotPartitioned(t)) {
+                throw new TableNotPartitionedException(getName(), objectPath);
+            } else if (isPartitionInvalid(t)) {
+                List<String> partitionKeys = null;
+                try {
+                    TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+                    partitionKeys = tableInfo.getPartitionKeys();
+                } catch (Exception ee) {
+                    // ignore.
+                }
+                if (partitionKeys != null) {
+                    // throw specific partition exception if getting partition keys success.
+                    throw new PartitionSpecInvalidException(
+                            getName(), partitionKeys, objectPath, catalogPartitionSpec, e);
+                } else {
+                    // throw general exception if getting partition keys failed.
+                    throw new CatalogException(
+                            String.format(
+                                    "PartitionSpec %s does not match partition keys of table %s in catalog %s.",
+                                    partitionSpec, objectPath.getFullName(), catalogName),
+                            e);
+                }
+            } else if (isPartitionAlreadyExists(t)) {
+                throw new PartitionAlreadyExistsException(
+                        getName(), objectPath, catalogPartitionSpec);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to create partition with partition spec %s of table %s in %s",
+                                catalogPartitionSpec, objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
     public void dropPartition(
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
             throws PartitionNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
+        try {
+            admin.dropPartition(toTablePath(objectPath), partitionSpec, b).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isPartitionNotExist(t)) {
+                throw new PartitionNotExistException(
+                        getName(), objectPath, catalogPartitionSpec, e);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to drop partition with partition spec %s of table %s in %s",
+                                catalogPartitionSpec, objectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
@@ -514,17 +630,21 @@ public class FlinkCatalog implements Catalog {
         throw new UnsupportedOperationException();
     }
 
-    private TablePath toTablePath(ObjectPath objectPath) {
+    protected TablePath toTablePath(ObjectPath objectPath) {
         return TablePath.of(objectPath.getDatabaseName(), objectPath.getObjectName());
     }
 
-    private void mayInitLakeCatalogCatalog() {
+    private void mayInitLakeCatalogCatalog(Configuration tableOptions) {
+        // TODO: Currently, a Fluss cluster only supports a single DataLake storage. However, in the
+        //  future, it may support multiple DataLakes. The following code assumes that a single
+        //  lakeCatalog is shared across multiple tables, which will no longer be valid in such
+        //  cases and should be updated accordingly.
         if (lakeCatalog == null) {
             synchronized (this) {
                 if (lakeCatalog == null) {
                     try {
                         Map<String, String> catalogProperties =
-                                admin.describeLakeStorage().get().getCatalogProperties();
+                                DataLakeUtils.extractLakeCatalogProperties(tableOptions);
                         lakeCatalog = new LakeCatalog(catalogName, catalogProperties, classLoader);
                     } catch (Exception e) {
                         throw new FlussRuntimeException("Failed to init paimon catalog.", e);

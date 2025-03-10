@@ -26,6 +26,7 @@ import com.alibaba.fluss.connector.flink.utils.FlinkConnectorOptionsUtils;
 import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils;
 import com.alibaba.fluss.connector.flink.utils.PushdownUtils.ValueConversion;
+import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
@@ -88,9 +89,12 @@ public class FlinkTableSource
     private final Configuration flussConfig;
     // output type before projection pushdown
     private final org.apache.flink.table.types.logical.RowType tableOutputType;
-    // will be empty if no pk
+    // will be empty if no primary key
     private final int[] primaryKeyIndexes;
-    private final List<String> partitionKeys;
+    // will be empty if no bucket key
+    private final int[] bucketKeyIndexes;
+    // will be empty if no partition key
+    private final int[] partitionKeyIndexes;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
 
@@ -101,6 +105,7 @@ public class FlinkTableSource
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
+    @Nullable private final MergeEngineType mergeEngineType;
 
     // output type after projection pushdown
     private LogicalType producedDataType;
@@ -123,20 +128,23 @@ public class FlinkTableSource
             Configuration flussConfig,
             org.apache.flink.table.types.logical.RowType tableOutputType,
             int[] primaryKeyIndexes,
-            List<String> partitionKeys,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             int lookupMaxRetryTimes,
             boolean lookupAsync,
             @Nullable LookupCache cache,
             long scanPartitionDiscoveryIntervalMs,
-            boolean isDataLakeEnabled) {
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
         this.producedDataType = tableOutputType;
         this.primaryKeyIndexes = primaryKeyIndexes;
-        this.partitionKeys = partitionKeys;
+        this.bucketKeyIndexes = bucketKeyIndexes;
+        this.partitionKeyIndexes = partitionKeyIndexes;
         this.streaming = streaming;
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
 
@@ -146,6 +154,7 @@ public class FlinkTableSource
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
+        this.mergeEngineType = mergeEngineType;
     }
 
     @Override
@@ -155,7 +164,11 @@ public class FlinkTableSource
         } else {
             if (hasPrimaryKey()) {
                 // pk table
-                return ChangelogMode.all();
+                if (mergeEngineType == MergeEngineType.FIRST_ROW) {
+                    return ChangelogMode.insertOnly();
+                } else {
+                    return ChangelogMode.all();
+                }
             } else {
                 // append only
                 return ChangelogMode.insertOnly();
@@ -165,6 +178,10 @@ public class FlinkTableSource
 
     private boolean hasPrimaryKey() {
         return primaryKeyIndexes.length > 0;
+    }
+
+    private boolean isPartitioned() {
+        return partitionKeyIndexes.length > 0;
     }
 
     @Override
@@ -222,7 +239,7 @@ public class FlinkTableSource
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
                 break;
-            case INITIAL:
+            case FULL:
                 offsetsInitializer = OffsetsInitializer.initial();
                 break;
             case TIMESTAMP:
@@ -239,7 +256,7 @@ public class FlinkTableSource
                         flussConfig,
                         tablePath,
                         hasPrimaryKey(),
-                        !partitionKeys.isEmpty(),
+                        isPartitioned(),
                         flussRowType,
                         projectedFields,
                         offsetsInitializer,
@@ -279,14 +296,18 @@ public class FlinkTableSource
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
         LookupNormalizer lookupNormalizer =
                 LookupNormalizer.validateAndCreateLookupNormalizer(
-                        context.getKeys(), primaryKeyIndexes, tableOutputType, projectedFields);
+                        context.getKeys(),
+                        primaryKeyIndexes,
+                        bucketKeyIndexes,
+                        partitionKeyIndexes,
+                        tableOutputType,
+                        projectedFields);
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
                     new FlinkAsyncLookupFunction(
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            primaryKeyIndexes,
                             lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
@@ -301,7 +322,6 @@ public class FlinkTableSource
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            primaryKeyIndexes,
                             lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
@@ -321,14 +341,16 @@ public class FlinkTableSource
                         flussConfig,
                         tableOutputType,
                         primaryKeyIndexes,
-                        partitionKeys,
+                        bucketKeyIndexes,
+                        partitionKeyIndexes,
                         streaming,
                         startupOptions,
                         lookupMaxRetryTimes,
                         lookupAsync,
                         cache,
                         scanPartitionDiscoveryIntervalMs,
-                        isDataLakeEnabled);
+                        isDataLakeEnabled,
+                        mergeEngineType);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
@@ -356,11 +378,11 @@ public class FlinkTableSource
     public Result applyFilters(List<ResolvedExpression> filters) {
         // only apply pk equal filters when all the condition satisfied:
         // (1) batch execution mode,
-        // (2) default (initial) startup mode,
+        // (2) default (full) startup mode,
         // (3) the table is a pk table,
         // (4) all filters are pk field equal expression
         if (streaming
-                || startupOptions.startupMode != FlinkConnectorOptions.ScanStartupMode.INITIAL
+                || startupOptions.startupMode != FlinkConnectorOptions.ScanStartupMode.FULL
                 || !hasPrimaryKey()
                 || filters.size() != primaryKeyIndexes.length) {
             return Result.of(Collections.emptyList(), filters);

@@ -41,6 +41,8 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_ROWKIND_OFFSET;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -134,7 +136,8 @@ class ArrowReaderWriterTest {
                         VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
                 ArrowWriter writer =
-                        provider.getOrCreateWriter(1L, 1, Integer.MAX_VALUE, rowType)) {
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
             for (InternalRow row : TEST_DATA) {
                 writer.writeRow(row);
             }
@@ -143,15 +146,10 @@ class ArrowReaderWriterTest {
                     new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024));
 
             // skip arrow batch header.
-            int size =
-                    writer.serializeToOutputView(
-                            pagedOutputView,
-                            pagedOutputView.getCurrentSegment(),
-                            ARROW_ROWKIND_OFFSET,
-                            true);
-            MemorySegment segment = MemorySegment.allocateHeapMemory(writer.sizeInBytes());
+            int size = writer.serializeToOutputView(pagedOutputView, ARROW_ROWKIND_OFFSET);
+            MemorySegment segment = MemorySegment.allocateHeapMemory(writer.estimatedSizeInBytes());
 
-            assertThat(pagedOutputView.getSegmentBytesViewList().size()).isEqualTo(1);
+            assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
             firstSegment.copyTo(ARROW_ROWKIND_OFFSET, segment, 0, size);
 
@@ -170,13 +168,15 @@ class ArrowReaderWriterTest {
     void testWriterExceedMaxSizeInBytes() {
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
-                ArrowWriter writer = provider.getOrCreateWriter(1L, 1, 1024, DATA1_ROW_TYPE)) {
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, 1024, DATA1_ROW_TYPE, DEFAULT_COMPRESSION)) {
             while (!writer.isFull()) {
-                writer.writeRow(row(DATA1_ROW_TYPE, DATA1.get(0)));
+                writer.writeRow(row(DATA1.get(0)));
             }
 
             // exceed max size
-            assertThatThrownBy(() -> writer.writeRow(row(DATA1_ROW_TYPE, DATA1.get(0))))
+            assertThatThrownBy(() -> writer.writeRow(row(DATA1.get(0))))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage(
                             "The arrow batch size is full and it shouldn't accept writing new rows, it's a bug.");

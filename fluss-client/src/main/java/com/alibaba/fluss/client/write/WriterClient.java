@@ -17,7 +17,7 @@
 package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.client.lakehouse.LakeTableBucketAssigner;
+import com.alibaba.fluss.bucketing.BucketingFunction;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.client.write.RecordAccumulator.RecordAppendResult;
@@ -26,13 +26,12 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.exception.RecordTooLargeException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
+import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
@@ -76,7 +75,6 @@ public class WriterClient {
 
     private final Configuration conf;
     private final int maxRequestSize;
-    private final long totalMemorySize;
     private final RecordAccumulator accumulator;
     private final Sender sender;
     private final ExecutorService ioThreadPool;
@@ -94,14 +92,14 @@ public class WriterClient {
             this.metadataUpdater = metadataUpdater;
             this.maxRequestSize =
                     (int) conf.get(ConfigOptions.CLIENT_WRITER_REQUEST_MAX_SIZE).getBytes();
-            this.totalMemorySize =
-                    conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes();
             this.idempotenceManager = buildIdempotenceManager();
             this.writerMetricGroup = new WriterMetricGroup(clientMetricGroup);
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
-            this.accumulator = new RecordAccumulator(conf, idempotenceManager, writerMetricGroup);
+            this.accumulator =
+                    new RecordAccumulator(
+                            conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
@@ -149,8 +147,6 @@ public class WriterClient {
         try {
             throwIfWriterClosed();
 
-            ensureValidRecordSize(record.getEstimatedSizeInBytes());
-
             // maybe create bucket assigner.
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
             Cluster cluster = metadataUpdater.getCluster();
@@ -160,8 +156,8 @@ public class WriterClient {
                             k -> createBucketAssigner(physicalTablePath, conf, cluster));
 
             // Append the record to the accumulator.
-            int bucketId =
-                    bucketAssigner.assignBucket(record.getBucketKey(), record.getRow(), cluster);
+            int bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);
+
             RecordAppendResult result =
                     accumulator.append(
                             record, callback, cluster, bucketId, bucketAssigner.abortIfBatchFull());
@@ -169,9 +165,7 @@ public class WriterClient {
             if (result.abortRecordForNewBatch) {
                 int prevBucketId = bucketId;
                 bucketAssigner.onNewBatch(cluster, prevBucketId);
-                bucketId =
-                        bucketAssigner.assignBucket(
-                                record.getBucketKey(), record.getRow(), cluster);
+                bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);
                 LOG.trace(
                         "Retrying append due to new batch creation for table {} bucket {}, the old bucket was {}.",
                         physicalTablePath,
@@ -189,19 +183,6 @@ public class WriterClient {
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
-        }
-    }
-
-    /** Validate that the record size isn't too large. */
-    private void ensureValidRecordSize(int size) {
-        if (size > totalMemorySize) {
-            throw new RecordTooLargeException(
-                    "The message is "
-                            + size
-                            + " bytes when serialized which is larger than the total memory buffer "
-                            + "you have configured with the "
-                            + ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key()
-                            + " configuration.");
         }
     }
 
@@ -319,16 +300,13 @@ public class WriterClient {
     private BucketAssigner createBucketAssigner(
             PhysicalTablePath physicalTablePath, Configuration conf, Cluster cluster) {
         TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
-        int bucketNumber = cluster.getBucketCount(physicalTablePath.getTablePath());
-        TableDescriptor tableDescriptor = tableInfo.getTableDescriptor();
-        List<String> bucketKeys = tableInfo.getTableDescriptor().getBucketKey();
+        int bucketNumber = tableInfo.getNumBuckets();
+        List<String> bucketKeys = tableInfo.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
-            if (tableDescriptor.isDataLakeEnabled()) {
-                // if lake is enabled, use lake table bucket assigner
-                return new LakeTableBucketAssigner(tableDescriptor, bucketNumber);
-            } else {
-                return new HashBucketAssigner(bucketNumber);
-            }
+            BucketingFunction function =
+                    BucketingFunction.of(
+                            tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
+            return new HashBucketAssigner(bucketNumber, function);
         } else {
             ConfigOptions.NoKeyAssigner noKeyAssigner =
                     conf.get(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER);

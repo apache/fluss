@@ -20,6 +20,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.fs.local.LocalFileSystem;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -33,7 +34,7 @@ import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
-import com.alibaba.fluss.server.coordinator.MetaDataManager;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import com.alibaba.fluss.server.replica.Replica;
@@ -77,6 +78,7 @@ import static com.alibaba.fluss.server.zk.ZooKeeperTestUtils.createZooKeeperClie
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static com.alibaba.fluss.utils.NetUtils.getAvailablePort;
+import static com.alibaba.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -98,7 +100,7 @@ public final class FlussClusterExtension
     private TestingServer zooKeeperServer;
     private ZooKeeperClient zooKeeperClient;
     private RpcClient rpcClient;
-    private MetaDataManager metaDataManager;
+    private MetadataManager metadataManager;
 
     private File tempDir;
 
@@ -138,12 +140,12 @@ public final class FlussClusterExtension
         String defaultDb = BUILTIN_DATABASE;
         // TODO: we need to cleanup all zk nodes, including the assignments,
         //  but currently, we don't have a good way to do it
-        if (metaDataManager != null) {
+        if (metadataManager != null) {
             // drop all database and tables
-            List<String> databases = metaDataManager.listDatabases();
+            List<String> databases = metadataManager.listDatabases();
             for (String database : databases) {
                 if (!database.equals(defaultDb)) {
-                    metaDataManager.dropDatabase(database, true, true);
+                    metadataManager.dropDatabase(database, true, true);
                     // delete the data dirs
                     for (int serverId : tabletServers.keySet()) {
                         String dataDir = getDataDir(serverId);
@@ -151,9 +153,9 @@ public final class FlussClusterExtension
                     }
                 }
             }
-            List<String> tables = metaDataManager.listTables(defaultDb);
+            List<String> tables = metadataManager.listTables(defaultDb);
             for (String table : tables) {
-                metaDataManager.dropTable(TablePath.of(defaultDb, table), true);
+                metadataManager.dropTable(TablePath.of(defaultDb, table), true);
             }
         }
     }
@@ -163,7 +165,7 @@ public final class FlussClusterExtension
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
                 createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
-        metaDataManager = new MetaDataManager(zooKeeperClient);
+        metadataManager = new MetadataManager(zooKeeperClient, clusterConf);
         Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(
@@ -280,13 +282,15 @@ public final class FlussClusterExtension
     }
 
     private void setRemoteDataDir(Configuration conf) {
-        String remoteDataDir =
-                LocalFileSystem.getLocalFsURI().getScheme()
-                        + "://"
-                        + tempDir.getAbsolutePath()
-                        + File.separator
-                        + "remote-data-dir";
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+    }
+
+    public String getRemoteDataDir() {
+        return LocalFileSystem.getLocalFsURI().getScheme()
+                + "://"
+                + tempDir.getAbsolutePath()
+                + File.separator
+                + "remote-data-dir";
     }
 
     /** Stop a tablet server. */
@@ -307,6 +311,11 @@ public final class FlussClusterExtension
                         String.format(
                                 "%s:%d",
                                 coordinatorServerNode.host(), coordinatorServerNode.port())));
+
+        // set a small memory buffer for testing.
+        flussConf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("2mb"));
+        flussConf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("256kb"));
+        flussConf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, MemorySize.parse("1kb"));
         return flussConf;
     }
 
@@ -497,13 +506,11 @@ public final class FlussClusterExtension
                 () -> {
                     Optional<BucketSnapshot> optSnapshot =
                             zkClient.getTableBucketSnapshot(tableBucket, snapshotId);
-                    if (optSnapshot.isPresent()) {
-                        return Optional.of(
-                                CompletedSnapshotHandle.fromMetadataPath(
-                                                optSnapshot.get().getPath())
-                                        .retrieveCompleteSnapshot());
-                    }
-                    return Optional.empty();
+                    return optSnapshot
+                            .map(BucketSnapshot::toCompletedSnapshotHandle)
+                            .map(
+                                    uncheckedFunction(
+                                            CompletedSnapshotHandle::retrieveCompleteSnapshot));
                 },
                 Duration.ofMinutes(2),
                 String.format(
@@ -546,6 +553,10 @@ public final class FlussClusterExtension
         return waitUntilPartitionsCreated(tablePath, preCreatePartitions);
     }
 
+    public Map<String, Long> waitUtilPartitionAllReady(TablePath tablePath, int expectCount) {
+        return waitUntilPartitionsCreated(tablePath, expectCount);
+    }
+
     public Map<String, Long> waitUntilPartitionsCreated(TablePath tablePath, int expectCount) {
         return waitValue(
                 () -> {
@@ -579,6 +590,10 @@ public final class FlussClusterExtension
                         .map(n -> newTabletServerClientForNode(n.id()))
                         .collect(Collectors.toList()));
         return rpcServiceBases;
+    }
+
+    public CoordinatorServer getCoordinatorServer() {
+        return coordinatorServer;
     }
 
     // --------------------------------------------------------------------------------------------

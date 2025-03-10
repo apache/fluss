@@ -18,18 +18,17 @@ package com.alibaba.fluss.client.utils;
 
 import com.alibaba.fluss.client.admin.OffsetSpec;
 import com.alibaba.fluss.client.lookup.LookupBatch;
-import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.BucketsSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.PartitionSnapshotInfo;
+import com.alibaba.fluss.client.lookup.PrefixLookupBatch;
+import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
+import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.write.KvWriteBatch;
 import com.alibaba.fluss.client.write.WriteBatch;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -38,28 +37,29 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageResponse;
+import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotResponse;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotResponse;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosResponse;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
-import com.alibaba.fluss.rpc.messages.PbBucketSnapshot;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbKeyValue;
+import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
-import com.alibaba.fluss.rpc.messages.PbLakeStorageInfo;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
-import com.alibaba.fluss.rpc.messages.PbSnapshotForBucket;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -77,6 +77,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * Utils for making rpc request/response from inner object or convert inner class to rpc
@@ -185,6 +187,22 @@ public class ClientRpcMessageUtils {
         return request;
     }
 
+    public static PrefixLookupRequest makePrefixLookupRequest(
+            long tableId, Collection<PrefixLookupBatch> lookupBatches) {
+        PrefixLookupRequest request = new PrefixLookupRequest().setTableId(tableId);
+        lookupBatches.forEach(
+                (batch) -> {
+                    TableBucket tb = batch.tableBucket();
+                    PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket =
+                            request.addBucketsReq().setBucketId(tb.getBucket());
+                    if (tb.getPartitionId() != null) {
+                        pbPrefixLookupReqForBucket.setPartitionId(tb.getPartitionId());
+                    }
+                    batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
+                });
+        return request;
+    }
+
     public static FetchLogResultForBucket getFetchLogResultForBucket(
             TableBucket tb, TablePath tp, PbFetchLogRespForBucket respForBucket) {
         FetchLogResultForBucket fetchLogResultForBucket;
@@ -237,43 +255,37 @@ public class ClientRpcMessageUtils {
         return fetchLogResultForBucket;
     }
 
-    public static KvSnapshotInfo toKvSnapshotInfo(GetKvSnapshotResponse getKvSnapshotResponse) {
-        long tableId = getKvSnapshotResponse.getTableId();
-        Map<Integer, BucketSnapshotInfo> snapshots =
-                toBucketsSnapshot(getKvSnapshotResponse.getBucketSnapshotsList());
-        return new KvSnapshotInfo(tableId, snapshots);
-    }
-
-    private static Map<Integer, BucketSnapshotInfo> toBucketsSnapshot(
-            List<PbSnapshotForBucket> pbSnapshotForBuckets) {
-        Map<Integer, BucketSnapshotInfo> snapshots = new HashMap<>(pbSnapshotForBuckets.size());
-        for (PbSnapshotForBucket bucketSnapshotForTable : pbSnapshotForBuckets) {
-            int bucketId = bucketSnapshotForTable.getBucketId();
-            // if has snapshot
-            BucketSnapshotInfo bucketSnapshotInfo = null;
-            if (bucketSnapshotForTable.hasSnapshot()) {
-                // get the files for the snapshot and the log offset for the snapshot
-                PbBucketSnapshot pbBucketSnapshot = bucketSnapshotForTable.getSnapshot();
-                bucketSnapshotInfo =
-                        new BucketSnapshotInfo(
-                                toFsPathAndFileName(pbBucketSnapshot.getSnapshotFilesList()),
-                                pbBucketSnapshot.getLogOffset());
-            }
-            snapshots.put(bucketId, bucketSnapshotInfo);
+    public static KvSnapshots toKvSnapshots(GetLatestKvSnapshotsResponse response) {
+        long tableId = response.getTableId();
+        Long partitionId = response.hasPartitionId() ? response.getPartitionId() : null;
+        Map<Integer, Long> snapshotIds = new HashMap<>();
+        Map<Integer, Long> logOffsets = new HashMap<>();
+        for (PbKvSnapshot pbKvSnapshot : response.getLatestSnapshotsList()) {
+            int bucketId = pbKvSnapshot.getBucketId();
+            Long snapshotId = pbKvSnapshot.hasSnapshotId() ? pbKvSnapshot.getSnapshotId() : null;
+            snapshotIds.put(bucketId, snapshotId);
+            Long logOffset = pbKvSnapshot.hasLogOffset() ? pbKvSnapshot.getLogOffset() : null;
+            logOffsets.put(bucketId, logOffset);
+            boolean bothNull = snapshotId == null && logOffset == null;
+            boolean bothNotNull = snapshotId != null && logOffset != null;
+            checkState(
+                    bothNull || bothNotNull,
+                    "snapshotId and logOffset should be both null or not null");
         }
-        return snapshots;
+        return new KvSnapshots(tableId, partitionId, snapshotIds, logOffsets);
     }
 
-    public static LakeTableSnapshotInfo toLakeTableSnapshotInfo(
-            GetLakeTableSnapshotResponse getLakeTableSnapshotResponse) {
-        LakeStorageInfo lakeStorageInfo =
-                toLakeStorageInfo(getLakeTableSnapshotResponse.getLakehouseStorageInfo());
-        long tableId = getLakeTableSnapshotResponse.getTableId();
-        long snapshotId = getLakeTableSnapshotResponse.getSnapshotId();
+    public static KvSnapshotMetadata toKvSnapshotMetadata(GetKvSnapshotMetadataResponse response) {
+        return new KvSnapshotMetadata(
+                toFsPathAndFileName(response.getSnapshotFilesList()), response.getLogOffset());
+    }
+
+    public static LakeSnapshot toLakeTableSnapshotInfo(GetLatestLakeSnapshotResponse response) {
+        long tableId = response.getTableId();
+        long snapshotId = response.getSnapshotId();
         Map<TableBucket, Long> tableBucketsOffset =
-                new HashMap<>(getLakeTableSnapshotResponse.getBucketSnapshotsCount());
-        for (PbLakeSnapshotForBucket pbLakeSnapshotForBucket :
-                getLakeTableSnapshotResponse.getBucketSnapshotsList()) {
+                new HashMap<>(response.getBucketSnapshotsCount());
+        for (PbLakeSnapshotForBucket pbLakeSnapshotForBucket : response.getBucketSnapshotsList()) {
             Long partitionId =
                     pbLakeSnapshotForBucket.hasPartitionId()
                             ? pbLakeSnapshotForBucket.getPartitionId()
@@ -282,16 +294,7 @@ public class ClientRpcMessageUtils {
                     new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
             tableBucketsOffset.put(tableBucket, pbLakeSnapshotForBucket.getLogOffset());
         }
-        return new LakeTableSnapshotInfo(lakeStorageInfo, snapshotId, tableBucketsOffset);
-    }
-
-    public static PartitionSnapshotInfo toPartitionSnapshotInfo(
-            GetPartitionSnapshotResponse response) {
-        long tableId = response.getTableId();
-        long partitionId = response.getPartitionId();
-        BucketsSnapshotInfo bucketsSnapshotInfo =
-                new BucketsSnapshotInfo(toBucketsSnapshot(response.getBucketSnapshotsList()));
-        return new PartitionSnapshotInfo(tableId, partitionId, bucketsSnapshotInfo);
+        return new LakeSnapshot(snapshotId, tableBucketsOffset);
     }
 
     public static List<FsPathAndFileName> toFsPathAndFileName(
@@ -373,6 +376,44 @@ public class ClientRpcMessageUtils {
         return listOffsetsRequest;
     }
 
+    public static CreatePartitionRequest makeCreatePartitionRequest(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        CreatePartitionRequest createPartitionRequest =
+                new CreatePartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        createPartitionRequest
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
+        partitionSpec
+                .getPartitionSpec()
+                .forEach(
+                        (partitionKey, value) ->
+                                pbPartitionKeyAndValues.add(
+                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+        createPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
+        return createPartitionRequest;
+    }
+
+    public static DropPartitionRequest makeDropPartitionRequest(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        DropPartitionRequest dropPartitionRequest =
+                new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        dropPartitionRequest
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
+        partitionSpec
+                .getPartitionSpec()
+                .forEach(
+                        (partitionKey, value) ->
+                                pbPartitionKeyAndValues.add(
+                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+        dropPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
+        return dropPartitionRequest;
+    }
+
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
         return response.getPartitionsInfosList().stream()
                 .map(
@@ -381,16 +422,6 @@ public class ClientRpcMessageUtils {
                                         pbPartitionInfo.getPartitionId(),
                                         pbPartitionInfo.getPartitionName()))
                 .collect(Collectors.toList());
-    }
-
-    public static LakeStorageInfo toLakeStorageInfo(DescribeLakeStorageResponse response) {
-        return toLakeStorageInfo(response.getLakehouseStorageInfo());
-    }
-
-    private static LakeStorageInfo toLakeStorageInfo(PbLakeStorageInfo pbLakeStorageInfo) {
-        Map<String, String> dataLakeCatalogConfig =
-                toKeyValueMap(pbLakeStorageInfo.getCatalogPropertiesList());
-        return new LakeStorageInfo(pbLakeStorageInfo.getLakeStorageType(), dataLakeCatalogConfig);
     }
 
     public static Map<String, String> toKeyValueMap(List<PbKeyValue> pbKeyValues) {

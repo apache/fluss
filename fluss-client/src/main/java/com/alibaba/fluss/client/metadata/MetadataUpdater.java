@@ -28,7 +28,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
@@ -51,6 +50,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
@@ -58,6 +58,8 @@ import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAn
 /** The updater to initialize and update client metadata. */
 public class MetadataUpdater {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataUpdater.class);
+
+    private static final int MAX_RETRY_TIMES = 5;
 
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
@@ -100,16 +102,12 @@ public class MetadataUpdater {
         return cluster.getBucketLocation(tableBucket);
     }
 
-    public int getBucketCount(TablePath tablePath) {
-        return cluster.getBucketCount(tablePath);
+    private Optional<TableInfo> getTableInfo(TablePath tablePath) {
+        return cluster.getTable(tablePath);
     }
 
-    private Optional<TableDescriptor> getTableDescriptor(TablePath tablePath) {
-        return cluster.getTable(tablePath).map(TableInfo::getTableDescriptor);
-    }
-
-    public TableDescriptor getTableDescriptorOrElseThrow(long tableId) {
-        return getTableDescriptor(cluster.getTablePathOrElseThrow(tableId))
+    public TableInfo getTableInfoOrElseThrow(long tableId) {
+        return getTableInfo(cluster.getTablePathOrElseThrow(tableId))
                 .orElseThrow(
                         () ->
                                 new FlussRuntimeException(
@@ -119,8 +117,32 @@ public class MetadataUpdater {
     public int leaderFor(TableBucket tableBucket) {
         ServerNode serverNode = cluster.leaderFor(tableBucket);
         if (serverNode == null) {
-            throw new FlussRuntimeException("Leader not found for table bucket: " + tableBucket);
+            for (int i = 0; i < MAX_RETRY_TIMES; i++) {
+                TablePath tablePath = cluster.getTablePathOrElseThrow(tableBucket.getTableId());
+                // check if bucket is for a partition
+                if (tableBucket.getPartitionId() != null) {
+                    updateMetadata(
+                            Collections.singleton(tablePath),
+                            null,
+                            Collections.singleton(tableBucket.getPartitionId()));
+                } else {
+                    updateMetadata(Collections.singleton(tablePath), null, null);
+                }
+                serverNode = cluster.leaderFor(tableBucket);
+                if (serverNode != null) {
+                    break;
+                }
+            }
+
+            if (serverNode == null) {
+                throw new FlussRuntimeException(
+                        "Leader not found after retry  "
+                                + MAX_RETRY_TIMES
+                                + " times for table bucket: "
+                                + tableBucket);
+            }
         }
+
         return serverNode.id();
     }
 
@@ -239,7 +261,7 @@ public class MetadataUpdater {
             }
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (t instanceof RetriableException) {
+            if (t instanceof RetriableException || t instanceof TimeoutException) {
                 LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
             } else {
                 throw new FlussRuntimeException("Failed to update metadata", t);
@@ -278,7 +300,7 @@ public class MetadataUpdater {
             RpcClient rpcClient, InetSocketAddress address) {
         ServerNode serverNode =
                 new ServerNode(
-                        -1, address.getHostName(), address.getPort(), ServerType.TABLET_SERVER);
+                        -1, address.getHostString(), address.getPort(), ServerType.COORDINATOR);
         try {
             AdminReadOnlyGateway adminReadOnlyGateway =
                     GatewayClientProxy.createGatewayProxy(
@@ -295,15 +317,14 @@ public class MetadataUpdater {
     }
 
     /** Invalid the bucket metadata for the given physical table paths. */
-    public void invalidPhysicalTableBucketMeta(
-            Collection<PhysicalTablePath> physicalTablesToInvalid) {
+    public void invalidPhysicalTableBucketMeta(Set<PhysicalTablePath> physicalTablesToInvalid) {
         if (!physicalTablesToInvalid.isEmpty()) {
             cluster = cluster.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
         }
     }
 
     /** Get the table physical paths by table ids and partition ids. */
-    public Collection<PhysicalTablePath> getPhysicalTablePathByIds(
+    public Set<PhysicalTablePath> getPhysicalTablePathByIds(
             @Nullable Collection<Long> tableId,
             @Nullable Collection<TablePartition> tablePartitions) {
         Set<PhysicalTablePath> physicalTablePaths = new HashSet<>();

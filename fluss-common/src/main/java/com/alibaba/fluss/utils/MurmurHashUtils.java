@@ -19,6 +19,8 @@ package com.alibaba.fluss.utils;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemoryUtils;
 
+import static com.alibaba.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
+
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -40,6 +42,11 @@ public class MurmurHashUtils {
      */
     public static int hashBytes(MemorySegment segment, int offset, int lengthInBytes) {
         return hashBytes(segment, offset, lengthInBytes, DEFAULT_SEED);
+    }
+
+    /** Hash bytes. */
+    public static int hashBytes(byte[] bytes) {
+        return hashUnsafeBytes(bytes, BYTE_ARRAY_BASE_OFFSET, bytes.length, DEFAULT_SEED);
     }
 
     /**

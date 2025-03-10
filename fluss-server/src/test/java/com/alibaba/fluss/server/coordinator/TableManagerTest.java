@@ -17,6 +17,8 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
@@ -33,6 +35,7 @@ import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,15 +44,19 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
@@ -63,6 +70,7 @@ class TableManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static ExecutorService ioExecutor;
 
     private CoordinatorContext coordinatorContext;
     private TableManager tableManager;
@@ -75,10 +83,11 @@ class TableManagerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        ioExecutor = Executors.newFixedThreadPool(1);
     }
 
     @BeforeEach
-    void beforeEach() {
+    void beforeEach() throws IOException {
         initTableManager();
     }
 
@@ -89,10 +98,17 @@ class TableManagerTest {
         }
     }
 
+    @AfterAll
+    static void afterAll() {
+        ioExecutor.shutdownNow();
+    }
+
     private void initTableManager() {
         testingEventManager = new TestingEventManager();
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
+        Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         CoordinatorRequestBatch coordinatorRequestBatch =
                 new CoordinatorRequestBatch(testCoordinatorChannelManager, testingEventManager);
         ReplicaStateMachine replicaStateMachine =
@@ -100,13 +116,14 @@ class TableManagerTest {
         TableBucketStateMachine tableBucketStateMachine =
                 new TableBucketStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);
-        MetaDataManager metaDataManager = new MetaDataManager(zookeeperClient);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         tableManager =
                 new TableManager(
-                        metaDataManager,
+                        metadataManager,
                         coordinatorContext,
                         replicaStateMachine,
-                        tableBucketStateMachine);
+                        tableBucketStateMachine,
+                        new RemoteStorageCleaner(conf, ioExecutor));
         tableManager.startup();
 
         coordinatorContext.setLiveTabletServers(
@@ -140,7 +157,7 @@ class TableManagerTest {
         TableAssignment assignment = createAssignment();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
-        tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
 
         // now, delete the created table
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));

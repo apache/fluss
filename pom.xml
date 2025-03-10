@@ -72,6 +72,8 @@
         <module>fluss-connectors</module>
         <module>fluss-protogen</module>
         <module>fluss-benchmark</module>
+        <module>fluss-lake</module>
+        <!-- fluss-lakehouse module is deprecated, will be removed once fluss-lake ready -->
         <module>fluss-lakehouse</module>
     </modules>
 
@@ -83,7 +85,7 @@
         <maven.compiler.target>${target.java.version}</maven.compiler.target>
         <test.unit.pattern>**/*Test.*</test.unit.pattern>
         <test.skip.coverage>true</test.skip.coverage>
-        <fluss.forkCount>1C</fluss.forkCount>
+        <fluss.forkCount>2</fluss.forkCount>
         <fluss.reuseForks>true</fluss.reuseForks>
 
         <!-- library versions in fluss-shaded -->
@@ -94,8 +96,8 @@
         <curator.version>5.4.0</curator.version>
         <netty.version>4.1.104</netty.version>
         <arrow.version>15.0.0</arrow.version>
-        <flink.version>1.20.0</flink.version>
-        <paimon.version>0.8.2</paimon.version>
+        <flink.version>1.20.1</flink.version>
+        <paimon.version>1.0.1</paimon.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
@@ -303,6 +305,13 @@
                 <groupId>com.alibaba.fluss</groupId>
                 <artifactId>fluss-shaded-zookeeper</artifactId>
                 <version>${zookeeper.version}-${fluss.shaded.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba.fluss</groupId>
+                <artifactId>fluss-test-utils</artifactId>
+                <version>${project.version}</version>
+                <scope>test</scope>
             </dependency>
 
             <dependency>
@@ -606,6 +615,9 @@
                     <trimStackTrace>false</trimStackTrace>
                     <systemPropertyVariables>
                         <forkNumber>0${surefire.forkNumber}</forkNumber>
+                        <!-- $$ ensures that surefire resolves this to the current forkNumber,
+						 	instead of maven during initialization -->
+                        <mvn.forkNumber>$${surefire.forkNumber}</mvn.forkNumber>
                         <project.basedir>${project.basedir}</project.basedir>
                         <!--suppress MavenModelInspection -->
                         <test.randomization.seed>${test.randomization.seed}
@@ -627,9 +639,7 @@
                         <junit.jupiter.execution.parallel.config.strategy>dynamic
                         </junit.jupiter.execution.parallel.config.strategy>
                     </systemPropertyVariables>
-                    <argLine>@{argLine} -Xms256m -Xmx2048m -Dmvn.forkNumber=${surefire.forkNumber}
-                        -XX:+UseG1GC
-                    </argLine>
+                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC</argLine>
                 </configuration>
                 <executions>
                     <!--execute all the unit tests-->
@@ -659,7 +669,6 @@
                             <excludes>
                                 <exclude>${test.unit.pattern}</exclude>
                             </excludes>
-                            <reuseForks>false</reuseForks>
                         </configuration>
                     </execution>
                 </executions>
@@ -884,13 +893,13 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-checkstyle-plugin</artifactId>
-                    <version>3.1.2</version>
+                    <version>3.6.0</version>
                     <dependencies>
                         <dependency>
                             <groupId>com.puppycrawl.tools</groupId>
                             <artifactId>checkstyle</artifactId>
-                            <!-- Note: match version with docs/flinkDev/ide_setup.md -->
-                            <version>8.14</version>
+                            <!-- Note: match version with docs/dev/ide-setup.md -->
+                            <version>9.3</version>
                         </dependency>
                     </dependencies>
                     <executions>
@@ -931,6 +940,14 @@
 
                             <removeUnusedImports/>
                         </java>
+                        <scala>
+                            <toggleOffOn />
+
+                            <scalafmt>
+                                <version>3.4.3</version>
+                                <file>${maven.multiModuleProjectDirectory}/.scalafmt.conf</file>
+                            </scalafmt>
+                        </scala>
                     </configuration>
                     <executions>
                         <execution>

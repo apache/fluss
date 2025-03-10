@@ -31,20 +31,24 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.DefaultKvRecord;
-import com.alibaba.fluss.record.DefaultLogRecord;
+import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.RowKind;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.BinaryRow;
+import com.alibaba.fluss.row.GenericRow;
+import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.utils.CloseableIterator;
+import com.alibaba.fluss.utils.clock.ManualClock;
 
+import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -58,6 +62,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
@@ -67,12 +72,29 @@ import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
+import static com.alibaba.fluss.testutils.DataTestUtils.indexedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link RecordAccumulator}. */
-public class RecordAccumulatorTest {
+class RecordAccumulatorTest {
+    private static final long ZSTD_TABLE_ID = 16001L;
+    private static final PhysicalTablePath ZSTD_PHYSICAL_TABLE_PATH =
+            PhysicalTablePath.of(TablePath.of("test_db_1", "test_zstd_table_1"));
+    private static final TableInfo ZSTD_TABLE_INFO =
+            TableInfo.of(
+                    ZSTD_PHYSICAL_TABLE_PATH.getTablePath(),
+                    ZSTD_TABLE_ID,
+                    1,
+                    TableDescriptor.builder()
+                            .schema(DATA1_SCHEMA)
+                            .distributedBy(3)
+                            .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), "zstd")
+                            .build(),
+                    System.currentTimeMillis(),
+                    System.currentTimeMillis());
+
     ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER);
     ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER);
     ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER);
@@ -89,13 +111,14 @@ public class RecordAccumulatorTest {
             new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2, serverNodes);
     private final BucketLocation bucket4 =
             new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 3, node2, serverNodes);
+
     private final WriteCallback writeCallback =
             exception -> {
                 if (exception != null) {
                     throw new RuntimeException(exception);
                 }
             };
-
+    private final ManualClock clock = new ManualClock(System.currentTimeMillis());
     private Configuration conf;
     private Cluster cluster;
 
@@ -112,7 +135,7 @@ public class RecordAccumulatorTest {
     @Test
     void testDrainBatches() throws Exception {
         // test case: node1(tb1, tb2), node2(tb3).
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         long batchSize = getTestBatchSize(row);
         RecordAccumulator accum = createTestRecordAccumulator((int) batchSize, Integer.MAX_VALUE);
 
@@ -148,10 +171,73 @@ public class RecordAccumulatorTest {
     }
 
     @Test
+    void testDrainCompressedBatches() throws Exception {
+        int batchSize = 10 * 1024;
+        int bucketNum = 10;
+        RecordAccumulator accum =
+                createTestRecordAccumulator(
+                        Integer.MAX_VALUE, batchSize, batchSize, Integer.MAX_VALUE);
+        List<BucketLocation> bucketLocations = new ArrayList<>();
+        for (int b = 0; b < bucketNum; b++) {
+            bucketLocations.add(
+                    new BucketLocation(
+                            ZSTD_PHYSICAL_TABLE_PATH, ZSTD_TABLE_ID, b, node1, serverNodes));
+        }
+        // all buckets are located in node1
+        cluster = updateCluster(bucketLocations);
+
+        appendUntilCompressionRatioStable(accum, batchSize);
+
+        for (int i = 0; i < bucketNum; i++) {
+            appendUntilBatchFull(accum, i);
+        }
+
+        // all 3 buckets are located in node1
+        Map<Integer, List<WriteBatch>> batches =
+                accum.drain(cluster, Collections.singleton(node1), batchSize * bucketNum);
+        // the compression ratio is smaller than 1.0,
+        // so bucketNum * batch_size should contain all compressed batches for each bucket
+        assertThat(batches.containsKey(node1.id())).isTrue();
+        int batchCount = batches.get(node1.id()).size();
+        assertThat(batchCount).isBetween(bucketNum - 1, bucketNum);
+
+        double averageBatchSize =
+                batches.get(node1.id()).stream().mapToInt(b -> b.build().getBytesLength()).sum()
+                        / (batchCount * 1.0);
+        assertThat(averageBatchSize).isBetween(batchSize * 0.9, batchSize * 1.1);
+    }
+
+    private void appendUntilCompressionRatioStable(RecordAccumulator accum, int batchSize)
+            throws Exception {
+        while (true) {
+            appendUntilBatchFull(accum, 0);
+            Map<Integer, List<WriteBatch>> batches =
+                    accum.drain(cluster, Collections.singleton(node1), Integer.MAX_VALUE);
+            WriteBatch batch = batches.get(node1.id()).get(0);
+            int actualSize = batch.build().getBytesLength();
+            if (actualSize > batchSize * ArrowWriter.BUFFER_USAGE_RATIO) {
+                return;
+            }
+        }
+    }
+
+    private void appendUntilBatchFull(RecordAccumulator accum, int bucketId) throws Exception {
+        while (true) {
+            GenericRow row = row(1, RandomStringUtils.random(10));
+            PhysicalTablePath tablePath = PhysicalTablePath.of(ZSTD_TABLE_INFO.getTablePath());
+            WriteRecord record = WriteRecord.forArrowAppend(tablePath, row, null);
+            // append until the batch is full
+            if (accum.append(record, writeCallback, cluster, bucketId, false).batchIsFull) {
+                break;
+            }
+        }
+    }
+
+    @Test
     void testFull() throws Exception {
         // test case assumes that the records do not fill the batch completely
-        int batchSize = 1025;
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        int batchSize = 1024;
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
         RecordAccumulator accum = createTestRecordAccumulator(batchSize, 10L * batchSize);
         int appends = expectedNumAppends(row, batchSize);
@@ -183,10 +269,7 @@ public class RecordAccumulatorTest {
         assertThat(batches.size()).isEqualTo(1);
         WriteBatch batch = batches.get(0);
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
-
-        IndexedLogWriteBatch logProducerBatch = (IndexedLogWriteBatch) batch;
-
-        MemoryLogRecords memoryLogRecords = logProducerBatch.records();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(batch.build());
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createIndexedReadContext(
@@ -203,16 +286,13 @@ public class RecordAccumulatorTest {
 
     @Test
     void testAppendLarge() throws Exception {
-        int batchSize = 10;
+        int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
-        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, 10L * 1024);
+        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, batchSize, 10L * 1024);
 
-        InternalRow row1 =
-                row(
-                        DATA1_ROW_TYPE,
-                        new Object[] {
-                            100000000, "this is very large string which large that 10 bytes"
-                        });
+        // a row with size > 2 * batchSize
+        IndexedRow row1 =
+                indexedRow(DATA1_ROW_TYPE, new Object[] {100000000, new String(new char[2 * 100])});
         // row size > 10;
         accum.append(createRecord(row1), writeCallback, cluster, 0, false);
         // bucket's leader should be ready for bucket0.
@@ -222,9 +302,8 @@ public class RecordAccumulatorTest {
         assertThat(writeBatches).hasSize(1);
         WriteBatch batch = writeBatches.peek();
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
-        IndexedLogWriteBatch logProducerBatch = (IndexedLogWriteBatch) batch;
-        assertThat(logProducerBatch).isNotNull();
-        MemoryLogRecords memoryLogRecords = logProducerBatch.records();
+        assertThat(batch).isNotNull();
+        MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(batch.build());
         Iterator<? extends LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch logRecordBatch = iterator.next();
@@ -242,23 +321,26 @@ public class RecordAccumulatorTest {
     void testAppendWithStickyBucketAssigner() throws Exception {
         // Test case assumes that the records do not fill the batch completely
         int batchSize = 100;
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
         StickyBucketAssigner bucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         RecordAccumulator accum =
                 createTestRecordAccumulator(
-                        (int) Duration.ofMinutes(1).toMillis(), batchSize, 10L * batchSize);
+                        (int) Duration.ofMinutes(1).toMillis(),
+                        batchSize,
+                        batchSize,
+                        10L * batchSize);
         int expectedAppends = expectedNumAppends(row, batchSize);
 
         // Create first batch.
-        int bucketId = bucketAssigner.assignBucket(null, cluster);
+        int bucketId = bucketAssigner.assignBucket(cluster);
         accum.append(createRecord(row), writeCallback, cluster, bucketId, false);
         int appends = 1;
 
         boolean switchBucket = false;
         while (!switchBucket) {
             // Append to the first batch.
-            bucketId = bucketAssigner.assignBucket(null, cluster);
+            bucketId = bucketAssigner.assignBucket(cluster);
             RecordAccumulator.RecordAppendResult result =
                     accum.append(createRecord(row), writeCallback, cluster, bucketId, true);
             int numBatches = getBatchNumInAccum(accum);
@@ -280,14 +362,14 @@ public class RecordAccumulatorTest {
 
         // Writer would call this method in this case, make second batch.
         bucketAssigner.onNewBatch(cluster, bucketId);
-        bucketId = bucketAssigner.assignBucket(null, cluster);
+        bucketId = bucketAssigner.assignBucket(cluster);
         accum.append(createRecord(row), writeCallback, cluster, bucketId, false);
         appends++;
 
         // These append operations all go into the second batch.
         while (!switchBucket) {
             // Append to the first batch.
-            bucketId = bucketAssigner.assignBucket(null, cluster);
+            bucketId = bucketAssigner.assignBucket(cluster);
             RecordAccumulator.RecordAppendResult result =
                     accum.append(createRecord(row), writeCallback, cluster, bucketId, true);
             int numBatches = getBatchNumInAccum(accum);
@@ -307,9 +389,9 @@ public class RecordAccumulatorTest {
 
     @Test
     void testPartialDrain() throws Exception {
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         RecordAccumulator accum = createTestRecordAccumulator(1024, 10L * 1024);
-        int appends = 1024 / DefaultLogRecord.sizeOf(row) + 1;
+        int appends = 1024 / IndexedLogRecord.sizeOf(row) + 1;
         List<TableBucket> buckets = Arrays.asList(tb1, tb2);
         for (TableBucket tb : buckets) {
             for (int i = 0; i < appends; i++) {
@@ -326,7 +408,7 @@ public class RecordAccumulatorTest {
 
     @Test
     void testFlush() throws Exception {
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
 
         for (int i = 0; i < 100; i++) {
@@ -356,10 +438,10 @@ public class RecordAccumulatorTest {
 
     @Test
     void testTableWithUnknownLeader() throws Exception {
-        int batchSize = 10;
+        int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
-        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, 10L * 1024);
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, batchSize, 10L * 1024);
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
         BucketLocation bucket1 =
                 new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, null, serverNodes);
@@ -385,7 +467,7 @@ public class RecordAccumulatorTest {
 
     @Test
     void testAwaitFlushComplete() throws Exception {
-        IndexedRow row = row(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
         accum.append(createRecord(row), writeCallback, cluster, 0, false);
 
@@ -395,8 +477,53 @@ public class RecordAccumulatorTest {
         assertThatThrownBy(accum::awaitFlushCompletion).isInstanceOf(InterruptedException.class);
     }
 
-    private WriteRecord createRecord(InternalRow row) {
-        return new WriteRecord(DATA1_PHYSICAL_TABLE_PATH, WriteKind.APPEND, row, null);
+    @Test
+    public void testNextReadyCheckDelay() throws Exception {
+        int batchTimeout = 10;
+        int batchSize = 1024;
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        // test case assumes that the records do not fill the batch completely
+        RecordAccumulator accum =
+                createTestRecordAccumulator(batchTimeout, batchSize, 256, 10 * batchSize);
+        // Just short of going over the limit so we trigger linger time
+        int appends = expectedNumAppends(row, batchSize);
+
+        // Add data for bucket 1
+        for (int i = 0; i < appends; i++) {
+            accum.append(createRecord(row), writeCallback, cluster, bucket1.getBucketId(), false);
+        }
+        RecordAccumulator.ReadyCheckResult result = accum.ready(cluster);
+        assertThat(result.readyNodes).isEmpty();
+        assertThat(result.nextReadyCheckDelayMs).isEqualTo(batchTimeout);
+
+        clock.advanceTime(batchTimeout / 2, TimeUnit.MILLISECONDS);
+
+        // Add data for bucket 3
+        for (int i = 0; i < appends; i++) {
+            accum.append(createRecord(row), writeCallback, cluster, bucket3.getBucketId(), false);
+        }
+        result = accum.ready(cluster);
+        assertThat(result.readyNodes).hasSize(0);
+        assertThat(result.nextReadyCheckDelayMs).isEqualTo(batchTimeout / 2);
+
+        // Append one more data for bucket1 should make the batch full and sendable immediately
+        accum.append(createRecord(row), writeCallback, cluster, bucket1.getBucketId(), false);
+
+        result = accum.ready(cluster);
+        // server for bucket1 should be ready now
+        assertThat(result.readyNodes).hasSize(1).contains(node1);
+        // Note this can actually be < batchTimeout because it may use delays from bucket that
+        // aren't sendable
+        // but have leaders with other sendable data.
+        assertThat(result.nextReadyCheckDelayMs).isLessThanOrEqualTo(batchTimeout);
+    }
+
+    /**
+     * Creates a indexed WriteRecord as the DATA1_PHYSICAL_TABLE_PATH is registered as a INDEXED
+     * format , see {@link #updateCluster(List)}.
+     */
+    private WriteRecord createRecord(IndexedRow row) {
+        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {
@@ -411,9 +538,10 @@ public class RecordAccumulatorTest {
         tableIdByPath.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
 
         TableInfo data1NonPkTableInfo =
-                new TableInfo(
+                TableInfo.of(
                         DATA1_TABLE_PATH,
                         DATA1_TABLE_ID,
+                        1,
                         TableDescriptor.builder()
                                 // use INDEXED format better memory control
                                 // to test RecordAccumulator
@@ -421,9 +549,11 @@ public class RecordAccumulatorTest {
                                 .schema(DATA1_SCHEMA)
                                 .distributedBy(3)
                                 .build(),
-                        1);
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
         tableInfoByPath.put(DATA1_TABLE_PATH, data1NonPkTableInfo);
+        tableInfoByPath.put(ZSTD_TABLE_INFO.getTablePath(), ZSTD_TABLE_INFO);
 
         return new Cluster(
                 aliveTabletServersById,
@@ -467,7 +597,7 @@ public class RecordAccumulatorTest {
         int size = RECORD_BATCH_HEADER_SIZE;
         int offsetDelta = 0;
         while (true) {
-            int recordSize = DefaultLogRecord.sizeOf(row);
+            int recordSize = IndexedLogRecord.sizeOf(row);
             if (size + recordSize > batchSize) {
                 return offsetDelta;
             }
@@ -477,15 +607,15 @@ public class RecordAccumulatorTest {
     }
 
     private RecordAccumulator createTestRecordAccumulator(int batchSize, long totalSize) {
-        return createTestRecordAccumulator(5000, batchSize, totalSize);
+        return createTestRecordAccumulator(5000, batchSize, 256, totalSize);
     }
 
     private RecordAccumulator createTestRecordAccumulator(
-            int batchTimeoutMs, int batchSize, long totalSize) {
+            int batchTimeoutMs, int batchSize, int pageSize, long totalSize) {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
         // TODO client writer buffer maybe removed.
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(totalSize));
-        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(batchSize));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(pageSize));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(batchSize));
         return new RecordAccumulator(
                 conf,
@@ -496,10 +626,11 @@ public class RecordAccumulatorTest {
                                 () -> cluster.getRandomTabletServer(),
                                 RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                                 TabletServerGateway.class)),
-                TestingWriterMetricGroup.newInstance());
+                TestingWriterMetricGroup.newInstance(),
+                clock);
     }
 
-    private long getTestBatchSize(InternalRow row) {
+    private long getTestBatchSize(BinaryRow row) {
         return RECORD_BATCH_HEADER_SIZE + DefaultKvRecord.sizeOf(new byte[4], row);
     }
 

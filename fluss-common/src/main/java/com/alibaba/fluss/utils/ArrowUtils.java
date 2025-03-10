@@ -17,6 +17,7 @@
 package com.alibaba.fluss.utils;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.compression.ArrowCompressionFactory;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.row.InternalRow;
@@ -80,8 +81,10 @@ import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBodyCompression;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBuffer;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
@@ -154,7 +157,8 @@ public class ArrowUtils {
         try (ReadChannel channel =
                         new ReadChannel(new ByteBufferReadableChannel(arrowBatchBuffer));
                 ArrowRecordBatch batch = deserializeRecordBatch(channel, allocator)) {
-            VectorLoader vectorLoader = new VectorLoader(schemaRoot);
+            VectorLoader vectorLoader =
+                    new VectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
             vectorLoader.load(batch);
             List<ColumnVector> columnVectors = new ArrayList<>();
             List<FieldVector> fieldVectors = schemaRoot.getFieldVectors();
@@ -181,6 +185,7 @@ public class ArrowUtils {
             long numRecords,
             List<ArrowFieldNode> nodes,
             List<ArrowBuffer> buffersLayout,
+            ArrowBodyCompression arrowBodyCompression,
             long arrowBodyLength)
             throws IOException {
         checkArgument(arrowBodyLength % 8 == 0, "batch is not aligned");
@@ -190,11 +195,18 @@ public class ArrowUtils {
         int nodesOffset = FBSerializables.writeAllStructsToVector(builder, nodes);
         RecordBatch.startBuffersVector(builder, buffersLayout.size());
         int buffersOffset = FBSerializables.writeAllStructsToVector(builder, buffersLayout);
+        int compressOffset = 0;
+        if (arrowBodyCompression.getCodec() != NoCompressionCodec.COMPRESSION_TYPE) {
+            compressOffset = arrowBodyCompression.writeTo(builder);
+        }
 
         RecordBatch.startRecordBatch(builder);
         RecordBatch.addLength(builder, numRecords);
         RecordBatch.addNodes(builder, nodesOffset);
         RecordBatch.addBuffers(builder, buffersOffset);
+        if (arrowBodyCompression.getCodec() != NoCompressionCodec.COMPRESSION_TYPE) {
+            RecordBatch.addCompression(builder, compressOffset);
+        }
         int batchOffset = RecordBatch.endRecordBatch(builder);
         ByteBuffer metadata =
                 MessageSerializer.serializeMessage(
@@ -208,7 +220,8 @@ public class ArrowUtils {
     }
 
     /** Estimates the size of {@link ArrowRecordBatch} metadata for the given schema. */
-    public static int estimateArrowMetadataLength(Schema arrowSchema) {
+    public static int estimateArrowMetadataLength(
+            Schema arrowSchema, ArrowBodyCompression bodyCompression) {
         List<Field> fields = flattenFields(arrowSchema.getFields());
         List<ArrowFieldNode> nodes = createFieldNodes(fields);
         List<ArrowBuffer> buffersLayout = createBuffersLayout(fields);
@@ -217,7 +230,7 @@ public class ArrowUtils {
         WriteChannel writeChannel = new WriteChannel(Channels.newChannel(out));
         try {
             return ArrowUtils.serializeArrowRecordBatchMetadata(
-                    writeChannel, 1L, nodes, buffersLayout, 8L);
+                    writeChannel, 1L, nodes, buffersLayout, bodyCompression, 8L);
         } catch (IOException e) {
             throw new FlussRuntimeException("Failed to estimate Arrow metadata size", e);
         }

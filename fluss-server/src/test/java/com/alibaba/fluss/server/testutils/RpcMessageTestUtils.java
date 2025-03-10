@@ -32,8 +32,8 @@ import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
-import com.alibaba.fluss.rpc.messages.GetTableResponse;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanRequest;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
@@ -45,10 +45,12 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -80,13 +82,12 @@ public class RpcMessageTestUtils {
         return dropTableRequest;
     }
 
-    public static GetTableRequest newGetTableRequest(TablePath tablePath) {
-        GetTableRequest getTableRequest = new GetTableRequest();
-        getTableRequest
-                .setTablePath()
+    public static GetTableInfoRequest newGetTableInfoRequest(TablePath tablePath) {
+        GetTableInfoRequest request = new GetTableInfoRequest();
+        request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return getTableRequest;
+        return request;
     }
 
     public static DatabaseExistsRequest newDatabaseExistsRequest(String db) {
@@ -185,10 +186,32 @@ public class RpcMessageTestUtils {
 
     public static FetchLogRequest newFetchLogRequest(
             int followerId, long tableId, int bucketId, long fetchOffset, int[] selectedFields) {
+        return newFetchLogRequest(
+                followerId,
+                tableId,
+                bucketId,
+                fetchOffset,
+                selectedFields,
+                -1,
+                Integer.MAX_VALUE,
+                -1);
+    }
+
+    public static FetchLogRequest newFetchLogRequest(
+            int followerId,
+            long tableId,
+            int bucketId,
+            long fetchOffset,
+            int[] selectedFields,
+            int minFetchBytes,
+            int maxFetchBytes,
+            int maxWaitMs) {
         FetchLogRequest fetchLogRequest =
-                new FetchLogRequest()
-                        .setFollowerServerId(followerId)
-                        .setMaxBytes(Integer.MAX_VALUE);
+                new FetchLogRequest().setFollowerServerId(followerId).setMaxBytes(maxFetchBytes);
+        if (minFetchBytes > 0) {
+            fetchLogRequest.setMinBytes(minFetchBytes).setMaxWaitMs(maxWaitMs);
+        }
+
         PbFetchLogReqForTable fetchLogReqForTable = new PbFetchLogReqForTable().setTableId(tableId);
         if (selectedFields != null) {
             fetchLogReqForTable
@@ -213,6 +236,17 @@ public class RpcMessageTestUtils {
         PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
         pbLookupReqForBucket.setBucketId(bucketId).addKey(key);
         return lookupRequest;
+    }
+
+    public static PrefixLookupRequest newPrefixLookupRequest(
+            long tableId, int bucketId, List<byte[]> prefixKeys) {
+        PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);
+        PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket = prefixLookupRequest.addBucketsReq();
+        pbPrefixLookupReqForBucket.setBucketId(bucketId);
+        for (byte[] prefixKey : prefixKeys) {
+            pbPrefixLookupReqForBucket.addKey(prefixKey);
+        }
+        return prefixLookupRequest;
     }
 
     public static LimitScanRequest newLimitScanRequest(long tableId, int bucketId, int limit) {
@@ -240,9 +274,9 @@ public class RpcMessageTestUtils {
         coordinatorGateway
                 .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
                 .get();
-        GetTableResponse getTableResponse =
-                coordinatorGateway.getTable(newGetTableRequest(tablePath)).get();
-        return getTableResponse.getTableId();
+        GetTableInfoResponse response =
+                coordinatorGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        return response.getTableId();
     }
 
     public static void assertProduceLogResponse(

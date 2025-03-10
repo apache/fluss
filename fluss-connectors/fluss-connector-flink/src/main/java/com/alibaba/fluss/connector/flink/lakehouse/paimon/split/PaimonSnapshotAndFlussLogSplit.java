@@ -115,7 +115,12 @@ public class PaimonSnapshotAndFlussLogSplit extends SourceSplitBase {
     @Override
     public String toString() {
         return "PaimonSnapshotAndFlussLogSplit{"
-                + "snapshotSplit="
+                + "tableBucket="
+                + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + ", snapshotSplit="
                 + snapshotSplit
                 + ", recordsToSkip="
                 + recordsToSkip
@@ -123,8 +128,6 @@ public class PaimonSnapshotAndFlussLogSplit extends SourceSplitBase {
                 + startingOffset
                 + ", stoppingOffset="
                 + stoppingOffset
-                + ", tableBucket="
-                + tableBucket
                 + '}';
     }
 }

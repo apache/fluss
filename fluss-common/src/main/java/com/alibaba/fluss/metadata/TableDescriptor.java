@@ -20,10 +20,7 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.annotation.PublicStable;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.ConfigurationUtils;
-import com.alibaba.fluss.utils.AutoPartitionStrategy;
-import com.alibaba.fluss.utils.Preconditions;
 import com.alibaba.fluss.utils.json.JsonSerdeUtils;
 import com.alibaba.fluss.utils.json.TableDescriptorJsonSerde;
 
@@ -64,11 +61,6 @@ public final class TableDescriptor implements Serializable {
     private final @Nullable TableDistribution tableDistribution;
     private final Map<String, String> properties;
     private final Map<String, String> customProperties;
-
-    /** The cached Configuration object for the {@link #properties}. */
-    private transient Configuration config;
-
-    private transient AutoPartitionStrategy autoPartitionStrategy;
 
     private TableDescriptor(
             Schema schema,
@@ -111,8 +103,8 @@ public final class TableDescriptor implements Serializable {
                                     f));
         }
 
-        if (tableDistribution != null) {
-            tableDistribution
+        if (this.tableDistribution != null) {
+            this.tableDistribution
                     .getBucketKeys()
                     .forEach(
                             f ->
@@ -127,12 +119,8 @@ public final class TableDescriptor implements Serializable {
                         .allMatch(e -> e.getKey() != null && e.getValue() != null),
                 "options cannot have null keys or values.");
 
-        if (hasPrimaryKey()
-                && getKvFormat() == KvFormat.COMPACTED
-                && getLogFormat() != LogFormat.ARROW) {
-            throw new IllegalArgumentException(
-                    "For Primary Key Table, if kv format is compacted, log format must be arrow.");
-        }
+        // we don't check property validation here, it will be checked in server,
+        // as the property may be supported in future version.
     }
 
     /** Creates a builder for building table descriptor. */
@@ -150,10 +138,27 @@ public final class TableDescriptor implements Serializable {
         return schema;
     }
 
-    public List<String> getBucketKey() {
+    /** Returns the bucket key of the table, empty if no bucket key is set. */
+    public List<String> getBucketKeys() {
         return this.getTableDistribution()
                 .map(TableDescriptor.TableDistribution::getBucketKeys)
                 .orElse(Collections.emptyList());
+    }
+
+    /**
+     * Check if the table is using a default bucket key. A default bucket key is:
+     *
+     * <ul>
+     *   <li>the same as the primary keys excluding the partition keys.
+     *   <li>empty if the table is not a primary key table.
+     * </ul>
+     */
+    public boolean isDefaultBucketKey() {
+        if (schema.getPrimaryKey().isPresent()) {
+            return getBucketKeys().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+        } else {
+            return getBucketKeys().isEmpty();
+        }
     }
 
     /**
@@ -205,51 +210,53 @@ public final class TableDescriptor implements Serializable {
         return customProperties;
     }
 
-    /** Gets the replication factor of the table. */
-    public int getReplicationFactor(int defaultReplicas) {
-        return configuration()
-                .getOptional(ConfigOptions.TABLE_REPLICATION_FACTOR)
-                .orElse(defaultReplicas);
+    /**
+     * Gets the replication factor of the table.
+     *
+     * @throws IllegalArgumentException if the replication factor is not set
+     */
+    public int getReplicationFactor() {
+        String factor = properties.get(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        checkArgument(
+                factor != null, "%s is not set.", ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        return Integer.parseInt(factor);
     }
 
-    public AutoPartitionStrategy getAutoPartitionStrategy() {
-        if (autoPartitionStrategy == null) {
-            autoPartitionStrategy = AutoPartitionStrategy.from(properties);
-        }
-        return autoPartitionStrategy;
-    }
-
-    /** Gets the log format of the table. */
-    public LogFormat getLogFormat() {
-        return configuration().get(ConfigOptions.TABLE_LOG_FORMAT);
-    }
-
-    /** Gets the kv format of the table. */
-    public KvFormat getKvFormat() {
-        return configuration().get(ConfigOptions.TABLE_KV_FORMAT);
-    }
-
-    /** Gets the log TTL of the table. */
-    public long getLogTTLMs() {
-        return configuration().get(ConfigOptions.TABLE_LOG_TTL).toMillis();
-    }
-
-    /** Gets the local segments to retain for tiered log of the table. */
-    public int getTieredLogLocalSegments() {
-        return configuration().get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);
-    }
-
-    /** Whether the data lake is enabled. */
-    public boolean isDataLakeEnabled() {
-        return configuration().get(ConfigOptions.TABLE_DATALAKE_ENABLED);
-    }
-
-    public TableDescriptor copy(Map<String, String> newProperties) {
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * properties.
+     */
+    public TableDescriptor withProperties(Map<String, String> newProperties) {
         return new TableDescriptor(
                 schema, comment, partitionKeys, tableDistribution, newProperties, customProperties);
     }
 
-    public TableDescriptor copy(int newBucketCount) {
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * replication factor property.
+     */
+    public TableDescriptor withReplicationFactor(int newReplicationFactor) {
+        Map<String, String> newProperties = new HashMap<>(properties);
+        newProperties.put(
+                ConfigOptions.TABLE_REPLICATION_FACTOR.key(), String.valueOf(newReplicationFactor));
+        return withProperties(newProperties);
+    }
+
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * datalake format.
+     */
+    public TableDescriptor withDataLakeFormat(DataLakeFormat dataLakeFormat) {
+        Map<String, String> newProperties = new HashMap<>(properties);
+        newProperties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), dataLakeFormat.toString());
+        return withProperties(newProperties);
+    }
+
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * bucket count.
+     */
+    public TableDescriptor withBucketCount(int newBucketCount) {
         return new TableDescriptor(
                 schema,
                 comment,
@@ -327,13 +334,6 @@ public final class TableDescriptor implements Serializable {
                 + '}';
     }
 
-    private Configuration configuration() {
-        if (config == null) {
-            config = Configuration.fromMap(properties);
-        }
-        return config;
-    }
-
     // ----------------------------------------------------------------------------------------
 
     @Nullable
@@ -360,21 +360,17 @@ public final class TableDescriptor implements Serializable {
                             originDistribution.getBucketCount().orElse(null),
                             defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
                 } else {
-                    // check the provided bucket key and expected bucket key
-                    List<String> expectedBucketKeys =
-                            defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys);
+                    // check the provided bucket key
                     List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
-
-                    if (expectedBucketKeys.size() != bucketKeys.size()
-                            || !new HashSet<>(expectedBucketKeys).containsAll(bucketKeys)) {
+                    if (!new HashSet<>(pkColumns).containsAll(bucketKeys)) {
                         throw new IllegalArgumentException(
                                 String.format(
-                                        "Currently, bucket keys must be equal to primary keys excluding partition keys for primary-key tables. "
-                                                + "The primary keys are %s, the partition keys are %s, "
-                                                + "the expected bucket keys are %s, but the user-defined bucket keys are %s.",
-                                        pkColumns, partitionKeys, expectedBucketKeys, bucketKeys));
+                                        "Bucket keys must be a subset of primary keys excluding partition "
+                                                + "keys for primary-key tables. The primary keys are %s, the "
+                                                + "partition keys are %s, but "
+                                                + "the user-defined bucket keys are %s.",
+                                        pkColumns, partitionKeys, bucketKeys));
                     }
-
                     return new TableDistribution(
                             originDistribution.getBucketCount().orElse(null), bucketKeys);
                 }
@@ -513,8 +509,8 @@ public final class TableDescriptor implements Serializable {
          * <p>Table properties are controlled by Fluss and will change the behavior of the table.
          */
         public <T> Builder property(ConfigOption<T> configOption, T value) {
-            Preconditions.checkNotNull(configOption, "Config option must not be null.");
-            Preconditions.checkNotNull(value, "Value must not be null.");
+            checkNotNull(configOption, "Config option must not be null.");
+            checkNotNull(value, "Value must not be null.");
             properties.put(
                     configOption.key(), ConfigurationUtils.convertValue(value, String.class));
             return this;
@@ -526,8 +522,8 @@ public final class TableDescriptor implements Serializable {
          * <p>Table properties are controlled by Fluss and will change the behavior of the table.
          */
         public Builder property(String key, String value) {
-            Preconditions.checkNotNull(key, "Key must not be null.");
-            Preconditions.checkNotNull(value, "Value must not be null.");
+            checkNotNull(key, "Key must not be null.");
+            checkNotNull(value, "Value must not be null.");
             properties.put(key, value);
             return this;
         }
@@ -538,7 +534,7 @@ public final class TableDescriptor implements Serializable {
          * <p>Table properties are controlled by Fluss and will change the behavior of the table.
          */
         public Builder properties(Map<String, String> properties) {
-            Preconditions.checkNotNull(properties, "properties must not be null.");
+            checkNotNull(properties, "properties must not be null.");
             this.properties.putAll(properties);
             return this;
         }
@@ -551,8 +547,8 @@ public final class TableDescriptor implements Serializable {
          * for users.
          */
         public Builder customProperty(String key, String value) {
-            Preconditions.checkNotNull(key, "Key must not be null.");
-            Preconditions.checkNotNull(value, "Value must not be null.");
+            checkNotNull(key, "Key must not be null.");
+            checkNotNull(value, "Value must not be null.");
             this.customProperties.put(key, value);
             return this;
         }
@@ -565,7 +561,7 @@ public final class TableDescriptor implements Serializable {
          * for users.
          */
         public Builder customProperties(Map<String, String> customProperties) {
-            Preconditions.checkNotNull(customProperties, "customProperties must not be null.");
+            checkNotNull(customProperties, "customProperties must not be null.");
             this.customProperties.putAll(customProperties);
             return this;
         }

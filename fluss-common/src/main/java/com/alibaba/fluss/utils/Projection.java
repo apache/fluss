@@ -70,7 +70,7 @@ public class Projection {
         return rowType.project(projectionInOrder);
     }
 
-    public int[] projection() {
+    public int[] getProjection() {
         return projection;
     }
 

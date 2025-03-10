@@ -24,18 +24,19 @@ import java.util.Map;
 
 /** The metric group for clients. */
 public class ClientMetricGroup extends AbstractMetricGroup {
-    private static final String name = "client";
+
+    private static final String NAME = "client";
 
     private final String clientId;
 
     public ClientMetricGroup(MetricRegistry registry, String clientId) {
-        super(registry, new String[] {name}, null);
+        super(registry, new String[] {NAME}, null);
         this.clientId = clientId;
     }
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return NAME;
     }
 
     @Override

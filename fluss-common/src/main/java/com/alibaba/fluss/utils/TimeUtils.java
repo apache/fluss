@@ -27,6 +27,9 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -56,11 +59,10 @@ public class TimeUtils {
      * @param text string to parse.
      */
     public static Duration parseDuration(String text) {
-        Preconditions.checkNotNull(text);
+        checkNotNull(text);
 
         final String trimmed = text.trim();
-        Preconditions.checkArgument(
-                !trimmed.isEmpty(), "argument is an empty- or whitespace-only string");
+        checkArgument(!trimmed.isEmpty(), "argument is an empty- or whitespace-only string");
 
         final int len = trimmed.length();
         int pos = 0;

@@ -16,13 +16,17 @@
 
 package com.alibaba.fluss.client.admin;
 
+import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
+import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.client.table.lake.LakeTableSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.KvSnapshotInfo;
-import com.alibaba.fluss.client.table.snapshot.PartitionSnapshotInfo;
 import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
-import com.alibaba.fluss.lakehouse.LakeStorageInfo;
+import com.alibaba.fluss.cluster.Cluster;
+import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
@@ -38,13 +42,13 @@ import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
-import com.alibaba.fluss.rpc.messages.DescribeLakeStorageRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
-import com.alibaba.fluss.rpc.messages.GetKvSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetLakeTableSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetPartitionSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
+import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
+import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
+import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesResponse;
@@ -56,6 +60,7 @@ import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
@@ -66,9 +71,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
+import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * The default implementation of {@link Admin}.
@@ -87,6 +95,31 @@ public class FlussAdmin implements Admin {
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
         this.client = client;
+    }
+
+    @Override
+    public CompletableFuture<List<ServerNode>> getServerNodes() {
+        CompletableFuture<List<ServerNode>> future = new CompletableFuture<>();
+        CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        List<ServerNode> serverNodeList = new ArrayList<>();
+                        Cluster cluster =
+                                sendMetadataRequestAndRebuildCluster(
+                                        gateway,
+                                        false,
+                                        metadataUpdater.getCluster(),
+                                        null,
+                                        null,
+                                        null);
+                        serverNodeList.add(cluster.getCoordinatorServer());
+                        serverNodeList.addAll(cluster.getAliveTabletServerList());
+                        future.complete(serverNodeList);
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
+                    }
+                });
+        return future;
     }
 
     @Override
@@ -119,17 +152,35 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<Void> createDatabase(String databaseName, boolean ignoreIfExists) {
+    public CompletableFuture<Void> createDatabase(
+            String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists) {
         TablePath.validateDatabaseName(databaseName);
         CreateDatabaseRequest request = new CreateDatabaseRequest();
-        request.setDatabaseName(databaseName).setIgnoreIfExists(ignoreIfExists);
+        request.setDatabaseJson(databaseDescriptor.toJsonBytes())
+                .setDatabaseName(databaseName)
+                .setIgnoreIfExists(ignoreIfExists);
         return gateway.createDatabase(request).thenApply(r -> null);
     }
 
     @Override
-    public CompletableFuture<Void> deleteDatabase(
+    public CompletableFuture<DatabaseInfo> getDatabaseInfo(String databaseName) {
+        GetDatabaseInfoRequest request = new GetDatabaseInfoRequest();
+        request.setDatabaseName(databaseName);
+        return gateway.getDatabaseInfo(request)
+                .thenApply(
+                        r ->
+                                new DatabaseInfo(
+                                        databaseName,
+                                        DatabaseDescriptor.fromJsonBytes(r.getDatabaseJson()),
+                                        r.getCreatedTime(),
+                                        r.getModifiedTime()));
+    }
+
+    @Override
+    public CompletableFuture<Void> dropDatabase(
             String databaseName, boolean ignoreIfNotExists, boolean cascade) {
         DropDatabaseRequest request = new DropDatabaseRequest();
+
         request.setIgnoreIfNotExists(ignoreIfNotExists)
                 .setCascade(cascade)
                 .setDatabaseName(databaseName);
@@ -164,23 +215,25 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<TableInfo> getTable(TablePath tablePath) {
-        GetTableRequest request = new GetTableRequest();
+    public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
+        GetTableInfoRequest request = new GetTableInfoRequest();
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.getTable(request)
+        return gateway.getTableInfo(request)
                 .thenApply(
                         r ->
-                                new TableInfo(
+                                TableInfo.of(
                                         tablePath,
                                         r.getTableId(),
+                                        r.getSchemaId(),
                                         TableDescriptor.fromJsonBytes(r.getTableJson()),
-                                        r.getSchemaId()));
+                                        r.getCreatedTime(),
+                                        r.getModifiedTime()));
     }
 
     @Override
-    public CompletableFuture<Void> deleteTable(TablePath tablePath, boolean ignoreIfNotExists) {
+    public CompletableFuture<Void> dropTable(TablePath tablePath, boolean ignoreIfNotExists) {
         DropTableRequest request = new DropTableRequest();
         request.setIgnoreIfNotExists(ignoreIfNotExists)
                 .setTablePath()
@@ -216,22 +269,66 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<KvSnapshotInfo> getKvSnapshot(TablePath tablePath) {
-        GetKvSnapshotRequest request = new GetKvSnapshotRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
-        return gateway.getKvSnapshot(request).thenApply(ClientRpcMessageUtils::toKvSnapshotInfo);
+    public CompletableFuture<Void> createPartition(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists) {
+        return gateway.createPartition(
+                        makeCreatePartitionRequest(tablePath, partitionSpec, ignoreIfExists))
+                .thenApply(r -> null);
     }
 
     @Override
-    public CompletableFuture<LakeTableSnapshotInfo> getLakeTableSnapshot(TablePath tablePath) {
-        GetLakeTableSnapshotRequest request = new GetLakeTableSnapshotRequest();
+    public CompletableFuture<Void> dropPartition(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        return gateway.dropPartition(
+                        makeDropPartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
+                .thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath tablePath) {
+        GetLatestKvSnapshotsRequest request = new GetLatestKvSnapshotsRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.getLatestKvSnapshots(request)
+                .thenApply(ClientRpcMessageUtils::toKvSnapshots);
+    }
+
+    @Override
+    public CompletableFuture<KvSnapshots> getLatestKvSnapshots(
+            TablePath tablePath, String partitionName) {
+        checkNotNull(partitionName, "partitionName");
+        GetLatestKvSnapshotsRequest request = new GetLatestKvSnapshotsRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setPartitionName(partitionName);
+        return gateway.getLatestKvSnapshots(request)
+                .thenApply(ClientRpcMessageUtils::toKvSnapshots);
+    }
+
+    @Override
+    public CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(
+            TableBucket bucket, long snapshotId) {
+        GetKvSnapshotMetadataRequest request = new GetKvSnapshotMetadataRequest();
+        if (bucket.getPartitionId() != null) {
+            request.setPartitionId(bucket.getPartitionId());
+        }
+        request.setTableId(bucket.getTableId())
+                .setBucketId(bucket.getBucket())
+                .setSnapshotId(snapshotId);
+        return gateway.getKvSnapshotMetadata(request)
+                .thenApply(ClientRpcMessageUtils::toKvSnapshotMetadata);
+    }
+
+    @Override
+    public CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath) {
+        GetLatestLakeSnapshotRequest request = new GetLatestLakeSnapshotRequest();
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
 
-        return gateway.getLakeTableSnapshot(request)
+        return gateway.getLatestLakeSnapshot(request)
                 .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
     }
 
@@ -252,31 +349,13 @@ public class FlussAdmin implements Admin {
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
                         metadataUpdater, tableId, partitionId, buckets, offsetSpec);
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
         }
 
         sendListOffsetsRequest(metadataUpdater, client, requestMap, bucketToOffsetMap);
         return new ListOffsetsResult(bucketToOffsetMap);
-    }
-
-    @Override
-    public CompletableFuture<PartitionSnapshotInfo> getPartitionSnapshot(
-            TablePath tablePath, String partitionName) {
-        GetPartitionSnapshotRequest request = new GetPartitionSnapshotRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
-        request.setPartitionName(partitionName);
-        return gateway.getPartitionSnapshot(request)
-                .thenApply(ClientRpcMessageUtils::toPartitionSnapshotInfo);
-    }
-
-    @Override
-    public CompletableFuture<LakeStorageInfo> describeLakeStorage() {
-        return gateway.describeLakeStorage(new DescribeLakeStorageRequest())
-                .thenApply(ClientRpcMessageUtils::toLakeStorageInfo);
     }
 
     @Override

@@ -41,7 +41,7 @@ public class FlussLakehousePaimon {
     private static final String DATABASE = "database";
     private static final String FLUSS_CONF_PREFIX = "fluss.";
     // for paimon config
-    private static final String PAIMON_CATALOG_CONF_PREFIX = "paimon.catalog.";
+    private static final String PAIMON_CONF_PREFIX = "datalake.paimon.";
 
     public static void main(String[] args) throws Exception {
         // parse params
@@ -61,8 +61,7 @@ public class FlussLakehousePaimon {
         flussConfigMap.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
 
         // extract paimon config
-        Map<String, String> paimonConfig =
-                extractConfigStartWith(paramsMap, PAIMON_CATALOG_CONF_PREFIX);
+        Map<String, String> paimonConfig = extractConfigStartWith(paramsMap, PAIMON_CONF_PREFIX);
 
         // then build the fluss to paimon job
         final StreamExecutionEnvironment execEnv =
@@ -71,7 +70,7 @@ public class FlussLakehousePaimon {
         Filter<TableInfo> tableFilter =
                 (tableInfo) ->
                         // data lake should enable
-                        tableInfo.getTableDescriptor().isDataLakeEnabled();
+                        tableInfo.getTableConfig().isDataLakeEnabled();
         Configuration flussConfig = Configuration.fromMap(flussConfigMap);
         FlussDatabaseSyncSource.Builder databaseSyncSourceBuilder =
                 FlussDatabaseSyncSource.newBuilder(flussConfig)
@@ -112,7 +111,7 @@ public class FlussLakehousePaimon {
         }
     }
 
-    public static Map<String, String> extractConfigStartWith(
+    private static Map<String, String> extractConfigStartWith(
             Map<String, String> configParams, String prefix) {
         Map<String, String> extractedConfig = new HashMap<>();
         for (Map.Entry<String, String> configEntry : configParams.entrySet()) {

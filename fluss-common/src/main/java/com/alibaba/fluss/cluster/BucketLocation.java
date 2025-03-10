@@ -22,6 +22,9 @@ import com.alibaba.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
+import java.util.Arrays;
+import java.util.Objects;
+
 /** This is used to describe per-bucket location information. */
 @Internal
 public final class BucketLocation {
@@ -71,6 +74,26 @@ public final class BucketLocation {
 
     public ServerNode[] getReplicas() {
         return replicas;
+    }
+
+    @Override
+    public boolean equals(Object object) {
+        if (this == object) {
+            return true;
+        }
+        if (!(object instanceof BucketLocation)) {
+            return false;
+        }
+        BucketLocation that = (BucketLocation) object;
+        return Objects.equals(physicalTablePath, that.physicalTablePath)
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(leader, that.leader)
+                && Objects.deepEquals(replicas, that.replicas);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(physicalTablePath, tableBucket, leader, Arrays.hashCode(replicas));
     }
 
     @Override

@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.row.indexed.IndexedRowWriter;
 import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.types.RowType;
 
 /**
  * A {@link RowEncoder} for {@link IndexedRow}.
@@ -32,6 +33,10 @@ public class IndexedRowEncoder implements RowEncoder {
     private final DataType[] fieldDataTypes;
     private final IndexedRowWriter rowWriter;
     private final IndexedRowWriter.FieldWriter[] fieldWriters;
+
+    public IndexedRowEncoder(RowType rowType) {
+        this(rowType.getChildren().toArray(new DataType[0]));
+    }
 
     public IndexedRowEncoder(DataType[] fieldDataTypes) {
         this.fieldDataTypes = fieldDataTypes;

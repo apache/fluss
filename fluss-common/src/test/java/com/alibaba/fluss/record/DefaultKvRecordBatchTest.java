@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.record;
 
-import com.alibaba.fluss.memory.MemorySegmentOutputView;
+import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.row.TestInternalRowGenerator;
 import com.alibaba.fluss.row.compacted.CompactedRow;
@@ -34,9 +34,12 @@ class DefaultKvRecordBatchTest extends KvTestBase {
     @Test
     void writeAndReadBatch() throws Exception {
         int recordNumber = 100;
-        DefaultKvRecordBatch.Builder builder =
-                DefaultKvRecordBatch.Builder.builder(
-                        schemaId, new MemorySegmentOutputView(100), KvFormat.COMPACTED);
+        KvRecordBatchBuilder builder =
+                KvRecordBatchBuilder.builder(
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        new UnmanagedPagedOutputView(100),
+                        KvFormat.COMPACTED);
 
         List<byte[]> keys = new ArrayList<>();
         List<CompactedRow> rows = new ArrayList<>();
@@ -49,7 +52,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
             rows.add(row);
         }
 
-        KvRecordBatch kvRecords = builder.build();
+        KvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(builder.build());
         kvRecords.ensureValid();
 
         // verify the header info
@@ -68,5 +71,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
             assertThat(record.getRow()).isEqualTo(rows.get(i));
             i++;
         }
+
+        builder.close();
     }
 }

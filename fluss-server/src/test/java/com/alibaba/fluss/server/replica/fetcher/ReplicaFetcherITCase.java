@@ -20,7 +20,6 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
@@ -52,14 +51,14 @@ import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponseWithRowKind;
+import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newFetchLogRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -92,25 +91,14 @@ public class ReplicaFetcherITCase {
     @Test
     void testProduceLogNeedAck() throws Exception {
         // set bucket count to 1 to easy for debug.
-        TableInfo data1NonPkTableInfo =
-                new TableInfo(
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_ID,
-                        TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA)
-                                .distributedBy(1, "a")
-                                .build(),
-                        1);
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
 
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
-        long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH,
-                        data1NonPkTableInfo.getTableDescriptor());
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -121,7 +109,7 @@ public class ReplicaFetcherITCase {
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // send one batch, which need ack.
-        RpcMessageTestUtils.assertProduceLogResponse(
+        assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(
                                 RpcMessageTestUtils.newProduceLogRequest(
@@ -134,7 +122,7 @@ public class ReplicaFetcherITCase {
                 0L);
 
         // check leader log data.
-        RpcMessageTestUtils.assertFetchLogResponse(
+        assertFetchLogResponse(
                 leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, bucketId, 0L)).get(),
                 tableId,
                 bucketId,
@@ -147,23 +135,9 @@ public class ReplicaFetcherITCase {
                 leaderAndIsr.isr().stream()
                         .filter(id -> id != leader)
                         .collect(Collectors.toList())) {
+
             ReplicaManager replicaManager =
                     FLUSS_CLUSTER_EXTENSION.getTabletServerById(followId).getReplicaManager();
-            CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
-                    new CompletableFuture<>();
-            // mock client fetch from follower.
-            replicaManager.fetchLogRecords(
-                    new FetchParams(-1, false, Integer.MAX_VALUE),
-                    Collections.singletonMap(tb, new FetchData(tableId, 0L, 1024 * 1024)),
-                    future::complete);
-            Map<TableBucket, FetchLogResultForBucket> result = future.get();
-            assertThat(result.size()).isEqualTo(1);
-            FetchLogResultForBucket resultForBucket = result.get(tb);
-            assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
-            LogRecords records = resultForBucket.records();
-            assertThat(records).isNotNull();
-            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1);
-
             // wait util follower highWaterMark equals leader.
             retry(
                     Duration.ofMinutes(1),
@@ -174,23 +148,33 @@ public class ReplicaFetcherITCase {
                                                     .getLogTablet()
                                                     .getHighWatermark())
                                     .isEqualTo(10L));
+
+            CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                    new CompletableFuture<>();
+            // mock client fetch from follower.
+            replicaManager.fetchLogRecords(
+                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
+                    Collections.singletonMap(tb, new FetchData(tableId, 0L, 1024 * 1024)),
+                    future::complete);
+            Map<TableBucket, FetchLogResultForBucket> result = future.get();
+            assertThat(result.size()).isEqualTo(1);
+            FetchLogResultForBucket resultForBucket = result.get(tb);
+            assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
+            LogRecords records = resultForBucket.records();
+            assertThat(records).isNotNull();
+            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1);
         }
     }
 
     @Test
     void testPutKvNeedAck() throws Exception {
-        // set bucket count to 1 to easy for debug.
-        TableInfo data1PkTableInfo = createPkTable();
-
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        data1PkTableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, createPkTableDescriptor());
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -245,7 +229,7 @@ public class ReplicaFetcherITCase {
                     new CompletableFuture<>();
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
-                    new FetchParams(-1, false, Integer.MAX_VALUE),
+                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
                     Collections.singletonMap(tb, new FetchData(tableId, 0L, 1024 * 1024)),
                     future::complete);
             Map<TableBucket, FetchLogResultForBucket> result = future.get();
@@ -261,14 +245,10 @@ public class ReplicaFetcherITCase {
 
     @Test
     void testFlushForPutKvNeedAck() throws Exception {
-        TableInfo data1PkTableInfo = createPkTable();
-
         // create a table and wait all replica ready
         long tableId =
                 createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        DATA1_TABLE_PATH_PK,
-                        data1PkTableInfo.getTableDescriptor());
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, createPkTableDescriptor());
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -335,12 +315,8 @@ public class ReplicaFetcherITCase {
         }
     }
 
-    private TableInfo createPkTable() {
-        return new TableInfo(
-                DATA1_TABLE_PATH_PK,
-                DATA1_TABLE_ID_PK,
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
-                1);
+    private TableDescriptor createPkTableDescriptor() {
+        return TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
     }
 
     private static Configuration initConfig() {

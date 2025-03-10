@@ -52,6 +52,11 @@
             <version>${jmh.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+        </dependency>
+
         <!-- Tests depends on ByteBufChannel -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>

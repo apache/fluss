@@ -64,21 +64,21 @@ public class ReplicaStateMachine {
         // see more in TableManager#onDeleteTableBucket
         LOG.info("Triggering online replica state changes");
         handleStateChanges(
-                replicaNotInDeletedTable(onlineAndOfflineReplicas.f0), ReplicaState.OnlineReplica);
+                replicaNotInDeletedTableOrPartition(onlineAndOfflineReplicas.f0),
+                ReplicaState.OnlineReplica);
         LOG.info("Triggering offline replica state changes");
         handleStateChanges(
-                replicaNotInDeletedTable(onlineAndOfflineReplicas.f1), ReplicaState.OfflineReplica);
+                replicaNotInDeletedTableOrPartition(onlineAndOfflineReplicas.f1),
+                ReplicaState.OfflineReplica);
         LOG.debug(
                 "Started replica state machine with initial state {}.",
                 coordinatorContext.getReplicaStates());
     }
 
-    private Set<TableBucketReplica> replicaNotInDeletedTable(Set<TableBucketReplica> replicas) {
+    private Set<TableBucketReplica> replicaNotInDeletedTableOrPartition(
+            Set<TableBucketReplica> replicas) {
         return replicas.stream()
-                .filter(
-                        replica ->
-                                !coordinatorContext.isTableQueuedForDeletion(
-                                        replica.getTableBucket().getTableId()))
+                .filter(replica -> !coordinatorContext.isToBeDeleted(replica.getTableBucket()))
                 .collect(Collectors.toSet());
     }
 
@@ -213,7 +213,7 @@ public class ReplicaStateMachine {
                                     if (partitionName == null) {
                                         LOG.error(
                                                 "Can't find partition name for partition: {}.",
-                                                tableBucket.getBucket());
+                                                tableBucket.getPartitionId());
                                         logFailedSateChange(replica, currentState, targetState);
                                         return;
                                     }

@@ -48,8 +48,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -262,11 +260,7 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
             throws Exception {
         long t1Id = createLogTable(tablePath, bucketNum);
         for (int i = 0; i < 30; i++) {
-            List<InternalRow> rows =
-                    Arrays.asList(
-                            row(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                            row(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                            row(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+            List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
             // write records
             writeRows(tablePath, rows, true);
         }
@@ -291,11 +285,7 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
             throws Exception {
         for (int i = 0; i < 10; i++) {
             List<InternalRow> rows =
-                    Arrays.asList(
-                            compactedRow(DATA1_ROW_TYPE, new Object[] {0, "v0"}),
-                            compactedRow(DATA1_ROW_TYPE, new Object[] {1, "v1"}),
-                            compactedRow(DATA1_ROW_TYPE, new Object[] {2, "v2"}),
-                            compactedRow(DATA1_ROW_TYPE, new Object[] {3, "v3"}));
+                    Arrays.asList(row(0, "v0"), row(1, "v1"), row(2, "v2"), row(3, "v3"));
             // write records
             writeRows(tablePath, rows, false);
         }

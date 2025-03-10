@@ -20,19 +20,25 @@ import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.OffsetSpec.LatestSpec;
 import com.alibaba.fluss.client.admin.OffsetSpec.TimestampSpec;
-import com.alibaba.fluss.client.scanner.ScanRecord;
-import com.alibaba.fluss.client.scanner.log.LogScan;
-import com.alibaba.fluss.client.scanner.log.LogScanner;
-import com.alibaba.fluss.client.scanner.log.ScanRecords;
+import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
+import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.metadata.DataLakeFormat;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.RowType;
 
@@ -44,10 +50,12 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -91,9 +99,10 @@ public abstract class ClientToServerITCaseBase {
     protected long createTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
             throws Exception {
-        admin.createDatabase(tablePath.getDatabaseName(), ignoreIfExists).get();
+        admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, ignoreIfExists)
+                .get();
         admin.createTable(tablePath, tableDescriptor, ignoreIfExists).get();
-        return admin.getTable(tablePath).get().getTableId();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     private static Configuration initConfig() {
@@ -103,6 +112,8 @@ public abstract class ClientToServerITCaseBase {
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
         // set a shorter max lag time to make tests in FlussFailServerTableITCase faster
         conf.set(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME, Duration.ofSeconds(10));
+        // set default datalake format for the cluster and enable datalake tables
+        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
 
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
@@ -110,15 +121,15 @@ public abstract class ClientToServerITCaseBase {
     }
 
     protected static LogScanner createLogScanner(Table table) {
-        return table.getLogScanner(new LogScan());
+        return table.newScan().createLogScanner();
     }
 
     protected static LogScanner createLogScanner(Table table, int[] projectFields) {
-        return table.getLogScanner(new LogScan().withProjectedFields(projectFields));
+        return table.newScan().project(projectFields).createLogScanner();
     }
 
     protected static void subscribeFromBeginning(LogScanner logScanner, Table table) {
-        int bucketCount = getBucketCount(table);
+        int bucketCount = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < bucketCount; i++) {
             logScanner.subscribeFromBeginning(i);
         }
@@ -168,18 +179,11 @@ public abstract class ClientToServerITCaseBase {
 
     protected static List<Integer> getAllBuckets(Table table) {
         List<Integer> buckets = new ArrayList<>();
-        int bucketCount = getBucketCount(table);
+        int bucketCount = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < bucketCount; i++) {
             buckets.add(i);
         }
         return buckets;
-    }
-
-    private static int getBucketCount(Table table) {
-        return table.getDescriptor()
-                .getTableDistribution()
-                .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                .orElse(ConfigOptions.DEFAULT_BUCKET_NUMBER.defaultValue());
     }
 
     public static void verifyPartitionLogs(
@@ -189,7 +193,7 @@ public abstract class ClientToServerITCaseBase {
                 expectPartitionsRows.values().stream().map(List::size).reduce(0, Integer::sum);
         int scanRecordCount = 0;
         Map<Long, List<InternalRow>> actualRows = new HashMap<>();
-        try (LogScanner logScanner = table.getLogScanner(new LogScan())) {
+        try (LogScanner logScanner = table.newScan().createLogScanner()) {
             for (Long partitionId : expectPartitionsRows.keySet()) {
                 logScanner.subscribeFromBeginning(partitionId, 0);
             }
@@ -211,9 +215,8 @@ public abstract class ClientToServerITCaseBase {
         verifyRows(rowType, actualRows, expectPartitionsRows);
     }
 
-    public static void waitAllReplicasReady(long tableId, TableDescriptor tableDescriptor) {
+    public static void waitAllReplicasReady(long tableId, int expectBucketCount) {
         // retry until all replica ready.
-        int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
         for (int i = 0; i < expectBucketCount; i++) {
             FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(new TableBucket(tableId, i));
         }
@@ -236,5 +239,29 @@ public abstract class ClientToServerITCaseBase {
                 assertThatRow(actual.get(i)).withSchema(rowType).isEqualTo(expected.get(i));
             }
         }
+    }
+
+    protected static void verifyPutAndLookup(Table table, Object[] fields) throws Exception {
+        Schema schema = table.getTableInfo().getSchema();
+        // put data.
+        InternalRow row = row(fields);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        // put data.
+        upsertWriter.upsert(row);
+        upsertWriter.flush();
+        // lookup this key.
+        Lookuper lookuper = table.newLookup().createLookuper();
+        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+        keyRow.replaceRow(row);
+        assertThatRow(lookupRow(lookuper, keyRow)).withSchema(schema.getRowType()).isEqualTo(row);
+    }
+
+    protected static InternalRow lookupRow(Lookuper lookuper, InternalRow keyRow) throws Exception {
+        // lookup this key.
+        return lookuper.lookup(keyRow).get().getSingletonRow();
+    }
+
+    protected static PartitionSpec newPartitionSpec(String partitionKey, String partitionValue) {
+        return new PartitionSpec(Collections.singletonMap(partitionKey, partitionValue));
     }
 }

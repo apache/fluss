@@ -16,15 +16,22 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
+import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableDescriptor.TableDistribution;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /**
  * The registration information of table in {@link ZkData.TableZNode}. It is used to store the table
@@ -39,49 +46,80 @@ public class TableRegistration {
     public final long tableId;
     public final @Nullable String comment;
     public final List<String> partitionKeys;
-    public final @Nullable TableDescriptor.TableDistribution tableDistribution;
+    public final List<String> bucketKeys;
+    public final int bucketCount;
     public final Map<String, String> properties;
     public final Map<String, String> customProperties;
+    public final long createdTime;
+    public final long modifiedTime;
 
     public TableRegistration(
             long tableId,
             @Nullable String comment,
             List<String> partitionKeys,
-            @Nullable TableDescriptor.TableDistribution tableDistribution,
+            TableDistribution tableDistribution,
             Map<String, String> properties,
-            Map<String, String> customProperties) {
+            Map<String, String> customProperties,
+            long createdTime,
+            long modifiedTime) {
+        checkArgument(
+                tableDistribution.getBucketCount().isPresent(),
+                "Bucket count is required for table registration.");
         this.tableId = tableId;
         this.comment = comment;
         this.partitionKeys = partitionKeys;
-        this.tableDistribution = tableDistribution;
+        this.bucketCount = tableDistribution.getBucketCount().get();
+        this.bucketKeys = tableDistribution.getBucketKeys();
         this.properties = properties;
         this.customProperties = customProperties;
+        this.createdTime = createdTime;
+        this.modifiedTime = modifiedTime;
     }
 
-    public TableDescriptor toTableDescriptor(Schema schema) {
-        TableDescriptor.Builder builder =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .comment(comment)
-                        .partitionedBy(partitionKeys);
-        if (tableDistribution != null) {
-            builder.distributedBy(
-                    tableDistribution.getBucketCount().orElse(null),
-                    tableDistribution.getBucketKeys());
+    public TableInfo toTableInfo(TablePath tablePath, SchemaInfo schemaInfo) {
+        return toTableInfo(tablePath, schemaInfo, null);
+    }
+
+    public TableInfo toTableInfo(
+            TablePath tablePath,
+            SchemaInfo schemaInfo,
+            @Nullable Map<String, String> defaultTableLakeOptions) {
+        Configuration properties = Configuration.fromMap(this.properties);
+        if (defaultTableLakeOptions != null) {
+            if (properties.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
+                // only make the lake options visible when the datalake is enabled on the table
+                defaultTableLakeOptions.forEach(properties::setString);
+            }
         }
-        properties.forEach(builder::property);
-        customProperties.forEach(builder::customProperty);
-        return builder.build();
+        return new TableInfo(
+                tablePath,
+                this.tableId,
+                schemaInfo.getSchemaId(),
+                schemaInfo.getSchema(),
+                this.bucketKeys,
+                this.partitionKeys,
+                this.bucketCount,
+                properties,
+                Configuration.fromMap(this.customProperties),
+                this.comment,
+                this.createdTime,
+                this.modifiedTime);
     }
 
-    public static TableRegistration of(long tableId, TableDescriptor tableDescriptor) {
+    public static TableRegistration newTable(long tableId, TableDescriptor tableDescriptor) {
+        checkArgument(
+                tableDescriptor.getTableDistribution().isPresent(),
+                "Table distribution is required for table registration.");
+        final long currentMillis = System.currentTimeMillis();
         return new TableRegistration(
                 tableId,
                 tableDescriptor.getComment().orElse(null),
                 tableDescriptor.getPartitionKeys(),
-                tableDescriptor.getTableDistribution().orElse(null),
+                tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
-                tableDescriptor.getCustomProperties());
+                tableDescriptor.getCustomProperties(),
+                currentMillis,
+                currentMillis);
     }
 
     @Override
@@ -89,14 +127,18 @@ public class TableRegistration {
         if (this == o) {
             return true;
         }
+
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         TableRegistration that = (TableRegistration) o;
         return tableId == that.tableId
+                && createdTime == that.createdTime
+                && modifiedTime == that.modifiedTime
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(partitionKeys, that.partitionKeys)
-                && Objects.equals(tableDistribution, that.tableDistribution)
+                && Objects.equals(bucketCount, that.bucketCount)
+                && Objects.equals(bucketKeys, that.bucketKeys)
                 && Objects.equals(properties, that.properties)
                 && Objects.equals(customProperties, that.customProperties);
     }
@@ -104,7 +146,15 @@ public class TableRegistration {
     @Override
     public int hashCode() {
         return Objects.hash(
-                tableId, comment, partitionKeys, tableDistribution, properties, customProperties);
+                tableId,
+                comment,
+                partitionKeys,
+                bucketCount,
+                bucketKeys,
+                properties,
+                customProperties,
+                createdTime,
+                modifiedTime);
     }
 
     @Override
@@ -117,12 +167,18 @@ public class TableRegistration {
                 + '\''
                 + ", partitionKeys="
                 + partitionKeys
-                + ", tableDistribution="
-                + tableDistribution
+                + ", bucketCount="
+                + bucketCount
+                + ", bucketKeys="
+                + bucketKeys
                 + ", properties="
                 + properties
                 + ", customProperties="
                 + customProperties
+                + ", createdTime="
+                + createdTime
+                + ", modifiedTime="
+                + modifiedTime
                 + '}';
     }
 }

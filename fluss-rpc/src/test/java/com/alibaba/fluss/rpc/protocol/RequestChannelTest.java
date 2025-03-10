@@ -17,7 +17,7 @@
 package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.messages.GetTableRequest;
+import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.rpc.netty.server.RpcRequest;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.EmptyByteBuf;
@@ -34,20 +34,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class RequestChannelTest {
 
     @Test
-    void testRequestPriority() throws Exception {
+    void testRequestsFIFO() throws Exception {
         RequestChannel channel = new RequestChannel(100);
 
-        // 1. request with same priority score. Use FIFO.
+        // 1. Same request type, Use FIFO.
         List<RpcRequest> rpcRequests = new ArrayList<>();
         // push rpc requests
         for (int i = 0; i < 100; i++) {
             RpcRequest rpcRequest =
                     new RpcRequest(
-                            ApiKeys.GET_TABLE.id,
+                            ApiKeys.GET_TABLE_INFO.id,
                             (short) 0,
                             i,
                             null,
-                            new GetTableRequest(),
+                            new GetTableInfoRequest(),
                             new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                             null);
             channel.putRequest(rpcRequest);
@@ -59,14 +59,14 @@ public class RequestChannelTest {
             assertThat(gotRequest).isEqualTo(rpcRequests.get(i));
         }
 
-        // 2. request with different priority score. Should be ordered by priority score.
+        // 2. Different request type, Use FIFO.
         RpcRequest rpcRequest1 =
                 new RpcRequest(
-                        ApiKeys.GET_TABLE.id,
+                        ApiKeys.GET_TABLE_INFO.id,
                         (short) 0,
                         3,
                         null,
-                        new GetTableRequest(),
+                        new GetTableInfoRequest(),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         null);
         RpcRequest rpcRequest2 =
@@ -81,8 +81,8 @@ public class RequestChannelTest {
         channel.putRequest(rpcRequest1);
         channel.putRequest(rpcRequest2);
         RpcRequest rpcRequest = channel.pollRequest(100);
-        assertThat(rpcRequest).isEqualTo(rpcRequest2);
-        rpcRequest = channel.pollRequest(100);
         assertThat(rpcRequest).isEqualTo(rpcRequest1);
+        rpcRequest = channel.pollRequest(100);
+        assertThat(rpcRequest).isEqualTo(rpcRequest2);
     }
 }

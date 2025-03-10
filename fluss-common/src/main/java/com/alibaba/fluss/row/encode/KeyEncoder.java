@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,72 +16,37 @@
 
 package com.alibaba.fluss.row.encode;
 
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.compacted.CompactedKeyWriter;
-import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.row.encode.paimon.PaimonKeyEncoder;
 import com.alibaba.fluss.types.RowType;
 
-import java.util.ArrayList;
+import javax.annotation.Nullable;
+
 import java.util.List;
-import java.util.stream.IntStream;
 
-/** An encoder to encode {@link InternalRow} using {@link CompactedKeyWriter}. */
-public class KeyEncoder {
+/** An interface for encoding key of row into bytes. */
+public interface KeyEncoder {
 
-    private final InternalRow.FieldGetter[] fieldGetters;
-
-    private final CompactedKeyWriter.FieldWriter[] fieldEncoders;
-
-    private final CompactedKeyWriter compactedEncoder;
+    /** Encode the key of given row to byte array. */
+    byte[] encodeKey(InternalRow row);
 
     /**
-     * Create a key encoder to encode the key of the row with given {@param rowType} in
-     * given @{@param primaryKeyIndexes} and {@param partitionKeys}.
+     * Create a key encoder to encode the key array bytes of the input row.
+     *
+     * @param rowType the row type of the input row
+     * @param keyFields the key fields to encode
+     * @param lakeFormat the datalake format
      */
-    public static KeyEncoder createKeyEncoder(
-            RowType rowType, List<String> primaryKeys, List<String> partitionKeys) {
-
-        // to get the col used to encode the key, for partitioned table,
-        // we will remove the partition keys from primary keys
-        List<String> encodeCols = new ArrayList<>(primaryKeys);
-        encodeCols.removeAll(partitionKeys);
-
-        int[] encodeColIndexes = new int[encodeCols.size()];
-        for (int i = 0; i < encodeCols.size(); i++) {
-            encodeColIndexes[i] = rowType.getFieldIndex(encodeCols.get(i));
+    static KeyEncoder of(
+            RowType rowType, List<String> keyFields, @Nullable DataLakeFormat lakeFormat) {
+        if (lakeFormat == null) {
+            // use default compacted key encoder
+            return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
+        } else if (lakeFormat == DataLakeFormat.PAIMON) {
+            return new PaimonKeyEncoder(rowType, keyFields);
+        } else {
+            throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }
-
-        return new KeyEncoder(rowType, encodeColIndexes);
-    }
-
-    protected KeyEncoder(RowType rowType) {
-        this(rowType, IntStream.range(0, rowType.getFieldCount()).toArray());
-    }
-
-    public KeyEncoder(RowType rowType, int[] encodeFieldPos) {
-        DataType[] encodeDataTypes = new DataType[encodeFieldPos.length];
-        for (int i = 0; i < encodeFieldPos.length; i++) {
-            encodeDataTypes[i] = rowType.getTypeAt(encodeFieldPos[i]);
-        }
-
-        // for get fields from internal row
-        fieldGetters = new InternalRow.FieldGetter[encodeFieldPos.length];
-        // for encode fields
-        fieldEncoders = new CompactedKeyWriter.FieldWriter[encodeFieldPos.length];
-        for (int i = 0; i < encodeFieldPos.length; i++) {
-            DataType fieldDataType = encodeDataTypes[i];
-            fieldGetters[i] = InternalRow.createFieldGetter(fieldDataType, encodeFieldPos[i]);
-            fieldEncoders[i] = CompactedKeyWriter.createFieldWriter(fieldDataType);
-        }
-        compactedEncoder = new CompactedKeyWriter();
-    }
-
-    public byte[] encode(InternalRow row) {
-        compactedEncoder.reset();
-        // iterate all the fields of the row, and encode each field
-        for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeField(compactedEncoder, i, fieldGetters[i].getFieldOrNull(row));
-        }
-        return compactedEncoder.toBytes();
     }
 }

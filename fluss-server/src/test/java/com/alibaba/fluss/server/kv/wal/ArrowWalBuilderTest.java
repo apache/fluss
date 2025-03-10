@@ -20,7 +20,6 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.memory.LazyMemorySegmentPool;
-import com.alibaba.fluss.memory.ManagedPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -36,14 +35,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEqualsWithRowKind;
-import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ArrowWalBuilder}. */
@@ -73,20 +74,21 @@ class ArrowWalBuilderTest {
 
         int bucketId = 0;
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, bucketId);
-        LazyMemorySegmentPool memorySegmentPool = LazyMemorySegmentPool.create(conf);
+        LazyMemorySegmentPool memorySegmentPool =
+                LazyMemorySegmentPool.createWriterBufferPool(conf);
         WalBuilder walBuilder = createWalBuilder(tb, 1024, memorySegmentPool);
 
         List<Tuple2<RowKind, Object[]>> expectedResult = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             RowKind rowKind = RowKind.INSERT;
             Object[] objects = {i, "v" + i};
-            walBuilder.append(rowKind, compactedRow(DATA1_ROW_TYPE, objects));
+            walBuilder.append(rowKind, row(objects));
             expectedResult.add(Tuple2.of(rowKind, objects));
         }
 
         // consume log records before walBuilder deallocate memory. it's safe.
         MemoryLogRecords logRecords = walBuilder.build();
-        int totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
+        long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
         assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
         // allocate multiple pages
         assertThat(totalPages - memorySegmentPool.freePages()).isGreaterThan(1);
@@ -114,20 +116,21 @@ class ArrowWalBuilderTest {
 
         int bucketId = 0;
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, bucketId);
-        LazyMemorySegmentPool memorySegmentPool = LazyMemorySegmentPool.create(conf);
+        LazyMemorySegmentPool memorySegmentPool =
+                LazyMemorySegmentPool.createWriterBufferPool(conf);
         WalBuilder walBuilder = createWalBuilder(tb, 1024, memorySegmentPool);
 
         List<Tuple2<RowKind, Object[]>> expectedResult = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             RowKind rowKind = RowKind.INSERT;
             Object[] objects = {i, "v" + i};
-            walBuilder.append(rowKind, compactedRow(DATA1_ROW_TYPE, objects));
+            walBuilder.append(rowKind, row(objects));
             expectedResult.add(Tuple2.of(rowKind, objects));
         }
 
         // consume log records before walBuilder deallocate memory. it's safe.
         MemoryLogRecords logRecords = walBuilder.build();
-        int totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
+        long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
         assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
         // allocate one page
         assertThat(totalPages - memorySegmentPool.freePages()).isEqualTo(1);
@@ -147,11 +150,16 @@ class ArrowWalBuilderTest {
     }
 
     private WalBuilder createWalBuilder(
-            TableBucket tb, int maxSizeInBytes, MemorySegmentPool memorySegmentPool) {
+            TableBucket tb, int maxSizeInBytes, MemorySegmentPool memorySegmentPool)
+            throws IOException {
         return new ArrowWalBuilder(
                 DEFAULT_SCHEMA_ID,
                 arrowWriterProvider.getOrCreateWriter(
-                        tb.getTableId(), DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE),
-                new ManagedPagedOutputView(memorySegmentPool));
+                        tb.getTableId(),
+                        DEFAULT_SCHEMA_ID,
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        DEFAULT_COMPRESSION),
+                memorySegmentPool);
     }
 }

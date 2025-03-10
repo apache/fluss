@@ -17,6 +17,7 @@
 package com.alibaba.fluss.rpc;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.rpc.netty.server.NettyServer;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.utils.AutoCloseableAsync;
@@ -36,6 +37,7 @@ public interface RpcServer extends AutoCloseableAsync {
      * @param externalAddress The external address to bind to.
      * @param externalPortRange The external port range to bind to.
      * @param service The service to handle incoming requests.
+     * @param serverMetricGroup The metric group of server to report.
      * @param requestsMetrics the requests metrics to report.
      * @return The new RPC server.
      */
@@ -44,9 +46,16 @@ public interface RpcServer extends AutoCloseableAsync {
             String externalAddress,
             String externalPortRange,
             RpcGatewayService service,
+            MetricGroup serverMetricGroup,
             RequestsMetrics requestsMetrics)
             throws IOException {
-        return new NettyServer(conf, externalAddress, externalPortRange, service, requestsMetrics);
+        return new NettyServer(
+                conf,
+                externalAddress,
+                externalPortRange,
+                service,
+                serverMetricGroup,
+                requestsMetrics);
     }
 
     /** Starts the RPC server by binding to the configured bind address and port (blocking). */

@@ -197,9 +197,6 @@ KEY_ENV_SSH_OPTS="env.ssh.opts"
 KEY_ZK_HEAP_MB="zookeeper.heap.mb"
 
 KEY_REMOTE_DATA_DIR="remote.data.dir"
-KEY_DATA_LAKE_STORAGE="lakehouse.storage"
-KEY_PAIMON_WAREHOUSE="paimon.catalog.warehouse"
-
 
 ########################################################################################################################
 # PATHS AND CONFIG
@@ -352,10 +349,6 @@ fi
 
 if [ -z "${REMOTE_DATA_DIR}" ]; then
     REMOTE_DATA_DIR=$(readFromConfig ${KEY_REMOTE_DATA_DIR} "" "${YAML_CONF}")
-fi
-
-if [ -z "${PAIMON_WAREHOUSE}" ]; then
-    PAIMON_WAREHOUSE=$(readFromConfig ${KEY_PAIMON_WAREHOUSE} "" "${YAML_CONF}")
 fi
 
 # Arguments for the JVM. Used for Coordinator server and Tablet server JVMs.

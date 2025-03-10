@@ -81,7 +81,24 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
-
+  plugins: [
+    [
+      '@docusaurus/plugin-pwa',
+      {
+          debug: true,
+          offlineModeActivationStrategies: [
+            'appInstalled',
+            'standalone',
+            'queryString',
+          ],
+          pwaHead: [
+            { tagName: 'link', rel: 'icon', href: '/img/logo.svg' },
+            { tagName: 'link', rel: 'manifest', href: '/manifest.json' },
+            { tagName: 'meta', name: 'theme-color', content: '#0071e3' },
+          ],
+      },
+    ],
+  ],
   themeConfig: {
     // Replace with your project's social card
     image: 'img/docusaurus-social-card.jpg',

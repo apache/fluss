@@ -49,6 +49,10 @@ public class TablePath implements Serializable {
     private final String databaseName;
     private final String tableName;
 
+    // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
+    // RecordAccumulator.ready)
+    private Integer hash;
+
     public TablePath(String databaseName, String tableName) {
         this.databaseName = databaseName;
         this.tableName = tableName;
@@ -101,7 +105,14 @@ public class TablePath implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(databaseName, tableName);
+        Integer h = this.hash;
+        if (h == null) {
+            int result = Objects.hash(databaseName, tableName);
+            this.hash = result;
+            return result;
+        } else {
+            return h;
+        }
     }
 
     @Override
@@ -129,7 +140,7 @@ public class TablePath implements Serializable {
         }
     }
 
-    static String detectInvalidName(String identifier) {
+    public static String detectInvalidName(String identifier) {
         if (identifier == null) {
             return "null string is not allowed";
         }
@@ -157,7 +168,7 @@ public class TablePath implements Serializable {
         return null;
     }
 
-    /** Valid characters for Fluss table names are the ASCII alphanumerics, '_', and '-'. */
+    /** Valid characters for Fluss table names are the ASCII alphanumerics, '_' and '-'. */
     private static boolean containsInvalidPattern(String identifier) {
         for (int i = 0; i < identifier.length(); ++i) {
             char c = identifier.charAt(i);
@@ -169,6 +180,7 @@ public class TablePath implements Serializable {
                             || (c >= 'A' && c <= 'Z')
                             || c == '_'
                             || c == '-';
+
             if (!validChar) {
                 return true;
             }

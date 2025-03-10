@@ -44,7 +44,8 @@ public class TableRegistrationJsonSerde
     static final String BUCKET_COUNT_NAME = "bucket_count";
     static final String PROPERTIES_NAME = "properties";
     static final String CUSTOM_PROPERTIES_NAME = "custom_properties";
-
+    static final String CREATED_TIME = "created_time";
+    static final String MODIFIED_TIME = "modified_time";
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 1;
 
@@ -64,24 +65,25 @@ public class TableRegistrationJsonSerde
         }
 
         // serialize partition key.
-        generator.writeArrayFieldStart(PARTITION_KEY_NAME);
-        for (String partitionKey : tableReg.partitionKeys) {
-            generator.writeString(partitionKey);
+        if (!tableReg.partitionKeys.isEmpty()) {
+            generator.writeArrayFieldStart(PARTITION_KEY_NAME);
+            for (String partitionKey : tableReg.partitionKeys) {
+                generator.writeString(partitionKey);
+            }
+            generator.writeEndArray();
         }
-        generator.writeEndArray();
 
-        // serialize tableDistribution.
-        TableDistribution distribution = tableReg.tableDistribution;
-        if (distribution != null) {
+        // serialize bucket key.
+        if (!tableReg.bucketKeys.isEmpty()) {
             generator.writeArrayFieldStart(BUCKET_KEY_NAME);
-            for (String bucketKey : distribution.getBucketKeys()) {
+            for (String bucketKey : tableReg.bucketKeys) {
                 generator.writeString(bucketKey);
             }
             generator.writeEndArray();
-            if (distribution.getBucketCount().isPresent()) {
-                generator.writeNumberField(BUCKET_COUNT_NAME, distribution.getBucketCount().get());
-            }
         }
+
+        // serialize bucket count.
+        generator.writeNumberField(BUCKET_COUNT_NAME, tableReg.bucketCount);
 
         // serialize properties.
         generator.writeObjectFieldStart(PROPERTIES_NAME);
@@ -97,6 +99,12 @@ public class TableRegistrationJsonSerde
         }
         generator.writeEndObject();
 
+        // serialize createdTime
+        generator.writeNumberField(CREATED_TIME, tableReg.createdTime);
+
+        // serialize modifiedTime
+        generator.writeNumberField(MODIFIED_TIME, tableReg.createdTime);
+
         generator.writeEndObject();
     }
 
@@ -110,34 +118,40 @@ public class TableRegistrationJsonSerde
             comment = commentNode.asText();
         }
 
-        Iterator<JsonNode> partitionJsons = node.get(PARTITION_KEY_NAME).elements();
         List<String> partitionKeys = new ArrayList<>();
-        while (partitionJsons.hasNext()) {
-            partitionKeys.add(partitionJsons.next().asText());
+        if (node.has(PARTITION_KEY_NAME)) {
+            Iterator<JsonNode> partitionJsons = node.get(PARTITION_KEY_NAME).elements();
+            while (partitionJsons.hasNext()) {
+                partitionKeys.add(partitionJsons.next().asText());
+            }
         }
 
-        TableDistribution distribution = null;
-        if (node.has(BUCKET_KEY_NAME) || node.has(BUCKET_COUNT_NAME)) {
+        List<String> bucketKeys = new ArrayList<>();
+        if (node.has(BUCKET_KEY_NAME)) {
             Iterator<JsonNode> bucketJsons = node.get(BUCKET_KEY_NAME).elements();
-            List<String> bucketKeys = new ArrayList<>();
             while (bucketJsons.hasNext()) {
                 bucketKeys.add(bucketJsons.next().asText());
             }
-
-            JsonNode bucketCountNode = node.get(BUCKET_COUNT_NAME);
-            if (bucketCountNode != null) {
-                distribution = new TableDistribution(bucketCountNode.asInt(), bucketKeys);
-            } else {
-                distribution = new TableDistribution(null, bucketKeys);
-            }
         }
+        int bucketCount = node.get(BUCKET_COUNT_NAME).asInt();
+        TableDistribution distribution = new TableDistribution(bucketCount, bucketKeys);
 
         Map<String, String> properties = deserializeProperties(node.get(PROPERTIES_NAME));
         Map<String, String> customProperties =
                 deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME));
 
+        long createdTime = node.get(CREATED_TIME).asLong();
+        long modifiedTime = node.get(MODIFIED_TIME).asLong();
+
         return new TableRegistration(
-                tableId, comment, partitionKeys, distribution, properties, customProperties);
+                tableId,
+                comment,
+                partitionKeys,
+                distribution,
+                properties,
+                customProperties,
+                createdTime,
+                modifiedTime);
     }
 
     private Map<String, String> deserializeProperties(JsonNode node) {

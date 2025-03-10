@@ -35,7 +35,6 @@ import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.server.utils.RpcGatewayManager;
-import com.alibaba.fluss.utils.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +45,8 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
+
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
  * Using by coordinator server. It's a manager to manage the rpc channels to tablet servers and send
@@ -75,7 +76,7 @@ public class CoordinatorChannelManager {
 
     public void addTabletServer(ServerNode serverNode) {
         // add new tablet server to the channel manager
-        Preconditions.checkState(
+        checkState(
                 serverNode.serverType().equals(ServerType.TABLET_SERVER),
                 "The server type should be TABLET_SERVER, but was " + serverNode.serverType());
 

@@ -19,7 +19,6 @@ package com.alibaba.fluss.connector.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.api.DataTypes;
@@ -27,6 +26,8 @@ import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
+import org.apache.flink.table.catalog.CatalogDatabaseImpl;
+import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ObjectPath;
@@ -39,6 +40,7 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
+import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
 import org.apache.flink.table.factories.FactoryUtil;
@@ -56,6 +58,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.addOptions;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static com.alibaba.fluss.connector.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
@@ -122,12 +125,17 @@ class FlinkCatalogTest {
 
     @BeforeEach
     void beforeEach() throws Exception {
+        // First check if database exists, and drop it if it does
+        if (catalog.databaseExists(DEFAULT_DB)) {
+            catalog.dropDatabase(DEFAULT_DB, true, true);
+        }
         try {
-            catalog.createDatabase(DEFAULT_DB, null, true);
+            catalog.createDatabase(
+                    DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
         } catch (CatalogException e) {
             // the auto partitioned manager may create the db zk node
             // in an another thread, so if exception is NodeExistsException, just ignore
-            if (!ExceptionUtils.findThrowable(e, KeeperException.NodeExistsException.class)
+            if (!ExceptionUtils.findThrowableWithMessage(e, "KeeperException$NodeExistsException")
                     .isPresent()) {
                 throw e;
             }
@@ -320,16 +328,33 @@ class FlinkCatalogTest {
     @Test
     void testDatabase() throws Exception {
         // test create db1
-        catalog.createDatabase("db1", null, false);
+        catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
         // test create db2
-        catalog.createDatabase("db2", null, false);
+        catalog.createDatabase(
+                "db2",
+                new CatalogDatabaseImpl(
+                        Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"),
+                        "test comment"),
+                false);
         assertThat(catalog.databaseExists("db2")).isTrue();
-        // create the database again should throw exception with ignore if exist = false
-        assertThatThrownBy(() -> catalog.createDatabase("db2", null, false));
-        // should be ok since we set ignore if exist = true
-        catalog.createDatabase("db2", null, true);
         CatalogDatabase db2 = catalog.getDatabase("db2");
-        assertThat(db2.getProperties()).isEmpty();
+        assertThat(db2.getComment()).isEqualTo("test comment");
+        assertThat(db2.getProperties())
+                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
+        // create the database again should throw exception with ignore if exist = false
+        assertThatThrownBy(
+                () ->
+                        catalog.createDatabase(
+                                "db2",
+                                new CatalogDatabaseImpl(Collections.emptyMap(), "test comment"),
+                                false));
+        // should be ok since we set ignore if exist = true
+        catalog.createDatabase(
+                "db2", new CatalogDatabaseImpl(Collections.emptyMap(), "test comment2"), true);
+        db2 = catalog.getDatabase("db2");
+        assertThat(db2.getComment()).isEqualTo("test comment");
+        assertThat(db2.getProperties())
+                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
         // test create table in db1
         ObjectPath path1 = new ObjectPath("db1", "t1");
         CatalogTable table = this.newCatalogTable(new HashMap<>());
@@ -368,6 +393,45 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
+    }
+
+    @Test
+    void testListPartitions() throws Exception {
+        catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
+        assertThatThrownBy(() -> catalog.listPartitions(new ObjectPath("db1", "unkown_table")))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        "Table (or view) db1.unkown_table does not exist in Catalog test-catalog.");
+
+        // create a none partitioned table.
+        CatalogTable table = this.newCatalogTable(Collections.emptyMap());
+        ObjectPath path1 = new ObjectPath(DEFAULT_DB, "t1");
+        catalog.createTable(path1, table, false);
+        assertThatThrownBy(() -> catalog.listPartitions(path1))
+                .isInstanceOf(TableNotPartitionedException.class)
+                .hasMessage("Table default.t1 in catalog test-catalog is not partitioned.");
+
+        // create partition table and list partitions.
+        ObjectPath path2 = new ObjectPath(DEFAULT_DB, "partitioned_t1");
+        ResolvedSchema resolvedSchema = this.createSchema();
+        CatalogTable table2 =
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                                "test comment",
+                                Collections.singletonList("first"),
+                                Collections.emptyMap()),
+                        resolvedSchema);
+        catalog.createTable(path2, table2, false);
+        catalog.createPartition(
+                path2,
+                new CatalogPartitionSpec(Collections.singletonMap("first", "1")),
+                null,
+                false);
+
+        List<CatalogPartitionSpec> catalogPartitionSpecs = catalog.listPartitions(path2);
+        assertThat(catalogPartitionSpecs).hasSize(1);
+        assertThat(catalogPartitionSpecs.get(0).getPartitionSpec()).containsEntry("first", "1");
     }
 
     private void createAndCheckAndDropTable(

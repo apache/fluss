@@ -18,6 +18,8 @@ package com.alibaba.fluss.utils;
 
 import java.util.HashMap;
 
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+
 /** Simple utility to work with Java collections. */
 public class CollectionUtils {
     /** The default load factor for hash maps create with this util class. */
@@ -43,8 +45,8 @@ public class CollectionUtils {
      * HASH_MAP_DEFAULT_LOAD_FACTOR.
      */
     static int computeRequiredCapacity(int expectedSize, float loadFactor) {
-        Preconditions.checkArgument(expectedSize >= 0);
-        Preconditions.checkArgument(loadFactor > 0f);
+        checkArgument(expectedSize >= 0);
+        checkArgument(loadFactor > 0f);
         if (expectedSize <= 2) {
             return expectedSize + 1;
         }

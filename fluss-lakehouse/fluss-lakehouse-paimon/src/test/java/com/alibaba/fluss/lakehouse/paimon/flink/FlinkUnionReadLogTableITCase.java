@@ -19,8 +19,6 @@ package com.alibaba.fluss.lakehouse.paimon.flink;
 import com.alibaba.fluss.lakehouse.paimon.sink.PaimonDataBaseSyncSinkBuilder;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.types.Row;
@@ -36,7 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -120,13 +117,13 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         List<InternalRow> rows = new ArrayList<>();
         List<Row> flinkRows = new ArrayList<>();
         for (int i = 0; i < rowCount; i++) {
-            RowType rowType =
-                    partition == null
-                            ? DATA1_ROW_TYPE
-                            : RowType.of(DataTypes.INT(), DataTypes.STRING(), DataTypes.STRING());
-            rows.add(row(rowType, rowValues(new Object[] {i, "v" + i}, partition)));
-            Row row = partition == null ? Row.of(i, "v" + i) : Row.of(i, "v" + i, partition);
-            flinkRows.add(row);
+            if (partition == null) {
+                rows.add(row(i, "v" + i));
+                flinkRows.add(Row.of(i, "v" + i));
+            } else {
+                rows.add(row(i, "v" + i, partition));
+                flinkRows.add(Row.of(i, "v" + i, partition));
+            }
         }
         writeRows(tablePath, rows, true);
         return flinkRows;

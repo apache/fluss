@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.FloatColumnVector;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.Float4Vector;
-import com.alibaba.fluss.utils.Preconditions;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Arrow column vector for Float. */
 @Internal
@@ -29,7 +30,7 @@ public class ArrowFloatColumnVector implements FloatColumnVector {
     private final Float4Vector floatVector;
 
     public ArrowFloatColumnVector(Float4Vector floatVector) {
-        this.floatVector = Preconditions.checkNotNull(floatVector);
+        this.floatVector = checkNotNull(floatVector);
     }
 
     @Override

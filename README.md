@@ -26,10 +26,10 @@ Prerequisites for building Fluss:
 ```bash
 git clone https://github.com/alibaba/fluss.git
 cd fluss
-mvn clean package -DskipTests
+./mvnw clean package -DskipTests
 ```
 
-Fluss is now installed in `build-target`.
+Fluss is now installed in `build-target`. The build command uses Maven Wrapper (`mvnw`) which ensures the correct Maven version is used.
 
 ## Contributing
 

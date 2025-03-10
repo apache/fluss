@@ -18,9 +18,11 @@ package com.alibaba.fluss.rpc.netty.server;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.rpc.RpcGateway;
 import com.alibaba.fluss.rpc.RpcGatewayService;
 import com.alibaba.fluss.rpc.RpcServer;
+import com.alibaba.fluss.rpc.netty.NettyMetrics;
 import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
@@ -41,6 +43,7 @@ import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static com.alibaba.fluss.rpc.netty.NettyUtils.isBindFailure;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownChannel;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownGroup;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -59,6 +62,7 @@ public final class NettyServer implements RpcServer {
     private final String portRange;
     private final RequestProcessorPool workerPool;
     private final ApiManager apiManager;
+    private final MetricGroup serverMetricGroup;
 
     private EventLoopGroup acceptorGroup;
     private EventLoopGroup selectorGroup;
@@ -72,10 +76,12 @@ public final class NettyServer implements RpcServer {
             String hostname,
             String portRange,
             RpcGatewayService service,
+            MetricGroup serverMetricGroup,
             RequestsMetrics requestsMetrics) {
         this.conf = checkNotNull(conf, "conf");
         this.hostname = checkNotNull(hostname, "hostname");
         this.portRange = checkNotNull(portRange, "portRange");
+        this.serverMetricGroup = checkNotNull(serverMetricGroup, "serverMetricGroup");
         this.apiManager = new ApiManager(service.providerType());
 
         this.workerPool =
@@ -102,13 +108,14 @@ public final class NettyServer implements RpcServer {
 
         this.acceptorGroup =
                 NettyUtils.newEventLoopGroup(
-                        1, // always use single thread for accepter
+                        1, // always use single thread for acceptor
                         "fluss-netty-server-acceptor");
         this.selectorGroup =
                 NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-server-selector");
 
         ServerBootstrap bootstrap = new ServerBootstrap();
-        bootstrap.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+        PooledByteBufAllocator pooledBufAllocator = PooledByteBufAllocator.DEFAULT;
+        bootstrap.childOption(ChannelOption.ALLOCATOR, pooledBufAllocator);
         bootstrap.group(acceptorGroup, selectorGroup);
         bootstrap.childOption(ChannelOption.TCP_NODELAY, true);
         bootstrap.childOption(
@@ -139,11 +146,12 @@ public final class NettyServer implements RpcServer {
             try {
                 bindChannel = bootstrap.bind().syncUninterruptibly().channel();
             } catch (Exception e) {
-                LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
                 // syncUninterruptibly() throws checked exceptions via Unsafe
                 // continue if the exception is due to the port being in use, fail early
                 // otherwise
-                if (!(e instanceof BindException)) {
+                if (isBindFailure(e)) {
+                    LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
+                } else {
                     throw e;
                 }
             }
@@ -166,6 +174,7 @@ public final class NettyServer implements RpcServer {
                 bindAddress);
 
         isRunning = true;
+        NettyMetrics.registerNettyMetrics(serverMetricGroup, pooledBufAllocator);
     }
 
     @Override

@@ -25,7 +25,7 @@ import java.util.Map;
 /** The metric group for coordinator server. */
 public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
-    private static final String name = "coordinator";
+    private static final String NAME = "coordinator";
 
     protected final String clusterId;
     protected final String hostname;
@@ -33,7 +33,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
-        super(registry, new String[] {clusterId, hostname, name}, null);
+        super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
@@ -41,7 +41,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected String getGroupName(CharacterFilter filter) {
-        return name;
+        return NAME;
     }
 
     @Override
