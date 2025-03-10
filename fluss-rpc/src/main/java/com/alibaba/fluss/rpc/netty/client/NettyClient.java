@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.TimeoutException;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
@@ -31,6 +32,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import com.alibaba.fluss.utils.MapUtils;
+import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -67,12 +69,16 @@ public final class NettyClient implements RpcClient {
      */
     private final Map<String, ServerConnection> connections;
 
+    private final long requestTimeoutMs;
+
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
 
+    private final Clock clock;
+
     private volatile boolean isClosed = false;
 
-    public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
+    public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup, Clock clock) {
         this.connections = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
@@ -84,6 +90,7 @@ public final class NettyClient implements RpcClient {
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         PooledByteBufAllocator pooledAllocator = PooledByteBufAllocator.DEFAULT;
+        this.requestTimeoutMs = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
         this.bootstrap =
                 new Bootstrap()
                         .group(eventGroup)
@@ -95,6 +102,8 @@ public final class NettyClient implements RpcClient {
                         .handler(new ClientChannelInitializer(connectionMaxIdle));
         this.clientMetricGroup = clientMetricGroup;
         NettyMetrics.registerNettyMetrics(clientMetricGroup, pooledAllocator);
+        this.clock = clock;
+        eventGroup.submit(this::handleTimeoutRequest);
     }
 
     /**
@@ -119,11 +128,15 @@ public final class NettyClient implements RpcClient {
      */
     @Override
     public CompletableFuture<Void> disconnect(String serverUid) {
+        return disconnect(serverUid, null);
+    }
+
+    private CompletableFuture<Void> disconnect(String serverUid, Throwable throwable) {
         LOG.debug("Disconnecting from server {}.", serverUid);
         checkArgument(!isClosed, "Netty client is closed.");
         ServerConnection connection = connections.remove(serverUid);
         if (connection != null) {
-            return connection.close();
+            return throwable == null ? connection.close() : connection.close(throwable);
         }
         return FutureUtils.completedVoidFuture();
     }
@@ -178,10 +191,38 @@ public final class NettyClient implements RpcClient {
                 ignored -> {
                     LOG.debug("Creating connection to server {}.", node);
                     ServerConnection connection =
-                            new ServerConnection(bootstrap, node, clientMetricGroup);
+                            new ServerConnection(
+                                    bootstrap, node, requestTimeoutMs, clock, clientMetricGroup);
                     connection.whenClose(ignore -> connections.remove(serverId, connection));
                     return connection;
                 });
+    }
+
+    private void handleTimeoutRequest() {
+        if (isClosed || requestTimeoutMs <= 0) {
+            return;
+        }
+        long nextRequestTimeoutMs = requestTimeoutMs;
+        long now = clock.milliseconds();
+        for (Map.Entry<String, ServerConnection> connection : connections.entrySet()) {
+            if (connection.getValue().hasExpiredRequest(now)) {
+                LOG.info("Disconnecting from node {} due to request timeout.", connection.getKey());
+                disconnect(
+                        connection.getKey(),
+                        new TimeoutException(
+                                String.format(
+                                        "Request from client %s timeout.", connection.getKey())));
+            } else {
+                nextRequestTimeoutMs =
+                        Math.min(
+                                nextRequestTimeoutMs,
+                                connection.getValue().nextTimeoutSinceNow(now));
+            }
+        }
+
+        assert nextRequestTimeoutMs > 0;
+        eventGroup.schedule(
+                this::handleTimeoutRequest, nextRequestTimeoutMs, TimeUnit.MILLISECONDS);
     }
 
     @VisibleForTesting

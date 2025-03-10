@@ -31,6 +31,7 @@ import com.alibaba.fluss.rpc.netty.client.NettyClient;
 import com.alibaba.fluss.rpc.netty.server.NettyServer;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.utils.NetUtils;
+import com.alibaba.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,7 +71,7 @@ public class NettyMetricsTest {
         }
         ClientMetricGroup clientMetricGroup = TestingClientMetricGroup.newInstance();
         clientGroup = clientMetricGroup.addGroup(NettyMetrics.NETTY_METRIC_GROUP);
-        nettyClient = new NettyClient(conf, clientMetricGroup);
+        nettyClient = new NettyClient(conf, clientMetricGroup, SystemClock.getInstance());
     }
 
     @AfterEach

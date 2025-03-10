@@ -20,6 +20,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.TimeoutException;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 import com.alibaba.fluss.rpc.TestingGatewayService;
@@ -33,13 +34,16 @@ import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.netty.server.NettyServer;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
+import com.alibaba.fluss.testutils.common.CommonTestUtils;
 import com.alibaba.fluss.utils.NetUtils;
+import com.alibaba.fluss.utils.clock.ManualClock;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -47,6 +51,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,7 +59,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link NettyClient}. */
 final class NettyClientTest {
-
+    private ManualClock clock;
     private Configuration conf;
     private NettyClient nettyClient;
     private ServerNode serverNode;
@@ -63,10 +68,12 @@ final class NettyClientTest {
 
     @BeforeEach
     public void setup() throws Exception {
+        clock = new ManualClock(System.currentTimeMillis());
         conf = new Configuration();
         // 3 worker threads is enough for this test
         conf.setInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
-        nettyClient = new NettyClient(conf, TestingClientMetricGroup.newInstance());
+        conf.setString(ConfigOptions.CLIENT_REQUEST_TIMEOUT.key(), "300ms");
+        nettyClient = new NettyClient(conf, TestingClientMetricGroup.newInstance(), clock);
         buildNettyServer(1);
     }
 
@@ -179,6 +186,52 @@ final class NettyClientTest {
 
         ex = new RuntimeException();
         assertThat(NettyUtils.isBindFailure(ex)).isFalse();
+    }
+
+    @Test
+    void testRequestTimeout() throws Exception {
+        nettyClient.connect(serverNode);
+        CommonTestUtils.waitUtil(
+                () -> nettyClient.isReady(serverNode.uid()),
+                Duration.ofMinutes(1),
+                "connection timeout");
+
+        // suspend the service to mock network or broker busy.
+        service.suspend();
+
+        int numRequests = 10;
+        List<CompletableFuture<ApiMessage>> futures = new ArrayList<>();
+        for (int i = 0; i < numRequests; i++) {
+            ApiVersionsRequest request =
+                    new ApiVersionsRequest()
+                            .setClientSoftwareName("testing_client" + i)
+                            .setClientSoftwareVersion("1.0");
+            futures.add(nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request));
+        }
+
+        clock.advanceTime(350, TimeUnit.MILLISECONDS);
+        futures.forEach(
+                future ->
+                        assertThatThrownBy(future::get)
+                                .cause()
+                                .isExactlyInstanceOf(TimeoutException.class)
+                                .hasMessageContaining("Request from client cs-1 timeout."));
+
+        assertThat(nettyClient.connections().size()).isEqualTo(0);
+
+        // resume the service to mock network or broker norman.
+        service.resume();
+        futures = new ArrayList<>();
+        for (int i = 0; i < numRequests; i++) {
+            ApiVersionsRequest request =
+                    new ApiVersionsRequest()
+                            .setClientSoftwareName("testing_client" + i)
+                            .setClientSoftwareVersion("1.0");
+            futures.add(nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request));
+        }
+
+        FutureUtils.waitForAll(futures).get();
+        assertThat(nettyClient.connections().size()).isEqualTo(1);
     }
 
     private void buildNettyServer(int serverId) throws Exception {

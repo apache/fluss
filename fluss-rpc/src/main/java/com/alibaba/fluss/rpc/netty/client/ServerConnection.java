@@ -36,6 +36,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import com.alibaba.fluss.utils.MapUtils;
+import com.alibaba.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +63,9 @@ final class ServerConnection {
     private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
+    private final long requestTimeoutMs;
+
+    private final Clock clock;
 
     private final Object lock = new Object();
 
@@ -83,13 +87,20 @@ final class ServerConnection {
     @GuardedBy("lock")
     private ServerApiVersions serverApiVersions;
 
-    ServerConnection(Bootstrap bootstrap, ServerNode node, ClientMetricGroup clientMetricGroup) {
+    ServerConnection(
+            Bootstrap bootstrap,
+            ServerNode node,
+            long requestTimeoutMs,
+            Clock clock,
+            ClientMetricGroup clientMetricGroup) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         bootstrap
                 .connect(node.host(), node.port())
                 .addListener((ChannelFutureListener) this::establishConnection);
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.clock = clock;
+        this.requestTimeoutMs = requestTimeoutMs;
     }
 
     public ServerNode getServerNode() {
@@ -117,7 +128,7 @@ final class ServerConnection {
         return close(new ClosedChannelException());
     }
 
-    private CompletableFuture<Void> close(Throwable cause) {
+    CompletableFuture<Void> close(Throwable cause) {
         synchronized (lock) {
             if (state.isDisconnected()) {
                 // the connection has been closed/closing.
@@ -186,6 +197,30 @@ final class ServerConnection {
         }
 
         return closeFuture;
+    }
+
+    /** Check if there is any request that has expired. */
+    Boolean hasExpiredRequest(long now) {
+        for (InflightRequest request : inflightRequests.values()) {
+            if (request.timeElapsedSinceSendMs(now) >= requestTimeoutMs) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Get the next timeout since now. */
+    long nextTimeoutSinceNow(long now) {
+        long minRequestTimeoutMs = Integer.MAX_VALUE;
+        for (InflightRequest request : inflightRequests.values()) {
+
+            minRequestTimeoutMs =
+                    Math.min(
+                            minRequestTimeoutMs,
+                            requestTimeoutMs - request.timeElapsedSinceSendMs(now));
+        }
+        return minRequestTimeoutMs;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -299,7 +334,13 @@ final class ServerConnection {
 
             InflightRequest inflight =
                     new InflightRequest(
-                            apiKey.id, version, requestCount++, rawRequest, responseFuture);
+                            apiKey.id,
+                            version,
+                            requestCount++,
+                            rawRequest,
+                            clock.milliseconds(),
+                            requestTimeoutMs,
+                            responseFuture);
             inflightRequests.put(inflight.requestId, inflight);
 
             // TODO: maybe we need to add timeout for the inflight requests
@@ -434,17 +475,23 @@ final class ServerConnection {
                 short apiVersion,
                 int requestId,
                 ApiMessage request,
+                long requestStartTime,
+                long requestTimeoutMs,
                 CompletableFuture<ApiMessage> responseFuture) {
             this.apiKey = apiKey;
             this.apiVersion = apiVersion;
             this.requestId = requestId;
             this.request = request;
             this.responseFuture = responseFuture;
-            this.requestStartTime = System.currentTimeMillis();
+            this.requestStartTime = requestStartTime;
         }
 
         ByteBuf toByteBuf(ByteBufAllocator allocator) {
             return MessageCodec.encodeRequest(allocator, apiKey, apiVersion, requestId, request);
+        }
+
+        public long timeElapsedSinceSendMs(long currentTimeMs) {
+            return Math.max(0, currentTimeMs - requestStartTime);
         }
     }
 }

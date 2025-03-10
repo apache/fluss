@@ -33,6 +33,7 @@ import com.alibaba.fluss.server.utils.TestProcessBuilder;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.testutils.common.CommonTestUtils;
+import com.alibaba.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -125,7 +126,10 @@ public abstract class ServerITCaseBase {
 
     private void testConnectionToServer() throws Exception {
         try (NettyClient client =
-                new NettyClient(new Configuration(), TestingClientMetricGroup.newInstance())) {
+                new NettyClient(
+                        new Configuration(),
+                        TestingClientMetricGroup.newInstance(),
+                        SystemClock.getInstance())) {
             RpcGateway gateway =
                     GatewayClientProxy.createGatewayProxy(
                             this::getServerNode, client, getRpcGatewayClass());

@@ -35,12 +35,22 @@ public class TestingGatewayService extends RpcGatewayService {
     private final List<String> processorThreadNames =
             Collections.synchronizedList(new ArrayList<>());
 
+    private boolean suspending = false;
+
     public List<String> getProcessorThreadNames() {
         return new ArrayList<>(processorThreadNames);
     }
 
     @Override
     public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
+        while (suspending) {
+            // suspend here to mock the network latency or broker is busy.
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
         ApiManager apiManager = new ApiManager(providerType());
         Set<ApiKeys> apiKeys = apiManager.enabledApis();
         List<PbApiVersion> apiVersions = new ArrayList<>();
@@ -70,5 +80,13 @@ public class TestingGatewayService extends RpcGatewayService {
     @Override
     public void shutdown() {
         // do nothing.
+    }
+
+    public void resume() {
+        this.suspending = false;
+    }
+
+    public void suspend() {
+        this.suspending = true;
     }
 }

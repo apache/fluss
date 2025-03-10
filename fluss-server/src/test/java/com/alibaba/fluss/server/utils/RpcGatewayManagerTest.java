@@ -22,6 +22,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.client.NettyClient;
+import com.alibaba.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.Test;
 
@@ -35,7 +36,9 @@ class RpcGatewayManagerTest {
         RpcGatewayManager<TabletServerGateway> gatewayRpcGatewayManager =
                 new RpcGatewayManager<>(
                         new NettyClient(
-                                new Configuration(), TestingClientMetricGroup.newInstance()),
+                                new Configuration(),
+                                TestingClientMetricGroup.newInstance(),
+                                SystemClock.getInstance()),
                         TabletServerGateway.class);
 
         ServerNode serverNode1 = new ServerNode(1, "localhost", 1234, ServerType.TABLET_SERVER);
