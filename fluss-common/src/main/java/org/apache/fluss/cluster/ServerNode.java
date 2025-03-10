@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.PublicEvolving;
 
 import javax.annotation.Nullable;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.util.Objects;
 
 /**

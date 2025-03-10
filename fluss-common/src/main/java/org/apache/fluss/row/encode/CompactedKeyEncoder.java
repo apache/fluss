@@ -1,10 +1,14 @@
 /*
+<<<<<<<< HEAD:fluss-common/src/main/java/org/apache/fluss/row/encode/CompactedKeyEncoder.java
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
+========
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-common/src/main/java/com/alibaba/fluss/row/encode/KeyEncoder.java
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,24 +21,36 @@
 
 package org.apache.fluss.row.encode;
 
+<<<<<<<< HEAD:fluss-common/src/main/java/org/apache/fluss/row/encode/CompactedKeyEncoder.java
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedKeyWriter;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
-import java.util.List;
-import java.util.stream.IntStream;
+========
+import com.alibaba.fluss.metadata.DataLakeFormat;
+import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.encode.paimon.PaimonKeyEncoder;
+import com.alibaba.fluss.types.RowType;
 
+import javax.annotation.Nullable;
+
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-common/src/main/java/com/alibaba/fluss/row/encode/KeyEncoder.java
+import java.util.List;
+
+<<<<<<<< HEAD:fluss-common/src/main/java/org/apache/fluss/row/encode/CompactedKeyEncoder.java
 /** An encoder to encode {@link InternalRow} using {@link CompactedKeyWriter}. */
 public class CompactedKeyEncoder implements KeyEncoder {
+========
+/** An interface for encoding key of row into bytes. */
+public interface KeyEncoder {
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-common/src/main/java/com/alibaba/fluss/row/encode/KeyEncoder.java
 
-    private final InternalRow.FieldGetter[] fieldGetters;
-
-    private final CompactedKeyWriter.FieldWriter[] fieldEncoders;
-
-    private final CompactedKeyWriter compactedEncoder;
+    /** Encode the key of given row to byte array. */
+    byte[] encodeKey(InternalRow row);
 
     /**
+<<<<<<<< HEAD:fluss-common/src/main/java/org/apache/fluss/row/encode/CompactedKeyEncoder.java
      * Create a key encoder to encode the key of the input row.
      *
      * @param rowType the row type of the input row
@@ -82,5 +98,23 @@ public class CompactedKeyEncoder implements KeyEncoder {
             fieldEncoders[i].writeField(compactedEncoder, i, fieldGetters[i].getFieldOrNull(row));
         }
         return compactedEncoder.toBytes();
+========
+     * Create a key encoder to encode the key array bytes of the input row.
+     *
+     * @param rowType the row type of the input row
+     * @param keyFields the key fields to encode
+     * @param lakeFormat the datalake format
+     */
+    static KeyEncoder of(
+            RowType rowType, List<String> keyFields, @Nullable DataLakeFormat lakeFormat) {
+        if (lakeFormat == null) {
+            // use default compacted key encoder
+            return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
+        } else if (lakeFormat == DataLakeFormat.PAIMON) {
+            return new PaimonKeyEncoder(rowType, keyFields);
+        } else {
+            throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
+        }
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-common/src/main/java/com/alibaba/fluss/row/encode/KeyEncoder.java
     }
 }

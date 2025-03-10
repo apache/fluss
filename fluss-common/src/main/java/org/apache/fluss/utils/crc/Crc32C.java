@@ -19,6 +19,8 @@ package org.apache.fluss.utils.crc;
 
 import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 
+import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;

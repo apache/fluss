@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/LogFetchCollector.java
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
@@ -31,6 +32,23 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+========
+package com.alibaba.fluss.client.table.scanner.log;
+
+import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.client.metadata.MetadataUpdater;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FetchException;
+import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.LogRecord;
+import com.alibaba.fluss.record.LogRecordBatch;
+import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.rpc.protocol.Errors;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/LogFetchCollector.java
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

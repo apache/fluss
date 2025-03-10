@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/LogScannerImpl.java
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
@@ -30,6 +31,23 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.Projection;
+========
+package com.alibaba.fluss.client.table.scanner.log;
+
+import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.client.metadata.MetadataUpdater;
+import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
+import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
+import com.alibaba.fluss.types.RowType;
+import com.alibaba.fluss.utils.Projection;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/LogScannerImpl.java
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

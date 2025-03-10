@@ -15,7 +15,11 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/LogScan.java
 package org.apache.fluss.client.table.scanner.log;
+========
+package com.alibaba.fluss.client.table.scanner.log;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/LogScan.java
 
 import org.apache.fluss.annotation.PublicEvolving;
 

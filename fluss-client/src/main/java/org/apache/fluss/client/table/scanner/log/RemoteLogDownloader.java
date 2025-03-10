@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/RemoteLogDownloader.java
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
@@ -30,6 +31,24 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
+========
+package com.alibaba.fluss.client.table.scanner.log;
+
+import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
+import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.fs.FsPath;
+import com.alibaba.fluss.fs.FsPathAndFileName;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.remote.RemoteLogSegment;
+import com.alibaba.fluss.utils.CloseableRegistry;
+import com.alibaba.fluss.utils.FlussPaths;
+import com.alibaba.fluss.utils.MapUtils;
+import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/RemoteLogDownloader.java
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,6 +121,10 @@ public class RemoteLogDownloader implements Closeable {
             long pollTimeout) {
         this.segmentsToFetch = new PriorityBlockingQueue<>();
         this.segmentsToRecycle = new LinkedBlockingQueue<>();
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/RemoteLogDownloader.java
+========
+        this.fetchedFiles = MapUtils.newConcurrentHashMap();
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/RemoteLogDownloader.java
         this.remoteFileDownloader = remoteFileDownloader;
         this.scannerMetricGroup = scannerMetricGroup;
         this.pollTimeout = pollTimeout;

@@ -1,4 +1,5 @@
 /*
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/batch/SnapshotFilesReader.java
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -7,14 +8,24 @@
  * the License.  You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
+========
+ *  Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/batch/SnapshotFilesReader.java
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/batch/SnapshotFilesReader.java
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
@@ -31,6 +42,24 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.IOUtils;
+========
+package com.alibaba.fluss.client.table.scanner.batch;
+
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.metadata.KvFormat;
+import com.alibaba.fluss.rocksdb.RocksDBHandle;
+import com.alibaba.fluss.rocksdb.RocksIteratorWrapper;
+import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.ProjectedRow;
+import com.alibaba.fluss.row.decode.RowDecoder;
+import com.alibaba.fluss.row.encode.ValueDecoder;
+import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.types.RowType;
+import com.alibaba.fluss.utils.CloseableIterator;
+import com.alibaba.fluss.utils.CloseableRegistry;
+import com.alibaba.fluss.utils.IOUtils;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/batch/SnapshotFilesReader.java
 
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.DBOptions;

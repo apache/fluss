@@ -20,9 +20,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-      <groupId>com.alibaba.fluss</groupId>
-      <artifactId>fluss-connector-spark</artifactId>
-      <version>0.6-SNAPSHOT</version>
+        <groupId>com.alibaba.fluss</groupId>
+        <artifactId>fluss-connector-spark</artifactId>
+        <version>0.6-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-connector-spark-3.3</artifactId>
@@ -73,7 +73,7 @@
                                     <include>com.alibaba.fluss:fluss-connector-spark-common</include>
                                     <include>com.alibaba.fluss:fluss-client</include>
                                 </includes>
-                              </artifactSet>
+                            </artifactSet>
                         </configuration>
                     </execution>
                 </executions>

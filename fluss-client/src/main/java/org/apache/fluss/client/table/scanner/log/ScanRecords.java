@@ -15,12 +15,21 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/ScanRecords.java
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.AbstractIterator;
+========
+package com.alibaba.fluss.client.table.scanner.log;
+
+import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.utils.AbstractIterator;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/ScanRecords.java
 
 import java.util.Collections;
 import java.util.Iterator;

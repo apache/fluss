@@ -15,12 +15,21 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/RemotePendingFetch.java
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.remote.RemoteLogSegment;
+========
+package com.alibaba.fluss.client.table.scanner.log;
+
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.record.FileLogRecords;
+import com.alibaba.fluss.record.LogRecordReadContext;
+import com.alibaba.fluss.remote.RemoteLogSegment;
+>>>>>>>> be8528e4 ([connector] Support spark catalog and introduce some basic classes to support spark read and write):fluss-client/src/main/java/com/alibaba/fluss/client/table/scanner/log/RemotePendingFetch.java
 
 /**
  * {@link RemotePendingFetch} is a {@link PendingFetch} that represents a pending fetch that waiting

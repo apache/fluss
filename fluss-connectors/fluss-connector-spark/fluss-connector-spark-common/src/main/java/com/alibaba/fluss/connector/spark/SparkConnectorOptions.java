@@ -61,6 +61,14 @@ public class SparkConnectorOptions {
                     .noDefaultValue()
                     .withDescription("the primary key of fluss table, such as key1,key2,...");
 
+    public static final ConfigOption<String> TMP_DIRS =
+            key("io.tmp.dirs")
+                    .stringType()
+                    .defaultValue(System.getProperty("java.io.tmpdir"))
+                    .withDeprecatedKeys("taskmanager.tmp.dirs")
+                    .withDescription(
+                            "Directories for temporary files, separated by\",\", \"|\", or the system's java.io.File.pathSeparator.");
+
     // --------------------------------------------------------------------------------------------
     // Lookup specific options
     // --------------------------------------------------------------------------------------------
