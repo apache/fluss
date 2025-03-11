@@ -21,7 +21,6 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -73,6 +72,7 @@ public class SparkCatalogITCase {
 
     private static final String DB = "my_db";
     private static final String TABLE = "my_table";
+    private static final String PARTITION_TABLE = "test_partitioned_table";
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -91,11 +91,8 @@ public class SparkCatalogITCase {
         spark = SparkSession.builder().config(sparkConf).getOrCreate();
         spark.sparkContext().setLogLevel("WARN");
 
-        try (Connection connection = ConnectionFactory.createConnection(flussConf)) {
-            admin = connection.getAdmin();
-        } catch (Exception e) {
-            throw new FlussRuntimeException(e);
-        }
+        Connection connection = ConnectionFactory.createConnection(flussConf);
+        admin = connection.getAdmin();
     }
 
     @AfterAll
@@ -111,6 +108,7 @@ public class SparkCatalogITCase {
     @AfterEach
     public void afterEach() {
         sql("DROP TABLE IF EXISTS fluss_catalog." + DB + "." + TABLE);
+        sql("DROP TABLE IF EXISTS fluss_catalog." + DB + "." + PARTITION_TABLE);
         sql("DROP DATABASE IF EXISTS fluss_catalog." + DB);
     }
 
@@ -370,16 +368,16 @@ public class SparkCatalogITCase {
     @Test
     public void testPartitionedTable() {
         sql("CREATE DATABASE fluss_catalog." + DB);
-        String tableName = "test_partitioned_table";
-        sql(String.format("create table %s (a int, b string) partitioned by (b)", tableName));
+        String fullName = "fluss_catalog." + DB + "." + PARTITION_TABLE;
+        sql(String.format("create table %s (a int, b string) partitioned by (b)", fullName));
         List<String> tables =
                 sql("SHOW TABLES IN fluss_catalog." + DB).collectAsList().stream()
                         .map(row -> row.getString(1))
                         .collect(Collectors.toList());
         assertThat(tables.size()).isEqualTo(1);
-        assertThat(tables.get(0)).isEqualTo(tableName);
+        assertThat(tables.get(0)).isEqualTo(PARTITION_TABLE);
 
-        TableInfo tableInfo = admin.getTableInfo(TablePath.of(DB, tableName)).join();
+        TableInfo tableInfo = admin.getTableInfo(TablePath.of(DB, PARTITION_TABLE)).join();
 
         // 1. check partition key
         List<String> partitionKeys = tableInfo.getPartitionKeys();
@@ -389,19 +387,22 @@ public class SparkCatalogITCase {
         assertThat(columns.size()).isEqualTo(2);
 
         // 2. add partitions.
-        List<String> expectedShowPartitionsResult = Arrays.asList("+I[b=1]", "+I[b=2]", "+I[b=3]");
+        sql("alter table " + fullName + " add if not exists partition (b = 1)").collectAsList();
+        sql("alter table " + fullName + " add if not exists partition (b = 2)").collectAsList();
+        sql("alter table " + fullName + " add if not exists partition (b = 3)").collectAsList();
+        List<String> expectedShowPartitionsResult = Arrays.asList("[b=1]", "[b=2]", "[b=3]");
         List<String> result =
-                sql("show partitions test_partitioned_table").collectAsList().stream()
+                sql("show partitions " + fullName).collectAsList().stream()
                         .map(Row::toString)
                         .collect(Collectors.toList());
         assertThat(result).isEqualTo(expectedShowPartitionsResult);
 
         // 3. drop partitions.
-        sql("alter table test_partitioned_table drop partition (b = 1)").collectAsList();
+        sql("alter table " + fullName + " drop if exists partition  (b = 1)").collectAsList();
 
-        expectedShowPartitionsResult = Arrays.asList("+I[b=2]", "+I[b=3]");
+        expectedShowPartitionsResult = Arrays.asList("[b=2]", "[b=3]");
         result =
-                sql("show partitions test_partitioned_table").collectAsList().stream()
+                sql("show partitions " + fullName).collectAsList().stream()
                         .map(Row::toString)
                         .collect(Collectors.toList());
         assertThat(result).isEqualTo(expectedShowPartitionsResult);

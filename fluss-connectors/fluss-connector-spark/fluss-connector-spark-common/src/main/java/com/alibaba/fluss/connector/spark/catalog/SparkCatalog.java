@@ -26,6 +26,7 @@ import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
+import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -58,6 +59,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.connector.spark.utils.SparkConversions.toFlussClientConfig;
 import static com.alibaba.fluss.connector.spark.utils.SparkConversions.toFlussTable;
@@ -370,6 +372,57 @@ public class SparkCatalog implements SupportsNamespaces, FunctionCatalog, TableC
             }
         }
         return true;
+    }
+
+    public List<Map<String, String>> listPartitions(TablePath tablePath)
+            throws TableNotExistException, TableNotPartitionedException, CatalogException {
+
+        try {
+            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+            return partitionInfos.stream()
+                    .map(partitionInfo -> partitionInfo.getPartitionSpec().getSpecMap())
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException("Table does not exist: " + tablePath, e);
+            } else if (isTableNotPartitioned(t)) {
+                throw new TableNotPartitionedException("Table is not partitioned: " + tablePath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to list partitions of table %s in %s",
+                                tablePath, catalogName),
+                        t);
+            }
+        }
+    }
+
+    public boolean partitionExists(TablePath tablePath, PartitionSpec partitionSpec)
+            throws TableNotExistException, TableNotPartitionedException, CatalogException {
+
+        try {
+            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+            return partitionInfos.stream()
+                    .anyMatch(
+                            info ->
+                                    info.getPartitionSpec()
+                                            .getSpecMap()
+                                            .equals(partitionSpec.getSpecMap()));
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException("Table does not exist: " + tablePath, e);
+            } else if (isTableNotPartitioned(t)) {
+                throw new TableNotPartitionedException("Table is not partitioned: " + tablePath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to list partitions of table %s in %s",
+                                tablePath, catalogName),
+                        t);
+            }
+        }
     }
 
     @Override
