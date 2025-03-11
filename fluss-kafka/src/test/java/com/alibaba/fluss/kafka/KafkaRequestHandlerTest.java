@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,9 +26,8 @@ import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ApiVersionsResponse;
 import org.apache.kafka.common.requests.RequestHeader;
-import org.junit.jupiter.api.Assertions;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -41,8 +40,7 @@ public class KafkaRequestHandlerTest {
         short latestVersion = ApiKeys.API_VERSIONS.latestVersion();
         ApiVersionsRequest apiVersionsRequest =
                 new ApiVersionsRequest.Builder().build(latestVersion);
-        ChannelHandlerContext ctx = Mockito.mock(ChannelHandlerContext.class);
-        Mockito.doReturn(ByteBufAllocator.DEFAULT).when(ctx).alloc();
+        ChannelHandlerContext ctx = new TestChannelHandlerContext();
         KafkaRequest request =
                 new KafkaRequest(
                         ApiKeys.API_VERSIONS,
@@ -60,8 +58,8 @@ public class KafkaRequestHandlerTest {
                         AbstractResponse.parseResponse(
                                 responseBuffer.nioBuffer(), request.header());
         Map<Errors, Integer> errorCounts = response.errorCounts();
-        Assertions.assertEquals(1, errorCounts.size());
-        Assertions.assertEquals(1, errorCounts.get(Errors.UNSUPPORTED_VERSION));
+        Assertions.assertThat(1).isEqualTo(errorCounts.size());
+        Assertions.assertThat(1).isEqualTo(errorCounts.get(Errors.UNSUPPORTED_VERSION));
     }
 
     @Test
@@ -70,8 +68,7 @@ public class KafkaRequestHandlerTest {
         short latestVersion = ApiKeys.API_VERSIONS.latestVersion();
         ApiVersionsRequest apiVersionsRequest =
                 new ApiVersionsRequest.Builder().build(latestVersion);
-        ChannelHandlerContext ctx = Mockito.mock(ChannelHandlerContext.class);
-        Mockito.doReturn(ByteBufAllocator.DEFAULT).when(ctx).alloc();
+        ChannelHandlerContext ctx = new TestChannelHandlerContext();
         KafkaRequest request =
                 new KafkaRequest(
                         ApiKeys.API_VERSIONS,
@@ -89,21 +86,24 @@ public class KafkaRequestHandlerTest {
                         AbstractResponse.parseResponse(
                                 responseBuffer.nioBuffer(), request.header());
         Map<Errors, Integer> errorCounts = response.errorCounts();
-        Assertions.assertEquals(1, errorCounts.size());
-        Assertions.assertEquals(1, errorCounts.get(Errors.NONE));
+        Assertions.assertThat(1).isEqualTo(errorCounts.size());
+        Assertions.assertThat(1).isEqualTo(errorCounts.get(Errors.NONE));
         response.data()
                 .apiKeys()
                 .forEach(
                         apiVersion -> {
                             if (ApiKeys.METADATA.id == apiVersion.apiKey()) {
-                                Assertions.assertTrue((short) 11 >= apiVersion.maxVersion());
+                                Assertions.assertThat((short) 11)
+                                        .isGreaterThan(apiVersion.maxVersion());
                             } else if (ApiKeys.FETCH.id == apiVersion.apiKey()) {
-                                Assertions.assertTrue((short) 12 >= apiVersion.maxVersion());
+                                Assertions.assertThat((short) 12)
+                                        .isGreaterThan(apiVersion.maxVersion());
                             } else {
-                                Assertions.assertEquals(
-                                        apiVersion.minVersion(), apiVersion.minVersion());
-                                Assertions.assertEquals(
-                                        apiVersion.maxVersion(), apiVersion.maxVersion());
+                                ApiKeys apiKeys = ApiKeys.forId(apiVersion.apiKey());
+                                Assertions.assertThat(apiVersion.minVersion())
+                                        .isEqualTo(apiKeys.oldestVersion());
+                                Assertions.assertThat(apiVersion.maxVersion())
+                                        .isEqualTo(apiKeys.latestVersion());
                             }
                         });
     }
