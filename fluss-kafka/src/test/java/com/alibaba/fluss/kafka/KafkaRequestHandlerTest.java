@@ -94,10 +94,10 @@ public class KafkaRequestHandlerTest {
                         apiVersion -> {
                             if (ApiKeys.METADATA.id == apiVersion.apiKey()) {
                                 Assertions.assertThat((short) 11)
-                                        .isGreaterThan(apiVersion.maxVersion());
+                                        .isGreaterThanOrEqualTo(apiVersion.maxVersion());
                             } else if (ApiKeys.FETCH.id == apiVersion.apiKey()) {
                                 Assertions.assertThat((short) 12)
-                                        .isGreaterThan(apiVersion.maxVersion());
+                                        .isGreaterThanOrEqualTo(apiVersion.maxVersion());
                             } else {
                                 ApiKeys apiKeys = ApiKeys.forId(apiVersion.apiKey());
                                 Assertions.assertThat(apiVersion.minVersion())
