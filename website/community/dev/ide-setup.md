@@ -161,6 +161,48 @@ You can now import the Checkstyle configuration for the Java code formatter.
 To verify the setup, click "View" → "Tool Windows" → "Checkstyle" and find the "Check Module"
 button in the opened tool window. It should report no violations.
 
+### Configure Git Commit Username and Email
+
+Verify that the Git commit username is set to your preferred name using
+
+```bash
+git config user.name
+```
+
+The set username will be shown in the contributor list in Fluss release notes.
+
+To change the username use
+
+```bash
+git config user.name "<Your username>"
+```
+
+You are free to choose any username you want. 
+In particular, the username does _not_ have to correspond to your GitHub username.
+A common choice is simply your full name.
+
+Also verify that the Git commit email address is set to your preferred email address using
+
+```bash
+git config user.email
+```
+
+Make sure that the set email address is an email address that is linked to your GitHub account.
+If the email address is not linked to your GitHub account, commits in the contribution graph will not be associated with your account.
+
+To change the email address use
+
+```bash
+git config user.email "<email address>"
+```
+
+If you do not want to expose your email address in Git commits, you can activate [GitHub's email privacy setting](https://docs.github.com/en/account-and-profile/setting-up-and-managing-your-personal-account-on-github/managing-email-preferences/blocking-command-line-pushes-that-expose-your-personal-email-address) and set the Git commit email address to the anonymized `noreply @users.noreply.github.com` email address.
+
+:::important
+- When committing from different devices, make sure the username is consistently set on all devices.
+- The `git config` commands above only set the username and email address for the current Git repository. If you want to apply the same settings to all Git repositories on a device, execute the commands with the `--global` option.
+:::
+
 ### Common Problems
 
 This section lists issues that developers have run into in the past when working with IntelliJ.
