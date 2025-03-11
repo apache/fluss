@@ -1,4 +1,5 @@
 ---
+sidebar_label: Building Fluss from Source
 sidebar_position: 1
 sidebar_label: Building Fluss
 ---
@@ -22,8 +23,6 @@ sidebar_label: Building Fluss
 # Building Fluss from Source
 
 This page covers how to build Fluss 0.6.0-SNAPSHOT from sources.
-
-## Build Fluss
 
 In order to build Fluss you need to get the source code by [clone the git repository](https://github.com/alibaba/fluss).
 

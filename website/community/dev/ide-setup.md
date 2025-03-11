@@ -1,4 +1,5 @@
 ---
+sidebar_label: IDE Setup
 sidebar_position: 2
 sidebar_label: IDE Setup
 ---
@@ -19,7 +20,7 @@ sidebar_label: IDE Setup
  limitations under the License.
 -->
 
-# Import Fluss into an IDE
+# IDE Setup
 
 The sections below describe how to import the Fluss project into an IDE
 for the development of Fluss itself.
