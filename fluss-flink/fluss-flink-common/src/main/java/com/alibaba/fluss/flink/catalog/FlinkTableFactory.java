@@ -52,6 +52,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import static com.alibaba.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
+import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Factory to create table source and table sink for Fluss. */
@@ -151,7 +152,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 context.getPrimaryKeyIndexes(),
                 isStreamingMode,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE));
+                tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
+                tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
+                getBucketKeys(tableOptions),
+                tableOptions.get(FlinkConnectorOptions.SINK_PRE_HASH_BY_BUCKET_KEY));
     }
 
     @Override
@@ -176,6 +180,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
+                                FlinkConnectorOptions.SINK_PRE_HASH_BY_BUCKET_KEY,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,

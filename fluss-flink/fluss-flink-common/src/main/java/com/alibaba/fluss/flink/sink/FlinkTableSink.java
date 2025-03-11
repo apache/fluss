@@ -24,6 +24,7 @@ import com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.GenericRow;
+import com.alibaba.fluss.row.encode.KeyEncoder;
 
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
@@ -52,6 +53,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussRowType;
+
 /** A Flink {@link DynamicTableSink}. */
 public class FlinkTableSink
         implements DynamicTableSink,
@@ -67,6 +70,9 @@ public class FlinkTableSink
     private final boolean streaming;
     @Nullable private final MergeEngineType mergeEngineType;
     private final boolean ignoreDelete;
+    private final int numBucket;
+    private final List<String> bucketKeys;
+    private final boolean sinkReHash;
 
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
@@ -78,7 +84,10 @@ public class FlinkTableSink
             int[] primaryKeyIndexes,
             boolean streaming,
             @Nullable MergeEngineType mergeEngineType,
-            boolean ignoreDelete) {
+            boolean ignoreDelete,
+            int numBucket,
+            List<String> bucketKeys,
+            boolean sinkReHash) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -86,6 +95,9 @@ public class FlinkTableSink
         this.streaming = streaming;
         this.mergeEngineType = mergeEngineType;
         this.ignoreDelete = ignoreDelete;
+        this.numBucket = numBucket;
+        this.bucketKeys = bucketKeys;
+        this.sinkReHash = sinkReHash;
     }
 
     @Override
@@ -168,7 +180,10 @@ public class FlinkTableSink
                                 flussConfig,
                                 tableRowType,
                                 targetColumnIndexes,
-                                ignoreDelete)
+                                ignoreDelete,
+                                numBucket,
+                                KeyEncoder.of(toFlussRowType(tableRowType), bucketKeys, null),
+                                sinkReHash)
                         : new FlinkSink.AppendSinkWriterBuilder(
                                 tablePath, flussConfig, tableRowType, ignoreDelete);
 
@@ -195,7 +210,10 @@ public class FlinkTableSink
                         primaryKeyIndexes,
                         streaming,
                         mergeEngineType,
-                        ignoreDelete);
+                        ignoreDelete,
+                        numBucket,
+                        bucketKeys,
+                        sinkReHash);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;

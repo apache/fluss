@@ -106,6 +106,15 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
+    public static final ConfigOption<Boolean> SINK_PRE_HASH_BY_BUCKET_KEY =
+            ConfigOptions.key("sink.pre-hash-by-bucket-key")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to pre hash the record by bucket key before write to sink. Hash the data with the "
+                                    + "same bucket key to be processed by the same task can improve the efficiency"
+                                    + " of client processing and reduce resource consumption");
+
     // --------------------------------------------------------------------------------------------
     // table storage specific options
     // --------------------------------------------------------------------------------------------

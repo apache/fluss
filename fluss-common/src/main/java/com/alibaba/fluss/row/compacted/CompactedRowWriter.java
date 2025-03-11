@@ -64,7 +64,7 @@ import static com.alibaba.fluss.types.DataTypeChecks.getPrecision;
  * the positive integer is doubled. We assume that the probability of general integers being
  * positive is higher, so sacrifice the negative number to promote the positive number.
  */
-public class CompactedRowWriter {
+public class CompactedRowWriter implements Serializable {
 
     private final int headerSizeInBytes;
 

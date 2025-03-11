@@ -124,6 +124,9 @@ public class TestingDatabaseSyncSink implements Sink<MultiplexCdcRecord> {
                                 tableInfo.getSchema().getPrimaryKeyIndexes(),
                                 true,
                                 null,
+                                false,
+                                tableInfo.getNumBuckets(),
+                                tableInfo.getBucketKeys(),
                                 false);
 
                 Sink<RowData> sink =

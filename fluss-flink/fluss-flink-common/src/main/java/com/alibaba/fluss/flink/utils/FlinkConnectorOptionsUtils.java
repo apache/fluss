@@ -27,7 +27,11 @@ import org.apache.flink.table.types.logical.RowType;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
@@ -61,6 +65,17 @@ public class FlinkConnectorOptionsUtils {
                             timeZone);
         }
         return options;
+    }
+
+    public static List<String> getBucketKeys(ReadableConfig tableOptions) {
+        Optional<String> bucketKey = tableOptions.getOptional(FlinkConnectorOptions.BUCKET_KEY);
+        if (!bucketKey.isPresent()) {
+            // log tables don't have bucket key by default
+            return new ArrayList<>();
+        }
+
+        String[] keys = bucketKey.get().split(",");
+        return Arrays.stream(keys).collect(Collectors.toList());
     }
 
     public static int[] getBucketKeyIndexes(ReadableConfig tableOptions, RowType schema) {
