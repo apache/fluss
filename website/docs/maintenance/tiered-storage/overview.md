@@ -16,4 +16,4 @@ in the well-known open data lake format for better analytics performance. Curren
 
 The overall tiered storage architecture is shown in the following diagram:
 
-<img width="600px" src={require('./tiered-storage.png').default} />
+<img width="600px" src={require('../../assets/tiered-storage.png').default} />

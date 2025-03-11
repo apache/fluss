@@ -32,7 +32,7 @@ In order to build Streaming Lakehouse, Fluss maintains a compaction service to c
 The data in Fluss cluster (streaming Arrow format) is write-optimized for low-latency read and write, and the compacted data in Lakehouse (Parquet format with compressions) is read-optimized for powerful analytics and space-optimized for storing long-term data.
 So the data in Fluss cluster serves real-time data layer which retains days with sub-second-level freshness, and the data in Lakehouse serves historical data layer which retains months with minute-level freshness.
 
-![streamhouse](streamhouse.png)
+![streamhouse](../assets/streamhouse.png)
 
 The core idea of Streaming Lakehouse is shared data and shared metadata between stream and Lakehouse, avoiding data duplication and metadata inconsistency.
 Some powerful features it provided are:

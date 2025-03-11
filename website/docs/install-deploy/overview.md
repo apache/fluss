@@ -10,7 +10,7 @@ Below, we provide an overview of the key components of a Fluss cluster, detailin
 
 The figure below shows the building blocks of Fluss clusters:
 
-<img width="1200px" src={require('./deployment_overview.png').default} />
+<img width="1200px" src={require('../assets/deployment_overview.png').default} />
 
 
 
