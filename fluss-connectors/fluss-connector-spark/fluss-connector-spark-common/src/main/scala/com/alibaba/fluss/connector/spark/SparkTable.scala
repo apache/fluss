@@ -22,7 +22,8 @@ import com.alibaba.fluss.connector.spark.utils.SparkTypeUtils
 import com.alibaba.fluss.metadata.{PartitionSpec, TableInfo}
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{BoundReference, Cast}
+import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
+import org.apache.spark.sql.catalyst.expressions.{BoundReference, Cast, GenericInternalRow, Literal}
 import org.apache.spark.sql.connector.catalog.{SupportsPartitionManagement, SupportsRead, SupportsWrite, Table, TableCapability, TableCatalog}
 import org.apache.spark.sql.connector.read.ScanBuilder
 import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
@@ -30,6 +31,8 @@ import org.apache.spark.sql.types.{StringType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import java.util
+
+import scala.collection.JavaConverters._
 
 case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: TableInfo)
   extends Table
@@ -82,9 +85,29 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
   override def listPartitionIdentifiers(
       names: Array[String],
       ident: InternalRow): Array[InternalRow] = {
-    // TODO, list partitions by Identifiers. Trace by
-    // https://github.com/alibaba/fluss/issues/514
-    throw new UnsupportedOperationException("List partition is not supported")
+    val partitionSpec = convertToFlussPartitionSpec(names, ident)
+    if (ident.numFields == partitionSchema().length) {
+      if (catalog.partitionExists(table.getTablePath, partitionSpec)) {
+        Array(ident)
+      } else {
+        Array.empty
+      }
+    } else {
+      val indexes = names.map(partitionSchema().fieldIndex)
+      val dataTypes = names.map(partitionSchema()(_).dataType)
+      val currentRow = new GenericInternalRow(new Array[Any](names.length))
+      catalog
+        .listPartitions(table.getTablePath)
+        .asScala
+        .map(part => convertToPartIdent(part, partitionSchema()))
+        .filter {
+          partition =>
+            for (i <- names.indices) {
+              currentRow.values(i) = partition.get(indexes(i), dataTypes(i))
+            }
+            currentRow == ident
+        }
+    }.toArray
   }
 
   private def convertToFlussPartitionSpec(
@@ -99,5 +122,28 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
         partitionSpec.put(field.name, value)
     }
     new PartitionSpec(partitionSpec)
+  }
+  private def convertToFlussPartitionSpec(
+      names: Array[String],
+      ident: InternalRow): PartitionSpec = {
+    val partitionSpec = names.zipWithIndex
+      .map {
+        case (name, index) =>
+          val value = Cast(
+            BoundReference(index, partitionSchema()(name).dataType, nullable = false),
+            StringType).eval(ident).toString
+          (name, value)
+      }
+      .toMap
+      .asJava
+    new PartitionSpec(partitionSpec)
+  }
+
+  def convertToPartIdent(
+      partitionSpec: util.Map[String, String],
+      partitionSchema: StructType): InternalRow = {
+    InternalRow.fromSeq(partitionSchema.map {
+      field => Cast(Literal(partitionSpec.asScala(field.name)), field.dataType, None).eval()
+    })
   }
 }

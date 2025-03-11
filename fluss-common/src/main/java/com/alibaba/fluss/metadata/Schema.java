@@ -71,7 +71,9 @@ public final class Schema implements Serializable {
                                 .map(
                                         column ->
                                                 new DataField(
-                                                        column.getName(), column.getDataType()))
+                                                        column.getName(),
+                                                        column.getDataType(),
+                                                        column.getComment().orElse(null)))
                                 .collect(Collectors.toList()));
     }
 
