@@ -1,8 +1,8 @@
-<div style="text-align: center;">
  <p>
    <img src="website/static/img/banner.png" alt="Fluss - Streaming Storage for Real-Time Analytics" />
  </p>
- 
+
+<div style="text-align: center;">
  <p>
    <a href="https://alibaba.github.io/fluss-docs/docs/intro/">Documentation</a> | <a href="https://alibaba.github.io/fluss-docs/docs/quickstart/flink/">QuickStart</a> | <a href="https://alibaba.github.io/fluss-docs/community/dev/ide-setup/">Development</a>
  </p>
