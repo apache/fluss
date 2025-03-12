@@ -54,12 +54,12 @@ public class TestingMemorySegmentPool implements MemorySegmentPool {
 
     @Override
     public void returnPage(MemorySegment segment) {
-        // do noting.
+        // do nothing.
     }
 
     @Override
     public void returnAll(List<MemorySegment> memory) {
-        // do noting.
+        // do nothing.
     }
 
     @Override

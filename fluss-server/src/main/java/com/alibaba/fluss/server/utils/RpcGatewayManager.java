@@ -104,7 +104,7 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        // do noting.
+        // do nothing.
     }
 
     private class ServerRpcGateway {
