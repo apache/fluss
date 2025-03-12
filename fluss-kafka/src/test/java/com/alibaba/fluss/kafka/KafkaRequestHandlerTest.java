@@ -26,11 +26,12 @@ import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ApiVersionsResponse;
 import org.apache.kafka.common.requests.RequestHeader;
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class KafkaRequestHandlerTest {
 
@@ -58,8 +59,8 @@ public class KafkaRequestHandlerTest {
                         AbstractResponse.parseResponse(
                                 responseBuffer.nioBuffer(), request.header());
         Map<Errors, Integer> errorCounts = response.errorCounts();
-        Assertions.assertThat(1).isEqualTo(errorCounts.size());
-        Assertions.assertThat(1).isEqualTo(errorCounts.get(Errors.UNSUPPORTED_VERSION));
+        assertThat(1).isEqualTo(errorCounts.size());
+        assertThat(1).isEqualTo(errorCounts.get(Errors.UNSUPPORTED_VERSION));
     }
 
     @Test
@@ -86,23 +87,23 @@ public class KafkaRequestHandlerTest {
                         AbstractResponse.parseResponse(
                                 responseBuffer.nioBuffer(), request.header());
         Map<Errors, Integer> errorCounts = response.errorCounts();
-        Assertions.assertThat(1).isEqualTo(errorCounts.size());
-        Assertions.assertThat(1).isEqualTo(errorCounts.get(Errors.NONE));
+        assertThat(1).isEqualTo(errorCounts.size());
+        assertThat(1).isEqualTo(errorCounts.get(Errors.NONE));
         response.data()
                 .apiKeys()
                 .forEach(
                         apiVersion -> {
                             if (ApiKeys.METADATA.id == apiVersion.apiKey()) {
-                                Assertions.assertThat((short) 11)
+                                assertThat((short) 11)
                                         .isGreaterThanOrEqualTo(apiVersion.maxVersion());
                             } else if (ApiKeys.FETCH.id == apiVersion.apiKey()) {
-                                Assertions.assertThat((short) 12)
+                                assertThat((short) 12)
                                         .isGreaterThanOrEqualTo(apiVersion.maxVersion());
                             } else {
                                 ApiKeys apiKeys = ApiKeys.forId(apiVersion.apiKey());
-                                Assertions.assertThat(apiVersion.minVersion())
+                                assertThat(apiVersion.minVersion())
                                         .isEqualTo(apiKeys.oldestVersion());
-                                Assertions.assertThat(apiVersion.maxVersion())
+                                assertThat(apiVersion.maxVersion())
                                         .isEqualTo(apiKeys.latestVersion());
                             }
                         });

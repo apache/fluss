@@ -30,6 +30,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
 
 import java.net.SocketAddress;
 
+/** A test implementation of {@link ChannelHandlerContext}. */
 public class TestChannelHandlerContext implements ChannelHandlerContext {
     @Override
     public Channel channel() {
