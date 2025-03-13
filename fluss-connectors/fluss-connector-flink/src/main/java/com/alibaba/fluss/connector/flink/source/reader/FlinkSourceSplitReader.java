@@ -108,23 +108,30 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     // track split IDs corresponding to removed partitions
     private final Set<String> removedSplits = new HashSet<>();
 
+    private final boolean enableChangelog;
+    private final @Nullable int[] selectedMetadataFields;
+
     public FlinkSourceSplitReader(
             Configuration flussConf,
             TablePath tablePath,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
+            boolean enableChangelog,
+            @Nullable int[] selectedMetadataFields) {
         this.flinkMetricRegistry =
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
         this.sourceOutputType = sourceOutputType;
         this.tablePath = tablePath;
+        this.enableChangelog = enableChangelog;
+        this.selectedMetadataFields = selectedMetadataFields;
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
-        sanityCheck(table.getTableInfo().getRowType(), projectedFields);
+        sanityCheck(sourceOutputType, projectedFields, selectedMetadataFields);
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
@@ -535,11 +542,34 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         flinkMetricRegistry.close();
     }
 
-    private void sanityCheck(RowType flussTableRowType, @Nullable int[] projectedFields) {
+    private void sanityCheck(
+            RowType flussTableRowType,
+            @Nullable int[] projectedFields,
+            @Nullable int[] selectedMetadataFields) {
         RowType tableRowType =
                 projectedFields != null
                         ? flussTableRowType.project(projectedFields)
                         : flussTableRowType;
+        if (enableChangelog) {
+            int metadataColumnCount =
+                    selectedMetadataFields != null ? selectedMetadataFields.length : 3;
+
+            if (sourceOutputType.getFieldCount() >= tableRowType.getFieldCount()) {
+                return;
+            } else {
+                throw new ValidationException(
+                        "Changelog schema detected but field count is insufficient. "
+                                + "\nFlink query schema: "
+                                + sourceOutputType
+                                + "\nExpected at least "
+                                + tableRowType.getFieldCount()
+                                + " fields for data"
+                                + "\nFluss table schema: "
+                                + tableRowType);
+            }
+        }
+
+        // Standard schema validation for non-changelog tables
         if (!sourceOutputType.copy(false).equals(tableRowType.copy(false))) {
             // The default nullability of Flink row type and Fluss row type might be not the same,
             // thus we need to compare the row type without nullability here.

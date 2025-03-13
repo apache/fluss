@@ -27,13 +27,18 @@ import org.apache.flink.table.data.utils.JoinedRowData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 /** Changelog converter that adds metadata columns using JoinedRowData. */
+// 1. First, update the ChangelogRowConverter to properly handle metadata field selection
 public class ChangelogRowConverter implements RecordToFlinkRowConverter {
     private static final Logger LOG = LoggerFactory.getLogger(ChangelogRowConverter.class);
     private final FlussRowToFlinkRowConverter converter;
+    private final @Nullable int[] selectedMetadataFields;
 
-    public ChangelogRowConverter(RowType rowType) {
+    public ChangelogRowConverter(RowType rowType, @Nullable int[] selectedMetadataFields) {
         this.converter = new FlussRowToFlinkRowConverter(rowType);
+        this.selectedMetadataFields = selectedMetadataFields;
     }
 
     @Override
@@ -43,17 +48,39 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
             RowData baseRowData = converter.toFlinkRowData(scanRecord);
 
             // Create metadata row
-            GenericRowData metadataRow = new GenericRowData(3);
-            metadataRow.setField(0, StringData.fromString(determineRowKind(scanRecord)));
-            metadataRow.setField(1, scanRecord.logOffset());
-            metadataRow.setField(2, TimestampData.fromEpochMillis(scanRecord.timestamp()));
+            GenericRowData metadataRow;
+            if (selectedMetadataFields == null || selectedMetadataFields.length == 0) {
+                // No metadata fields selected
+                return baseRowData;
+            } else {
+                metadataRow = new GenericRowData(selectedMetadataFields.length);
+                for (int i = 0; i < selectedMetadataFields.length; i++) {
+                    int metadataIndex = selectedMetadataFields[i];
+                    switch (metadataIndex) {
+                        case 0: // _change_type
+                            metadataRow.setField(
+                                    i, StringData.fromString(determineRowKind(scanRecord)));
+                            break;
+                        case 1: // _log_offset
+                            metadataRow.setField(i, scanRecord.logOffset());
+                            break;
+                        case 2: // _commit_timestamp
+                            metadataRow.setField(
+                                    i, TimestampData.fromEpochMillis(scanRecord.timestamp()));
+                            break;
+                        default:
+                            throw new IllegalArgumentException(
+                                    "Invalid metadata index: " + metadataIndex);
+                    }
+                }
+            }
 
             // Join metadata and base data
             return new JoinedRowData(metadataRow, baseRowData);
         } catch (Exception e) {
-            // For debugging - log the error
+            // Improved error logging
             LOG.error("Error converting record: {}", e.getMessage(), e);
-            throw e;
+            throw new RuntimeException(e);
         }
     }
 

@@ -33,6 +33,8 @@ import org.apache.flink.table.data.RowData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 /**
  * The {@link RecordEmitter} implementation for {@link FlinkSourceReader}.
  *
@@ -49,9 +51,15 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
     private final RecordToFlinkRowConverter converter;
     private LakeRecordRecordEmitter lakeRecordRecordEmitter;
 
-    public FlinkRecordEmitter(RowType rowType, boolean enableChangeLog) {
+    public FlinkRecordEmitter(
+            RowType rowType,
+            boolean enableChangeLog,
+            @Nullable int[] projectedFields,
+            @Nullable int[] selectedMetadataFields) {
         if (enableChangeLog) {
-            this.converter = new ChangelogRowConverter(rowType);
+            int[] metadataFields =
+                    selectedMetadataFields != null ? selectedMetadataFields : new int[] {0, 1, 2};
+            this.converter = new ChangelogRowConverter(rowType, metadataFields);
         } else {
             this.converter = new PlainRowConverter(rowType);
         }

@@ -166,6 +166,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                 context,
                 null,
                 new FlinkSourceReaderMetrics(context.metricGroup()),
-                false);
+                false,
+                new int[] {});
     }
 }
