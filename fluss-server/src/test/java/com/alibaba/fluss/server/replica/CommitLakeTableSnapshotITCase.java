@@ -82,7 +82,7 @@ class CommitLakeTableSnapshotITCase {
             // get the leader server
             int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
             TabletServerGateway leaderGateWay =
-                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer, true);
 
             for (int i = 0; i < 10; i++) {
                 leaderGateWay
@@ -97,7 +97,7 @@ class CommitLakeTableSnapshotITCase {
         }
 
         // now, let's commit the lake table snapshot
-        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(true);
         long snapshotId = 1;
         long dataLakeLogStartOffset = 0;
         long dataLakeLogEndOffset = 50;

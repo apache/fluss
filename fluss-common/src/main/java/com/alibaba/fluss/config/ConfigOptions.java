@@ -128,6 +128,7 @@ public class ConfigOptions {
      * <p>If the coordinator server is used as a bootstrap server (discover all the servers in the
      * cluster), the value of this config option should be a static hostname or address.
      */
+    @Deprecated
     public static final ConfigOption<String> COORDINATOR_HOST =
             key("coordinator.host")
                     .stringType()
@@ -149,6 +150,7 @@ public class ConfigOptions {
      * resolution. The value accepts a list of ports (“50100,50101”), ranges (“50100-50200”) or a
      * combination of both.
      */
+    @Deprecated
     public static final ConfigOption<String> COORDINATOR_PORT =
             key("coordinator.port")
                     .stringType()
@@ -166,6 +168,50 @@ public class ConfigOptions {
                                     + " (“50100,50101”), ranges (“50100-50200”) or a combination"
                                     + " of both.");
 
+    /**
+     * The network address and port the server binds to for accepting connections.
+     *
+     * <p>This specifies the interface and port where the server will listen for incoming requests.
+     * The format is {@code listener_name://host:port}, supporting multiple addresses separated by
+     * commas.
+     *
+     * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
+     */
+    public static final ConfigOption<String> BIND_LISTENER =
+            key("bind.listeners")
+                    .stringType()
+                    .defaultValue("CLIENT://localhost:9123")
+                    .withDescription(
+                            "The network address and port the server binds to for accepting connections. "
+                                    + "The format is 'protocol://host:port', supporting multiple addresses separated by commas. "
+                                    + "The default value is suitable for local development. "
+                                    + "In production, configure to '0.0.0.0' for external access.");
+
+    /**
+     * The externally advertised address and port for client connections.
+     *
+     * <p>This specifies the address other nodes/clients should use to connect to this server. It is
+     * required when the bind address ({@link #BIND_LISTENER}) is not publicly reachable (e.g., when
+     * using {@code localhost} in {@code bind.listeners}). <b>Must be configured in distributed
+     * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
+     * {@code bind.listeners} will be used as fallback.
+     */
+    public static final ConfigOption<String> ADVERTISED_LISTENER =
+            key("advertised.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The externally advertised address and port for client connections. "
+                                    + "Required in distributed environments when the bind address is not publicly reachable. "
+                                    + "Format matches 'bind.listeners' (protocol://host:port). "
+                                    + "Defaults to the value of 'bind.listeners' if not explicitly configured.");
+
+    public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
+            key("internal.listener.name")
+                    .stringType()
+                    .defaultValue("FLUSS")
+                    .withDescription("The listener for internal communicate");
+
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()
@@ -180,6 +226,7 @@ public class ConfigOptions {
     //  ConfigOptions for Tablet Server
     // ------------------------------------------------------------------------
     /** The external address of the network interface where the tablet server is exposed. */
+    @Deprecated
     public static final ConfigOption<String> TABLET_SERVER_HOST =
             key("tablet-server.host")
                     .stringType()
@@ -193,6 +240,7 @@ public class ConfigOptions {
      * The default network port the tablet server expects incoming IPC connections. The {@code "0"}
      * means that the TabletServer searches for a free port.
      */
+    @Deprecated
     public static final ConfigOption<String> TABLET_SERVER_PORT =
             key("tablet-server.port")
                     .stringType()

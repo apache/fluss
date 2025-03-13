@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.replica;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -45,6 +45,7 @@ import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.log.remote.TestingRemoteLogStorage;
 import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
@@ -201,18 +202,25 @@ public class ReplicaTestBase {
     private void initMetadataCache(ServerMetadataCache metadataCache) {
         metadataCache.updateMetadata(
                 new ClusterMetadataInfo(
-                        Optional.of(new ServerNode(0, "localhost", 1234, ServerType.COORDINATOR)),
+                        Optional.of(
+                                new ServerInfo(
+                                        0,
+                                        Endpoint.parseEndpoints("CLIENT://localhost:1234"),
+                                        ServerType.COORDINATOR)),
                         new HashSet<>(
                                 Arrays.asList(
-                                        new ServerNode(
+                                        new ServerInfo(
                                                 TABLET_SERVER_ID,
-                                                "localhost",
-                                                90,
+                                                Endpoint.parseEndpoints("CLIENT://localhost:90"),
                                                 ServerType.TABLET_SERVER),
-                                        new ServerNode(
-                                                2, "localhost", 91, ServerType.TABLET_SERVER),
-                                        new ServerNode(
-                                                3, "localhost", 92, ServerType.TABLET_SERVER)))));
+                                        new ServerInfo(
+                                                2,
+                                                Endpoint.parseEndpoints("CLIENT://localhost:91"),
+                                                ServerType.TABLET_SERVER),
+                                        new ServerInfo(
+                                                3,
+                                                Endpoint.parseEndpoints("CLIENT://localhost:92"),
+                                                ServerType.TABLET_SERVER)))));
     }
 
     private void registerTableInZkClient() throws Exception {

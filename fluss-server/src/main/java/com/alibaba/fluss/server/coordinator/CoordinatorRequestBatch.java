@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
@@ -38,6 +37,7 @@ import com.alibaba.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseRece
 import com.alibaba.fluss.server.entity.DeleteReplicaResultForBucket;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -221,8 +221,8 @@ public class CoordinatorRequestBatch {
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public void addUpdateMetadataRequestForTabletServers(
             Set<Integer> tabletServers,
-            Optional<ServerNode> coordinatorServer,
-            Set<ServerNode> aliveTabletServers) {
+            Optional<ServerInfo> coordinatorServer,
+            Set<ServerInfo> aliveTabletServers) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
                 .forEach(

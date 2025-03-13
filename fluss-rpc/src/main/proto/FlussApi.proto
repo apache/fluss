@@ -492,8 +492,11 @@ message PbPhysicalTablePath {
 
 message PbServerNode {
   required int32 node_id = 1;
-  required string host = 2;
-  required int32 port = 3;
+  // host and port is used for client.
+  optional string host = 2;
+  optional int32 port = 3;
+  // listeners is used for server.
+  optional string listeners = 4;
 }
 
 message PbTableMetadata {

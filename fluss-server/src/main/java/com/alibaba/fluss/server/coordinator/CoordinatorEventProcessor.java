@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
@@ -67,6 +68,7 @@ import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
@@ -132,6 +134,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final ServerMetadataCache serverMetadataCache;
     private final CoordinatorRequestBatch coordinatorRequestBatch;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
+    private final String internalListenerName;
 
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final ExecutorService ioExecutor;
@@ -139,7 +142,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     // in normal case, it won't be null, but from I can see, it'll only be null in unit test
     // since the we won't register a coordinator node in zk.
     // todo: may remove the nullable in the future
-    private @Nullable ServerNode coordinatorServerNode;
+    private @Nullable ServerInfo coordinatorServerInfo;
 
     // metrics
     private volatile int tabletServerCount;
@@ -214,6 +217,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         zooKeeperClient);
         this.autoPartitionManager = autoPartitionManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
+        this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         registerMetric();
     }
 
@@ -231,7 +235,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void startup() {
-        coordinatorServerNode = getCoordinatorServerNode();
+        coordinatorServerInfo = getCoordinatorServerInfo();
         // start watchers first so that we won't miss node in zk;
         tabletServerChangeWatcher.start();
         tableChangeWatcher.start();
@@ -251,7 +255,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // partitionStateMachine.startup().
         LOG.info("Sending update metadata request.");
         updateServerMetadataCache(
-                Optional.ofNullable(coordinatorServerNode),
+                Optional.ofNullable(coordinatorServerInfo),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()));
 
         // start table manager
@@ -268,7 +272,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         onShutdown();
     }
 
-    private ServerNode getCoordinatorServerNode() {
+    private ServerInfo getCoordinatorServerInfo() {
         try {
             return zooKeeperClient
                     .getCoordinatorAddress()
@@ -277,10 +281,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                     // TODO we set id to 0 as that CoordinatorServer don't support
                                     // HA, if we support HA, we need to set id to the config
                                     // CoordinatorServer id to avoid node drift.
-                                    new ServerNode(
+                                    new ServerInfo(
                                             0,
-                                            coordinatorAddress.getHost(),
-                                            coordinatorAddress.getPort(),
+                                            coordinatorAddress.getEndpoints(),
                                             ServerType.COORDINATOR))
                     .orElseGet(
                             () -> {
@@ -296,20 +299,30 @@ public class CoordinatorEventProcessor implements EventProcessor {
         long start = System.currentTimeMillis();
         // get all tablet server's
         int[] currentServers = zooKeeperClient.getSortedTabletServerList();
-        List<ServerNode> tabletServers = new ArrayList<>();
+        List<ServerInfo> tabletServerInfos = new ArrayList<>();
+        List<ServerNode> internalServerNodes = new ArrayList<>();
         for (int server : currentServers) {
             TabletServerRegistration registration = zooKeeperClient.getTabletServer(server).get();
-            tabletServers.add(
+            ServerInfo serverInfo =
+                    new ServerInfo(server, registration.getEndpoints(), ServerType.TABLET_SERVER);
+            // Get internal listener endpoint to send request to tablet server.
+            Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
+            if (internalEndpoint == null) {
+                LOG.error("Internal listener endpoint is null for tablet server {}.", server);
+                continue;
+            }
+            tabletServerInfos.add(serverInfo);
+            internalServerNodes.add(
                     new ServerNode(
                             server,
-                            registration.getHost(),
-                            registration.getPort(),
+                            internalEndpoint.getHost(),
+                            internalEndpoint.getPort(),
                             ServerType.TABLET_SERVER));
         }
 
-        coordinatorContext.setLiveTabletServers(tabletServers);
+        coordinatorContext.setLiveTabletServers(tabletServerInfos);
         // init tablet server channels
-        coordinatorChannelManager.startup(tabletServers);
+        coordinatorChannelManager.startup(internalServerNodes);
 
         // load all tables
         List<TableInfo> autoPartitionTables = new ArrayList<>();
@@ -683,9 +696,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // problem in Fluss;
         // TODO: revisit here to see whether we really need epoch for tablet server like kafka
         // when we finish the logic of tablet server
-        ServerNode serverNode = newTabletServerEvent.getServerNode();
-        int tabletServerId = serverNode.id();
-        if (coordinatorContext.getLiveTabletServers().containsKey(serverNode.id())) {
+        ServerInfo serverInfo = newTabletServerEvent.getServerInfo();
+        int tabletServerId = serverInfo.id();
+        if (coordinatorContext.getLiveTabletServers().containsKey(serverInfo.id())) {
             // if the dead server is already in live servers, return directly
             // it may happen during coordinator server initiation, the watcher watch a new tablet
             // server register event and put it to event manager, but after that, the coordinator
@@ -699,12 +712,26 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LOG.info("New tablet server callback for tablet server {}", tabletServerId);
 
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
-        coordinatorContext.addLiveTabletServer(serverNode);
-        coordinatorChannelManager.addTabletServer(serverNode);
+        coordinatorContext.addLiveTabletServer(serverInfo);
+
+        Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
+        if (internalEndpoint == null) {
+            LOG.error(
+                    "Tablet server {} has no internal listener name {}",
+                    serverInfo.id(),
+                    internalListenerName);
+            return;
+        }
+        coordinatorChannelManager.addTabletServer(
+                new ServerNode(
+                        tabletServerId,
+                        internalEndpoint.getHost(),
+                        internalEndpoint.getPort(),
+                        ServerType.TABLET_SERVER));
 
         // update server metadata cache.
         updateServerMetadataCache(
-                Optional.ofNullable(coordinatorServerNode),
+                Optional.ofNullable(coordinatorServerInfo),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()));
 
         // when a new tablet server comes up, we need to get all replicas of the server
@@ -742,7 +769,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorChannelManager.removeTabletServer(tabletServerId);
 
         updateServerMetadataCache(
-                Optional.ofNullable(coordinatorServerNode),
+                Optional.ofNullable(coordinatorServerInfo),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()));
 
         TableBucketStateMachine tableBucketStateMachine = tableManager.getTableBucketStateMachine();
@@ -1035,7 +1062,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     /** Update metadata cache for coordinator server and all remote tablet servers. */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     private void updateServerMetadataCache(
-            Optional<ServerNode> coordinatorServer, Set<ServerNode> aliveTabletServers) {
+            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTabletServers) {
         // 1. update local metadata cache.
         serverMetadataCache.updateMetadata(
                 new ClusterMetadataInfo(coordinatorServer, aliveTabletServers));
@@ -1043,7 +1070,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // 2. send update metadata request to all alive tablet servers
         coordinatorRequestBatch.newBatch();
         Set<Integer> serverIds =
-                aliveTabletServers.stream().map(ServerNode::id).collect(Collectors.toSet());
+                aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
         coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
                 serverIds, coordinatorServer, aliveTabletServers);
         coordinatorRequestBatch.sendUpdateMetadataRequest();

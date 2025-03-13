@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 /** An implement of {@link MetadataCache} for testing purpose. */
@@ -36,7 +37,7 @@ public class TestingMetadataCache implements MetadataCache {
 
     @Nullable
     @Override
-    public ServerNode getCoordinatorServer() {
+    public ServerNode getCoordinatorServer(String listenerName) {
         return null;
     }
 
@@ -47,13 +48,18 @@ public class TestingMetadataCache implements MetadataCache {
 
     @Nullable
     @Override
-    public ServerNode getTabletServer(int serverId) {
+    public ServerNode getTabletServer(int serverId, String listenerName) {
         return null;
     }
 
     @Override
-    public Map<Integer, ServerNode> getAllAliveTabletServers() {
+    public Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName) {
         return Collections.emptyMap();
+    }
+
+    @Override
+    public Set<Integer> getAliveTabletServerIds() {
+        return Collections.emptySet();
     }
 
     public int[] getLiveServerIds() {

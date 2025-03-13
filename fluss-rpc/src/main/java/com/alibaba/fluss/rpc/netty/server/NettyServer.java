@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.rpc.netty.server;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
@@ -31,7 +32,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.channel.AdaptiveRecvByteBufAlloc
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
-import com.alibaba.fluss.utils.NetUtils;
+import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,15 +40,18 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.BindException;
 import java.net.InetSocketAddress;
-import java.util.Iterator;
+import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.rpc.netty.NettyUtils.isBindFailure;
-import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownChannel;
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownGroup;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static com.alibaba.fluss.utils.concurrent.FutureUtils.completeAll;
 
 /**
  * Netty based {@link RpcServer} implementation. The RPC server starts a handler to receive RPC
@@ -58,31 +62,29 @@ public final class NettyServer implements RpcServer {
     private static final Logger LOG = LoggerFactory.getLogger(NettyServer.class);
 
     private final Configuration conf;
-    private final String hostname;
-    private final String portRange;
+    private final Collection<Endpoint> endpoints;
     private final RequestProcessorPool workerPool;
     private final ApiManager apiManager;
     private final MetricGroup serverMetricGroup;
+    private final List<Channel> bindChannels;
+    private final List<Endpoint> bindEndpoints;
 
     private EventLoopGroup acceptorGroup;
     private EventLoopGroup selectorGroup;
-    private InetSocketAddress bindAddress;
-    private Channel bindChannel;
+    private PooledByteBufAllocator pooledBufAllocator;
 
     private volatile boolean isRunning;
 
     public NettyServer(
             Configuration conf,
-            String hostname,
-            String portRange,
+            Collection<Endpoint> endpoints,
             RpcGatewayService service,
             MetricGroup serverMetricGroup,
             RequestsMetrics requestsMetrics) {
         this.conf = checkNotNull(conf, "conf");
-        this.hostname = checkNotNull(hostname, "hostname");
-        this.portRange = checkNotNull(portRange, "portRange");
         this.serverMetricGroup = checkNotNull(serverMetricGroup, "serverMetricGroup");
         this.apiManager = new ApiManager(service.providerType());
+        this.endpoints = checkNotNull(endpoints, "endpoints");
 
         this.workerPool =
                 new RequestProcessorPool(
@@ -90,17 +92,19 @@ public final class NettyServer implements RpcServer {
                         conf.getInt(ConfigOptions.NETTY_SERVER_MAX_QUEUED_REQUESTS),
                         service,
                         requestsMetrics);
+        this.bindChannels = new CopyOnWriteArrayList<>();
+        this.bindEndpoints = new CopyOnWriteArrayList<>();
+        pooledBufAllocator = PooledByteBufAllocator.DEFAULT;
     }
 
     @Override
     public void start() throws IOException {
-        checkState(bindChannel == null, "Netty server has already been initialized.");
+        checkState(bindChannels.isEmpty(), "Netty server has already been initialized.");
         int numNetworkThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS);
         int numWorkerThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS);
         LOG.info(
-                "Starting Netty server on address {} and port range {} with {} network threads and {} worker threads.",
-                hostname,
-                portRange,
+                "Starting Netty server on endpoints {} with {} network threads and {} worker threads.",
+                endpoints,
                 numNetworkThreads,
                 numWorkerThreads);
 
@@ -112,81 +116,97 @@ public final class NettyServer implements RpcServer {
                         "fluss-netty-server-acceptor");
         this.selectorGroup =
                 NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-server-selector");
-
-        ServerBootstrap bootstrap = new ServerBootstrap();
         PooledByteBufAllocator pooledBufAllocator = PooledByteBufAllocator.DEFAULT;
-        bootstrap.childOption(ChannelOption.ALLOCATOR, pooledBufAllocator);
-        bootstrap.group(acceptorGroup, selectorGroup);
-        bootstrap.childOption(ChannelOption.TCP_NODELAY, true);
-        bootstrap.childOption(
-                ChannelOption.RCVBUF_ALLOCATOR,
-                new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
-        bootstrap.channel(NettyUtils.getServerSocketChannelClass(selectorGroup));
-
-        // child channel pipeline for accepted connections
-        bootstrap.childHandler(
-                new ServerChannelInitializer(
-                        new NettyServerHandler(workerPool.getRequestChannels(), apiManager),
-                        conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds()));
-
-        // --------------------------------------------------------------------
-        // Start Server
-        // --------------------------------------------------------------------
-        LOG.debug(
-                "Trying to start Netty server on address: {} and port range {}",
-                hostname,
-                portRange);
-
-        Iterator<Integer> portsIterator = NetUtils.getPortRangeFromString(portRange);
-        while (portsIterator.hasNext() && bindChannel == null) {
-            Integer port = portsIterator.next();
-            LOG.debug("Trying to bind Netty server to port: {}", port);
-
-            bootstrap.localAddress(hostname, port);
-            try {
-                bindChannel = bootstrap.bind().syncUninterruptibly().channel();
-            } catch (Exception e) {
-                // syncUninterruptibly() throws checked exceptions via Unsafe
-                // continue if the exception is due to the port being in use, fail early
-                // otherwise
-                if (isBindFailure(e)) {
-                    LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
-                } else {
-                    throw e;
-                }
-            }
-        }
-
-        if (bindChannel == null) {
-            throw new BindException(
-                    "Could not start Netty server on any port in port range " + portRange);
-        }
-
-        bindAddress = (InetSocketAddress) bindChannel.localAddress();
 
         // setup worker thread pool
         workerPool.start();
 
+        List<CompletableFuture<Void>> startEndpointFutures =
+                endpoints.stream().map(this::startEndpoint).collect(Collectors.toList());
+        try {
+            completeAll(startEndpointFutures).get();
+        } catch (InterruptedException | ExecutionException ex) {
+            throw new IOException("Failed to start Netty server", ex);
+        }
+
         final long duration = (System.nanoTime() - start) / 1_000_000;
         LOG.info(
-                "Successfully start Netty server (took {} ms). Listening on SocketAddress {}.",
+                "Successfully start Netty server (took {} ms). Listening on endpoints {}.",
                 duration,
-                bindAddress);
-
+                endpoints);
         isRunning = true;
         NettyMetrics.registerNettyMetrics(serverMetricGroup, pooledBufAllocator);
     }
 
     @Override
-    public String getHostname() {
+    public List<Endpoint> getBindEndpoints() {
         checkState(isRunning, "Netty server has not been started yet.");
-        return bindAddress.getAddress().getHostAddress();
+        return bindEndpoints;
     }
 
-    @Override
-    public int getPort() {
-        checkState(isRunning, "Netty server has not been started yet.");
-        return bindAddress.getPort();
+    private CompletableFuture<Void> startEndpoint(Endpoint endpoint) {
+        CompletableFuture<Void> startEndpointFuture = new CompletableFuture<>();
+        CompletableFuture.runAsync(
+                () -> {
+                    ServerBootstrap bootstrap = new ServerBootstrap();
+
+                    bootstrap.childOption(ChannelOption.ALLOCATOR, pooledBufAllocator);
+                    bootstrap.group(acceptorGroup, selectorGroup);
+                    bootstrap.childOption(ChannelOption.TCP_NODELAY, true);
+                    bootstrap.childOption(
+                            ChannelOption.RCVBUF_ALLOCATOR,
+                            new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
+                    bootstrap.channel(NettyUtils.getServerSocketChannelClass(selectorGroup));
+
+                    // child channel pipeline for accepted connections
+                    bootstrap.childHandler(
+                            new ServerChannelInitializer(
+                                    new NettyServerHandler(
+                                            workerPool.getRequestChannels(),
+                                            apiManager,
+                                            endpoint.getListenerName()),
+                                    conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME)
+                                            .getSeconds()));
+
+                    // --------------------------------------------------------------------
+                    // Start Server
+                    // --------------------------------------------------------------------
+                    String hostname = endpoint.getHost();
+                    Integer port = endpoint.getPort();
+                    LOG.debug(
+                            "Trying to start Netty server on address: {} and port {}",
+                            hostname,
+                            port);
+
+                    try {
+                        bootstrap.localAddress(hostname, port);
+                        Channel bindChannel = bootstrap.bind().syncUninterruptibly().channel();
+                        if (bindChannel == null) {
+                            throw new BindException(
+                                    String.format(
+                                            "Could not start Netty server on address: %s and port %s ",
+                                            hostname, port));
+                        }
+                        LOG.info("Listening on address: {} and port {}.", hostname, port);
+                        bindChannels.add(bindChannel);
+                        InetSocketAddress bindAddress =
+                                (InetSocketAddress) bindChannel.localAddress();
+                        bindEndpoints.add(
+                                new Endpoint(
+                                        bindAddress.getAddress().getHostAddress(),
+                                        bindAddress.getPort(),
+                                        endpoint.getListenerName()));
+                        startEndpointFuture.complete(null);
+                    } catch (Exception e) {
+                        // syncUninterruptibly() throws checked exceptions via Unsafe
+                        // continue if the exception is due to the port being in use, fail early
+                        // otherwise
+                        LOG.debug(
+                                "Failed to bind Netty server on port {}: {}", port, e.getMessage());
+                        startEndpointFuture.completeExceptionally(e);
+                    }
+                });
+        return startEndpointFuture;
     }
 
     @Override
@@ -205,7 +225,11 @@ public final class NettyServer implements RpcServer {
 
         CompletableFuture<Void> acceptorShutdownFuture = shutdownGroup(acceptorGroup);
         CompletableFuture<Void> selectorShutdownFuture = shutdownGroup(selectorGroup);
-        CompletableFuture<Void> channelShutdownFuture = shutdownChannel(bindChannel);
+        CompletableFuture<Void> channelShutdownFuture =
+                FutureUtils.completeAll(
+                        bindChannels.stream()
+                                .map(NettyUtils::shutdownChannel)
+                                .collect(Collectors.toList()));
         CompletableFuture<Void> workerShutdownFuture;
         if (workerPool != null) {
             workerShutdownFuture = workerPool.closeAsync();

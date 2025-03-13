@@ -56,8 +56,8 @@ public class TabletServerITCase extends ServerITCaseBase {
     @Override
     protected Configuration getServerConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.TABLET_SERVER_PORT, getPort() + "");
-        conf.set(ConfigOptions.TABLET_SERVER_HOST, HOSTNAME);
+        String listenerNames = String.format("CLIENT://%s:%d", HOSTNAME, getPort());
+        conf.set(ConfigOptions.BIND_LISTENER, listenerNames);
         conf.set(ConfigOptions.TABLET_SERVER_ID, 1);
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;

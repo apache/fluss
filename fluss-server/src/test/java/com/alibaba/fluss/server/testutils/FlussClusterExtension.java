@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.testutils;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
@@ -37,6 +38,7 @@ import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.tablet.TabletServer;
@@ -69,6 +71,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -96,7 +99,7 @@ public final class FlussClusterExtension
     private final int initialNumOfTabletServers;
 
     private CoordinatorServer coordinatorServer;
-    private ServerNode coordinatorServerNode;
+    private ServerInfo coordinatorServerInfo;
     private TestingServer zooKeeperServer;
     private ZooKeeperClient zooKeeperClient;
     private RpcClient rpcClient;
@@ -105,19 +108,27 @@ public final class FlussClusterExtension
     private File tempDir;
 
     private final Map<Integer, TabletServer> tabletServers;
-    private final List<ServerNode> tabletServerNodes;
+    private final List<ServerInfo> tabletServerInfo;
     private final Configuration clusterConf;
+    private final String clientListenerName;
+    private final String internalListnerName;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
         return new Builder();
     }
 
-    private FlussClusterExtension(int numOfTabletServers, Configuration clusterConf) {
+    private FlussClusterExtension(
+            int numOfTabletServers,
+            String clientListenerName,
+            String internalListnerName,
+            Configuration clusterConf) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
-        this.tabletServerNodes = new ArrayList<>();
+        this.tabletServerInfo = new ArrayList<>();
         this.clusterConf = clusterConf;
+        this.clientListenerName = clientListenerName;
+        this.internalListnerName = internalListnerName;
     }
 
     @Override
@@ -192,7 +203,7 @@ public final class FlussClusterExtension
             tabletServer.close();
         }
         tabletServers.clear();
-        tabletServerNodes.clear();
+        tabletServerInfo.clear();
         if (coordinatorServer != null) {
             coordinatorServer.close();
             coordinatorServer = null;
@@ -211,20 +222,34 @@ public final class FlussClusterExtension
     public void startCoordinatorServer() throws Exception {
         if (coordinatorServer == null) {
             // if no coordinator server exists, create a new coordinator server and start
-            try (NetUtils.Port availablePort = getAvailablePort()) {
+            try (NetUtils.Port availablePortForClient = getAvailablePort();
+                    NetUtils.Port availablePortForInternal = getAvailablePort()) {
+
+                List<Endpoint> endpoints = new ArrayList<>();
+                endpoints.add(
+                        new Endpoint(
+                                HOST_ADDRESS,
+                                availablePortForClient.getPort(),
+                                clientListenerName));
+                if (!Objects.equals(internalListnerName, clientListenerName)) {
+                    endpoints.add(
+                            new Endpoint(
+                                    HOST_ADDRESS,
+                                    availablePortForInternal.getPort(),
+                                    internalListnerName));
+                }
+
                 Configuration conf = new Configuration(clusterConf);
                 conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
-                conf.setString(ConfigOptions.COORDINATOR_HOST, HOST_ADDRESS);
-                conf.setString(
-                        ConfigOptions.COORDINATOR_PORT, String.valueOf(availablePort.getPort()));
+                conf.setString(ConfigOptions.BIND_LISTENER, Endpoint.toListenerString(endpoints));
+                conf.setString(ConfigOptions.INTERNAL_LISTENER_NAME, internalListnerName);
                 setRemoteDataDir(conf);
 
                 coordinatorServer = new CoordinatorServer(conf);
                 coordinatorServer.start();
-                coordinatorServerNode =
+                coordinatorServerInfo =
                         // TODO, Currently, we use 0 as coordinator server id.
-                        new ServerNode(
-                                0, HOST_ADDRESS, availablePort.getPort(), ServerType.COORDINATOR);
+                        new ServerInfo(0, endpoints, ServerType.COORDINATOR);
             }
         } else {
             // start the existing coordinator server
@@ -249,14 +274,27 @@ public final class FlussClusterExtension
             throw new IllegalArgumentException("Tablet server " + serverId + " already exists.");
         }
         String dataDir = getDataDir(serverId);
-        final ServerNode serverNode;
+        final ServerInfo serverInfo;
         final TabletServer tabletServer;
-        try (NetUtils.Port availablePort = getAvailablePort()) {
+        try (NetUtils.Port availablePortForClient = getAvailablePort();
+                NetUtils.Port availablePortForInternal = getAvailablePort()) {
+            List<Endpoint> endpoints = new ArrayList<>();
+            endpoints.add(
+                    new Endpoint(
+                            HOST_ADDRESS, availablePortForClient.getPort(), clientListenerName));
+            if (!Objects.equals(internalListnerName, clientListenerName)) {
+                endpoints.add(
+                        new Endpoint(
+                                HOST_ADDRESS,
+                                availablePortForInternal.getPort(),
+                                internalListnerName));
+            }
+
             Configuration tabletServerConf = new Configuration(clusterConf);
-            tabletServerConf.set(ConfigOptions.TABLET_SERVER_HOST, HOST_ADDRESS);
             tabletServerConf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
-            tabletServerConf.set(
-                    ConfigOptions.TABLET_SERVER_PORT, String.valueOf(availablePort.getPort()));
+            tabletServerConf.setString(
+                    ConfigOptions.BIND_LISTENER, Endpoint.toListenerString(endpoints));
+            tabletServerConf.set(ConfigOptions.INTERNAL_LISTENER_NAME, internalListnerName);
             tabletServerConf.set(ConfigOptions.DATA_DIR, dataDir);
             tabletServerConf.setString(
                     ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
@@ -265,16 +303,11 @@ public final class FlussClusterExtension
 
             tabletServer = new TabletServer(tabletServerConf);
             tabletServer.start();
-            serverNode =
-                    new ServerNode(
-                            serverId,
-                            HOST_ADDRESS,
-                            availablePort.getPort(),
-                            ServerType.TABLET_SERVER);
+            serverInfo = new ServerInfo(serverId, endpoints, ServerType.TABLET_SERVER);
         }
 
         tabletServers.put(serverId, tabletServer);
-        tabletServerNodes.add(serverNode);
+        tabletServerInfo.add(serverInfo);
     }
 
     private String getDataDir(int serverId) {
@@ -299,7 +332,7 @@ public final class FlussClusterExtension
             throw new IllegalArgumentException("Tablet server " + serverId + " does not exist.");
         }
         tabletServers.remove(serverId).close();
-        tabletServerNodes.removeIf(node -> node.id() == serverId);
+        tabletServerInfo.removeIf(node -> node.id() == serverId);
     }
 
     public Configuration getClientConfig() {
@@ -310,7 +343,8 @@ public final class FlussClusterExtension
                 Collections.singletonList(
                         String.format(
                                 "%s:%d",
-                                coordinatorServerNode.host(), coordinatorServerNode.port())));
+                                getCoordinatorServerNode(false).host(),
+                                getCoordinatorServerNode(false).port())));
 
         // set a small memory buffer for testing.
         flussConf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("2mb"));
@@ -323,16 +357,43 @@ public final class FlussClusterExtension
         return tabletServers.get(serverId);
     }
 
-    public ServerNode getCoordinatorServerNode() {
-        return coordinatorServerNode;
+    public ServerInfo getCoordinatorServerInfo() {
+        return coordinatorServerInfo;
+    }
+
+    public List<ServerInfo> getTabletServerInfo() {
+        return tabletServerInfo;
+    }
+
+    public ServerNode getCoordinatorServerNode(boolean isInternal) {
+        Endpoint clientEndpoint =
+                coordinatorServerInfo.endpoint(
+                        isInternal ? internalListnerName : clientListenerName);
+        return new ServerNode(
+                coordinatorServerInfo.id(),
+                clientEndpoint.getHost(),
+                clientEndpoint.getPort(),
+                ServerType.COORDINATOR);
     }
 
     public Set<TabletServer> getTabletServers() {
         return new HashSet<>(tabletServers.values());
     }
 
-    public List<ServerNode> getTabletServerNodes() {
-        return tabletServerNodes;
+    public List<ServerNode> getTabletServerNodes(boolean isInternal) {
+        return tabletServerInfo.stream()
+                .map(
+                        node -> {
+                            Endpoint endpoint =
+                                    node.endpoint(
+                                            isInternal ? internalListnerName : clientListenerName);
+                            return new ServerNode(
+                                    node.id(),
+                                    endpoint.getHost(),
+                                    endpoint.getPort(),
+                                    ServerType.TABLET_SERVER);
+                        })
+                .collect(Collectors.toList());
     }
 
     public ZooKeeperClient getZooKeeperClient() {
@@ -343,20 +404,24 @@ public final class FlussClusterExtension
         return rpcClient;
     }
 
-    public CoordinatorGateway newCoordinatorClient() {
+    public CoordinatorGateway newCoordinatorClient(boolean isInternal) {
         return GatewayClientProxy.createGatewayProxy(
-                this::getCoordinatorServerNode, rpcClient, CoordinatorGateway.class);
+                () -> getCoordinatorServerNode(isInternal), rpcClient, CoordinatorGateway.class);
     }
 
-    public TabletServerGateway newTabletServerClientForNode(int serverId) {
+    public TabletServerGateway newTabletServerClientForNode(int serverId, boolean isInternal) {
         final ServerNode serverNode =
-                tabletServerNodes.stream()
+                getTabletServerNodes(isInternal).stream()
                         .filter(n -> n.id() == serverId)
                         .findFirst()
                         .orElseThrow(
                                 () ->
                                         new IllegalArgumentException(
                                                 "Tablet server " + serverId + " does not exist."));
+        return newTabletServerClientForNode(serverNode);
+    }
+
+    private TabletServerGateway newTabletServerClientForNode(ServerNode serverNode) {
         return GatewayClientProxy.createGatewayProxy(
                 () -> serverNode, rpcClient, TabletServerGateway.class);
     }
@@ -376,14 +441,14 @@ public final class FlussClusterExtension
                         ServerNode coordinatorNode =
                                 toServerNode(
                                         response.getCoordinatorServer(), ServerType.COORDINATOR);
-                        assertThat(coordinatorNode).isEqualTo(getCoordinatorServerNode());
+                        assertThat(coordinatorNode).isEqualTo(getCoordinatorServerNode(true));
                         // check tablet server nodes
                         List<ServerNode> tsNodes =
                                 response.getTabletServersList().stream()
                                         .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
                                         .collect(Collectors.toList());
                         assertThat(tsNodes)
-                                .containsExactlyInAnyOrderElementsOf(getTabletServerNodes());
+                                .containsExactlyInAnyOrderElementsOf(getTabletServerNodes(true));
                     });
         }
     }
@@ -584,10 +649,10 @@ public final class FlussClusterExtension
 
     private List<AdminReadOnlyGateway> collectAllRpcGateways() {
         List<AdminReadOnlyGateway> rpcServiceBases = new ArrayList<>();
-        rpcServiceBases.add(newCoordinatorClient());
+        rpcServiceBases.add(newCoordinatorClient(true));
         rpcServiceBases.addAll(
-                getTabletServerNodes().stream()
-                        .map(n -> newTabletServerClientForNode(n.id()))
+                getTabletServerNodes(true).stream()
+                        .map(this::newTabletServerClientForNode)
                         .collect(Collectors.toList()));
         return rpcServiceBases;
     }
@@ -601,6 +666,9 @@ public final class FlussClusterExtension
     /** Builder for {@link FlussClusterExtension}. */
     public static class Builder {
         private int numOfTabletServers = 1;
+        private String clientListenerName = "FLUSS";
+        private String internalListenerName = "FLUSS";
+
         private final Configuration clusterConf = new Configuration();
 
         public Builder() {
@@ -621,8 +689,21 @@ public final class FlussClusterExtension
             return this;
         }
 
+        /** Sets the listener name for client. */
+        public Builder setClientListenerName(String clientListenerName) {
+            this.clientListenerName = clientListenerName;
+            return this;
+        }
+
+        /** Sets the listener name for internal. */
+        public Builder setInternalListenerName(String internalListenerName) {
+            this.internalListenerName = internalListenerName;
+            return this;
+        }
+
         public FlussClusterExtension build() {
-            return new FlussClusterExtension(numOfTabletServers, clusterConf);
+            return new FlussClusterExtension(
+                    numOfTabletServers, clientListenerName, internalListenerName, clusterConf);
         }
     }
 }

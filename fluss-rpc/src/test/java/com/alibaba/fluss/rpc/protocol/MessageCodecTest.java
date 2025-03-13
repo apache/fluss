@@ -60,7 +60,8 @@ class MessageCodecTest {
         this.serverHandler =
                 new NettyServerHandler(
                         new RequestChannel[] {requestChannel},
-                        new ApiManager(ServerType.TABLET_SERVER));
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "CLIENT");
         this.ctx = mockChannelHandlerContext();
     }
 

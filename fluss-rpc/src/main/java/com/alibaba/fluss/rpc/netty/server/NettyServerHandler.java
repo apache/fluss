@@ -46,11 +46,14 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private final RequestChannel[] requestChannels;
     private final int numChannels;
     private final ApiManager apiManager;
+    private final String listenerName;
 
-    public NettyServerHandler(RequestChannel[] requestChannels, ApiManager apiManager) {
+    public NettyServerHandler(
+            RequestChannel[] requestChannels, ApiManager apiManager, String listenerName) {
         this.requestChannels = requestChannels;
         this.numChannels = requestChannels.length;
         this.apiManager = apiManager;
+        this.listenerName = listenerName;
     }
 
     @Override
@@ -82,7 +85,15 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             }
 
             RpcRequest request =
-                    new RpcRequest(apiKey, apiVersion, requestId, api, requestMessage, buffer, ctx);
+                    new RpcRequest(
+                            apiKey,
+                            apiVersion,
+                            requestId,
+                            api,
+                            requestMessage,
+                            buffer,
+                            listenerName,
+                            ctx);
             // TODO: we can introduce a smarter and dynamic strategy to distribute requests to
             //  channels
             int channelIndex =

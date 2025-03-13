@@ -56,8 +56,8 @@ class CoordinatorServerITCase extends ServerITCaseBase {
     @Override
     protected Configuration getServerConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.COORDINATOR_PORT, getPort() + "");
-        conf.set(ConfigOptions.COORDINATOR_HOST, HOSTNAME);
+        String listenerNames = String.format("CLIENT://%s:%d", HOSTNAME, getPort());
+        conf.set(ConfigOptions.BIND_LISTENER, listenerNames);
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;
     }

@@ -82,7 +82,7 @@ public class AdjustIsrITCase {
 
         // send one batch data to check the stop follower will become out of sync replica.
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
         RpcMessageTestUtils.assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(
@@ -153,7 +153,7 @@ public class AdjustIsrITCase {
                 isr.stream().filter(i -> i != leader).collect(Collectors.toList());
         followerSet.forEach(unchecked(FLUSS_CLUSTER_EXTENSION::stopTabletServer));
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
         RpcMessageTestUtils.assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(

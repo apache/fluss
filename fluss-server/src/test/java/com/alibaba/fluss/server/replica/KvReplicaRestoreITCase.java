@@ -144,7 +144,7 @@ class KvReplicaRestoreITCase {
                         + newLeaderServer.get());
         // wait the new replica become leader
         TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeaderServer.get());
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeaderServer.get(), true);
 
         // although the records have been put into kv, but has been written to log,
         // once restore in another server, it should also restore the records to kv
@@ -211,7 +211,7 @@ class KvReplicaRestoreITCase {
                 newPutKvRequest(
                         tableBucket.getTableId(), tableBucket.getBucket(), -1, kvRecordBatch);
         TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer, true);
         leaderGateway.putKv(putKvRequest);
     }
 }

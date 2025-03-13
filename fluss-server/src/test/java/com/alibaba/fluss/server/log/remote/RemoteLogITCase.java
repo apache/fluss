@@ -66,7 +66,7 @@ public class RemoteLogITCase {
                 Objects.requireNonNull(
                         FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb).getLeaderId());
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
         // produce many records to trigger remote log copy.
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(
@@ -92,7 +92,7 @@ public class RemoteLogITCase {
         assertThat(fileSystem.exists(fsPath)).isTrue();
         assertThat(fileSystem.listStatus(fsPath).length).isGreaterThan(1);
 
-        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(false);
         coordinatorGateway
                 .dropTable(
                         newDropTableRequest(
@@ -122,7 +122,7 @@ public class RemoteLogITCase {
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(follower);
 
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
         // produce many records to trigger remote log copy.
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(

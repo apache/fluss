@@ -37,6 +37,7 @@ public final class RpcRequest {
     private final ApiMethod apiMethod;
     private final ApiMessage message;
     private final ByteBuf buffer;
+    private final String listenerName;
     private final ChannelHandlerContext channelContext;
 
     // the time when the request is received by server
@@ -49,6 +50,7 @@ public final class RpcRequest {
             ApiMethod apiMethod,
             ApiMessage message,
             ByteBuf buffer,
+            String listenerName,
             ChannelHandlerContext channelContext) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
@@ -56,6 +58,7 @@ public final class RpcRequest {
         this.apiMethod = apiMethod;
         this.message = message;
         this.buffer = checkNotNull(buffer);
+        this.listenerName = listenerName;
         this.channelContext = channelContext;
         this.startTimeMs = System.currentTimeMillis();
     }
@@ -68,6 +71,7 @@ public final class RpcRequest {
         this.apiMethod = apiMethod;
         this.message = null;
         this.buffer = null;
+        this.listenerName = null;
         this.channelContext = null;
         this.startTimeMs = System.currentTimeMillis();
     }
@@ -106,6 +110,10 @@ public final class RpcRequest {
         return startTimeMs;
     }
 
+    public String getListenerName() {
+        return listenerName;
+    }
+
     @Override
     public String toString() {
         return "RpcRequest{"
@@ -115,6 +123,8 @@ public final class RpcRequest {
                 + apiVersion
                 + ", requestId="
                 + requestId
+                + ", listenerName="
+                + listenerName
                 + '}';
     }
 }

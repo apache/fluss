@@ -20,9 +20,9 @@ import com.alibaba.fluss.annotation.Internal;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The metadata cache to cache the cluster metadata info.
@@ -38,7 +38,7 @@ public interface MetadataCache {
      * @return the coordinator server node
      */
     @Nullable
-    ServerNode getCoordinatorServer();
+    ServerNode getCoordinatorServer(String listenerName);
 
     /**
      * Check whether the tablet server id related tablet server node is alive.
@@ -55,21 +55,24 @@ public interface MetadataCache {
      * @return the tablet server node
      */
     @Nullable
-    ServerNode getTabletServer(int serverId);
+    ServerNode getTabletServer(int serverId, String listenerName);
 
     /**
      * Get all alive tablet server nodes.
      *
      * @return all alive tablet server nodes
      */
-    Map<Integer, ServerNode> getAllAliveTabletServers();
+    Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName);
+
+    Set<Integer> getAliveTabletServerIds();
 
     /** Get ids of all alive tablet server nodes. */
     default int[] getLiveServerIds() {
-        List<ServerNode> serverNodes = new ArrayList<>(getAllAliveTabletServers().values());
-        int[] server = new int[serverNodes.size()];
-        for (int i = 0; i < serverNodes.size(); i++) {
-            server[i] = serverNodes.get(i).id();
+        Set<Integer> aliveTabletServerIds = getAliveTabletServerIds();
+        int[] server = new int[aliveTabletServerIds.size()];
+        Iterator<Integer> iterator = aliveTabletServerIds.iterator();
+        for (int i = 0; i < aliveTabletServerIds.size(); i++) {
+            server[i] = iterator.next();
         }
         return server;
     }

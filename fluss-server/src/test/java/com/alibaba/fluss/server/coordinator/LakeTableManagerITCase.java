@@ -56,7 +56,7 @@ class LakeTableManagerITCase {
 
     @Test
     void testCreateAndGetTable() throws Exception {
-        AdminGateway adminGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        AdminGateway adminGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(false);
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())

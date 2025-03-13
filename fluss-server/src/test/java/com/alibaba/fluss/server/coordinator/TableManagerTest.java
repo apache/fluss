@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -27,6 +26,7 @@ import com.alibaba.fluss.server.coordinator.event.TestingEventManager;
 import com.alibaba.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import com.alibaba.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import com.alibaba.fluss.server.entity.DeleteReplicaResultForBucket;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -196,9 +196,9 @@ class TableManagerTest {
 
         // restart table manager, it should resume table delete
         // set coordinator context manually to make sure the followup delete can success
-        List<ServerNode> serverNodes = CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2));
+        List<ServerInfo> serverInfos = CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2));
         // set live tablet servers
-        coordinatorContext.setLiveTabletServers(serverNodes);
+        coordinatorContext.setLiveTabletServers(serverInfos);
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
 

@@ -17,7 +17,6 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -25,6 +24,7 @@ import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.coordinator.statemachine.BucketState;
 import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.utils.types.Tuple2;
 
@@ -63,7 +63,7 @@ public class CoordinatorContext {
     // a success deletion.
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
-    private final Map<Integer, ServerNode> liveTabletServers = new HashMap<>();
+    private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
 
     // a map from the table bucket to the state of the bucket.
     private final Map<TableBucket, BucketState> bucketStates = new HashMap<>();
@@ -105,18 +105,18 @@ public class CoordinatorContext {
         return coordinatorEpoch;
     }
 
-    public Map<Integer, ServerNode> getLiveTabletServers() {
+    public Map<Integer, ServerInfo> getLiveTabletServers() {
         return liveTabletServers;
     }
 
     @VisibleForTesting
-    public void setLiveTabletServers(List<ServerNode> servers) {
+    public void setLiveTabletServers(List<ServerInfo> servers) {
         liveTabletServers.clear();
         servers.forEach(server -> liveTabletServers.put(server.id(), server));
     }
 
-    public void addLiveTabletServer(ServerNode serverNode) {
-        this.liveTabletServers.put(serverNode.id(), serverNode);
+    public void addLiveTabletServer(ServerInfo serverInfo) {
+        this.liveTabletServers.put(serverInfo.id(), serverInfo);
     }
 
     public void removeLiveTabletServer(int serverId) {

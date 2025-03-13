@@ -16,11 +16,11 @@
 
 package com.alibaba.fluss.server;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussException;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
-import com.alibaba.fluss.server.tablet.TabletServer;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -29,6 +29,10 @@ import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -86,22 +90,40 @@ public abstract class ServerTestBase {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
-        configuration.setString(ConfigOptions.COORDINATOR_HOST, "127.0.0.1");
-        // randomize the coordinator port
-        configuration.setString(ConfigOptions.COORDINATOR_PORT, "0");
+        configuration.setString(
+                ConfigOptions.BIND_LISTENER, "CLIENT://localhost:0,INTERNAL://localhost:0");
+        configuration.setString(ConfigOptions.ADVERTISED_LISTENER, "CLIENT://198.168.0.1:100");
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return configuration;
+    }
+
+    protected void verifyEndpoint(
+            List<Endpoint> registeredEndpoints, List<Endpoint> bindEndpoints) {
+        Map<String, Endpoint> bindEndpointMap =
+                bindEndpoints.stream()
+                        .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
+        Map<String, Endpoint> advisedEndpoints =
+                Endpoint.parseEndpoints(
+                                createConfiguration().getString(ConfigOptions.ADVERTISED_LISTENER))
+                        .stream()
+                        .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
+        assertThat(registeredEndpoints).hasSameSizeAs(bindEndpoints);
+
+        registeredEndpoints.forEach(
+                endpoint -> {
+                    if (advisedEndpoints.containsKey(endpoint.getListenerName())) {
+                        assertThat(endpoint)
+                                .isEqualTo(advisedEndpoints.get(endpoint.getListenerName()));
+                    } else {
+                        assertThat(endpoint)
+                                .isEqualTo(bindEndpointMap.get(endpoint.getListenerName()));
+                    }
+                });
     }
 
     public static CoordinatorServer startCoordinatorServer(Configuration conf) throws Exception {
         CoordinatorServer coordinatorServer = new CoordinatorServer(conf);
         coordinatorServer.start();
         return coordinatorServer;
-    }
-
-    public static TabletServer startTabletServer(Configuration conf) throws Exception {
-        TabletServer tabletServer = new TabletServer(conf);
-        tabletServer.start();
-        return tabletServer;
     }
 }

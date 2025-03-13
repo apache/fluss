@@ -44,6 +44,7 @@ import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.PbBucketMetadata;
 import com.alibaba.fluss.rpc.messages.PbPartitionMetadata;
 import com.alibaba.fluss.rpc.messages.PbTableMetadata;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
@@ -103,6 +104,9 @@ class TableManagerITCase {
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConf())
+                    // use different listener name to show all the metadata.
+                    .setClientListenerName("client")
+                    .setInternalListenerName("internal")
                     .build();
 
     private static Configuration initConf() {
@@ -119,7 +123,7 @@ class TableManagerITCase {
 
     @Test
     void testCreateInvalidDatabaseAndTable() {
-        AdminGateway adminGateway = getAdminGateway();
+        AdminGateway adminGateway = getAdminGateway(true);
         assertThatThrownBy(
                         () ->
                                 adminGateway
@@ -160,12 +164,12 @@ class TableManagerITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testDatabaseManagement(boolean isCoordinatorServer) throws Exception {
-        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer, true);
         String db1 = "db1";
         assertThat(gateway.databaseExists(newDatabaseExistsRequest(db1)).get().isExists())
                 .isFalse();
 
-        AdminGateway adminGateway = getAdminGateway();
+        AdminGateway adminGateway = getAdminGateway(true);
         // create the database, should success
 
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
@@ -224,8 +228,8 @@ class TableManagerITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testTableManagement(boolean isCoordinatorServer) throws Exception {
-        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
-        AdminGateway adminGateway = getAdminGateway();
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer, true);
+        AdminGateway adminGateway = getAdminGateway(true);
 
         String db1 = "db1";
         String tb1 = "tb1";
@@ -338,7 +342,7 @@ class TableManagerITCase {
     @ParameterizedTest
     @EnumSource(AutoPartitionTimeUnit.class)
     void testPartitionedTableManagement(AutoPartitionTimeUnit timeUnit) throws Exception {
-        AdminGateway adminGateway = getAdminGateway();
+        AdminGateway adminGateway = getAdminGateway(true);
         String db1 = "db1";
         String tb1 = "tb1_" + timeUnit.name();
         TablePath tablePath = TablePath.of(db1, tb1);
@@ -386,7 +390,7 @@ class TableManagerITCase {
 
     @Test
     void testCreateInvalidPartitionedTable() throws Exception {
-        AdminGateway adminGateway = getAdminGateway();
+        AdminGateway adminGateway = getAdminGateway(true);
         String db1 = "db1";
         String tb1 = "tb1";
         TablePath tablePath = TablePath.of(db1, tb1);
@@ -427,8 +431,8 @@ class TableManagerITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testMetadata(boolean isCoordinatorServer) throws Exception {
-        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
-        AdminGateway adminGateway = getAdminGateway();
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer, true);
+        AdminGateway adminGateway = getAdminGateway(true);
 
         String db1 = "db1";
         String tb1 = "tb1";
@@ -463,8 +467,8 @@ class TableManagerITCase {
         // now, check the table buckets metadata
         assertThat(tableMetadata.getBucketMetadatasCount()).isEqualTo(expectBucketCount);
 
-        List<ServerNode> tabletServerNodes = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
-        ServerNode coordinatorServerNode = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode();
+        List<ServerInfo> tabletServerInfos = FLUSS_CLUSTER_EXTENSION.getTabletServerInfo();
+        ServerInfo coordinatorServerInfo = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerInfo();
 
         checkBucketMetadata(expectBucketCount, tableMetadata.getBucketMetadatasList());
 
@@ -472,15 +476,16 @@ class TableManagerITCase {
         // we should get the same response
         gateway.updateMetadata(
                         makeUpdateMetadataRequest(
-                                Optional.of(coordinatorServerNode),
-                                new HashSet<>(tabletServerNodes)))
+                                Optional.of(coordinatorServerInfo),
+                                new HashSet<>(tabletServerInfos)))
                 .get();
 
+        // test lookup metadata from internal view
         metadataResponse =
                 gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
         // check coordinator server
         assertThat(toServerNode(metadataResponse.getCoordinatorServer(), ServerType.COORDINATOR))
-                .isEqualTo(coordinatorServerNode);
+                .isEqualTo(coordinatorServerInfo.toServerNode("internal"));
         assertThat(metadataResponse.getTabletServersCount()).isEqualTo(3);
         List<ServerNode> tsNodes =
                 metadataResponse.getTabletServersList().stream()
@@ -488,14 +493,32 @@ class TableManagerITCase {
                         .collect(Collectors.toList());
         assertThat(tsNodes)
                 .containsExactlyInAnyOrderElementsOf(
-                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(true));
+
+        // test lookup metadata from client view
+        AdminGateway adminGatewayForClient = getAdminGateway(false);
+        metadataResponse =
+                adminGatewayForClient
+                        .metadata(newMetadataRequest(Collections.singletonList(tablePath)))
+                        .get();
+        // check coordinator server
+        assertThat(toServerNode(metadataResponse.getCoordinatorServer(), ServerType.COORDINATOR))
+                .isEqualTo(coordinatorServerInfo.toServerNode("client"));
+        assertThat(metadataResponse.getTabletServersCount()).isEqualTo(3);
+        tsNodes =
+                metadataResponse.getTabletServersList().stream()
+                        .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
+                        .collect(Collectors.toList());
+        assertThat(tsNodes)
+                .containsExactlyInAnyOrderElementsOf(
+                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(false));
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testMetadataWithPartition(boolean isCoordinatorServer) throws Exception {
-        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
-        AdminGateway adminGateway = getAdminGateway();
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer, true);
+        AdminGateway adminGateway = getAdminGateway(true);
         String db1 = "db1";
         String tb1 = "tb1";
         // create a partitioned table, and request a not exist partition, should throw partition not
@@ -559,7 +582,7 @@ class TableManagerITCase {
 
     private void checkBucketMetadata(int expectBucketCount, List<PbBucketMetadata> bucketMetadata) {
         Set<Integer> liveServers =
-                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().stream()
+                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(true).stream()
                         .map(ServerNode::id)
                         .collect(Collectors.toSet());
         for (int i = 0; i < expectBucketCount; i++) {
@@ -584,16 +607,17 @@ class TableManagerITCase {
         }
     }
 
-    private AdminReadOnlyGateway getAdminOnlyGateway(boolean isCoordinatorServer) {
+    private AdminReadOnlyGateway getAdminOnlyGateway(
+            boolean isCoordinatorServer, boolean isInternal) {
         if (isCoordinatorServer) {
-            return getAdminGateway();
+            return getAdminGateway(isInternal);
         } else {
-            return FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(0);
+            return FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(0, isInternal);
         }
     }
 
-    private AdminGateway getAdminGateway() {
-        return FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+    private AdminGateway getAdminGateway(boolean isInternal) {
+        return FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(isInternal);
     }
 
     public static List<String> getExpectAddedPartitions(

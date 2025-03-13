@@ -64,11 +64,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * CoordinatorServer and TabletServer.
  */
 public abstract class ClientToServerITCaseBase {
+    protected static final String INTERNAL_LISTENER_NAME = "internal";
+    protected static final String CLIENT_LISTENER_NAME = "client";
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
+                    .setInternalListenerName(INTERNAL_LISTENER_NAME)
+                    .setClientListenerName(CLIENT_LISTENER_NAME)
                     .setClusterConf(initConfig())
                     .build();
 

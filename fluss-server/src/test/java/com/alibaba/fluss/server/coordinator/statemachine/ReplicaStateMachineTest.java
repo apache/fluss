@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator.statemachine;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -30,6 +30,7 @@ import com.alibaba.fluss.server.coordinator.CoordinatorTestUtils;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import com.alibaba.fluss.server.entity.DeleteReplicaResultForBucket;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
@@ -60,8 +61,12 @@ class ReplicaStateMachineTest {
         // bucket0 has two replicas, put them into context
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(1, 2));
         // only server1 is alive
-        List<ServerNode> liveServers =
-                Collections.singletonList(new ServerNode(1, "host", 23, ServerType.TABLET_SERVER));
+        List<ServerInfo> liveServers =
+                Collections.singletonList(
+                        new ServerInfo(
+                                1,
+                                Endpoint.parseEndpoints("CLIENT://host:23"),
+                                ServerType.TABLET_SERVER));
         coordinatorContext.setLiveTabletServers(liveServers);
 
         // now, create the state machine with the context

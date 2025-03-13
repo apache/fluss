@@ -102,7 +102,8 @@ final class RequestProcessor implements Runnable {
         ApiMethod api = request.getApiMethod();
         ApiMessage message = request.getMessage();
         try {
-            service.setCurrentApiVersion(request.getApiVersion());
+            service.setCurrentSession(
+                    new Session(request.getApiVersion(), request.getListenerName()));
             // invoke the corresponding method on RpcGateway instance.
             CompletableFuture<?> responseFuture =
                     (CompletableFuture<?>) api.getMethod().invoke(service, message);

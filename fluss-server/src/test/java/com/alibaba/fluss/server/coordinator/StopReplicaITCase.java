@@ -62,7 +62,7 @@ public class StopReplicaITCase {
     @BeforeEach
     void beforeEach() {
         zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(true);
     }
 
     @ParameterizedTest

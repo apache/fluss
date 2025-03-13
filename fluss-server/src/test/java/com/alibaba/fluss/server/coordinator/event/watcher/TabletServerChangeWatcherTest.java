@@ -16,12 +16,13 @@
 
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
 import com.alibaba.fluss.server.coordinator.event.DeadTabletServerEvent;
 import com.alibaba.fluss.server.coordinator.event.NewTabletServerEvent;
 import com.alibaba.fluss.server.coordinator.event.TestingEventManager;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
@@ -60,13 +62,14 @@ class TabletServerChangeWatcherTest {
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             TabletServerRegistration tabletServerRegistration =
-                    new TabletServerRegistration("host" + i, 1234, System.currentTimeMillis());
+                    new TabletServerRegistration(
+                            Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
+                            System.currentTimeMillis());
             expectedEvents.add(
                     new NewTabletServerEvent(
-                            new ServerNode(
+                            new ServerInfo(
                                     i,
-                                    tabletServerRegistration.getHost(),
-                                    tabletServerRegistration.getPort(),
+                                    tabletServerRegistration.getEndpoints(),
                                     ServerType.TABLET_SERVER)));
             zookeeperClient.registerTabletServer(i, tabletServerRegistration);
         }

@@ -181,6 +181,7 @@ public class ReplicaManager {
 
     // for metrics
     private final TabletServerMetricGroup serverMetricGroup;
+    private final String internalListenerName;
 
     private final Clock clock;
 
@@ -268,6 +269,7 @@ public class ReplicaManager {
                         zkClient, completedKvSnapshotCommitter, kvSnapshotResource, conf);
         this.remoteLogManager = remoteLogManager;
         this.serverMetricGroup = serverMetricGroup;
+        this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.clock = clock;
         registerMetrics();
     }
@@ -814,7 +816,8 @@ public class ReplicaManager {
                                 serverId, replica.getTableBucket()));
             }
 
-            ServerNode leader = metadataCache.getTabletServer(leaderId);
+            // fetch from leader server node with internal endpoint.
+            ServerNode leader = metadataCache.getTabletServer(leaderId, internalListenerName);
             if (leader == null) {
                 throw new NotLeaderOrFollowerException(
                         String.format(

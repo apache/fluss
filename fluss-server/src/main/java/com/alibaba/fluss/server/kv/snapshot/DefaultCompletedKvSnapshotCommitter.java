@@ -45,9 +45,9 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
     }
 
     public static DefaultCompletedKvSnapshotCommitter create(
-            RpcClient rpcClient, MetadataCache metadataCache) {
+            RpcClient rpcClient, MetadataCache metadataCache, String interListenerName) {
         CoordinatorServerSupplier coordinatorServerSupplier =
-                new CoordinatorServerSupplier(metadataCache);
+                new CoordinatorServerSupplier(metadataCache, interListenerName);
         return new DefaultCompletedKvSnapshotCommitter(
                 GatewayClientProxy.createGatewayProxy(
                         coordinatorServerSupplier, rpcClient, CoordinatorGateway.class));
@@ -69,14 +69,16 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
         private static final int BACK_OFF_MILLS = 500;
 
         private final MetadataCache metadataCache;
+        private final String interListenerName;
 
-        public CoordinatorServerSupplier(MetadataCache metadataCache) {
+        public CoordinatorServerSupplier(MetadataCache metadataCache, String interListenerName) {
             this.metadataCache = metadataCache;
+            this.interListenerName = interListenerName;
         }
 
         @Override
         public ServerNode get() {
-            ServerNode serverNode = metadataCache.getCoordinatorServer();
+            ServerNode serverNode = metadataCache.getCoordinatorServer(interListenerName);
             if (serverNode == null) {
                 LOG.info("No coordinator provided, retrying after backoff.");
                 // backoff some times

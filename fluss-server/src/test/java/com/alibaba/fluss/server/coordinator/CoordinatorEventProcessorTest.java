@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
@@ -37,6 +37,7 @@ import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
@@ -94,6 +95,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
 class CoordinatorEventProcessorTest {
+    private static final String INTERNAL_LISTENER_NAME = "fluss";
 
     private static final int N_BUCKETS = 3;
     private static final int REPLICATION_FACTOR = 3;
@@ -133,7 +135,11 @@ class CoordinatorEventProcessorTest {
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(
-                    i, new TabletServerRegistration("host" + i, 1000, System.currentTimeMillis()));
+                    i,
+                    new TabletServerRegistration(
+                            Collections.singletonList(
+                                    new Endpoint("host" + i, 1000, INTERNAL_LISTENER_NAME)),
+                            System.currentTimeMillis()));
         }
     }
 
@@ -153,7 +159,8 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration()
+                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
@@ -222,7 +229,8 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration()
+                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
         initCoordinatorChannel();
         eventProcessor.startup();
         // make sure the table can still be deleted successfully
@@ -278,7 +286,9 @@ class CoordinatorEventProcessorTest {
                         .createZooKeeperClient(NOPErrorHandler.INSTANCE);
         int newlyServerId = 3;
         TabletServerRegistration tabletServerRegistration =
-                new TabletServerRegistration("host3", 1234, System.currentTimeMillis());
+                new TabletServerRegistration(
+                        Endpoint.parseEndpoints(INTERNAL_LISTENER_NAME + "://host3:1234"),
+                        System.currentTimeMillis());
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled
@@ -289,10 +299,11 @@ class CoordinatorEventProcessorTest {
         // verify the context has the exact tablet server
         retryVerifyContext(
                 ctx -> {
-                    ServerNode tabletServer = ctx.getLiveTabletServers().get(newlyServerId);
+                    ServerInfo tabletServer = ctx.getLiveTabletServers().get(newlyServerId);
                     assertThat(tabletServer.id()).isEqualTo(newlyServerId);
-                    assertThat(tabletServer.host()).isEqualTo(tabletServerRegistration.getHost());
-                    assertThat(tabletServer.port()).isEqualTo(tabletServerRegistration.getPort());
+
+                    assertThat(tabletServer.endpoints())
+                            .isEqualTo(tabletServerRegistration.getEndpoints());
                 });
 
         // we try to assign a replica to this newly server, every thing will
@@ -384,7 +395,8 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration()
+                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
 
         // in this test case, so make requests to gateway should always be
         // successful for when start up, it will send request to tablet servers
@@ -429,7 +441,8 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration()
+                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
         int failedServer = 0;
         initCoordinatorChannel(failedServer);
         eventProcessor.startup();
@@ -600,7 +613,8 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration()
+                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
         initCoordinatorChannel();
         eventProcessor.startup();
         verifyPartitionDropped(tableId, partition2Id);
@@ -654,7 +668,8 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration()
+                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
         initCoordinatorChannel();
         eventProcessor.startup();
 

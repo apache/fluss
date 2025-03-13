@@ -16,7 +16,18 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonEncoding;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.util.ByteArrayBuilder;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
 
 /** Test for {@link com.alibaba.fluss.server.zk.data.TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
@@ -29,14 +40,47 @@ public class TabletServerRegistrationJsonSerdeTest
     @Override
     protected TabletServerRegistration[] createObjects() {
         TabletServerRegistration tabletServerRegistration =
-                new TabletServerRegistration("localhost", 2345, 10000);
+                new TabletServerRegistration(
+                        Endpoint.parseEndpoints("CLIENT://localhost:2345"), 10000);
         return new TabletServerRegistration[] {tabletServerRegistration};
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"host\":\"localhost\",\"port\":2345,\"register_timestamp\":10000}"
+            "{\"version\":2,\"listeners\":\"CLIENT://localhost:2345\",\"register_timestamp\":10000}"
         };
+    }
+
+    @Test
+    void testCompatibility() throws IOException {
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode jsonInVersion1 = objectMapper.readTree(serializeInVersion1(objectMapper));
+
+        TabletServerRegistration tabletServerRegistration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion1);
+        TabletServerRegistration expectedTabletServerRegistration =
+                new TabletServerRegistration(
+                        Endpoint.parseEndpoints("CLIENT://localhost:1001"), 10000);
+        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+    }
+
+    private byte[] serializeInVersion1(ObjectMapper objectMapper) {
+        try (ByteArrayBuilder bb =
+                new ByteArrayBuilder(objectMapper.getFactory()._getBufferRecycler())) {
+            JsonGenerator generator = objectMapper.createGenerator(bb, JsonEncoding.UTF8);
+            generator.writeStartObject();
+            generator.writeNumberField("version", 1);
+            generator.writeStringField("host", "localhost");
+            generator.writeNumberField("port", 1001);
+            generator.writeNumberField("register_timestamp", 10000);
+            generator.writeEndObject();
+            generator.close();
+            final byte[] result = bb.toByteArray();
+            bb.release();
+            return result;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 }

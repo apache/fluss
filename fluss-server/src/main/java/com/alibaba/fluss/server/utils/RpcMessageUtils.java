@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.utils;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.fs.FsPath;
@@ -126,6 +127,7 @@ import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -206,15 +208,14 @@ public class RpcMessageUtils {
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public static UpdateMetadataRequest makeUpdateMetadataRequest(
-            Optional<ServerNode> coordinatorServer, Set<ServerNode> aliveTableServers) {
+            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTableServers) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
-        for (ServerNode serverNode : aliveTableServers) {
+        for (ServerInfo serverInfo : aliveTableServers) {
             aliveTableServerNodes.add(
                     new PbServerNode()
-                            .setNodeId(serverNode.id())
-                            .setHost(serverNode.host())
-                            .setPort(serverNode.port()));
+                            .setNodeId(serverInfo.id())
+                            .setListeners(Endpoint.toListenerString(serverInfo.endpoints())));
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         coordinatorServer.map(
@@ -222,8 +223,7 @@ public class RpcMessageUtils {
                         updateMetadataRequest
                                 .setCoordinatorServer()
                                 .setNodeId(node.id())
-                                .setHost(node.host())
-                                .setPort(node.port()));
+                                .setListeners(Endpoint.toListenerString(node.endpoints())));
         return updateMetadataRequest;
     }
 
