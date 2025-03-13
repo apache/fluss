@@ -17,8 +17,10 @@
 package com.alibaba.fluss.client.table.scanner.log;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.metrics.Metric;
 
 import java.time.Duration;
+import java.util.Map;
 
 /**
  * The scanner is used to scan log data of specify table from Fluss.
@@ -120,4 +122,7 @@ public interface LogScanner extends AutoCloseable {
      * #poll(Duration timeout)}.
      */
     void wakeup();
+
+    /** Get the metrics of the log scanner. */
+    public Map<String, ? extends Metric> metrics();
 }

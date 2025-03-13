@@ -23,13 +23,17 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
 import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
+import com.alibaba.fluss.metrics.Gauge;
 import com.alibaba.fluss.metrics.Histogram;
 import com.alibaba.fluss.metrics.MeterView;
+import com.alibaba.fluss.metrics.Metric;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.ThreadSafeSimpleCounter;
 import com.alibaba.fluss.metrics.groups.AbstractMetricGroup;
+import com.alibaba.fluss.metrics.groups.GenericMetricGroup;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static com.alibaba.fluss.metrics.utils.MetricGroupUtils.makeScope;
@@ -56,6 +60,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     private volatile double pollIdleRatio;
     private volatile long lastPollMs;
     private volatile long pollStartMs;
+    private final Map<Integer, GenericMetricGroup> buckets = new HashMap<>();
 
     public ScannerMetricGroup(ClientMetricGroup parent, TablePath tablePath) {
         super(parent.getMetricRegistry(), makeScope(parent, NAME), parent);
@@ -121,6 +126,19 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
         return (System.currentTimeMillis() - lastPollMs) / 1000;
     }
 
+    public void recordBucketLag(int bucketId, long lag) {
+        buckets.computeIfAbsent(
+                bucketId,
+                (bucket) -> new GenericMetricGroup(registry, this, String.valueOf(bucketId)));
+        Metric metric = buckets.get(bucketId).metrics().get(bucketRecordsLagMetricName(bucketId));
+        if (metric == null) {
+            SimpleGauge simpleGauge = new SimpleGauge(lag);
+            buckets.get(bucketId).gauge(bucketRecordsLagMetricName(bucketId), simpleGauge);
+        } else {
+            ((SimpleGauge) metric).setValue(lag);
+        }
+    }
+
     @Override
     protected String getGroupName(CharacterFilter filter) {
         return NAME;
@@ -130,5 +148,33 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     protected final void putVariables(Map<String, String> variables) {
         variables.put("database", tablePath.getDatabaseName());
         variables.put("table", tablePath.getTableName());
+    }
+
+    private static String bucketRecordsLagMetricName(int bucketId) {
+        return bucketId + ".records-lag";
+    }
+
+    @Override
+    public Map<String, Metric> metrics() {
+        Map<String, Metric> allMetric = new HashMap<>(super.metrics());
+        buckets.forEach((key, value) -> allMetric.putAll(value.metrics()));
+        return allMetric;
+    }
+
+    private static class SimpleGauge implements Gauge<Long> {
+        private long value;
+
+        public SimpleGauge(long value) {
+            this.value = value;
+        }
+
+        @Override
+        public Long getValue() {
+            return value;
+        }
+
+        public void setValue(long value) {
+            this.value = value;
+        }
     }
 }

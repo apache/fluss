@@ -330,6 +330,9 @@ public class LogFetcher implements Closeable {
                                 logFetchBuffer.add(completedFetch);
                             }
                         }
+                        scannerMetricGroup.recordBucketLag(
+                                tb.getBucket(),
+                                fetchResultForBucket.getHighWatermark() - fetchOffset);
                     }
                 }
             }

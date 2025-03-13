@@ -421,6 +421,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 }
             }
             splitRecords.put(splitId, toRecordAndPos(bucketScanRecords.iterator()));
+            flinkSourceReaderMetrics.maybeAddRecordsLagMetric(logScanner.metrics(), scanBucket);
         }
         Iterator<TableBucket> buckets = tableScanBuckets.iterator();
         Iterator<String> splitIterator =

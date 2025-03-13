@@ -18,6 +18,8 @@ package com.alibaba.fluss.connector.flink.source.metrics;
 
 import com.alibaba.fluss.connector.flink.source.reader.FlinkSourceReader;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metrics.Gauge;
+import com.alibaba.fluss.metrics.Metric;
 
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
@@ -25,8 +27,12 @@ import org.apache.flink.runtime.metrics.MetricNames;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
 /**
  * A collection class for handling metrics in {@link FlinkSourceReader} of Fluss.
@@ -64,8 +70,13 @@ public class FlinkSourceReaderMetrics {
     // Map for tracking current consuming offsets
     private final Map<TableBucket, Long> offsets = new HashMap<>();
 
+    // Map for tracking records lag of tableBucket
+    @Nullable private Map<TableBucket, Metric> recordsLagMetrics;
+
     // For currentFetchEventTimeLag metric
     private volatile long currentFetchEventTimeLag = UNINITIALIZED;
+
+    public static final String RECORDS_LAG = ".records-lag";
 
     public FlinkSourceReaderMetrics(SourceReaderMetricGroup sourceReaderMetricGroup) {
         this.sourceReaderMetricGroup = sourceReaderMetricGroup;
@@ -124,5 +135,52 @@ public class FlinkSourceReaderMetrics {
 
     public SourceReaderMetricGroup getSourceReaderMetricGroup() {
         return sourceReaderMetricGroup;
+    }
+
+    public void maybeAddRecordsLagMetric(Map<String, ? extends Metric> metrics, TableBucket tb) {
+        // Lazily register pendingRecords
+        if (recordsLagMetrics == null) {
+            this.recordsLagMetrics = new ConcurrentHashMap<>();
+            this.sourceReaderMetricGroup.setPendingRecordsGauge(
+                    () -> {
+                        long pendingRecordsTotal = 0;
+                        for (Metric recordsLagMetric : this.recordsLagMetrics.values()) {
+                            pendingRecordsTotal +=
+                                    Long.parseLong(
+                                            ((Gauge<?>) recordsLagMetric).getValue().toString());
+                        }
+                        return pendingRecordsTotal;
+                    });
+        }
+        recordsLagMetrics.computeIfAbsent(tb, (ignored) -> getRecordsLagMetric(metrics, tb));
+    }
+
+    private @Nullable Metric getRecordsLagMetric(
+            Map<String, ? extends Metric> metrics, TableBucket tb) {
+        try {
+            int bucket = tb.getBucket();
+            Predicate<Map.Entry<String, ? extends Metric>> filter =
+                    entry -> {
+                        final String metricName = entry.getKey();
+                        return metricName.equals(bucket + RECORDS_LAG);
+                    };
+            return metrics.entrySet().stream()
+                    .filter(filter)
+                    .map(Map.Entry::getValue)
+                    .findFirst()
+                    .orElseThrow(
+                            () ->
+                                    new IllegalStateException(
+                                            "Cannot find fluss metric matching current filter."));
+        } catch (IllegalStateException e) {
+            LOG.warn(
+                    String.format(
+                            "Error when getting fluss log scanner metric \"%s\" "
+                                    + "for bucket \"%s\". "
+                                    + "Metric \"%s\" may not be reported correctly. ",
+                            RECORDS_LAG, tb, MetricNames.PENDING_RECORDS),
+                    e);
+            return null;
+        }
     }
 }
