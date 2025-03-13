@@ -653,7 +653,7 @@ public final class RecordAccumulator {
                 return true;
             }
 
-            if (!idempotenceManager.canSendMortRequests(tableBucket)) {
+            if (!idempotenceManager.canSendMoreRequests(tableBucket)) {
                 // we have reached the max inflight requests for this table bucket, so we need stop
                 // drain this batch.
                 return true;

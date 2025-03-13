@@ -223,7 +223,7 @@ final class SenderTest {
             appendToAccumulator(tb1, row(1, "a"), future::complete);
             sender1.runOnce();
             assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(i + 1);
-            assertThat(idempotenceManager.canSendMortRequests(tb1)).isTrue();
+            assertThat(idempotenceManager.canSendMoreRequests(tb1)).isTrue();
         }
 
         // add one batch to make the inflight request size equal to max.
@@ -232,7 +232,7 @@ final class SenderTest {
         sender1.runOnce();
         assertThat(idempotenceManager.inflightBatchSize(tb1))
                 .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
-        assertThat(idempotenceManager.canSendMortRequests(tb1)).isFalse();
+        assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
 
         // add one more batch, it will not be drained from accumulator.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
