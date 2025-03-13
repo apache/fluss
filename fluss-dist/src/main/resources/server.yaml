@@ -80,3 +80,10 @@ tablet-server.id: 0
 # fs.oss.endpoint: xxx
 # fs.oss.accessKeyId: xxx
 # fs.oss.accessKeySecret: xxx
+
+#==============================================================================
+# Fluss Kafka Configs
+#==============================================================================
+kafka.enabled: false
+kafka.port: 9092
+kafka.database: _kafka
