@@ -145,6 +145,8 @@ public class Sender implements Runnable {
             try {
                 runOnce();
             } catch (Throwable t) {
+                // if an unexpected error occurs, we first to try to reinitialize the metadata.
+                metadataUpdater.reInitializeCluster();
                 LOG.error("Uncaught error in Fluss write sender thread: ", t);
             }
         }

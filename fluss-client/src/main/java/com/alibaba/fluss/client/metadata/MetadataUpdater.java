@@ -17,7 +17,6 @@
 package com.alibaba.fluss.client.metadata;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.client.utils.ClientUtils;
 import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
@@ -53,6 +52,7 @@ import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.client.utils.ClientUtils.parseAndValidateAddresses;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 
 /** The updater to initialize and update client metadata. */
@@ -61,16 +61,18 @@ public class MetadataUpdater {
 
     private static final int MAX_RETRY_TIMES = 5;
 
+    private final Configuration conf;
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
 
     public MetadataUpdater(Configuration configuration, RpcClient rpcClient) {
-        this(rpcClient, initializeCluster(configuration, rpcClient));
+        this(rpcClient, configuration, initializeCluster(configuration, rpcClient));
     }
 
     @VisibleForTesting
-    public MetadataUpdater(RpcClient rpcClient, Cluster cluster) {
+    public MetadataUpdater(RpcClient rpcClient, Configuration conf, Cluster cluster) {
         this.rpcClient = rpcClient;
+        this.conf = conf;
         this.cluster = cluster;
     }
 
@@ -275,7 +277,7 @@ public class MetadataUpdater {
      */
     private static Cluster initializeCluster(Configuration conf, RpcClient rpcClient) {
         List<InetSocketAddress> inetSocketAddresses =
-                ClientUtils.parseAndValidateAddresses(conf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+                parseAndValidateAddresses(conf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         Cluster cluster = null;
         for (InetSocketAddress address : inetSocketAddresses) {
             cluster = tryToInitializeCluster(rpcClient, address);
@@ -294,6 +296,13 @@ public class MetadataUpdater {
         }
 
         return cluster;
+    }
+
+    /** Re-initialize the cluster. */
+    public void reInitializeCluster() {
+        synchronized (this) {
+            cluster = initializeCluster(conf, rpcClient);
+        }
     }
 
     private static @Nullable Cluster tryToInitializeCluster(
