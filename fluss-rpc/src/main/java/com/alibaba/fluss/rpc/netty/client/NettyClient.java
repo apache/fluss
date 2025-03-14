@@ -45,6 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A network client for asynchronous request/response network i/o. This is an internal class used to
@@ -148,6 +149,7 @@ public final class NettyClient implements RpcClient {
     @Override
     public CompletableFuture<ApiMessage> sendRequest(
             ServerNode node, ApiKeys apiKey, ApiMessage request) {
+        checkNotNull(node, "node is null.");
         checkArgument(!isClosed, "Netty client is closed.");
         return getOrCreateConnection(node).send(apiKey, request);
     }

@@ -23,6 +23,7 @@ import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.cluster.BucketLocation;
+import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidMetadataException;
@@ -192,6 +193,12 @@ public class LogFetcher implements Closeable {
     }
 
     private void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
+        ServerNode tabletServer = metadataUpdater.getTabletServer(destination);
+        if (tabletServer == null) {
+            LOG.debug("Tablet server not found for id {}", destination);
+            return;
+        }
+
         // TODO cache the tablet server gateway.
         TabletServerGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
