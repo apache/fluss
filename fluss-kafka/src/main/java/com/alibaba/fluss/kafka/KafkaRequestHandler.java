@@ -16,6 +16,12 @@
 
 package com.alibaba.fluss.kafka;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.cluster.MetadataCache;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.rpc.gateway.AdminGateway;
+import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 
 import org.apache.kafka.common.errors.LeaderNotAvailableException;
@@ -29,6 +35,45 @@ import org.slf4j.LoggerFactory;
 
 public final class KafkaRequestHandler extends KafkaCommandDecoder {
     private static final Logger log = LoggerFactory.getLogger(KafkaRequestHandler.class);
+
+    private final String hostname;
+    private final int port;
+    private final int serverId;
+    private final Configuration conf;
+    private final AdminGateway admin;
+    private final MetadataCache metadataCache;
+    private final TabletServerGateway tablet;
+    private final String database;
+
+    public KafkaRequestHandler(
+            String hostname,
+            int port,
+            int serverId,
+            Configuration conf,
+            AdminGateway admin,
+            MetadataCache metadataCache,
+            TabletServerGateway tablet) {
+        this.hostname = hostname;
+        this.port = port;
+        this.serverId = serverId;
+        this.conf = conf;
+        this.admin = admin;
+        this.metadataCache = metadataCache;
+        this.tablet = tablet;
+        this.database = conf.getString(ConfigOptions.KAFKA_DATABASE);
+    }
+
+    @VisibleForTesting
+    public KafkaRequestHandler() {
+        this.hostname = "localhost";
+        this.port = 9092;
+        this.serverId = 0;
+        this.conf = null;
+        this.admin = null;
+        this.metadataCache = null;
+        this.tablet = null;
+        this.database = "_kafka";
+    }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {

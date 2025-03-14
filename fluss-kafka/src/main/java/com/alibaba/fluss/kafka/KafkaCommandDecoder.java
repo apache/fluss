@@ -52,6 +52,10 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
     protected volatile ChannelHandlerContext ctx;
     protected SocketAddress remoteAddress;
 
+    public KafkaCommandDecoder() {
+        super(false);
+    }
+
     @Override
     public void channelRead0(ChannelHandlerContext ctx, ByteBuf buffer) throws Exception {
         CompletableFuture<AbstractResponse> future = new CompletableFuture<>();
@@ -194,7 +198,7 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
                 if (produceRequest.acks() == 0 && isDone) {
                     // if acks=0, we don't need to wait for the response to be sent
                     inflightResponses.pollFirst();
-                    request.releaseBuffer();
+                    request.release();
                     continue;
                 }
             }
@@ -205,7 +209,7 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
 
             if (cancelled) {
                 inflightResponses.pollFirst();
-                request.releaseBuffer();
+                request.release();
                 continue;
             }
 
@@ -213,6 +217,8 @@ public abstract class KafkaCommandDecoder extends SimpleChannelInboundHandler<By
             if (isActive.get()) {
                 ByteBuf buffer = request.serialize();
                 ctx.writeAndFlush(buffer);
+            } else {
+                request.release();
             }
         }
     }

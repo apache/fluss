@@ -38,7 +38,7 @@
             <version>${kafka.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>${project.groupId}</groupId>
             <artifactId>fluss-shaded-netty</artifactId>
             <version>${netty.version}-${fluss.shaded.version}</version>
         </dependency>
@@ -47,10 +47,14 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>${project.groupId}</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>fluss-rpc</artifactId>
+            <version>${project.version}</version>
         </dependency>
     </dependencies>
 </project>

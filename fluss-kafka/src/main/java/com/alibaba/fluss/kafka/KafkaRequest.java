@@ -86,7 +86,7 @@ public class KafkaRequest {
         return (T) request;
     }
 
-    public void releaseBuffer() {
+    public void release() {
         ReferenceCountUtil.safeRelease(buffer);
     }
 
@@ -126,7 +126,7 @@ public class KafkaRequest {
             AbstractResponse response = request.getErrorResponse(t);
             return serialize(response);
         } finally {
-            releaseBuffer();
+            release();
         }
     }
 

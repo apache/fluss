@@ -22,12 +22,15 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
+import com.alibaba.fluss.kafka.KafkaNettyServer;
+import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.RpcServer;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
+import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
@@ -43,6 +46,7 @@ import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperUtils;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
+import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.clock.SystemClock;
@@ -89,7 +93,16 @@ public class TabletServer extends ServerBase {
     private final String interListenerName;
 
     @GuardedBy("lock")
+    private EventLoopGroup acceptor;
+
+    @GuardedBy("lock")
+    private EventLoopGroup worker;
+
+    @GuardedBy("lock")
     private RpcServer rpcServer;
+
+    @GuardedBy("lock")
+    private RpcServer kafkaServer;
 
     @GuardedBy("lock")
     private RpcClient rpcClient;
@@ -213,6 +226,13 @@ public class TabletServer extends ServerBase {
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
+
+            this.acceptor = NettyUtils.newEventLoopGroup(2, "fluss-tablet-netty-acceptor");
+            this.worker =
+                    NettyUtils.newEventLoopGroup(
+                            conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
+                            "fluss-tablet-netty-worker");
+
             this.rpcServer =
                     RpcServer.create(
                             conf,
@@ -220,7 +240,24 @@ public class TabletServer extends ServerBase {
                             tabletService,
                             tabletServerMetricGroup,
                             requestsMetrics);
-            rpcServer.start();
+            rpcServer.start(acceptor, worker);
+
+            boolean kafkaEnabled = conf.getBoolean(ConfigOptions.KAFKA_ENABLED);
+            if (kafkaEnabled) {
+                this.kafkaServer =
+                        KafkaNettyServer.create(
+                                conf.getString(ConfigOptions.TABLET_SERVER_HOST),
+                                conf.getInt(ConfigOptions.KAFKA_PORT),
+                                serverId,
+                                conf,
+                                coordinatorGateway,
+                                metadataCache,
+                                tabletService);
+                // Create Kafka database before starting Kafka server.
+                retryCreateKafkaDatabase(
+                        metadataManager, conf.getString(ConfigOptions.KAFKA_DATABASE));
+                kafkaServer.start(acceptor, worker);
+            }
 
             registerTabletServer();
         }
@@ -247,6 +284,38 @@ public class TabletServer extends ServerBase {
     @Override
     protected CompletableFuture<Result> getTerminationFuture() {
         return terminationFuture;
+    }
+
+    private void retryCreateKafkaDatabase(MetadataManager metadataManager, String kafkaDatabase) {
+        long startTime = System.currentTimeMillis();
+        while (true) {
+            try {
+                metadataManager.createDatabase(
+                        kafkaDatabase, DatabaseDescriptor.builder().build(), true);
+                break;
+            } catch (Exception e) {
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                if (elapsedTime >= ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS) {
+                    LOG.error(
+                            "Failed to create Kafka database {} after {} ms. Aborting creation attempts.",
+                            kafkaDatabase,
+                            ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS,
+                            e);
+                    throw e;
+                }
+
+                LOG.warn(
+                        "Failed to create Kafka database {}. retrying after {} ms....",
+                        kafkaDatabase,
+                        ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
+                try {
+                    Thread.sleep(ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
     }
 
     private void registerTabletServer() throws Exception {
@@ -316,8 +385,32 @@ public class TabletServer extends ServerBase {
             }
 
             try {
+                if (kafkaServer != null) {
+                    terminationFutures.add(kafkaServer.closeAsync());
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (tabletService != null) {
                     tabletService.shutdown();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (acceptor != null) {
+                    acceptor.shutdownGracefully();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (worker != null) {
+                    worker.shutdownGracefully();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

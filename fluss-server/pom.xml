@@ -70,6 +70,12 @@
             <artifactId>fluss-shaded-zookeeper</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>fluss-kafka</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!--
         we will start zookeeper server when start a local cluster,
         need include this module for starting zookeeper requires it -->
