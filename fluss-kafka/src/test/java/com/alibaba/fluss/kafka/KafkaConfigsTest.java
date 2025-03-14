@@ -19,11 +19,12 @@ package com.alibaba.fluss.kafka;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class KafkaConfigsTest {
     @Test
@@ -34,18 +35,16 @@ public class KafkaConfigsTest {
         map.put(ConfigOptions.KAFKA_DATABASE.key(), "fluss");
         Configuration configuration = Configuration.fromMap(map);
 
-        Assertions.assertThat(configuration.getBoolean(ConfigOptions.KAFKA_ENABLED)).isTrue();
-        Assertions.assertThat(configuration.getInt(ConfigOptions.KAFKA_PORT)).isEqualTo(9093);
-        Assertions.assertThat(configuration.getString(ConfigOptions.KAFKA_DATABASE))
-                .isEqualTo("fluss");
+        assertThat(configuration.getBoolean(ConfigOptions.KAFKA_ENABLED)).isTrue();
+        assertThat(configuration.getInt(ConfigOptions.KAFKA_PORT)).isEqualTo(9093);
+        assertThat(configuration.getString(ConfigOptions.KAFKA_DATABASE)).isEqualTo("fluss");
     }
 
     @Test
     public void testFromDefault() throws Exception {
         Configuration configuration = Configuration.fromMap(new HashMap<>());
-        Assertions.assertThat(configuration.getBoolean(ConfigOptions.KAFKA_ENABLED)).isFalse();
-        Assertions.assertThat(configuration.getInt(ConfigOptions.KAFKA_PORT)).isEqualTo(9092);
-        Assertions.assertThat(configuration.getString(ConfigOptions.KAFKA_DATABASE))
-                .isEqualTo("_kafka");
+        assertThat(configuration.getBoolean(ConfigOptions.KAFKA_ENABLED)).isFalse();
+        assertThat(configuration.getInt(ConfigOptions.KAFKA_PORT)).isEqualTo(9092);
+        assertThat(configuration.getString(ConfigOptions.KAFKA_DATABASE)).isEqualTo("_kafka");
     }
 }
