@@ -1,5 +1,4 @@
 ---
-sidebar_label: Building Fluss from Source
 sidebar_position: 1
 sidebar_label: Building Fluss
 ---
