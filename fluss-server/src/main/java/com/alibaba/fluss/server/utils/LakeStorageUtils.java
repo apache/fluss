@@ -25,7 +25,8 @@ import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.alibaba.fluss.utils.OptionsUtils.convertToPropertiesWithPrefix;
+import static com.alibaba.fluss.utils.PropertiesUtils.asPrefixedMap;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** Utils for Fluss lake storage. */
 public class LakeStorageUtils {
@@ -39,6 +40,6 @@ public class LakeStorageUtils {
         }
 
         String dataLakePrefix = "datalake." + optDataLakeFormat.get() + ".";
-        return convertToPropertiesWithPrefix(clusterConf.toMap(), dataLakePrefix, false, "table.");
+        return asPrefixedMap(extractPrefix(clusterConf.toMap(), dataLakePrefix), "table.");
     }
 }

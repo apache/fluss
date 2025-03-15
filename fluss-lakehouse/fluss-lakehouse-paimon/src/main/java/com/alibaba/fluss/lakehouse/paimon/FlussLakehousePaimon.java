@@ -33,7 +33,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-import static com.alibaba.fluss.utils.OptionsUtils.convertToPropertiesWithPrefix;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** The entrypoint for fluss tier data to Paimon. */
 public class FlussLakehousePaimon {
@@ -53,8 +53,7 @@ public class FlussLakehousePaimon {
         String database = paramsMap.get(DATABASE);
 
         // extract fluss config
-        Map<String, String> flussConfigMap =
-                convertToPropertiesWithPrefix(paramsMap, FLUSS_CONF_PREFIX, true);
+        Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
         // we need to get bootstrap.servers
         String bootstrapServers = paramsMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
         if (bootstrapServers == null) {
@@ -63,8 +62,7 @@ public class FlussLakehousePaimon {
         flussConfigMap.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
 
         // extract paimon config
-        Map<String, String> paimonConfig =
-                convertToPropertiesWithPrefix(paramsMap, PAIMON_CONF_PREFIX, true);
+        Map<String, String> paimonConfig = extractAndRemovePrefix(paramsMap, PAIMON_CONF_PREFIX);
 
         // then build the fluss to paimon job
         final StreamExecutionEnvironment execEnv =

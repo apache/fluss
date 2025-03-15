@@ -22,7 +22,7 @@ import com.alibaba.fluss.metadata.DataLakeFormat;
 
 import java.util.Map;
 
-import static com.alibaba.fluss.utils.OptionsUtils.convertToPropertiesWithPrefix;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** Utility class for accessing data lake related configurations. */
 public class DataLakeUtils {
@@ -45,6 +45,6 @@ public class DataLakeUtils {
 
         // currently, extract datalake catalog config
         String dataLakePrefix = "table.datalake." + datalakeFormat + ".";
-        return convertToPropertiesWithPrefix(tableOptions.toMap(), dataLakePrefix, true);
+        return extractAndRemovePrefix(tableOptions.toMap(), dataLakePrefix);
     }
 }
