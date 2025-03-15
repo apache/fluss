@@ -25,11 +25,6 @@ On this page, you can find the following guides to set up an observability stack
 
 - [Observability with Prometheus, Loki and Grafana](#observability-with-prometheus-loki-and-grafana)
 
-:::warning
-    Make sure the environment variables for the Fluss and the Quickstart version are set.
-    For further information, check the [Flink quickstart guide](quickstart/flink.md#starting-required-components).
-:::
-
 ## Observability with Prometheus, Loki and Grafana
 
 We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation sytem) and Grafana (dashboard system). 
