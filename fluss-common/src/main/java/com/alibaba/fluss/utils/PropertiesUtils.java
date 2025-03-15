@@ -19,7 +19,7 @@ package com.alibaba.fluss.utils;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/** Utility class for Options related helper functions. */
+/** Utility class for properties related helper functions. */
 public class PropertiesUtils {
 
     /** Returns the properties as a map copy with a prefix key. */
@@ -56,7 +56,7 @@ public class PropertiesUtils {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
-    /** Filter out keys that start with the given prefix from the original map */
+    /** Filter out keys that start with the given prefix from the original map. */
     public static <T> Map<String, T> excludeByPrefix(Map<String, T> originalMap, String prefix) {
         return originalMap.entrySet().stream()
                 .filter(entry -> !entry.getKey().startsWith(prefix))
