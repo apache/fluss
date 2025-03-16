@@ -17,6 +17,7 @@
 package com.alibaba.fluss.connector.spark
 
 import com.alibaba.fluss.metadata.TableBucket
+import com.alibaba.fluss.spark.TableBucketInfo
 
 import org.apache.spark.sql.connector.read.InputPartition
 

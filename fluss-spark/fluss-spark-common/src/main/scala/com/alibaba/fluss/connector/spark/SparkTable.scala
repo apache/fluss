@@ -17,9 +17,9 @@
 package com.alibaba.fluss.connector.spark
 
 import com.alibaba.fluss.config.Configuration
-import com.alibaba.fluss.connector.spark.catalog.SparkCatalog
-import com.alibaba.fluss.connector.spark.utils.SparkTypeUtils
 import com.alibaba.fluss.metadata.{PartitionSpec, TableInfo}
+import com.alibaba.fluss.spark.catalog.SparkCatalog
+import com.alibaba.fluss.spark.utils.SparkTypeUtils
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
