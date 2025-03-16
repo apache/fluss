@@ -284,6 +284,18 @@
                             </descriptors>
                         </configuration>
                     </execution>
+                    <execution>
+                        <id>examples</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>src/main/assemblies/examples.xml</descriptor>
+                            </descriptors>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
 
