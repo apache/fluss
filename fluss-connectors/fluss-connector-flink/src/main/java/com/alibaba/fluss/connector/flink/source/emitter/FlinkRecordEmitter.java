@@ -58,7 +58,9 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
             @Nullable int[] selectedMetadataFields) {
         if (enableChangeLog) {
             int[] metadataFields =
-                    selectedMetadataFields != null ? selectedMetadataFields : new int[] {0, 1, 2};
+                    selectedMetadataFields != null && selectedMetadataFields.length > 0
+                            ? selectedMetadataFields
+                            : new int[] {};
             this.converter = new ChangelogRowConverter(rowType, metadataFields);
         } else {
             this.converter = new PlainRowConverter(rowType);
@@ -101,11 +103,22 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
     }
 
     private void emitRecord(ScanRecord scanRecord, SourceOutput<RowData> sourceOutput) {
-        long timestamp = scanRecord.timestamp();
-        if (timestamp > 0) {
-            sourceOutput.collect(converter.convert(scanRecord), timestamp);
-        } else {
-            sourceOutput.collect(converter.convert(scanRecord));
+        try {
+            long timestamp = scanRecord.timestamp();
+            RowData rowData = converter.convert(scanRecord);
+
+            // Debug info to see what's happening
+            LOG.debug("Emitting row with {} fields", rowData.getArity());
+
+            if (timestamp > 0) {
+                sourceOutput.collect(rowData, timestamp);
+            } else {
+                sourceOutput.collect(rowData);
+            }
+        } catch (Exception e) {
+            // CRITICAL FIX: Log and rethrow to avoid silent failures
+            LOG.error("Error emitting record: {}", e.getMessage(), e);
+            throw e;
         }
     }
 }

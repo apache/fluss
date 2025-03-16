@@ -546,15 +546,11 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             RowType flussTableRowType,
             @Nullable int[] projectedFields,
             @Nullable int[] selectedMetadataFields) {
-        RowType tableRowType =
-                projectedFields != null
-                        ? flussTableRowType.project(projectedFields)
-                        : flussTableRowType;
         if (enableChangelog) {
             int metadataColumnCount =
                     selectedMetadataFields != null ? selectedMetadataFields.length : 3;
 
-            if (sourceOutputType.getFieldCount() >= tableRowType.getFieldCount()) {
+            if (sourceOutputType.getFieldCount() >= flussTableRowType.getFieldCount()) {
                 return;
             } else {
                 throw new ValidationException(
@@ -562,13 +558,16 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                                 + "\nFlink query schema: "
                                 + sourceOutputType
                                 + "\nExpected at least "
-                                + tableRowType.getFieldCount()
+                                + flussTableRowType.getFieldCount()
                                 + " fields for data"
                                 + "\nFluss table schema: "
-                                + tableRowType);
+                                + flussTableRowType);
             }
         }
-
+        RowType tableRowType =
+                projectedFields != null
+                        ? flussTableRowType.project(projectedFields)
+                        : flussTableRowType;
         // Standard schema validation for non-changelog tables
         if (!sourceOutputType.copy(false).equals(tableRowType.copy(false))) {
             // The default nullability of Flink row type and Fluss row type might be not the same,

@@ -38,6 +38,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
@@ -1080,5 +1081,31 @@ class FlinkTableSinkITCase {
             this.insertValues = insertValues;
             this.expectedRows = expectedRows;
         }
+    }
+
+    @Test
+    void testChangelogTableNotSupportedAsSink() {
+        // Create a regular table
+        String tableName = "changelog_sink_test";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "a int not null primary key not enforced, "
+                                + "b varchar, "
+                                + "c bigint)"
+                                + " with ('bucket.num' = '3')",
+                        tableName));
+
+        // Test using a direct catalog API check
+        org.apache.flink.table.catalog.Catalog catalog = tEnv.getCatalog(CATALOG_NAME).get();
+
+        // Make sure the original table exists
+        ObjectPath originalTablePath = new ObjectPath(DEFAULT_DB, tableName);
+        assertThat(catalog.tableExists(originalTablePath)).isTrue();
+
+        // Check that the $changelog table doesn't exist as a normal table (because it's
+        // virtual/view)
+        ObjectPath changelogTablePath = new ObjectPath(DEFAULT_DB, tableName + "$changelog");
+        assertThat(catalog.tableExists(changelogTablePath)).isFalse();
     }
 }

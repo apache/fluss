@@ -23,6 +23,7 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.RowType;
@@ -60,6 +61,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
@@ -1122,11 +1124,11 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     }
 
     @Test
-    void testReadWithoutChangeLogData() throws Exception {
+    void testReadWithoutChangeLog() throws Exception {
         // Create a primary key table
         tEnv.executeSql(
-                "create table direct_changelog_test (a int not null primary key not enforced, b varchar, c bigint)");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "direct_changelog_test");
+                "create table no_changelog (a int not null primary key not enforced, b varchar, c bigint)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "no_changelog");
 
         // Write initial data
         List<InternalRow> rows =
@@ -1142,7 +1144,7 @@ class FlinkTableSourceITCase extends FlinkTestBase {
 
         // Try using the assertResultsIgnoreOrder helper that's already in your codebase
         CloseableIterator<Row> rowIter =
-                tEnv.executeSql("SELECT a, b, c FROM direct_changelog_test").collect();
+                tEnv.executeSql("SELECT a, b, c FROM no_changelog").collect();
 
         // Expected results - this should be 3 rows total
         List<String> expected =
@@ -1152,40 +1154,175 @@ class FlinkTableSourceITCase extends FlinkTestBase {
     }
 
     @Test
-    void testReadWithChangeLogData() throws Exception {
+    void testChangelogQueries() throws Exception {
         // Create a primary key table
         tEnv.executeSql(
                 "create table changelog_test (a int not null primary key not enforced, b varchar, c bigint)");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "changelog_test");
 
         // Write initial data
-        List<InternalRow> rows =
+        List<InternalRow> initialData =
                 Arrays.asList(row(1, "v1", 100L), row(2, "v2", 200L), row(3, "v3", 300L));
-        writeRows(tablePath, rows, false);
+        writeRows(tablePath, initialData, false);
 
         // Wait until snapshot is complete
         waitUtilAllBucketFinishSnapshot(admin, tablePath);
 
         // Update a row and add a new row
-        List<InternalRow> updateRows =
+        List<InternalRow> updateData =
                 Arrays.asList(row(1, "v1_updated", 101L), row(4, "v4", 400L));
-        writeRows(tablePath, updateRows, false);
+        writeRows(tablePath, updateData, false);
 
-        // Critical: Read from the earliest possible point in the changelog to see all events
-        CloseableIterator<Row> rowIterAll =
-                tEnv.executeSql(
-                                "SELECT _commit_timestamp, _change_type,_log_offset  b, c  FROM changelog_test$changelog "
-                                        + "/*+ OPTIONS('scan.startup.mode' = 'earliest') */")
-                        .collect();
+        // Options for all queries
+        String startupOptions = "/*+ OPTIONS('scan.startup.mode' = 'earliest') */";
+
+        // Test case 1: Metadata + selected physical fields
+        testChangelogQuery(
+                "SELECT _change_type, _log_offset, _commit_timestamp, a, b FROM changelog_test$changelog "
+                        + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Verify first row has expected pattern (insert for id 1)
+                    Row firstRow = results.get(0);
+                    assertThat(firstRow.getField(0)).isEqualTo("+I"); // change type
+                    assertThat(firstRow.getField(3)).isEqualTo(1); // a = 1
+                    assertThat(firstRow.getField(4)).isEqualTo("v1"); // b = v1
+
+                    // Verify we see the update for id 1
+                    Row updateBeforeRow = results.get(3);
+                    assertThat(updateBeforeRow.getField(0)).isEqualTo("-U");
+                    assertThat(updateBeforeRow.getField(3)).isEqualTo(1);
+
+                    Row updateAfterRow = results.get(4);
+                    assertThat(updateAfterRow.getField(0)).isEqualTo("+U");
+                    assertThat(updateAfterRow.getField(3)).isEqualTo(1);
+                    assertThat(updateAfterRow.getField(4)).isEqualTo("v1_updated");
+                });
+
+        // Test case 2: One metadata field + all physical fields
+        testChangelogQuery(
+                "SELECT _change_type, a, b, c FROM changelog_test$changelog " + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Verify update before/after pair
+                    Row beforeRow = results.get(3);
+                    assertThat(beforeRow.getField(0)).isEqualTo("-U");
+                    assertThat(beforeRow.getField(1)).isEqualTo(1);
+                    assertThat(beforeRow.getField(2)).isEqualTo("v1");
+                    assertThat(beforeRow.getField(3)).isEqualTo(100L);
+
+                    Row afterRow = results.get(4);
+                    assertThat(afterRow.getField(0)).isEqualTo("+U");
+                    assertThat(afterRow.getField(1)).isEqualTo(1);
+                    assertThat(afterRow.getField(2)).isEqualTo("v1_updated");
+                    assertThat(afterRow.getField(3)).isEqualTo(101L);
+                });
+
+        // Test case 3: All fields (SELECT *)
+        testChangelogQuery(
+                "SELECT * FROM changelog_test$changelog " + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Verify a row has all 6 fields
+                    Row row = results.get(0);
+                    assertThat(row.getArity()).isEqualTo(6); // 3 metadata + 3 physical fields
+
+                    // Check field order: _change_type, _log_offset, _commit_timestamp, a, b, c
+                    assertThat(row.getField(0)).isEqualTo("+I");
+                    assertThat(row.getField(3)).isEqualTo(1);
+                    assertThat(row.getField(4)).isEqualTo("v1");
+                    assertThat(row.getField(5)).isEqualTo(100L);
+                });
+
+        // Test case 4: Metadata fields + non-PK field
+        testChangelogQuery(
+                "SELECT _change_type, _log_offset, _commit_timestamp, c FROM changelog_test$changelog "
+                        + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Verify update shows value change
+                    Row beforeRow = results.get(3);
+                    assertThat(beforeRow.getField(0)).isEqualTo("-U");
+                    assertThat(beforeRow.getField(3)).isEqualTo(100L);
+
+                    Row afterRow = results.get(4);
+                    assertThat(afterRow.getField(0)).isEqualTo("+U");
+                    assertThat(afterRow.getField(3)).isEqualTo(101L);
+                });
+
+        // Test case 5: Metadata fields + different field order
+        testChangelogQuery(
+                "SELECT _change_type, _log_offset, _commit_timestamp, c, a FROM changelog_test$changelog "
+                        + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Check order is preserved
+                    Row row = results.get(0);
+                    assertThat(row.getField(0)).isEqualTo("+I"); // _change_type
+                    assertThat(row.getField(3)).isEqualTo(100L); // c
+                    assertThat(row.getField(4)).isEqualTo(1); // a
+                });
+
+        // Test case 6: Metadata except _change_type
+        testChangelogQuery(
+                "SELECT _commit_timestamp, _log_offset, c, a FROM changelog_test$changelog "
+                        + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Check field order is preserved
+                    Row row = results.get(0);
+                    assertThat(row.getField(0))
+                            .isInstanceOf(java.time.Instant.class); // _commit_timestamp
+                    assertThat(row.getField(1)).isInstanceOf(Long.class); // _log_offset
+                    assertThat(row.getField(2)).isEqualTo(100L); // c
+                    assertThat(row.getField(3)).isEqualTo(1); // a
+                });
+
+        // Test case 7: No metadata fields (physical only)
+        testChangelogQuery(
+                "SELECT a, b, c FROM changelog_test$changelog " + startupOptions,
+                results -> {
+                    assertThat(results).hasSize(5);
+                    // Verify we see row kinds correctly (not as field values)
+                    Row row1 = results.get(0);
+                    assertThat(row1.getKind().name()).isEqualTo(RowKind.INSERT.name());
+
+                    assertThat(row1.getField(0)).isEqualTo(1);
+
+                    Row row4 = results.get(3);
+                    assertThat(row4.getKind().name()).isEqualTo(RowKind.UPDATE_BEFORE.name());
+
+                    Row row5 = results.get(4);
+                    assertThat(row5.getKind().name()).isEqualTo(RowKind.UPDATE_AFTER.name());
+                });
+
+        // Test case 8: Metadata only - should throw exception
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                "SELECT _change_type, _log_offset, _commit_timestamp FROM changelog_test$changelog "
+                                                        + startupOptions)
+                                        .collect())
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Queries selecting only metadata columns are not supported")
+                .hasMessageContaining("You must include at least one physical field");
+    }
+
+    // Helper method to test a changelog query and validate results
+    private void testChangelogQuery(String query, Consumer<List<Row>> validator) throws Exception {
+        System.out.println("Testing query: " + query);
+        CloseableIterator<Row> iterator = tEnv.executeSql(query).collect();
 
         List<Row> results = new ArrayList<>();
-        int maxRows = 5;
+        int maxRows = 5; // Limit rows collected for streaming queries
 
-        while (rowIterAll.hasNext() && results.size() < maxRows) {
-            Row row = rowIterAll.next();
+        while (iterator.hasNext() && results.size() < maxRows) {
+            Row row = iterator.next();
             results.add(row);
             System.out.println("Row: " + row);
         }
-        // todo still pending need to complete to back more patterns
+
+        // Run validator to check the results
+        validator.accept(results);
     }
 }

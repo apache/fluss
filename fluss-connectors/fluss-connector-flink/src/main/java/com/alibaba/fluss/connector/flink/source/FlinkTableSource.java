@@ -235,31 +235,76 @@ public class FlinkTableSource
             };
         }
 
-        // handle normal scan
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
 
         if (enableChangelog) {
-            // For changelog tables, use field names for projection
-            List<String> fieldNames = tableOutputType.getFieldNames();
+            // STEP 1: Determine which metadata fields are needed
+            if (selectedMetadataFields == null) {
+                // For SELECT * or when nothing is explicitly selected, include all metadata fields
+                if (projectedFields == null) {
+                    this.selectedMetadataFields =
+                            new int[] {0, 1, 2}; // All metadata fields for SELECT *
+                    LOG.debug("SELECT * case - including all metadata fields");
+                } else if (projectedFields.length == 0) {
+                    // Handle metadata-only queries - for cases like SELECT _change_type,
+                    // _log_offset, _commit_timestamp
+                    this.selectedMetadataFields = new int[] {0, 1, 2}; // All metadata fields
+                    LOG.debug("Detected metadata-only query - including all metadata fields");
+                } else {
+                    // For queries with only physical fields like SELECT a,b,c - explicitly set
+                    // EMPTY metadata
+                    this.selectedMetadataFields = new int[0]; // No metadata fields
+                    LOG.debug("Only physical fields selected - setting empty metadata fields");
+                }
+            } else if (selectedMetadataFields.length == 0
+                    && projectedFields != null
+                    && projectedFields.length == 0) {
+                // Edge case: Empty arrays for both physical and metadata, but changelog mode
+                // This might be a metadata-only query that was incorrectly parsed
+                this.selectedMetadataFields = new int[] {0, 1, 2};
+                LOG.debug(
+                        "Edge case: Empty projections in changelog mode - defaulting to all metadata fields");
+            }
 
-            // Get the names of only the fields we want to project
+            // STEP 2: Set up physical field projection
+            List<String> fieldNames = tableOutputType.getFieldNames();
             List<String> projectedFieldNames = new ArrayList<>();
 
             if (projectedFields == null) {
-                // If projectedFields is null, it means "select all fields"
-                projectedFieldNames.addAll(fieldNames);
-            } else {
-                // Get metadata field count safely
-                int metadataCount =
-                        selectedMetadataFields != null ? selectedMetadataFields.length : 3;
-
+                // If projectedFields is null, it means "SELECT *" - include all physical fields
+                LOG.debug("SELECT * - including all {} physical fields", fieldNames.size() - 3);
+                for (int i = 3; i < fieldNames.size(); i++) {
+                    projectedFieldNames.add(fieldNames.get(i));
+                }
+            } else if (projectedFields.length > 0) {
+                // Normal projection case
+                LOG.debug("Projecting {} specific physical fields", projectedFields.length);
                 for (int idx : projectedFields) {
                     // Account for metadata fields in the index
                     projectedFieldNames.add(fieldNames.get(idx + 3));
                 }
+            } else {
+                // No physical fields selected - might be metadata-only query
+                LOG.debug("No physical fields in projection - likely metadata-only query");
             }
 
-            flussRowType = flussRowType.project(projectedFieldNames);
+            // Apply physical field projection if we have any fields to project
+            if (!projectedFieldNames.isEmpty()) {
+                flussRowType = flussRowType.project(projectedFieldNames);
+                LOG.debug(
+                        "Projected row type has {} fields: {}",
+                        flussRowType.getFieldCount(),
+                        flussRowType.getFieldNames());
+            } else if (selectedMetadataFields.length > 0) {
+                // if only metadata fields asked without physical fields
+                throw new UnsupportedOperationException(
+                        "Queries selecting only metadata columns are not supported. "
+                                + "You must include at least one physical field in your query.\n\n"
+                                + "For example, instead of:\n"
+                                + "    SELECT _change_type, _log_offset, _commit_timestamp FROM changelog_test$changelog\n\n"
+                                + "Use:\n"
+                                + "    SELECT _change_type, _log_offset, _commit_timestamp, phycialField FROM changelog_test$changelog");
+            }
         } else if (!enableChangelog && projectedFields != null) {
             // For non-changelog tables, continue using index-based projection
             flussRowType = flussRowType.project(projectedFields);
@@ -408,7 +453,6 @@ public class FlinkTableSource
 
     @Override
     public void applyProjection(int[][] projectedFields, DataType producedDataType) {
-        // Separate physical fields from metadata fields if changelog is enabled
         if (enableChangelog) {
             List<Integer> physicalFieldIndices = new ArrayList<>();
             List<Integer> metadataFieldIndices = new ArrayList<>();
@@ -423,6 +467,7 @@ public class FlinkTableSource
                 }
             }
 
+            // Set projected fields (may be empty!)
             this.projectedFields = physicalFieldIndices.stream().mapToInt(i -> i).toArray();
             this.selectedMetadataFields = metadataFieldIndices.stream().mapToInt(i -> i).toArray();
         } else {
