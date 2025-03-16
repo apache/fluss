@@ -44,14 +44,12 @@ import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownGroup;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
-import static com.alibaba.fluss.utils.concurrent.FutureUtils.completeAll;
 
 /**
  * Netty based {@link RpcServer} implementation. The RPC server starts a handler to receive RPC
@@ -71,7 +69,6 @@ public final class NettyServer implements RpcServer {
 
     private EventLoopGroup acceptorGroup;
     private EventLoopGroup selectorGroup;
-    private PooledByteBufAllocator pooledBufAllocator;
 
     private volatile boolean isRunning;
 
@@ -94,7 +91,6 @@ public final class NettyServer implements RpcServer {
                         requestsMetrics);
         this.bindChannels = new CopyOnWriteArrayList<>();
         this.bindEndpoints = new CopyOnWriteArrayList<>();
-        pooledBufAllocator = PooledByteBufAllocator.DEFAULT;
     }
 
     @Override
@@ -120,13 +116,8 @@ public final class NettyServer implements RpcServer {
 
         // setup worker thread pool
         workerPool.start();
-
-        List<CompletableFuture<Void>> startEndpointFutures =
-                endpoints.stream().map(this::startEndpoint).collect(Collectors.toList());
-        try {
-            completeAll(startEndpointFutures).get();
-        } catch (InterruptedException | ExecutionException ex) {
-            throw new IOException("Failed to start Netty server", ex);
+        for (Endpoint endpoint : endpoints) {
+            startEndpoint(endpoint);
         }
 
         final long duration = (System.nanoTime() - start) / 1_000_000;
@@ -144,69 +135,58 @@ public final class NettyServer implements RpcServer {
         return bindEndpoints;
     }
 
-    private CompletableFuture<Void> startEndpoint(Endpoint endpoint) {
-        CompletableFuture<Void> startEndpointFuture = new CompletableFuture<>();
-        CompletableFuture.runAsync(
-                () -> {
-                    ServerBootstrap bootstrap = new ServerBootstrap();
+    private void startEndpoint(Endpoint endpoint) throws IOException {
 
-                    bootstrap.childOption(ChannelOption.ALLOCATOR, pooledBufAllocator);
-                    bootstrap.group(acceptorGroup, selectorGroup);
-                    bootstrap.childOption(ChannelOption.TCP_NODELAY, true);
-                    bootstrap.childOption(
-                            ChannelOption.RCVBUF_ALLOCATOR,
-                            new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
-                    bootstrap.channel(NettyUtils.getServerSocketChannelClass(selectorGroup));
+        ServerBootstrap bootstrap = new ServerBootstrap();
 
-                    // child channel pipeline for accepted connections
-                    bootstrap.childHandler(
-                            new ServerChannelInitializer(
-                                    new NettyServerHandler(
-                                            workerPool.getRequestChannels(),
-                                            apiManager,
-                                            endpoint.getListenerName()),
-                                    conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME)
-                                            .getSeconds()));
+        bootstrap.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+        bootstrap.group(acceptorGroup, selectorGroup);
+        bootstrap.childOption(ChannelOption.TCP_NODELAY, true);
+        bootstrap.childOption(
+                ChannelOption.RCVBUF_ALLOCATOR,
+                new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
+        bootstrap.channel(NettyUtils.getServerSocketChannelClass(selectorGroup));
 
-                    // --------------------------------------------------------------------
-                    // Start Server
-                    // --------------------------------------------------------------------
-                    String hostname = endpoint.getHost();
-                    Integer port = endpoint.getPort();
-                    LOG.debug(
-                            "Trying to start Netty server on address: {} and port {}",
-                            hostname,
-                            port);
+        // child channel pipeline for accepted connections
+        bootstrap.childHandler(
+                new ServerChannelInitializer(
+                        new NettyServerHandler(
+                                workerPool.getRequestChannels(),
+                                apiManager,
+                                endpoint.getListenerName()),
+                        conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds()));
 
-                    try {
-                        bootstrap.localAddress(hostname, port);
-                        Channel bindChannel = bootstrap.bind().syncUninterruptibly().channel();
-                        if (bindChannel == null) {
-                            throw new BindException(
-                                    String.format(
-                                            "Could not start Netty server on address: %s and port %s ",
-                                            hostname, port));
-                        }
-                        LOG.info("Listening on address: {} and port {}.", hostname, port);
-                        bindChannels.add(bindChannel);
-                        InetSocketAddress bindAddress =
-                                (InetSocketAddress) bindChannel.localAddress();
-                        bindEndpoints.add(
-                                new Endpoint(
-                                        bindAddress.getAddress().getHostAddress(),
-                                        bindAddress.getPort(),
-                                        endpoint.getListenerName()));
-                        startEndpointFuture.complete(null);
-                    } catch (Exception e) {
-                        // syncUninterruptibly() throws checked exceptions via Unsafe
-                        // continue if the exception is due to the port being in use, fail early
-                        // otherwise
-                        LOG.debug(
-                                "Failed to bind Netty server on port {}: {}", port, e.getMessage());
-                        startEndpointFuture.completeExceptionally(e);
-                    }
-                });
-        return startEndpointFuture;
+        // --------------------------------------------------------------------
+        // Start Server
+        // --------------------------------------------------------------------
+        String hostname = endpoint.getHost();
+        int port = endpoint.getPort();
+        LOG.debug("Trying to start Netty server on address: {} and port {}", hostname, port);
+
+        try {
+            bootstrap.localAddress(hostname, port);
+            Channel bindChannel = bootstrap.bind().syncUninterruptibly().channel();
+            if (bindChannel == null) {
+                throw new BindException(
+                        String.format(
+                                "Could not start Netty server on address: %s and port %s ",
+                                hostname, port));
+            }
+            LOG.info("Listening on address {} and port {}", hostname, port);
+            bindChannels.add(bindChannel);
+            InetSocketAddress bindAddress = (InetSocketAddress) bindChannel.localAddress();
+            bindEndpoints.add(
+                    new Endpoint(
+                            bindAddress.getAddress().getHostAddress(),
+                            bindAddress.getPort(),
+                            endpoint.getListenerName()));
+        } catch (Exception e) {
+            // syncUninterruptibly() throws checked exceptions via Unsafe
+            // continue if the exception is due to the port being in use, fail early
+            // otherwise
+            LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
+            throw new IOException("Failed to start Netty server", e);
+        }
     }
 
     @Override

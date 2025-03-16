@@ -817,8 +817,9 @@ public class ReplicaManager {
             }
 
             // fetch from leader server node with internal endpoint.
-            ServerNode leader = metadataCache.getTabletServer(leaderId, internalListenerName);
-            if (leader == null) {
+            Optional<ServerNode> leader =
+                    metadataCache.getTabletServer(leaderId, internalListenerName);
+            if (!leader.isPresent()) {
                 throw new NotLeaderOrFollowerException(
                         String.format(
                                 "Could not find leader in server metadata by id for replica %s while make follower",
@@ -830,7 +831,7 @@ public class ReplicaManager {
             bucketAndStatus.put(
                     tableBucket,
                     new InitialFetchStatus(
-                            tableBucket.getTableId(), leader, logTablet.localLogEndOffset()));
+                            tableBucket.getTableId(), leader.get(), logTablet.localLogEndOffset()));
         }
         replicaFetcherManager.addFetcherForBuckets(bucketAndStatus);
     }

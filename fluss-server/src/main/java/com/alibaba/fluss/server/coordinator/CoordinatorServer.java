@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
@@ -46,7 +47,6 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -128,17 +128,7 @@ public class CoordinatorServer extends ServerBase {
     protected void startServices() throws Exception {
         synchronized (lock) {
             LOG.info("Initializing Coordinator services.");
-            List<Endpoint> endpoints =
-                    Endpoint.parseEndpoints(conf.get(ConfigOptions.BIND_LISTENER));
-            if (endpoints.isEmpty()) {
-                endpoints =
-                        Collections.singletonList(
-                                new Endpoint(
-                                        conf.get(ConfigOptions.COORDINATOR_HOST),
-                                        Integer.parseInt(conf.get(ConfigOptions.COORDINATOR_PORT)),
-                                        conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME)));
-            }
-
+            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
             this.serverId = UUID.randomUUID().toString();
 
             // for metrics
@@ -225,12 +215,9 @@ public class CoordinatorServer extends ServerBase {
 
     private void registerCoordinatorLeader() throws Exception {
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
-        List<Endpoint> advisedEndpoints =
-                Endpoint.parseEndpoints(conf.getString(ConfigOptions.ADVERTISED_LISTENER));
         CoordinatorAddress coordinatorAddress =
                 new CoordinatorAddress(
-                        this.serverId,
-                        Endpoint.getRegisteredEndpoint(bindEndpoints, advisedEndpoints));
+                        this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
         zkClient.registerCoordinatorLeader(coordinatorAddress);
     }
 
@@ -356,7 +343,7 @@ public class CoordinatorServer extends ServerBase {
     }
 
     @VisibleForTesting
-    RpcServer getRpcServer() {
+    public RpcServer getRpcServer() {
         return rpcServer;
     }
 
@@ -384,12 +371,6 @@ public class CoordinatorServer extends ServerBase {
         if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
             throw new IllegalConfigurationException(
                     String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        }
-
-        if (conf.get(ConfigOptions.BIND_LISTENER) == null
-                && conf.get(ConfigOptions.COORDINATOR_HOST) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.BIND_LISTENER));
         }
     }
 }

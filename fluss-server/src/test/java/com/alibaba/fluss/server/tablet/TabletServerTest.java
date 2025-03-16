@@ -28,7 +28,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,8 +65,8 @@ class TabletServerTest extends ServerTestBase {
         Configuration configuration = createTabletServerConfiguration();
         // configure with a invalid port, the server should fail to start
         configuration.set(
-                ConfigOptions.INTERNAL_LISTENER_NAME,
-                new Endpoint("localhost", -12, "CLIENT").toString());
+                ConfigOptions.BIND_LISTENERS,
+                new Endpoint("localhost", -12, "FLUSS").connectionString());
         return new TabletServer(configuration);
     }
 
@@ -86,8 +85,7 @@ class TabletServerTest extends ServerTestBase {
         assertThat(optionalTabletServerRegistration).isPresent();
 
         TabletServerRegistration tabletServerRegistration = optionalTabletServerRegistration.get();
-        List<Endpoint> registeredEndpoints = tabletServerRegistration.getEndpoints();
-        List<Endpoint> bindEndpoints = server.getRpcServer().getBindEndpoints();
-        verifyEndpoint(registeredEndpoints, bindEndpoints);
+        verifyEndpoint(
+                tabletServerRegistration.getEndpoints(), server.getRpcServer().getBindEndpoints());
     }
 }

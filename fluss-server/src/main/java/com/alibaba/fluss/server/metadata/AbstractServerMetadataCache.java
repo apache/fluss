@@ -20,9 +20,8 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.tablet.TabletServer;
 
-import javax.annotation.Nullable;
-
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -54,7 +53,7 @@ public abstract class AbstractServerMetadataCache implements ServerMetadataCache
     }
 
     @Override
-    public @Nullable ServerNode getTabletServer(int serverId, String listenerName) {
+    public Optional<ServerNode> getTabletServer(int serverId, String listenerName) {
         return clusterMetadata.getAliveTabletServersById(serverId, listenerName);
     }
 
@@ -64,7 +63,7 @@ public abstract class AbstractServerMetadataCache implements ServerMetadataCache
     }
 
     @Override
-    public @Nullable ServerNode getCoordinatorServer(String listenerName) {
+    public Optional<ServerNode> getCoordinatorServer(String listenerName) {
         return clusterMetadata.getCoordinatorServer(listenerName);
     }
 

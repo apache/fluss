@@ -95,7 +95,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
 class CoordinatorEventProcessorTest {
-    private static final String INTERNAL_LISTENER_NAME = "fluss";
 
     private static final int N_BUCKETS = 3;
     private static final int REPLICATION_FACTOR = 3;
@@ -138,7 +137,10 @@ class CoordinatorEventProcessorTest {
                     i,
                     new TabletServerRegistration(
                             Collections.singletonList(
-                                    new Endpoint("host" + i, 1000, INTERNAL_LISTENER_NAME)),
+                                    new Endpoint(
+                                            "host" + i,
+                                            1000,
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue())),
                             System.currentTimeMillis()));
         }
     }
@@ -159,8 +161,7 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration()
-                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
+                        new Configuration());
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
@@ -229,8 +230,7 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration()
-                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
+                        new Configuration());
         initCoordinatorChannel();
         eventProcessor.startup();
         // make sure the table can still be deleted successfully
@@ -287,7 +287,9 @@ class CoordinatorEventProcessorTest {
         int newlyServerId = 3;
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        Endpoint.parseEndpoints(INTERNAL_LISTENER_NAME + "://host3:1234"),
+                        Endpoint.fromListenersString(
+                                ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()
+                                        + "://host3:1234"),
                         System.currentTimeMillis());
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
@@ -395,8 +397,7 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration()
-                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
+                        new Configuration());
 
         // in this test case, so make requests to gateway should always be
         // successful for when start up, it will send request to tablet servers
@@ -441,8 +442,7 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration()
-                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
+                        new Configuration());
         int failedServer = 0;
         initCoordinatorChannel(failedServer);
         eventProcessor.startup();
@@ -613,8 +613,7 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration()
-                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
+                        new Configuration());
         initCoordinatorChannel();
         eventProcessor.startup();
         verifyPartitionDropped(tableId, partition2Id);
@@ -668,8 +667,7 @@ class CoordinatorEventProcessorTest {
                         testCoordinatorChannelManager,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration()
-                                .set(ConfigOptions.INTERNAL_LISTENER_NAME, INTERNAL_LISTENER_NAME));
+                        new Configuration());
         initCoordinatorChannel();
         eventProcessor.startup();
 

@@ -215,7 +215,7 @@ public class RpcMessageUtils {
             aliveTableServerNodes.add(
                     new PbServerNode()
                             .setNodeId(serverInfo.id())
-                            .setListeners(Endpoint.toListenerString(serverInfo.endpoints())));
+                            .setListeners(Endpoint.toListenersString(serverInfo.endpoints())));
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         coordinatorServer.map(
@@ -223,7 +223,7 @@ public class RpcMessageUtils {
                         updateMetadataRequest
                                 .setCoordinatorServer()
                                 .setNodeId(node.id())
-                                .setListeners(Endpoint.toListenerString(node.endpoints())));
+                                .setListeners(Endpoint.toListenersString(node.endpoints())));
         return updateMetadataRequest;
     }
 

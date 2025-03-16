@@ -41,23 +41,24 @@ public class ServerMetadataCacheImplTest {
         coordinatorServer =
                 new ServerInfo(
                         0,
-                        Endpoint.parseEndpoints("CLIENT://localhost:99,INTERNAL://localhost:100"),
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:99,INTERNAL://localhost:100"),
                         ServerType.COORDINATOR);
         aliveTableServers =
                 new HashSet<>(
                         Arrays.asList(
                                 new ServerInfo(
                                         0,
-                                        Endpoint.parseEndpoints(
+                                        Endpoint.fromListenersString(
                                                 "CLIENT://localhost:101, INTERNAL://localhost:102"),
                                         ServerType.TABLET_SERVER),
                                 new ServerInfo(
                                         1,
-                                        Endpoint.parseEndpoints("INTERNAL://localhost:103"),
+                                        Endpoint.fromListenersString("INTERNAL://localhost:103"),
                                         ServerType.TABLET_SERVER),
                                 new ServerInfo(
                                         2,
-                                        Endpoint.parseEndpoints("INTERNAL://localhost:104"),
+                                        Endpoint.fromListenersString("INTERNAL://localhost:104"),
                                         ServerType.TABLET_SERVER)));
     }
 
@@ -65,10 +66,10 @@ public class ServerMetadataCacheImplTest {
     void testUpdateMetadataRequest() {
         serverMetadataCache.updateMetadata(
                 new ClusterMetadataInfo(Optional.of(coordinatorServer), aliveTableServers));
-        assertThat(serverMetadataCache.getCoordinatorServer("CLIENT"))
-                .isEqualTo(coordinatorServer.toServerNode("CLIENT"));
-        assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL"))
-                .isEqualTo(coordinatorServer.toServerNode("INTERNAL"));
+        assertThat(serverMetadataCache.getCoordinatorServer("CLIENT").get())
+                .isEqualTo(coordinatorServer.node("CLIENT"));
+        assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL").get())
+                .isEqualTo(coordinatorServer.node("INTERNAL"));
         assertThat(serverMetadataCache.isAliveTabletServer(0)).isTrue();
         assertThat(serverMetadataCache.getAllAliveTabletServers("CLIENT").size()).isEqualTo(1);
         assertThat(serverMetadataCache.getAllAliveTabletServers("INTERNAL").size()).isEqualTo(3);

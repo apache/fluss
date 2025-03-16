@@ -27,6 +27,7 @@ import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
@@ -78,8 +79,8 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
 
         @Override
         public ServerNode get() {
-            ServerNode serverNode = metadataCache.getCoordinatorServer(interListenerName);
-            if (serverNode == null) {
+            Optional<ServerNode> serverNode = metadataCache.getCoordinatorServer(interListenerName);
+            if (!serverNode.isPresent()) {
                 LOG.info("No coordinator provided, retrying after backoff.");
                 // backoff some times
                 try {
@@ -91,7 +92,7 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
                 }
                 return get();
             }
-            return serverNode;
+            return serverNode.get();
         }
     }
 }

@@ -36,7 +36,7 @@ public interface RpcServer extends AutoCloseableAsync {
      * {@link RpcGatewayService} to handle incoming requests.
      *
      * @param conf The configuration for the RPC server.
-     * @param endpoints The external endpoints to bind to.
+     * @param endpoints The endpoints to bind to.
      * @param service The service to handle incoming requests.
      * @param serverMetricGroup The metric group of server to report.
      * @param requestsMetrics the requests metrics to report.

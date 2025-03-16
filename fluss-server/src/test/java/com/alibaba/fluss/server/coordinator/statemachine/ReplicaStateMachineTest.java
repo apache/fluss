@@ -65,7 +65,7 @@ class ReplicaStateMachineTest {
                 Collections.singletonList(
                         new ServerInfo(
                                 1,
-                                Endpoint.parseEndpoints("CLIENT://host:23"),
+                                Endpoint.fromListenersString("CLIENT://host:23"),
                                 ServerType.TABLET_SERVER));
         coordinatorContext.setLiveTabletServers(liveServers);
 

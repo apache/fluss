@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.tablet;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
@@ -57,7 +58,6 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -146,17 +146,7 @@ public class TabletServer extends ServerBase {
         synchronized (lock) {
             LOG.info("Initializing Tablet services.");
 
-            List<Endpoint> endpoints =
-                    Endpoint.parseEndpoints(conf.getString(ConfigOptions.BIND_LISTENER));
-            if (endpoints.isEmpty()) {
-                endpoints =
-                        Collections.singletonList(
-                                new Endpoint(
-                                        conf.get(ConfigOptions.TABLET_SERVER_HOST),
-                                        Integer.parseInt(
-                                                conf.get(ConfigOptions.TABLET_SERVER_PORT)),
-                                        conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME)));
-            }
+            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.TABLET_SERVER);
 
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
@@ -189,7 +179,7 @@ public class TabletServer extends ServerBase {
 
             CoordinatorGateway coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(
-                            () -> metadataCache.getCoordinatorServer(interListenerName),
+                            () -> metadataCache.getCoordinatorServer(interListenerName).get(),
                             rpcClient,
                             CoordinatorGateway.class);
 
@@ -262,12 +252,9 @@ public class TabletServer extends ServerBase {
     private void registerTabletServer() throws Exception {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
-        List<Endpoint> advisedEndpoints =
-                Endpoint.parseEndpoints(conf.getString(ConfigOptions.ADVERTISED_LISTENER));
-
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        Endpoint.getRegisteredEndpoint(bindEndpoints, advisedEndpoints), startTime);
+                        Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
 
         while (true) {
             try {
@@ -417,16 +404,10 @@ public class TabletServer extends ServerBase {
             throw new IllegalConfigurationException(
                     String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
         }
-
-        if (conf.get(ConfigOptions.INTERNAL_LISTENER_NAME) == null) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Configuration %s must be set.", ConfigOptions.INTERNAL_LISTENER_NAME));
-        }
     }
 
     @VisibleForTesting
-    RpcServer getRpcServer() {
+    public RpcServer getRpcServer() {
         return rpcServer;
     }
 }

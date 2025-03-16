@@ -265,9 +265,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
         return CompletableFuture.completedFuture(
                 ClusterMetadataInfo.toMetadataResponse(
-                        metadataCache.getCoordinatorServer(listenerName) == null
-                                ? Optional.empty()
-                                : Optional.of(metadataCache.getCoordinatorServer(listenerName)),
+                        metadataCache.getCoordinatorServer(listenerName),
                         aliveTableServers,
                         tableMetadataInfos,
                         partitionMetadataInfos));

@@ -145,7 +145,8 @@ final class NettyClientTest {
                         .setClientSoftwareVersion("1.0");
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
         assertThat(nettyClient.connections().size()).isEqualTo(1);
-        assertThat(nettyClient.connections().get(serverNode).getServerNode()).isEqualTo(serverNode);
+        assertThat(nettyClient.connections().get(serverNode.uid()).getServerNode())
+                .isEqualTo(serverNode);
 
         // close the netty server.
         nettyServer.close();
@@ -163,7 +164,8 @@ final class NettyClientTest {
         buildNettyServer(1);
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
         assertThat(nettyClient.connections().size()).isEqualTo(1);
-        assertThat(nettyClient.connections().get(serverNode).getServerNode()).isEqualTo(serverNode);
+        assertThat(nettyClient.connections().get(serverNode.uid()).getServerNode())
+                .isEqualTo(serverNode);
     }
 
     @Test
@@ -213,17 +215,20 @@ final class NettyClientTest {
                             ApiKeys.API_VERSIONS,
                             request)
                     .get();
-            nettyClient
-                    .sendRequest(
-                            new ServerNode(
-                                    3,
-                                    "localhost",
-                                    availablePort2.getPort(),
-                                    ServerType.COORDINATOR),
-                            ApiKeys.API_VERSIONS,
-                            request)
-                    .get();
-            assertThat(nettyClient.connections().size()).isEqualTo(2);
+            assertThat(nettyClient.connections().size()).isEqualTo(1);
+            try (NettyClient client =
+                    new NettyClient(conf, TestingClientMetricGroup.newInstance()); ) {
+                client.sendRequest(
+                                new ServerNode(
+                                        2,
+                                        "localhost",
+                                        availablePort2.getPort(),
+                                        ServerType.COORDINATOR),
+                                ApiKeys.API_VERSIONS,
+                                request)
+                        .get();
+                assertThat(client.connections().size()).isEqualTo(1);
+            }
         }
     }
 

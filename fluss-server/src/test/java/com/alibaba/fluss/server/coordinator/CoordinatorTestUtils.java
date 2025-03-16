@@ -88,7 +88,7 @@ public class CoordinatorTestUtils {
             tabletServes.add(
                     new ServerInfo(
                             server,
-                            Endpoint.parseEndpoints("CLIENT://host:100"),
+                            Endpoint.fromListenersString("CLIENT://host:100"),
                             ServerType.TABLET_SERVER));
         }
         return tabletServes;

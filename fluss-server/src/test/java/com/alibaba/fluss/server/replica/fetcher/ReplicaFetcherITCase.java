@@ -106,7 +106,7 @@ public class ReplicaFetcherITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // send one batch, which need ack.
         assertProduceLogResponse(
@@ -182,7 +182,7 @@ public class ReplicaFetcherITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // send one batch, which need ack.
         assertPutKvResponse(
@@ -258,7 +258,7 @@ public class ReplicaFetcherITCase {
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
 
         int serverToKill =
-                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(true).stream()
+                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().stream()
                         .filter(node -> node.id() != leader)
                         .findFirst()
                         .get()
@@ -272,7 +272,7 @@ public class ReplicaFetcherITCase {
 
         // put kv record batch
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         KvRecordBatch kvRecords =
                 genKvRecordBatch(
                         Tuple2.of("k1", new Object[] {1, "a"}),

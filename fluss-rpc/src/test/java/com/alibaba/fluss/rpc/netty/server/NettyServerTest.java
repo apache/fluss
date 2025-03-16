@@ -33,8 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class NettyServerTest {
 
     @Test
-    void testPostAsZero() throws Exception {
-        List<Endpoint> endpoints = Endpoint.parseEndpoints("FLUSS://localhost:0");
+    void testPortAsZero() throws Exception {
+        List<Endpoint> endpoints = Endpoint.fromListenersString("FLUSS://localhost:0");
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         try (RpcServer server =
                 RpcServer.create(

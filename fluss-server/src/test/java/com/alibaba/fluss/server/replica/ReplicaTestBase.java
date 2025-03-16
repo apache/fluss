@@ -205,21 +205,24 @@ public class ReplicaTestBase {
                         Optional.of(
                                 new ServerInfo(
                                         0,
-                                        Endpoint.parseEndpoints("CLIENT://localhost:1234"),
+                                        Endpoint.fromListenersString("CLIENT://localhost:1234"),
                                         ServerType.COORDINATOR)),
                         new HashSet<>(
                                 Arrays.asList(
                                         new ServerInfo(
                                                 TABLET_SERVER_ID,
-                                                Endpoint.parseEndpoints("CLIENT://localhost:90"),
+                                                Endpoint.fromListenersString(
+                                                        "CLIENT://localhost:90"),
                                                 ServerType.TABLET_SERVER),
                                         new ServerInfo(
                                                 2,
-                                                Endpoint.parseEndpoints("CLIENT://localhost:91"),
+                                                Endpoint.fromListenersString(
+                                                        "CLIENT://localhost:91"),
                                                 ServerType.TABLET_SERVER),
                                         new ServerInfo(
                                                 3,
-                                                Endpoint.parseEndpoints("CLIENT://localhost:92"),
+                                                Endpoint.fromListenersString(
+                                                        "CLIENT://localhost:92"),
                                                 ServerType.TABLET_SERVER)))));
     }
 

@@ -126,7 +126,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
             throws Exception {
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, false);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(

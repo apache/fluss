@@ -26,7 +26,6 @@ import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,7 +55,9 @@ class CoordinatorServerTest extends ServerTestBase {
     @Override
     protected ServerBase getStartFailServer() {
         Configuration configuration = createConfiguration();
-        configuration.setString(ConfigOptions.BIND_LISTENER, "-12");
+        configuration.set(
+                ConfigOptions.BIND_LISTENERS,
+                new Endpoint("localhost", -12, "CLIENT").connectionString());
         return new CoordinatorServer(configuration);
     }
 
@@ -66,8 +67,8 @@ class CoordinatorServerTest extends ServerTestBase {
         // check the data put in zk after coordinator server start
         Optional<CoordinatorAddress> optCoordinatorAddr = zookeeperClient.getCoordinatorAddress();
         assertThat(optCoordinatorAddr).isNotEmpty();
-        List<Endpoint> registeredEndpoints = optCoordinatorAddr.get().getEndpoints();
-        List<Endpoint> bindEndpoints = coordinatorServer.getRpcServer().getBindEndpoints();
-        verifyEndpoint(registeredEndpoints, bindEndpoints);
+        verifyEndpoint(
+                optCoordinatorAddr.get().getEndpoints(),
+                coordinatorServer.getRpcServer().getBindEndpoints());
     }
 }

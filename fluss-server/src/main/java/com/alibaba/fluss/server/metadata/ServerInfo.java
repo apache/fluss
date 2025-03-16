@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.metadata;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.exception.EndpointNotAvailableException;
 
 import javax.annotation.Nullable;
 
@@ -48,24 +49,38 @@ public class ServerInfo {
         return id;
     }
 
+    @Nullable
     public Endpoint endpoint(String listenerName) {
         return endpointMap.get(listenerName);
     }
 
-    public ServerType serverType() {
-        return serverType;
+    public Endpoint endpointOrThrow(String listenerName) {
+        Endpoint endpoint = endpoint(listenerName);
+        if (endpoint == null) {
+            throw new EndpointNotAvailableException(
+                    String.format(
+                            "Endpoint with listener name: %s not found for %s %d",
+                            listenerName, serverType.name().toLowerCase(), id));
+        }
+        return endpoint;
+    }
+
+    @Nullable
+    public ServerNode node(String listenerName) {
+        Endpoint endpoint = endpoint(listenerName);
+        if (endpoint == null) {
+            return null;
+        }
+        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType);
+    }
+
+    public ServerNode nodeOrThrow(String listenerName) {
+        Endpoint endpoint = endpointOrThrow(listenerName);
+        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType);
     }
 
     public List<Endpoint> endpoints() {
         return new ArrayList<>(endpointMap.values());
-    }
-
-    public @Nullable ServerNode toServerNode(String listenerName) {
-        if (endpoint(listenerName) == null) {
-            return null;
-        }
-        Endpoint endpoint = endpoint(listenerName);
-        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType);
     }
 
     @Override

@@ -308,7 +308,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
-                LOG.error("Internal listener endpoint is null for tablet server {}.", server);
+                LOG.error(
+                        "Can not find endpoint for listener name {} for tablet server {}",
+                        internalListenerName,
+                        serverInfo);
                 continue;
             }
             tabletServerInfos.add(serverInfo);
@@ -714,20 +717,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
         coordinatorContext.addLiveTabletServer(serverInfo);
 
-        Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
-        if (internalEndpoint == null) {
-            LOG.error(
-                    "Tablet server {} has no internal listener name {}",
-                    serverInfo.id(),
-                    internalListenerName);
-            return;
-        }
-        coordinatorChannelManager.addTabletServer(
-                new ServerNode(
-                        tabletServerId,
-                        internalEndpoint.getHost(),
-                        internalEndpoint.getPort(),
-                        ServerType.TABLET_SERVER));
+        ServerNode serverNode = serverInfo.nodeOrThrow(internalListenerName);
+        coordinatorChannelManager.addTabletServer(serverNode);
 
         // update server metadata cache.
         updateServerMetadataCache(

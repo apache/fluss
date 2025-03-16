@@ -20,6 +20,7 @@ import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
@@ -166,11 +167,20 @@ public class ClusterMetadataInfo {
         Optional<ServerInfo> coordinatorServer = Optional.empty();
         if (request.hasCoordinatorServer()) {
             PbServerNode pbCoordinatorServer = request.getCoordinatorServer();
+
             coordinatorServer =
                     Optional.of(
                             new ServerInfo(
                                     pbCoordinatorServer.getNodeId(),
-                                    Endpoint.parseEndpoints(pbCoordinatorServer.getListeners()),
+                                    pbCoordinatorServer.hasListeners()
+                                            ? Endpoint.fromListenersString(
+                                                    pbCoordinatorServer.getListeners())
+                                            : Collections.singletonList(
+                                                    new Endpoint(
+                                                            pbCoordinatorServer.getHost(),
+                                                            pbCoordinatorServer.getPort(),
+                                                            ConfigOptions.INTERNAL_LISTENER_NAME
+                                                                    .defaultValue())),
                                     ServerType.COORDINATOR));
         }
 
@@ -179,7 +189,14 @@ public class ClusterMetadataInfo {
             aliveTabletServers.add(
                     new ServerInfo(
                             tabletServer.getNodeId(),
-                            Endpoint.parseEndpoints(tabletServer.getListeners()),
+                            tabletServer.hasListeners()
+                                    ? Endpoint.fromListenersString(tabletServer.getListeners())
+                                    : Collections.singletonList(
+                                            new Endpoint(
+                                                    tabletServer.getHost(),
+                                                    tabletServer.getPort(),
+                                                    ConfigOptions.INTERNAL_LISTENER_NAME
+                                                            .defaultValue())),
                             ServerType.TABLET_SERVER));
         }
         return new ClusterMetadataInfo(coordinatorServer, aliveTabletServers);

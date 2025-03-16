@@ -52,7 +52,7 @@ public class CoordinatorAddressJsonSerde
         writeVersion(generator);
         generator.writeStringField(ID, coordinatorAddress.getId());
         generator.writeStringField(
-                LISTENERS, Endpoint.toListenerString(coordinatorAddress.getEndpoints()));
+                LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
         generator.writeEndObject();
     }
 
@@ -66,7 +66,7 @@ public class CoordinatorAddressJsonSerde
             int port = node.get(PORT).asInt();
             endpoints = Collections.singletonList(new Endpoint(host, port, "CLIENT"));
         } else {
-            endpoints = Endpoint.parseEndpoints(node.get(LISTENERS).asText());
+            endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         }
         return new CoordinatorAddress(id, endpoints);
     }

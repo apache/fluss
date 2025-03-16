@@ -118,7 +118,7 @@ class KvSnapshotITCase {
                     RpcMessageTestUtils.newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
 
             TabletServerGateway leaderGateway =
-                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer, true);
+                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
             leaderGateway.putKv(putKvRequest).get();
 
             // wait for snapshot is available

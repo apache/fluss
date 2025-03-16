@@ -65,7 +65,7 @@ public final class NettyClient implements RpcClient {
      * Managed connections to Netty servers. The key is the server uid (e.g., "cs-2", "ts-3"), the
      * value is the connection.
      */
-    private final Map<ServerNode, ServerConnection> connections;
+    private final Map<String, ServerConnection> connections;
 
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
@@ -157,7 +157,7 @@ public final class NettyClient implements RpcClient {
         try {
             isClosed = true;
             final List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-            for (Map.Entry<ServerNode, ServerConnection> conn : connections.entrySet()) {
+            for (Map.Entry<String, ServerConnection> conn : connections.entrySet()) {
                 if (connections.remove(conn.getKey(), conn.getValue())) {
                     shutdownFutures.add(conn.getValue().close());
                 }
@@ -172,19 +172,20 @@ public final class NettyClient implements RpcClient {
     }
 
     private ServerConnection getOrCreateConnection(ServerNode node) {
+        String serverId = node.uid();
         return connections.computeIfAbsent(
-                node,
+                serverId,
                 ignored -> {
                     LOG.debug("Creating connection to server {}.", node);
                     ServerConnection connection =
                             new ServerConnection(bootstrap, node, clientMetricGroup);
-                    connection.whenClose(ignore -> connections.remove(node, connection));
+                    connection.whenClose(ignore -> connections.remove(serverId, connection));
                     return connection;
                 });
     }
 
     @VisibleForTesting
-    Map<ServerNode, ServerConnection> connections() {
+    Map<String, ServerConnection> connections() {
         return connections;
     }
 }

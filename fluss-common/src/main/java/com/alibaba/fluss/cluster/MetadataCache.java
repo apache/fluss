@@ -18,10 +18,9 @@ package com.alibaba.fluss.cluster;
 
 import com.alibaba.fluss.annotation.Internal;
 
-import javax.annotation.Nullable;
-
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -37,8 +36,7 @@ public interface MetadataCache {
      *
      * @return the coordinator server node
      */
-    @Nullable
-    ServerNode getCoordinatorServer(String listenerName);
+    Optional<ServerNode> getCoordinatorServer(String listenerName);
 
     /**
      * Check whether the tablet server id related tablet server node is alive.
@@ -54,8 +52,7 @@ public interface MetadataCache {
      * @param serverId the tablet server id
      * @return the tablet server node
      */
-    @Nullable
-    ServerNode getTabletServer(int serverId, String listenerName);
+    Optional<ServerNode> getTabletServer(int serverId, String listenerName);
 
     /**
      * Get all alive tablet server nodes.

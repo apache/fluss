@@ -563,8 +563,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     void testGetServerNodes() throws Exception {
         List<ServerNode> serverNodes = admin.getServerNodes().get();
         List<ServerNode> expectedNodes = new ArrayList<>();
-        expectedNodes.add(FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(false));
-        expectedNodes.addAll(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(false));
+        expectedNodes.add(FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode());
+        expectedNodes.addAll(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
         assertThat(serverNodes).containsExactlyInAnyOrderElementsOf(expectedNodes);
     }
 
@@ -748,7 +748,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testBootstrapServerConfigAsTabletServer() throws Exception {
         Configuration newConf = clientConf;
-        ServerNode ts0 = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(false).get(0);
+        ServerNode ts0 = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0);
         newConf.set(
                 ConfigOptions.BOOTSTRAP_SERVERS,
                 Collections.singletonList(String.format("%s:%d", ts0.host(), ts0.port())));
@@ -776,7 +776,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     private void assertHasTabletServerNumber(int tabletServerNumber) {
-        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(true);
+        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         retry(
                 Duration.ofMinutes(2),
                 () -> {

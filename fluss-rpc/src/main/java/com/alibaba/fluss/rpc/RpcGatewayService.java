@@ -28,7 +28,10 @@ public abstract class RpcGatewayService implements RpcGateway {
 
     private final ThreadLocal<Session> currentSession = new ThreadLocal<>();
 
-    /** Returns the current session of the RPC call. This method is thread-safe */
+    /**
+     * Sets API version and listener name of the RPC call to the current session. This method is
+     * thread-safe
+     */
     public void setCurrentSession(Session session) {
         currentSession.set(session);
     }

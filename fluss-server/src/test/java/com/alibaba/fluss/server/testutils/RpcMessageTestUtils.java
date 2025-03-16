@@ -267,7 +267,7 @@ public class RpcMessageTestUtils {
     public static long createTable(
             FlussClusterExtension extension, TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
-        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient(true);
+        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
         coordinatorGateway
                 .createDatabase(newCreateDatabaseRequest(tablePath.getDatabaseName(), true))
                 .get();

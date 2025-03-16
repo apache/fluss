@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.zk.data;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import com.alibaba.fluss.utils.json.JsonDeserializer;
@@ -51,7 +52,7 @@ public class TabletServerRegistrationJsonSerde
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
         generator.writeStringField(
-                LISTENERS, Endpoint.toListenerString(tabletServerRegistration.getEndpoints()));
+                LISTENERS, Endpoint.toListenersString(tabletServerRegistration.getEndpoints()));
         generator.writeNumberField(
                 REGISTER_TIMESTAMP, tabletServerRegistration.getRegisterTimestamp());
         generator.writeEndObject();
@@ -64,9 +65,14 @@ public class TabletServerRegistrationJsonSerde
         if (version == 1) {
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
-            endpoints = Collections.singletonList(new Endpoint(host, port, "CLIENT"));
+            endpoints =
+                    Collections.singletonList(
+                            new Endpoint(
+                                    host,
+                                    port,
+                                    ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
         } else {
-            endpoints = Endpoint.parseEndpoints(node.get(LISTENERS).asText());
+            endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         }
 
         long registerTimestamp = node.get(REGISTER_TIMESTAMP).asLong();

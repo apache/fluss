@@ -31,8 +31,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -91,34 +89,23 @@ public abstract class ServerTestBase {
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         configuration.setString(
-                ConfigOptions.BIND_LISTENER, "CLIENT://localhost:0,INTERNAL://localhost:0");
-        configuration.setString(ConfigOptions.ADVERTISED_LISTENER, "CLIENT://198.168.0.1:100");
+                ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:0,FLUSS://localhost:0");
+        configuration.setString(ConfigOptions.ADVERTISED_LISTENERS, "CLIENT://198.168.0.1:100");
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return configuration;
     }
 
     protected void verifyEndpoint(
             List<Endpoint> registeredEndpoints, List<Endpoint> bindEndpoints) {
-        Map<String, Endpoint> bindEndpointMap =
+        Endpoint internal =
                 bindEndpoints.stream()
-                        .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
-        Map<String, Endpoint> advisedEndpoints =
-                Endpoint.parseEndpoints(
-                                createConfiguration().getString(ConfigOptions.ADVERTISED_LISTENER))
-                        .stream()
-                        .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
-        assertThat(registeredEndpoints).hasSameSizeAs(bindEndpoints);
-
-        registeredEndpoints.forEach(
-                endpoint -> {
-                    if (advisedEndpoints.containsKey(endpoint.getListenerName())) {
-                        assertThat(endpoint)
-                                .isEqualTo(advisedEndpoints.get(endpoint.getListenerName()));
-                    } else {
-                        assertThat(endpoint)
-                                .isEqualTo(bindEndpointMap.get(endpoint.getListenerName()));
-                    }
-                });
+                        .filter(e -> e.getListenerName().equals("FLUSS"))
+                        .findFirst()
+                        .get();
+        List<Endpoint> expectedEndpoints =
+                Endpoint.fromListenersString(
+                        internal.connectionString() + ", CLIENT://198.168.0.1:100");
+        assertThat(registeredEndpoints).containsExactlyInAnyOrderElementsOf(expectedEndpoints);
     }
 
     public static CoordinatorServer startCoordinatorServer(Configuration conf) throws Exception {

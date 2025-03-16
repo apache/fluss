@@ -104,7 +104,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // 1. send first batch.
         assertProduceLogResponse(
                 leaderGateWay
@@ -151,7 +151,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // produce one batch to this bucket.
         assertProduceLogResponse(
@@ -257,7 +257,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // first send an empty fetch request, without min fetch size, the request will return
         // immediately.
@@ -350,7 +350,7 @@ public class TabletServiceITCase {
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         assertFetchLogResponse(
                 leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, 0, 0L, new int[] {1})).get(),
                 tableId,
@@ -371,7 +371,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // 1. send one batch kv.
         assertPutKvResponse(
                 leaderGateWay
@@ -408,7 +408,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // first lookup without in table, key = 1.
         Object[] key1 = DATA_1_WITH_KEY_AND_VALUE.get(0).f0;
@@ -459,7 +459,7 @@ public class TabletServiceITCase {
 
         int logLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(logTableBucket);
         TabletServerGateway logLeaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(logLeader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(logLeader);
         pbLookupRespForBucket =
                 logLeaderGateWay
                         .lookup(newLookupRequest(logTableId, 0, key3Bytes))
@@ -498,7 +498,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // first prefix lookup without in table, prefix key = (1, "a").
         Object[] prefixKey1 = new Object[] {1, "a"};
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0, 1});
@@ -573,7 +573,7 @@ public class TabletServiceITCase {
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
         leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay2 =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         PbPrefixLookupRespForBucket pbPrefixLookupRespForBucket =
                 leaderGateWay2
                         .prefixLookup(
@@ -598,7 +598,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
 
@@ -628,7 +628,7 @@ public class TabletServiceITCase {
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(logTableBucket);
         int logLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(logTableBucket);
         TabletServerGateway logLeaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(logLeader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(logLeader);
         // send first batch.
         assertProduceLogResponse(
                 logLeaderGateWay
@@ -672,7 +672,7 @@ public class TabletServiceITCase {
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // produce one batch to this bucket.
         assertProduceLogResponse(
@@ -721,7 +721,7 @@ public class TabletServiceITCase {
     @Test
     void testInitWriterId() throws Exception {
         TabletServerGateway tabletServerGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(0, true);
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(0);
         for (int i = 0; i < 100; i++) {
             InitWriterResponse response =
                     tabletServerGateway.initWriter(new InitWriterRequest()).get();

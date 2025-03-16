@@ -83,7 +83,8 @@ class ZooKeeperClientTest {
         // zk
         assertThat(zookeeperClient.getCoordinatorAddress()).isEmpty();
         CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress("2", Endpoint.parseEndpoints("CLIENT://localhost1:10012"));
+                new CoordinatorAddress(
+                        "2", Endpoint.fromListenersString("CLIENT://localhost1:10012"));
         // register leader address
         zookeeperClient.registerCoordinatorLeader(coordinatorAddress);
         // check get leader address
@@ -99,10 +100,12 @@ class ZooKeeperClientTest {
         // register two table servers
         TabletServerRegistration registration1 =
                 new TabletServerRegistration(
-                        Endpoint.parseEndpoints("CLIENT://host1:3456"), System.currentTimeMillis());
+                        Endpoint.fromListenersString("CLIENT://host1:3456"),
+                        System.currentTimeMillis());
         TabletServerRegistration registration2 =
                 new TabletServerRegistration(
-                        Endpoint.parseEndpoints("CLIENT://host2:3454"), System.currentTimeMillis());
+                        Endpoint.fromListenersString("CLIENT://host2:3454"),
+                        System.currentTimeMillis());
         zookeeperClient.registerTabletServer(2, registration2);
         zookeeperClient.registerTabletServer(1, registration1);
         // now get the tablet servers
