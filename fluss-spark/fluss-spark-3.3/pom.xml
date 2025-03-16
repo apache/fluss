@@ -21,34 +21,37 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>com.alibaba.fluss</groupId>
-        <artifactId>fluss</artifactId>
+        <artifactId>fluss-spark</artifactId>
         <version>0.7-SNAPSHOT</version>
     </parent>
 
-    <artifactId>fluss-flink</artifactId>
-    <name>Fluss : Engine Flink :</name>
-    <packaging>pom</packaging>
+    <artifactId>fluss-spark-3.3</artifactId>
 
-    <modules>
-        <module>fluss-flink-common</module>
-        <module>fluss-flink-1.20</module>
-        <module>fluss-flink-1.19</module>
-        <module>fluss-flink-1.18</module>
-    </modules>
+    <name>Fluss : Spark : 3.3</name>
 
-    <!-- override these root dependencies as 'provided', so they don't end up
-      in the jars-with-dependencies (uber jars) of connectors and
-      user programs that depend on the connectors -->
+    <properties>
+        <spark.version>3.3.3</spark.version>
+    </properties>
+
     <dependencies>
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
             <scope>provided</scope>
         </dependency>
+
         <dependency>
-            <groupId>com.google.code.findbugs</groupId>
-            <artifactId>jsr305</artifactId>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-core_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
             <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-connector-spark-common</artifactId>
+            <version>${project.version}</version>
         </dependency>
     </dependencies>
 
@@ -56,20 +59,25 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-enforcer-plugin</artifactId>
+                <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>dependency-convergence</id>
+                        <id>shade-fluss</id>
+                        <phase>package</phase>
                         <goals>
-                            <goal>enforce</goal>
+                            <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <skip>true</skip>
+                            <artifactSet>
+                                <includes combine.children="append">
+                                    <include>com.alibaba.fluss:fluss-connector-spark-common</include>
+                                    <include>com.alibaba.fluss:fluss-client</include>
+                                </includes>
+                            </artifactSet>
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
         </plugins>
     </build>
-
 </project>
