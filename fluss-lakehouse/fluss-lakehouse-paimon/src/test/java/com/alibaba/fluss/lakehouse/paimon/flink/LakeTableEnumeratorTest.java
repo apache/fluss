@@ -16,12 +16,12 @@
 
 package com.alibaba.fluss.lakehouse.paimon.flink;
 
-import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
-import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
-import com.alibaba.fluss.connector.flink.source.enumerator.FlinkSourceEnumerator;
-import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.connector.flink.source.split.LogSplit;
-import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
+import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
+import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
+import com.alibaba.fluss.flink.source.enumerator.FlinkSourceEnumerator;
+import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import com.alibaba.fluss.flink.source.split.LogSplit;
+import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.lakehouse.paimon.sink.PaimonDataBaseSyncSinkBuilder;
 import com.alibaba.fluss.lakehouse.paimon.testutils.PaimonSyncTestBase;
 import com.alibaba.fluss.metadata.TableBucket;

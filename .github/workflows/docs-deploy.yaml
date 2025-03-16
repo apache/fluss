@@ -29,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
       - name: Generate versioned docs
         run: ./build_versioned_docs.sh

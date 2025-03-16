@@ -4,6 +4,22 @@ title: Fluss is Now Open Source
 authors: [jark, giannis]
 ---
 
+<!--
+ Copyright (c) 2025 Alibaba Group Holding Ltd.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 Earlier this year at Flink Forward 2024 Berlin we [announced Fluss](https://www.ververica.com/blog/introducing-fluss) and today we are thrilled to announce open-sourcing the project.
 Fluss is a **streaming storage system** designed to power real-time analytics. It aspires to change how organizations approach real-time data by acting as the **real-time data layer** for the Lakehouse. 
 Its cutting-edge design enables businesses to achieve **sub-second latency**, **high throughput**, and **cost efficiency** for data analytics, making it the ideal solution for modern data-driven applications.

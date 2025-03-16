@@ -37,6 +37,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!--  filesystem plugin -->
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-fs-hadoop</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-fs-oss</artifactId>
@@ -51,6 +59,22 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- metrics plugin -->
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-metrics-prometheus</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-metrics-jmx</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-lakehouse-paimon</artifactId>
@@ -64,6 +88,7 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
+
 
         <!-- Concrete logging framework - we add this only here (and not in the
 			root POM) to not tie the projects to one specific framework and make
@@ -93,6 +118,8 @@
             <artifactId>log4j-1.2-api</artifactId>
             <scope>compile</scope>
         </dependency>
+
+
     </dependencies>
 
 

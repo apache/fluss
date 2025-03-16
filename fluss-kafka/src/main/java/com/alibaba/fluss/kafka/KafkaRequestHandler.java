@@ -19,6 +19,11 @@ package com.alibaba.fluss.kafka;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 
 import org.apache.kafka.common.errors.LeaderNotAvailableException;
+import org.apache.kafka.common.message.ApiVersionsResponseData;
+import org.apache.kafka.common.protocol.ApiKeys;
+import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.record.RecordBatch;
+import org.apache.kafka.common.requests.ApiVersionsResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,7 +57,34 @@ public final class KafkaRequestHandler extends KafkaCommandDecoder {
     }
 
     @Override
-    protected void handleApiVersionsRequest(KafkaRequest request) {}
+    protected void handleApiVersionsRequest(KafkaRequest request) {
+        short apiVersion = request.apiVersion();
+        if (!ApiKeys.API_VERSIONS.isVersionSupported(apiVersion)) {
+            request.fail(Errors.UNSUPPORTED_VERSION.exception());
+            return;
+        }
+        ApiVersionsResponseData data = new ApiVersionsResponseData();
+        for (ApiKeys apiKey : ApiKeys.values()) {
+            if (apiKey.minRequiredInterBrokerMagic <= RecordBatch.CURRENT_MAGIC_VALUE) {
+                ApiVersionsResponseData.ApiVersion apiVersionData =
+                        new ApiVersionsResponseData.ApiVersion()
+                                .setApiKey(apiKey.id)
+                                .setMinVersion(apiKey.oldestVersion())
+                                .setMaxVersion(apiKey.latestVersion());
+                if (apiKey.equals(ApiKeys.METADATA)) {
+                    // Not support TopicId
+                    short v = apiKey.latestVersion() > 11 ? 11 : apiKey.latestVersion();
+                    apiVersionData.setMaxVersion(v);
+                } else if (apiKey.equals(ApiKeys.FETCH)) {
+                    // Not support TopicId
+                    short v = apiKey.latestVersion() > 12 ? 12 : apiKey.latestVersion();
+                    apiVersionData.setMaxVersion(v);
+                }
+                data.apiKeys().add(apiVersionData);
+            }
+        }
+        request.complete(new ApiVersionsResponse(data));
+    }
 
     @Override
     protected void handleProducerRequest(KafkaRequest request) {}

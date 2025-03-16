@@ -25,7 +25,7 @@
     </parent>
 
     <artifactId>fluss-kafka</artifactId>
-    <name>Fluss : Kafka</name>
+    <name>Fluss : Kafka Compatibility</name>
 
     <properties>
         <kafka.version>3.9.0</kafka.version>
@@ -45,6 +45,12 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

@@ -69,7 +69,7 @@
         <module>fluss-test-utils</module>
         <module>fluss-test-coverage</module>
         <module>fluss-server</module>
-        <module>fluss-connectors</module>
+        <module>fluss-flink</module>
         <module>fluss-protogen</module>
         <module>fluss-benchmark</module>
         <module>fluss-lake</module>
@@ -591,7 +591,6 @@
                         <!-- Configuration Files. -->
                         <exclude>**/fluss-bin/conf/servers</exclude>
                         <!-- Website Files. -->
-                        <exclude>**/*.md</exclude>
                         <exclude>website/**/_category_.json</exclude>
                         <exclude>website/package.json</exclude>
                         <exclude>website/package-lock.json</exclude>

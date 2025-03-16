@@ -2,6 +2,22 @@
 sidebar_position: 1
 ---
 
+<!--
+ Copyright (c) 2025 Alibaba Group Holding Ltd.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 # Lakehouse Overview
 
 ## Introducing Lakehouse
@@ -28,11 +44,11 @@ Fluss is a streaming storage supporting streaming reads and writes with sub-seco
 With [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md), Fluss unifies data streaming and data Lakehouse by serving real-time streaming data on top of Lakehouse.
 This not only brings low latency to data Lakehouse, but also adds powerful analytics to data streams.
 
-In order to build Streaming Lakehouse, Fluss maintains a compaction service to compact the real-time data in Fluss cluster into Lakehouse storage.
+To build a Streaming Lakehouse, Fluss maintains a tiering service that compacts real-time data from the Fluss cluster into the data lake format stored in the Lakehouse Storage.
 The data in Fluss cluster (streaming Arrow format) is write-optimized for low-latency read and write, and the compacted data in Lakehouse (Parquet format with compressions) is read-optimized for powerful analytics and space-optimized for storing long-term data.
 So the data in Fluss cluster serves real-time data layer which retains days with sub-second-level freshness, and the data in Lakehouse serves historical data layer which retains months with minute-level freshness.
 
-![streamhouse](streamhouse.png)
+![streamhouse](../assets/streamhouse.png)
 
 The core idea of Streaming Lakehouse is shared data and shared metadata between stream and Lakehouse, avoiding data duplication and metadata inconsistency.
 Some powerful features it provided are:

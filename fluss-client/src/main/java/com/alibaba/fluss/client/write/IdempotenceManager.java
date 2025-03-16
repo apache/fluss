@@ -235,7 +235,7 @@ public class IdempotenceManager {
         return idempotenceBucketMap.getOrCreate(tableBucket).hasInflightBatches();
     }
 
-    synchronized boolean canSendMortRequests(TableBucket tableBucket) {
+    synchronized boolean canSendMoreRequests(TableBucket tableBucket) {
         return inflightBatchSize(tableBucket) < maxInflightRequestsPerBucket;
     }
 

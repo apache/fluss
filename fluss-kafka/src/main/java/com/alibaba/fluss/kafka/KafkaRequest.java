@@ -23,6 +23,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.protocol.ByteBufferAccessor;
+import org.apache.kafka.common.protocol.Message;
 import org.apache.kafka.common.protocol.ObjectSerializationCache;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
@@ -132,14 +133,17 @@ public class KafkaRequest {
     private ByteBuf serialize(AbstractResponse response) {
         final ObjectSerializationCache cache = new ObjectSerializationCache();
         ResponseHeader responseHeader = header.toResponseHeader();
-        int headerSize = responseHeader.size();
+        short headerVersion = responseHeader.headerVersion();
+        short apiVersion = request.version();
+        Message headerData = responseHeader.data();
+        int headerSize = headerData.size(cache, headerVersion);
         ApiMessage apiMessage = response.data();
         int messageSize = apiMessage.size(cache, apiVersion);
         final ByteBuf buffer = ctx.alloc().buffer(headerSize + messageSize);
         buffer.writerIndex(headerSize + messageSize);
         final ByteBuffer nioBuffer = buffer.nioBuffer();
         final ByteBufferAccessor writable = new ByteBufferAccessor(nioBuffer);
-        responseHeader.data().write(writable, cache, apiVersion);
+        headerData.write(writable, cache, headerVersion);
         apiMessage.write(writable, cache, apiVersion);
         return buffer;
     }

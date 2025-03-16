@@ -22,9 +22,11 @@ import com.alibaba.fluss.metadata.DataLakeFormat;
 
 import javax.annotation.Nullable;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+
+import static com.alibaba.fluss.utils.PropertiesUtils.asPrefixedMap;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** Utils for Fluss lake storage. */
 public class LakeStorageUtils {
@@ -36,14 +38,8 @@ public class LakeStorageUtils {
         if (!optDataLakeFormat.isPresent()) {
             return null;
         }
-        Map<String, String> datalakeProperties = new HashMap<>();
+
         String dataLakePrefix = "datalake." + optDataLakeFormat.get() + ".";
-        for (Map.Entry<String, String> configurationEntry : clusterConf.toMap().entrySet()) {
-            if (configurationEntry.getKey().startsWith(dataLakePrefix)) {
-                datalakeProperties.put(
-                        "table." + configurationEntry.getKey(), configurationEntry.getValue());
-            }
-        }
-        return datalakeProperties;
+        return asPrefixedMap(extractPrefix(clusterConf.toMap(), dataLakePrefix), "table.");
     }
 }

@@ -158,14 +158,14 @@
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-connector-flink</artifactId>
+            <artifactId>fluss-flink-common</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-connector-flink</artifactId>
+            <artifactId>fluss-flink-common</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>

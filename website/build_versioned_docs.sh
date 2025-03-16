@@ -41,7 +41,7 @@ cd "$TEMP_DIR" || { echo "Failed to enter temporary directory"; exit 1; }
 
 # Match branches in the format "release-x.y"
 regex='release-[0-9]+\.[0-9]+$'                          # Regular expression to match release-x.y
-branches=$(git branch -a | grep -E "$regex")             # Filter branches that match the criteria
+branches=$(git branch -a | grep -E "$regex"| sort -r)    # Filter branches that match the criteria
 
 # Exit the script if no matching branches are found
 if [ -z "$branches" ]; then

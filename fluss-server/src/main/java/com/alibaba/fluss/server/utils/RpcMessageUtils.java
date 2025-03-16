@@ -947,13 +947,20 @@ public class RpcMessageUtils {
     }
 
     public static ListOffsetsRequest makeListOffsetsRequest(
-            int followerServerId, int offsetType, long tableId, List<Integer> bucketIdList) {
+            int followerServerId,
+            int offsetType,
+            long tableId,
+            @Nullable Long partitionId,
+            int bucketId) {
         ListOffsetsRequest listOffsetsRequest = new ListOffsetsRequest();
         listOffsetsRequest
                 .setFollowerServerId(followerServerId)
                 .setOffsetType(offsetType)
                 .setTableId(tableId)
-                .setBucketIds(bucketIdList.stream().mapToInt(Integer::intValue).toArray());
+                .setBucketIds(new int[] {bucketId});
+        if (partitionId != null) {
+            listOffsetsRequest.setPartitionId(partitionId);
+        }
         return listOffsetsRequest;
     }
 

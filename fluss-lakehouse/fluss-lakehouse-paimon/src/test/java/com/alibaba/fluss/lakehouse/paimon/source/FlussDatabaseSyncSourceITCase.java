@@ -17,7 +17,7 @@
 package com.alibaba.fluss.lakehouse.paimon.source;
 
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.connector.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
 import com.alibaba.fluss.lakehouse.paimon.testutils.TestingDatabaseSyncSink;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
@@ -45,7 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static com.alibaba.fluss.connector.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
