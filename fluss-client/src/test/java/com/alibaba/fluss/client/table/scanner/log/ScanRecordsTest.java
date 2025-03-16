@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ package com.alibaba.fluss.client.table.scanner.log;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 
 import org.junit.jupiter.api.Test;
 
@@ -39,10 +39,10 @@ public class ScanRecordsTest {
         Map<TableBucket, List<ScanRecord>> records = new LinkedHashMap<>();
         long tableId = 0;
         records.put(new TableBucket(tableId, 0), new ArrayList<>());
-        ScanRecord record1 = new ScanRecord(0L, 1000L, RowKind.INSERT, row(1, "a"));
-        ScanRecord record2 = new ScanRecord(1L, 1000L, RowKind.UPDATE_BEFORE, row(1, "a"));
-        ScanRecord record3 = new ScanRecord(2L, 1000L, RowKind.UPDATE_AFTER, row(1, "a1"));
-        ScanRecord record4 = new ScanRecord(3L, 1000L, RowKind.DELETE, row(1, "a1"));
+        ScanRecord record1 = new ScanRecord(0L, 1000L, ChangeType.INSERT, row(1, "a"));
+        ScanRecord record2 = new ScanRecord(1L, 1000L, ChangeType.UPDATE_BEFORE, row(1, "a"));
+        ScanRecord record3 = new ScanRecord(2L, 1000L, ChangeType.UPDATE_AFTER, row(1, "a1"));
+        ScanRecord record4 = new ScanRecord(3L, 1000L, ChangeType.DELETE, row(1, "a1"));
         records.put(new TableBucket(tableId, 1), Arrays.asList(record1, record2, record3, record4));
         records.put(new TableBucket(tableId, 2), new ArrayList<>());
 

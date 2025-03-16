@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -259,7 +259,7 @@ class FileLogProjectionTest {
                     while (records.hasNext()) {
                         LogRecord record = records.next();
                         assertThat(record.logOffset()).isEqualTo(expectedOffset);
-                        assertThat(record.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                        assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                         InternalRow row = record.getRow();
                         assertThat(row.getFieldCount()).isEqualTo(projectedFields.length);
                         Object[] objs = new Object[projectedFields.length];

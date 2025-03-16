@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@ package com.alibaba.fluss.client.write;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.DefaultLogRecordBatch;
 import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.indexed.IndexedRow;
 import com.alibaba.fluss.utils.CloseableIterator;
@@ -173,7 +173,7 @@ public class IndexedLogWriteBatchTest {
                 CloseableIterator<LogRecord> iterator = recordBatch.records(readContext)) {
             assertThat(iterator.hasNext()).isTrue();
             LogRecord record = iterator.next();
-            assertThat(record.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+            assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             assertThat(record.getRow()).isEqualTo(row);
             assertThat(iterator.hasNext()).isFalse();
         }

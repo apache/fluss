@@ -17,7 +17,7 @@
 package com.alibaba.fluss.row.encode.paimon;
 
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.BinarySegmentUtils;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
@@ -78,8 +78,8 @@ class PaimonBinaryRowWriter {
         BinarySegmentUtils.bitSet(segment, 0, pos + HEADER_SIZE_IN_BITS);
     }
 
-    public void writeRowKind(RowKind kind) {
-        // convert Fluss rowKind to Paimon rowKind byte value
+    public void writeChangeType(ChangeType kind) {
+        // convert Fluss changeType to Paimon rowKind byte value
         byte paimonRowKindByte;
         switch (kind) {
             case APPEND_ONLY:
@@ -96,7 +96,7 @@ class PaimonBinaryRowWriter {
                 paimonRowKindByte = 3;
                 break;
             default:
-                throw new IllegalArgumentException("Unsupported row kind: " + kind);
+                throw new IllegalArgumentException("Unsupported change type: " + kind);
         }
         segment.put(0, paimonRowKindByte);
     }

@@ -1,8 +1,25 @@
 ---
 sidebar_position: 2
+sidebar_label: IDE Setup
 ---
 
-# Import Fluss into an IDE
+<!--
+ Copyright (c) 2025 Alibaba Group Holding Ltd.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+# IDE Setup
 
 The sections below describe how to import the Fluss project into an IDE
 for the development of Fluss itself.
@@ -17,14 +34,24 @@ that has a bug or is not properly set up.
 Using the included [Maven Wrapper](https://maven.apache.org/wrapper/) by replacing `mvn` with `./mvnw` ensures that the correct Maven version is used.
 :::
 
-## Preparation
+## Preparation: Fork and Clone the Fluss Repository
 
-To get started, please first checkout the Fluss sources from our
-[repository](https://github.com/alibaba/fluss),
-e.g.
+Fluss uses [git](http://git-scm.com/) for version control.
+The Git repository is mirrored to [GitHub](https://github.com/alibaba/fluss/).
+
+The common way to merge code changes on GitHub is to fork the repository (creating a copy of the repository to your personal GitHub account so you can modify the source code) and issue a pull request.
+
+1. To fork the Fluss repository, log in with your GitHub account. If you do not have one yet, [sign up for free](https://github.com/signup). Then, click the `[Fork]` button on the upper right of the [Fluss repository](https://github.com/alibaba/fluss/).
+2. Clone the _forked_ version of the repository over HTTPs or SSH. SSH is recommended but needs to be [explicitly configured](https://docs.github.com/en/authentication/connecting-to-github-with-ssh).
 
 ```bash
-git clone git@github.com:alibaba/fluss.git
+# Clone using HTTPs
+git clone https://github.com/<your-user-name>/fluss.git
+```
+
+```bash
+# Clone using SSH
+git clone git@github.com:<your-user-name>/fluss.git
 ```
 
 ## IntelliJ IDEA
@@ -57,21 +84,21 @@ adding a Copyright profile:
 2. Add a new profile and name it "Alibaba".
 3. Add the following text as the license text:
 
-   ```
-    Copyright (c) 2024 Alibaba Group Holding Ltd.
+```text
+Copyright (c) 2025 Alibaba Group Holding Ltd.
 
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
-    
-        http://www.apache.org/licenses/LICENSE-2.0
-   
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
-   ```
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
 4. Go to "Editor" → "Copyright" and choose the "Alibaba" profile as the default profile for this
    project.
 5. Click "Apply".
@@ -142,6 +169,48 @@ You can now import the Checkstyle configuration for the Java code formatter.
 
 To verify the setup, click "View" → "Tool Windows" → "Checkstyle" and find the "Check Module"
 button in the opened tool window. It should report no violations.
+
+### Configure Git Commit Username and Email
+
+Verify that the Git commit username is set to your preferred name using
+
+```bash
+git config user.name
+```
+
+The set username will be shown in the contributor list in Fluss release notes.
+
+To change the username use
+
+```bash
+git config user.name "<Your username>"
+```
+
+You are free to choose any username you want. 
+In particular, the username does _not_ have to correspond to your GitHub username.
+A common choice is simply your full name.
+
+Also verify that the Git commit email address is set to your preferred email address using
+
+```bash
+git config user.email
+```
+
+Make sure that the set email address is an email address that is linked to your GitHub account.
+If the email address is not linked to your GitHub account, commits in the contribution graph will not be associated with your account.
+
+To change the email address use
+
+```bash
+git config user.email "<email address>"
+```
+
+If you do not want to expose your email address in Git commits, you can activate [GitHub's email privacy setting](https://docs.github.com/en/account-and-profile/setting-up-and-managing-your-personal-account-on-github/managing-email-preferences/blocking-command-line-pushes-that-expose-your-personal-email-address) and set the Git commit email address to the anonymized `noreply @users.noreply.github.com` email address.
+
+:::important
+- When committing from different devices, make sure the username is consistently set on all devices.
+- The `git config` commands above only set the username and email address for the current Git repository. If you want to apply the same settings to all Git repositories on a device, execute the commands with the `--global` option.
+:::
 
 ### Common Problems
 

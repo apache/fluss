@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,12 +54,12 @@ public class TestingMemorySegmentPool implements MemorySegmentPool {
 
     @Override
     public void returnPage(MemorySegment segment) {
-        // do noting.
+        // do nothing.
     }
 
     @Override
     public void returnAll(List<MemorySegment> memory) {
-        // do noting.
+        // do nothing.
     }
 
     @Override

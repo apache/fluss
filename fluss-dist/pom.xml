@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
- Copyright (c) 2024 Alibaba Group Holding Ltd.
+ Copyright (c) 2025 Alibaba Group Holding Ltd.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@
     <parent>
         <groupId>com.alibaba.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.6-SNAPSHOT</version>
+        <version>0.7-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-dist</artifactId>
@@ -33,6 +33,14 @@
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!--  filesystem plugin -->
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-fs-hadoop</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
@@ -51,6 +59,22 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- metrics plugin -->
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-metrics-prometheus</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-metrics-jmx</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-lakehouse-paimon</artifactId>
@@ -64,6 +88,7 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
+
 
         <!-- Concrete logging framework - we add this only here (and not in the
 			root POM) to not tie the projects to one specific framework and make
@@ -93,6 +118,8 @@
             <artifactId>log4j-1.2-api</artifactId>
             <scope>compile</scope>
         </dependency>
+
+
     </dependencies>
 
 
@@ -255,6 +282,25 @@
                             <descriptors>
                                 <descriptor>src/main/assemblies/tgz.xml</descriptor>
                             </descriptors>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Generate empty javadoc jar to make Sonatype OSS happy -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>empty-javadoc-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>javadoc</classifier>
+                            <classesDirectory>${basedir}/javadoc</classesDirectory>
                         </configuration>
                     </execution>
                 </executions>

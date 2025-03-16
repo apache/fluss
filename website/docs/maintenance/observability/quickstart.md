@@ -3,16 +3,27 @@ sidebar_label: Quickstart Guides
 sidebar_position: 1
 ---
 
+<!--
+ Copyright (c) 2025 Alibaba Group Holding Ltd.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 # Observability Quickstart Guides
 
 On this page, you can find the following guides to set up an observability stack **based on the instructions in the [Flink quickstart guide](quickstart/flink.md)**:
 
 - [Observability with Prometheus, Loki and Grafana](#observability-with-prometheus-loki-and-grafana)
-
-:::warning
-    Make sure the environment variables for the Fluss and the Quickstart version are set.
-    For further information, check the [Flink quickstart guide](quickstart/flink.md#starting-required-components).
-:::
 
 ## Observability with Prometheus, Loki and Grafana
 

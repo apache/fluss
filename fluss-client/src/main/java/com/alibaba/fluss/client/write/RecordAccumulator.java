@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -393,11 +393,8 @@ public final class RecordAccumulator {
 
         boolean exhausted = writerBufferPool.queued() > 0;
         for (Map.Entry<Integer, Deque<WriteBatch>> entry : batches.entrySet()) {
-            int bucketId = entry.getKey();
             Deque<WriteBatch> deque = entry.getValue();
 
-            TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
-            ServerNode leader = cluster.leaderFor(tableBucket);
             final long waitedTimeMs;
             final int dequeSize;
             final boolean full;
@@ -419,6 +416,9 @@ public final class RecordAccumulator {
                 full = dequeSize > 1 || batch.isClosed();
             }
 
+            int bucketId = entry.getKey();
+            TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
+            ServerNode leader = cluster.leaderFor(tableBucket);
             if (leader == null) {
                 // This is a bucket for which leader is not known, but messages are
                 // available to send. Note that entries are currently not removed from
@@ -653,7 +653,7 @@ public final class RecordAccumulator {
                 return true;
             }
 
-            if (!idempotenceManager.canSendMortRequests(tableBucket)) {
+            if (!idempotenceManager.canSendMoreRequests(tableBucket)) {
                 // we have reached the max inflight requests for this table bucket, so we need stop
                 // drain this batch.
                 return true;

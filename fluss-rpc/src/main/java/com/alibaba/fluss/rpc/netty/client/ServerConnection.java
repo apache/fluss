@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -86,10 +86,10 @@ final class ServerConnection {
     ServerConnection(Bootstrap bootstrap, ServerNode node, ClientMetricGroup clientMetricGroup) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
+        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         bootstrap
                 .connect(node.host(), node.port())
                 .addListener((ChannelFutureListener) this::establishConnection);
-        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
     }
 
     public ServerNode getServerNode() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 import static org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions.CHECKPOINTING_INTERVAL;
 
 /** Cli for Fluss lakehouse integrating. */
@@ -75,15 +76,8 @@ public class FlussLakehouseCli {
                     GlobalConfiguration.loadConfiguration(
                             configDirAndDynamicConfig.f0, configDirAndDynamicConfig.f1);
 
-            // validate datalake format
-            DataLakeFormat datalakeFormat = globalConfiguration.get(ConfigOptions.DATALAKE_FORMAT);
-            if (datalakeFormat == null) {
-                throw new IllegalArgumentException(
-                        "The datalake format is not set,"
-                                + " please set the configuration "
-                                + ConfigOptions.DATALAKE_FORMAT.key());
-            }
-
+            // get config for lake storage
+            Map<String, String> lakeStorageConfig = getLakeStorageConfig(globalConfiguration);
             // get config for fluss source, now only bootstrap server is required
             String flussBootstrapServer = getFlussBootStrapServers(globalConfiguration);
 
@@ -100,7 +94,14 @@ public class FlussLakehouseCli {
             flinkConfig.set(PipelineOptions.NAME, DEFAULT_PIPELINE_NAME);
 
             // now, start execute
-            retCode = run(runAction, jarFile, flussBootstrapServer, flinkConfig, dynamicConfigs);
+            retCode =
+                    run(
+                            runAction,
+                            jarFile,
+                            flussBootstrapServer,
+                            lakeStorageConfig,
+                            flinkConfig,
+                            dynamicConfigs);
         } catch (Throwable t) {
             t.printStackTrace(System.err);
         }
@@ -125,6 +126,7 @@ public class FlussLakehouseCli {
             String runAction,
             String jarFile,
             String flussBootstrapServer,
+            Map<String, String> lakeStorageConfig,
             org.apache.flink.configuration.Configuration flinkConfig,
             Map<String, String> dynamicConfigs) {
         List<CustomCommandLine> customCommandLines = new ArrayList<>();
@@ -139,12 +141,29 @@ public class FlussLakehouseCli {
                                 jarFile,
                                 "--" + ConfigOptions.BOOTSTRAP_SERVERS.key(),
                                 flussBootstrapServer));
+        for (Map.Entry<String, String> entry : lakeStorageConfig.entrySet()) {
+            arguments.add("--" + entry.getKey());
+            arguments.add(entry.getValue());
+        }
         for (Map.Entry<String, String> entry : dynamicConfigs.entrySet()) {
             arguments.add("--" + entry.getKey());
             arguments.add(entry.getValue());
         }
         String[] newArgs = arguments.toArray(new String[0]);
         return cliFrontend.parseAndRun(newArgs);
+    }
+
+    private static Map<String, String> getLakeStorageConfig(Configuration configuration) {
+        // validate datalake format
+        DataLakeFormat datalakeFormat = configuration.get(ConfigOptions.DATALAKE_FORMAT);
+        if (datalakeFormat == null) {
+            throw new IllegalArgumentException(
+                    "The datalake format is not set,"
+                            + " please set the configuration "
+                            + ConfigOptions.DATALAKE_FORMAT.key());
+        }
+        String datalakeConfigPrefix = "datalake." + datalakeFormat + ".";
+        return extractPrefix(configuration.toMap(), datalakeConfigPrefix);
     }
 
     private static String getFlussBootStrapServers(Configuration configuration) {

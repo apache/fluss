@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -333,8 +333,8 @@ public class FlinkSourceEnumerator
 
     private void checkPartitionChanges(
             Map<Long, TableInfo> tableInfos, Map<Long, Set<PartitionInfo>> fetchedPartitionInfos) {
-        Map<Long, Collection<PartitionInfo>> newPartitions = new HashMap<>();
-        Map<Long, Collection<PartitionInfo>> removedPartitions = new HashMap<>();
+        Map<Long, Collection<Partition>> newPartitions = new HashMap<>();
+        Map<Long, Collection<Partition>> removedPartitions = new HashMap<>();
         for (Map.Entry<Long, Set<PartitionInfo>> entry : fetchedPartitionInfos.entrySet()) {
             long tableId = entry.getKey();
             Set<PartitionInfo> partitionInfos = entry.getValue();
@@ -384,27 +384,26 @@ public class FlinkSourceEnumerator
     }
 
     private List<SourceSplitBase> initPartitionedSplits(
-            Map<Long, TableInfo> tableInfos, Map<Long, Collection<PartitionInfo>> newPartitions) {
+            Map<Long, TableInfo> tableInfos, Map<Long, Collection<Partition>> newPartitions) {
         List<SourceSplitBase> sourceSplitBases = new ArrayList<>();
-        for (Map.Entry<Long, Collection<PartitionInfo>> entry : newPartitions.entrySet()) {
+        for (Map.Entry<Long, Collection<Partition>> entry : newPartitions.entrySet()) {
             long tableId = entry.getKey();
-            Collection<PartitionInfo> partitionInfos = entry.getValue();
+            Collection<Partition> partitions = entry.getValue();
             TableInfo tableInfo = tableInfos.get(tableId);
             if (tableInfo.hasPrimaryKey()) {
                 sourceSplitBases.addAll(
-                        initPrimaryKeyTablePartitionSplits(
-                                tableId, tableInfo.getTablePath(), partitionInfos));
+                        initPrimaryKeyTablePartitionSplits(tableInfo.getTablePath(), partitions));
             } else {
-                sourceSplitBases.addAll(initLogTablePartitionSplits(tableInfo, partitionInfos));
+                sourceSplitBases.addAll(initLogTablePartitionSplits(tableInfo, partitions));
             }
         }
         return sourceSplitBases;
     }
 
     private List<SourceSplitBase> initLogTablePartitionSplits(
-            TableInfo tableInfo, Collection<PartitionInfo> newPartitions) {
+            TableInfo tableInfo, Collection<Partition> newPartitions) {
         List<SourceSplitBase> splits = new ArrayList<>();
-        for (PartitionInfo partition : newPartitions) {
+        for (Partition partition : newPartitions) {
             splits.addAll(
                     getLogSplits(
                             new TableIdAndPath(tableInfo.getTableId(), tableInfo.getTablePath()),
@@ -416,10 +415,10 @@ public class FlinkSourceEnumerator
     }
 
     private List<SourceSplitBase> initPrimaryKeyTablePartitionSplits(
-            long tableId, TablePath tablePath, Collection<PartitionInfo> newPartitions) {
+            TablePath tablePath, Collection<Partition> newPartitions) {
         List<SourceSplitBase> splits = new ArrayList<>();
-        for (PartitionInfo partitionInfo : newPartitions) {
-            String partitionName = partitionInfo.getPartitionName();
+        for (Partition partition : newPartitions) {
+            String partitionName = partition.getPartitionName();
             // get the table snapshot info
             final KvSnapshots kvSnapshots;
             try {
@@ -433,7 +432,7 @@ public class FlinkSourceEnumerator
             }
             splits.addAll(
                     getHybridSnapshotAndLogSplits(
-                            kvSnapshots, tablePath, partitionInfo.getPartitionName()));
+                            kvSnapshots, tablePath, partition.getPartitionName()));
         }
         return splits;
     }
@@ -568,20 +567,16 @@ public class FlinkSourceEnumerator
     }
 
     private PartitionChange getPartitionChange(Set<PartitionInfo> fetchedPartitionInfos) {
-        final Set<PartitionInfo> removedPartitionIds = new HashSet<>();
+        final Set<Partition> newPartitions =
+                fetchedPartitionInfos.stream()
+                        .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
+                        .collect(Collectors.toSet());
+        final Set<Partition> removedPartitions = new HashSet<>();
 
-        Consumer<PartitionInfo> dedupOrMarkAsRemoved =
-                (tp) -> {
-                    if (!fetchedPartitionInfos.remove(tp)) {
-                        removedPartitionIds.add(tp);
-                    }
-                };
-
-        Set<PartitionInfo> assignedOrPendingPartitions = new HashSet<>();
+        Set<Partition> assignedOrPendingPartitions = new HashSet<>();
         assignedPartitions.forEach(
                 (partitionId, partitionName) ->
-                        assignedOrPendingPartitions.add(
-                                new PartitionInfo(partitionId, partitionName)));
+                        assignedOrPendingPartitions.add(new Partition(partitionId, partitionName)));
         pendingSplitAssignment.values().stream()
                 .flatMap(Collection::stream)
                 .forEach(
@@ -595,19 +590,24 @@ public class FlinkSourceEnumerator
                                             split.getPartitionName(),
                                             "partition name shouldn't be null for the splits of partitioned table.");
                             assignedOrPendingPartitions.add(
-                                    new PartitionInfo(partitionId, partitionName));
+                                    new Partition(partitionId, partitionName));
                         });
 
-        assignedOrPendingPartitions.forEach(dedupOrMarkAsRemoved);
+        assignedOrPendingPartitions.forEach(
+                p -> {
+                    if (!newPartitions.remove(p)) {
+                        removedPartitions.add(p);
+                    }
+                });
 
-        if (!removedPartitionIds.isEmpty()) {
-            LOG.info("Discovered removed partitions: {}", removedPartitionIds);
+        if (!removedPartitions.isEmpty()) {
+            LOG.info("Discovered removed partitions: {}", removedPartitions);
         }
-        if (!fetchedPartitionInfos.isEmpty()) {
-            LOG.info("Discovered new partitions: {}", fetchedPartitionInfos);
+        if (!newPartitions.isEmpty()) {
+            LOG.info("Discovered new partitions: {}", newPartitions);
         }
 
-        return new PartitionChange(fetchedPartitionInfos, removedPartitionIds);
+        return new PartitionChange(newPartitions, removedPartitions);
     }
 
     private void handleTablesAdd(Collection<TableInfo> addedTables) {
@@ -641,22 +641,22 @@ public class FlinkSourceEnumerator
     }
 
     private void handlePartitionsRemoved(
-            Map<Long, Collection<PartitionInfo>> removedPartitionInfoByTableId) {
+            Map<Long, Collection<Partition>> removedPartitionInfoByTableId) {
         if (removedPartitionInfoByTableId.isEmpty()) {
             return;
         }
 
         Map<Long, Map<Long, String>> removedPartitionsByTableId = new HashMap<>();
 
-        for (Map.Entry<Long, Collection<PartitionInfo>> removedPartitionInfoEntry :
+        for (Map.Entry<Long, Collection<Partition>> removedPartitionInfoEntry :
                 removedPartitionInfoByTableId.entrySet()) {
             long tableId = removedPartitionInfoEntry.getKey();
             Map<Long, String> removedPartitionsMap =
                     removedPartitionInfoEntry.getValue().stream()
                             .collect(
                                     Collectors.toMap(
-                                            PartitionInfo::getPartitionId,
-                                            PartitionInfo::getPartitionName));
+                                            Partition::getPartitionId,
+                                            Partition::getPartitionName));
             // remove from the pending split assignment
             pendingSplitAssignment.forEach(
                     (reader, splits) ->
@@ -767,12 +767,11 @@ public class FlinkSourceEnumerator
     // --------------- private class ---------------
     /** A container class to hold the newly added partitions and removed partitions. */
     private static class PartitionChange {
-        private final Collection<PartitionInfo> newPartitions;
-        private final Collection<PartitionInfo> removedPartitions;
+        private final Collection<Partition> newPartitions;
+        private final Collection<Partition> removedPartitions;
 
         PartitionChange(
-                Collection<PartitionInfo> newPartitions,
-                Collection<PartitionInfo> removedPartitions) {
+                Collection<Partition> newPartitions, Collection<Partition> removedPartitions) {
             this.newPartitions = newPartitions;
             this.removedPartitions = removedPartitions;
         }
@@ -825,6 +824,45 @@ public class FlinkSourceEnumerator
                     + tablePath
                     + '\''
                     + '}';
+        }
+    }
+
+    /** A container class to hold the partition id and partition name. */
+    private static class Partition {
+        final long partitionId;
+        final String partitionName;
+
+        Partition(long partitionId, String partitionName) {
+            this.partitionId = partitionId;
+            this.partitionName = partitionName;
+        }
+
+        public long getPartitionId() {
+            return partitionId;
+        }
+
+        public String getPartitionName() {
+            return partitionName;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            Partition partition = (Partition) o;
+            return partitionId == partition.partitionId
+                    && Objects.equals(partitionName, partition.partitionName);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(partitionId, partitionName);
+        }
+
+        @Override
+        public String toString() {
+            return "Partition{" + "id=" + partitionId + ", name='" + partitionName + '\'' + '}';
         }
     }
 }

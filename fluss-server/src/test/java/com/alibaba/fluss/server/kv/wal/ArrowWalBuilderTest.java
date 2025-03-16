@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@ import com.alibaba.fluss.memory.LazyMemorySegmentPool;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -78,12 +78,12 @@ class ArrowWalBuilderTest {
                 LazyMemorySegmentPool.createWriterBufferPool(conf);
         WalBuilder walBuilder = createWalBuilder(tb, 1024, memorySegmentPool);
 
-        List<Tuple2<RowKind, Object[]>> expectedResult = new ArrayList<>();
+        List<Tuple2<ChangeType, Object[]>> expectedResult = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            RowKind rowKind = RowKind.INSERT;
+            ChangeType changeType = ChangeType.INSERT;
             Object[] objects = {i, "v" + i};
-            walBuilder.append(rowKind, row(objects));
-            expectedResult.add(Tuple2.of(rowKind, objects));
+            walBuilder.append(changeType, row(objects));
+            expectedResult.add(Tuple2.of(changeType, objects));
         }
 
         // consume log records before walBuilder deallocate memory. it's safe.
@@ -120,12 +120,12 @@ class ArrowWalBuilderTest {
                 LazyMemorySegmentPool.createWriterBufferPool(conf);
         WalBuilder walBuilder = createWalBuilder(tb, 1024, memorySegmentPool);
 
-        List<Tuple2<RowKind, Object[]>> expectedResult = new ArrayList<>();
+        List<Tuple2<ChangeType, Object[]>> expectedResult = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            RowKind rowKind = RowKind.INSERT;
+            ChangeType changeType = ChangeType.INSERT;
             Object[] objects = {i, "v" + i};
-            walBuilder.append(rowKind, row(objects));
-            expectedResult.add(Tuple2.of(rowKind, objects));
+            walBuilder.append(changeType, row(objects));
+            expectedResult.add(Tuple2.of(changeType, objects));
         }
 
         // consume log records before walBuilder deallocate memory. it's safe.

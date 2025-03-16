@@ -21,8 +21,10 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
@@ -40,7 +42,7 @@ public class ResolvedPartitionSpec {
     private final List<String> partitionKeys;
     private final List<String> partitionValues;
 
-    private ResolvedPartitionSpec(List<String> partitionKeys, List<String> partitionValues) {
+    public ResolvedPartitionSpec(List<String> partitionKeys, List<String> partitionValues) {
         checkArgument(
                 partitionKeys.size() == partitionValues.size(),
                 "The number of partition keys and partition values should be the same.");
@@ -71,6 +73,14 @@ public class ResolvedPartitionSpec {
 
     public List<String> getPartitionValues() {
         return partitionValues;
+    }
+
+    public PartitionSpec toPartitionSpec() {
+        Map<String, String> specMap = new HashMap<>();
+        for (int i = 0; i < partitionKeys.size(); i++) {
+            specMap.put(partitionKeys.get(i), partitionValues.get(i));
+        }
+        return new PartitionSpec(specMap);
     }
 
     /**
@@ -121,13 +131,28 @@ public class ResolvedPartitionSpec {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        ResolvedPartitionSpec that = (ResolvedPartitionSpec) o;
+        return Objects.equals(partitionKeys, that.partitionKeys)
+                && Objects.equals(partitionValues, that.partitionValues);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(partitionKeys, partitionValues);
+    }
+
+    @Override
     public String toString() {
         return getPartitionQualifiedName();
     }
 
     private static List<String> getReorderedPartitionValues(
             List<String> partitionKeys, PartitionSpec partitionSpec) {
-        Map<String, String> partitionSpecMap = partitionSpec.getPartitionSpec();
+        Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         List<String> reOrderedPartitionValues = new ArrayList<>(partitionKeys.size());
         partitionKeys.forEach(
                 partitionKey -> reOrderedPartitionValues.add(partitionSpecMap.get(partitionKey)));

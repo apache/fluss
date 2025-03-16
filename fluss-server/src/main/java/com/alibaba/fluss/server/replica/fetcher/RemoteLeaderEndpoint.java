@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,12 +30,13 @@ import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeListOffsetsRequest;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
 final class RemoteLeaderEndpoint implements LeaderEndpoint {
@@ -158,11 +159,12 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     private CompletableFuture<Long> fetchLogOffset(TableBucket tableBucket, int offsetType) {
         return tabletServerGateway
                 .listOffsets(
-                        RpcMessageUtils.makeListOffsetsRequest(
+                        makeListOffsetsRequest(
                                 followerServerId,
                                 offsetType,
                                 tableBucket.getTableId(),
-                                Collections.singletonList(tableBucket.getBucket())))
+                                tableBucket.getPartitionId(),
+                                tableBucket.getBucket()))
                 .thenApply(
                         response -> {
                             PbListOffsetsRespForBucket respForBucket =

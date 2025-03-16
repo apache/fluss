@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,11 +21,10 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
@@ -74,7 +73,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             while (rowList.size() < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     rowList.add(row(row.getInt(0), row.getString(1)));
                 }
@@ -109,7 +108,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             while (rowList.size() < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     rowList.add(row(row.getInt(0), row.getString(1)));
                 }
@@ -148,7 +147,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             while (rowList.size() < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     rowList.add(row(row.getInt(0), row.getString(1)));
                 }
@@ -201,7 +200,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             while (scanned < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     assertThat(scanRecord.getRow().getString(0).getSizeInBytes()).isEqualTo(10);
                     assertThat(scanRecord.getRow().getLong(1)).isEqualTo(scanned);
                     assertThat(scanRecord.getRow().getString(2).getSizeInBytes()).isEqualTo(1000);
@@ -257,7 +256,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             while (scanned < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.INSERT);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
                     assertThat(scanRecord.getRow().getString(0).getSizeInBytes()).isEqualTo(10);
                     assertThat(scanRecord.getRow().getLong(1)).isEqualTo(scanned);
                     assertThat(scanRecord.getRow().getString(2).getSizeInBytes()).isEqualTo(1000);
@@ -298,8 +297,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
         }
 
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
-
         long firstStartTimestamp = System.currentTimeMillis();
         int batchRecordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
@@ -324,12 +321,18 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from firstStartTimestamp, which smaller than the first batch commit
             // timestamp.
             subscribeFromTimestamp(
-                    physicalTablePath, partitionId, table, logScanner, admin, firstStartTimestamp);
+                    tablePath,
+                    partitionName,
+                    partitionId,
+                    table,
+                    logScanner,
+                    admin,
+                    firstStartTimestamp);
             List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     rowList.add(row(row.getInt(0), row.getString(1)));
                 }
@@ -348,12 +351,18 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from secondStartTimestamp, which larger than the second batch commit
             // timestamp, return the data of second batch.
             subscribeFromTimestamp(
-                    physicalTablePath, partitionId, table, logScanner, admin, secondStartTimestamp);
+                    tablePath,
+                    partitionName,
+                    partitionId,
+                    table,
+                    logScanner,
+                    admin,
+                    secondStartTimestamp);
             rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     rowList.add(row(row.getInt(0), row.getString(1)));
                 }
@@ -387,7 +396,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             partitionId = partitionNameAndIds.get(partitionName);
             FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
         }
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
 
         int batchRecordSize = 10;
         try (Table table = conn.getTable(tablePath)) {
@@ -399,7 +407,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
             LogScanner logScanner = createLogScanner(table);
             // try to fetch from the latest offsets. For the first batch, it cannot get any data.
-            subscribeFromLatestOffset(physicalTablePath, partitionId, table, logScanner, admin);
+            subscribeFromLatestOffset(
+                    tablePath, partitionName, partitionId, table, logScanner, admin);
             assertThat(logScanner.poll(Duration.ofSeconds(1)).isEmpty()).isTrue();
 
             // 2. write the second batch.
@@ -414,7 +423,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     rowList.add(row(row.getInt(0), row.getString(1)));
                 }

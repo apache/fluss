@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
 import com.alibaba.fluss.record.KvRecord;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -29,7 +30,6 @@ import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.row.encode.CompactedKeyEncoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
@@ -478,13 +478,13 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 5));
 
         // 2. get the cdc-log of this batch (data1).
-        List<Tuple2<RowKind, Object[]>> expectedLogForData1 =
+        List<Tuple2<ChangeType, Object[]>> expectedLogForData1 =
                 Arrays.asList(
-                        Tuple2.of(RowKind.INSERT, new Object[] {1, "a"}),
-                        Tuple2.of(RowKind.INSERT, new Object[] {2, "b"}),
-                        Tuple2.of(RowKind.INSERT, new Object[] {3, "c"}),
-                        Tuple2.of(RowKind.UPDATE_BEFORE, new Object[] {1, "a"}),
-                        Tuple2.of(RowKind.UPDATE_AFTER, new Object[] {1, "a1"}));
+                        Tuple2.of(ChangeType.INSERT, new Object[] {1, "a"}),
+                        Tuple2.of(ChangeType.INSERT, new Object[] {2, "b"}),
+                        Tuple2.of(ChangeType.INSERT, new Object[] {3, "c"}),
+                        Tuple2.of(ChangeType.UPDATE_BEFORE, new Object[] {1, "a"}),
+                        Tuple2.of(ChangeType.UPDATE_AFTER, new Object[] {1, "a1"}));
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future1 =
                 new CompletableFuture<>();
         replicaManager.fetchLogRecords(
@@ -554,11 +554,11 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
         // 6. get the cdc-log of this batch (data2).
-        List<Tuple2<RowKind, Object[]>> expectedLogForData2 =
+        List<Tuple2<ChangeType, Object[]>> expectedLogForData2 =
                 Arrays.asList(
-                        Tuple2.of(RowKind.UPDATE_BEFORE, new Object[] {2, "b"}),
-                        Tuple2.of(RowKind.UPDATE_AFTER, new Object[] {2, "b1"}),
-                        Tuple2.of(RowKind.DELETE, new Object[] {3, "c"}));
+                        Tuple2.of(ChangeType.UPDATE_BEFORE, new Object[] {2, "b"}),
+                        Tuple2.of(ChangeType.UPDATE_AFTER, new Object[] {2, "b1"}),
+                        Tuple2.of(ChangeType.DELETE, new Object[] {3, "c"}));
         future1 = new CompletableFuture<>();
         replicaManager.fetchLogRecords(
                 buildFetchParams(-1),
@@ -1389,14 +1389,14 @@ class ReplicaManagerTest extends ReplicaTestBase {
         for (Map.Entry<TableBucket, FetchLogResultForBucket> r1 : result.entrySet()) {
             TableBucket tableBucket = r1.getKey();
             int bucketId = tableBucket.getBucket();
-            List<Tuple2<RowKind, Object[]>> expectedLogResults =
+            List<Tuple2<ChangeType, Object[]>> expectedLogResults =
                     Arrays.asList(
-                            Tuple2.of(RowKind.INSERT, new Object[] {1, "a" + bucketId}),
-                            Tuple2.of(RowKind.INSERT, new Object[] {2, "b" + bucketId}),
-                            Tuple2.of(RowKind.UPDATE_BEFORE, new Object[] {1, "a" + bucketId}),
-                            Tuple2.of(RowKind.UPDATE_AFTER, new Object[] {1, "aa" + bucketId}),
-                            Tuple2.of(RowKind.UPDATE_BEFORE, new Object[] {2, "b" + bucketId}),
-                            Tuple2.of(RowKind.UPDATE_AFTER, new Object[] {2, "bb" + bucketId}));
+                            Tuple2.of(ChangeType.INSERT, new Object[] {1, "a" + bucketId}),
+                            Tuple2.of(ChangeType.INSERT, new Object[] {2, "b" + bucketId}),
+                            Tuple2.of(ChangeType.UPDATE_BEFORE, new Object[] {1, "a" + bucketId}),
+                            Tuple2.of(ChangeType.UPDATE_AFTER, new Object[] {1, "aa" + bucketId}),
+                            Tuple2.of(ChangeType.UPDATE_BEFORE, new Object[] {2, "b" + bucketId}),
+                            Tuple2.of(ChangeType.UPDATE_AFTER, new Object[] {2, "bb" + bucketId}));
             FetchLogResultForBucket r = r1.getValue();
             assertLogRecordsEqualsWithRowKind(DATA1_ROW_TYPE, r.records(), expectedLogResults);
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ package com.alibaba.fluss.server.kv.wal;
 
 import com.alibaba.fluss.memory.ManagedPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegmentPool;
+import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
-import com.alibaba.fluss.record.RowKind;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
@@ -38,12 +38,13 @@ public class ArrowWalBuilder implements WalBuilder {
             throws IOException {
         this.memorySegmentPool = memorySegmentPool;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
-        this.recordsBuilder = MemoryLogRecordsArrowBuilder.builder(schemaId, writer, outputView);
+        this.recordsBuilder =
+                MemoryLogRecordsArrowBuilder.builder(schemaId, writer, outputView, false);
     }
 
     @Override
-    public void append(RowKind rowKind, InternalRow row) throws Exception {
-        recordsBuilder.append(rowKind, row);
+    public void append(ChangeType changeType, InternalRow row) throws Exception {
+        recordsBuilder.append(changeType, row);
     }
 
     @Override

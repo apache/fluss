@@ -48,7 +48,7 @@ public class PartitionUtils {
 
     public static void validatePartitionSpec(TableInfo tableInfo, PartitionSpec partitionSpec) {
         List<String> partitionKeys = tableInfo.getPartitionKeys();
-        Map<String, String> partitionSpecMap = partitionSpec.getPartitionSpec();
+        Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         if (partitionKeys.size() != partitionSpecMap.size()) {
             throw new InvalidPartitionException(
                     String.format(

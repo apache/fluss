@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -146,16 +146,16 @@ public final class TestData {
                     Tuple2.of(new Object[] {2}, new Object[] {2, "b1"}),
                     Tuple2.of(new Object[] {3}, null));
 
-    public static final List<Tuple2<RowKind, Object[]>> EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK =
+    public static final List<Tuple2<ChangeType, Object[]>> EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK =
             Arrays.asList(
-                    Tuple2.of(RowKind.INSERT, new Object[] {1, "a"}),
-                    Tuple2.of(RowKind.INSERT, new Object[] {2, "b"}),
-                    Tuple2.of(RowKind.INSERT, new Object[] {3, "c"}),
-                    Tuple2.of(RowKind.UPDATE_BEFORE, new Object[] {1, "a"}),
-                    Tuple2.of(RowKind.UPDATE_AFTER, new Object[] {1, "a1"}),
-                    Tuple2.of(RowKind.UPDATE_BEFORE, new Object[] {2, "b"}),
-                    Tuple2.of(RowKind.UPDATE_AFTER, new Object[] {2, "b1"}),
-                    Tuple2.of(RowKind.DELETE, new Object[] {3, "c"}));
+                    Tuple2.of(ChangeType.INSERT, new Object[] {1, "a"}),
+                    Tuple2.of(ChangeType.INSERT, new Object[] {2, "b"}),
+                    Tuple2.of(ChangeType.INSERT, new Object[] {3, "c"}),
+                    Tuple2.of(ChangeType.UPDATE_BEFORE, new Object[] {1, "a"}),
+                    Tuple2.of(ChangeType.UPDATE_AFTER, new Object[] {1, "a1"}),
+                    Tuple2.of(ChangeType.UPDATE_BEFORE, new Object[] {2, "b"}),
+                    Tuple2.of(ChangeType.UPDATE_AFTER, new Object[] {2, "b1"}),
+                    Tuple2.of(ChangeType.DELETE, new Object[] {3, "c"}));
 
     // ---------------------------- data1 table info end ------------------------------
 

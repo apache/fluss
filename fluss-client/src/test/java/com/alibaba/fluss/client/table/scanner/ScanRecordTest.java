@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.client.table.scanner;
 
-import com.alibaba.fluss.record.RowKind;
+import com.alibaba.fluss.record.ChangeType;
 
 import org.junit.jupiter.api.Test;
 
@@ -29,15 +29,15 @@ public class ScanRecordTest {
     @Test
     void testBuildSnapshotReadScanRecord() {
         ScanRecord record = new ScanRecord(row(1, "a"));
-        assertThat(record.getRowKind()).isEqualTo(RowKind.INSERT);
+        assertThat(record.getChangeType()).isEqualTo(ChangeType.INSERT);
         assertThat(record.logOffset()).isEqualTo(-1L);
         assertThat(record.getRow()).isEqualTo(row(1, "a"));
     }
 
     @Test
     void testBuildLogScanRecord() {
-        ScanRecord record = new ScanRecord(1L, 1000L, RowKind.APPEND_ONLY, row(1, "a"));
-        assertThat(record.getRowKind()).isEqualTo(RowKind.APPEND_ONLY);
+        ScanRecord record = new ScanRecord(1L, 1000L, ChangeType.APPEND_ONLY, row(1, "a"));
+        assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
         assertThat(record.logOffset()).isEqualTo(1L);
         assertThat(record.getRow()).isEqualTo(row(1, "a"));
     }

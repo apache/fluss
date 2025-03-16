@@ -3,6 +3,22 @@ sidebar_label: "Getting Started"
 sidebar_position: 1
 ---
 
+<!--
+ Copyright (c) 2025 Alibaba Group Holding Ltd.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 # Getting Started with Flink Engine
 ## Quick Start
 For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
@@ -25,7 +41,10 @@ Fluss only supports Apache Flink's Table API.
 | [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
 | [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
-| [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |                                                                   |
+| [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |
+| [SQL show partitions](ddl.md#show-partitions)     | ✔️    |                                        |
+| [SQL add partiiton](ddl.md#add-partition)         | ✔️    |                                        |
+| [SQL drop partiiton](ddl.md#drop-partition)       | ✔️    |                                        |
 | [SQL select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
 | [SQL insert into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
 | [SQL lookup join](lookups.md)                     | ✔️    |                                        |
@@ -38,12 +57,12 @@ If you haven’t downloaded Flink, you can download [the binary release](https:/
 ```shell
 tar -xzf flink-1.20.1-bin-scala_2.12.tgz
 ```
-- **Copy Fluss Connector Jar**
+- **Copy Fluss Flink Bundled Jar**
 
-Download [Fluss connector jar](/downloads#fluss-connector) and copy to the lib directory of your Flink home.
+Download [Fluss Flink Bundled jar](/downloads) and copy to the `lib` directory of your Flink home.
 
 ```shell
-cp fluss-connector-flink-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
+cp fluss-flink-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
 ```
 :::note
 If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -93,9 +93,9 @@ public abstract class LogTestBase {
 
     private void assertIndexedRecordEquals(
             LogRecord actualRecord, LogRecord expectedRecord, IndexedRow row, int offsetDelta) {
-        assertThat(actualRecord.getRowKind())
-                .isEqualTo(expectedRecord.getRowKind())
-                .isEqualTo(RowKind.APPEND_ONLY);
+        assertThat(actualRecord.getChangeType())
+                .isEqualTo(expectedRecord.getChangeType())
+                .isEqualTo(ChangeType.APPEND_ONLY);
         assertThat(actualRecord.logOffset())
                 .isEqualTo(expectedRecord.logOffset())
                 .isEqualTo(baseLogOffset + offsetDelta);

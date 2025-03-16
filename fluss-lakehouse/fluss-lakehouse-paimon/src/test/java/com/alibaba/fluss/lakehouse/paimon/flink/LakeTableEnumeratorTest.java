@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,12 @@
 
 package com.alibaba.fluss.lakehouse.paimon.flink;
 
-import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
-import com.alibaba.fluss.connector.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
-import com.alibaba.fluss.connector.flink.source.enumerator.FlinkSourceEnumerator;
-import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.connector.flink.source.split.LogSplit;
-import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
+import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
+import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
+import com.alibaba.fluss.flink.source.enumerator.FlinkSourceEnumerator;
+import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import com.alibaba.fluss.flink.source.split.LogSplit;
+import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.lakehouse.paimon.sink.PaimonDataBaseSyncSinkBuilder;
 import com.alibaba.fluss.lakehouse.paimon.testutils.PaimonSyncTestBase;
 import com.alibaba.fluss.metadata.TableBucket;

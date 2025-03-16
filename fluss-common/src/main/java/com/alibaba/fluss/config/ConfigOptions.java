@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1372,6 +1372,28 @@ public class ConfigOptions {
                     .withDescription(
                             "The datalake format used by Fluss to be as lake storage, such as Paimon, Iceberg, Hudi. "
                                     + "Now, only support Paimon.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for fluss kafka
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<Boolean> KAFKA_ENABLED =
+            key("kafka.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether enable fluss kafka. Disabled by default. "
+                                    + "When this option is set to true, the fluss kafka will be enabled.");
+    public static final ConfigOption<Integer> KAFKA_PORT =
+            key("kafka.port")
+                    .intType()
+                    .defaultValue(9092)
+                    .withDescription("The port for fluss kafka. The default port is 9092.");
+    public static final ConfigOption<String> KAFKA_DATABASE =
+            key("kafka.database")
+                    .stringType()
+                    .defaultValue("_kafka")
+                    .withDescription(
+                            "The database for fluss kafka. The default database is '_kafka'.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including
