@@ -23,11 +23,10 @@ import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
-import java.io.Serializable;
 import java.util.List;
 
 /** An interface for encoding key of row into bytes. */
-public interface KeyEncoder extends Serializable {
+public interface KeyEncoder {
 
     /** Encode the key of given row to byte array. */
     byte[] encodeKey(InternalRow row);

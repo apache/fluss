@@ -49,9 +49,11 @@ import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import static com.alibaba.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
+import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
 import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
@@ -95,8 +97,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 resolvedCatalogTable.getPartitionKeys().stream()
                         .mapToInt(tableOutputType::getFieldIndex)
                         .toArray();
-        int[] bucketKeyIndexes =
-                FlinkConnectorOptionsUtils.getBucketKeyIndexes(tableOptions, tableOutputType);
+        int[] bucketKeyIndexes = getBucketKeyIndexes(tableOptions, tableOutputType);
 
         // options for lookup
         LookupCache cache = null;
@@ -142,6 +143,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
                         == RuntimeExecutionMode.STREAMING;
 
+        ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
+        List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
+
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
         final ReadableConfig tableOptions = helper.getOptions();
 
@@ -150,12 +154,14 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 toFlussClientConfig(tableOptions, context.getConfiguration()),
                 rowType,
                 context.getPrimaryKeyIndexes(),
+                partitionKeys,
                 isStreamingMode,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_FORMAT)),
                 tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
-                tableOptions.get(FlinkConnectorOptions.SINK_PRE_HASH_BY_BUCKET_KEY));
+                tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE));
     }
 
     @Override
@@ -180,7 +186,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
-                                FlinkConnectorOptions.SINK_PRE_HASH_BY_BUCKET_KEY,
+                                FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,

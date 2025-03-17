@@ -106,14 +106,17 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
-    public static final ConfigOption<Boolean> SINK_PRE_HASH_BY_BUCKET_KEY =
-            ConfigOptions.key("sink.pre-hash-by-bucket-key")
+    public static final ConfigOption<Boolean> SINK_BUCKET_SHUFFLE =
+            ConfigOptions.key("sink.bucket-shuffle")
                     .booleanType()
-                    .defaultValue(false)
+                    .defaultValue(true)
                     .withDescription(
-                            "Whether to pre hash the record by bucket key before write to sink. Hash the data with the "
-                                    + "same bucket key to be processed by the same task can improve the efficiency"
-                                    + " of client processing and reduce resource consumption");
+                            "Whether to shuffle by bucket id before write to sink. Shuffling the data with the same "
+                                    + "bucket id to be processed by the same task can improve the efficiency of client "
+                                    + "processing and reduce resource consumption. For Log Table, bucket shuffle will "
+                                    + "only take effect when the '"
+                                    + BUCKET_KEY.key()
+                                    + "' is defined. For Primary Key table, it is enabled by default.");
 
     // --------------------------------------------------------------------------------------------
     // table storage specific options

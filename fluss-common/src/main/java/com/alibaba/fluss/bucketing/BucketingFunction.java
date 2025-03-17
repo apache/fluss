@@ -20,10 +20,8 @@ import com.alibaba.fluss.metadata.DataLakeFormat;
 
 import javax.annotation.Nullable;
 
-import java.io.Serializable;
-
 /** An interface to assign a bucket according to the bucket key byte array. */
-public interface BucketingFunction extends Serializable {
+public interface BucketingFunction {
 
     /**
      * Assign a bucket according to the bucket key byte array.

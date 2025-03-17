@@ -21,10 +21,10 @@ import com.alibaba.fluss.flink.sink.writer.FlinkSinkWriter;
 import com.alibaba.fluss.flink.utils.PushdownUtils;
 import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.encode.KeyEncoder;
 
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
@@ -53,8 +53,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussRowType;
-
 /** A Flink {@link DynamicTableSink}. */
 public class FlinkTableSink
         implements DynamicTableSink,
@@ -67,12 +65,14 @@ public class FlinkTableSink
     private final Configuration flussConfig;
     private final RowType tableRowType;
     private final int[] primaryKeyIndexes;
+    private final List<String> partitionKeys;
     private final boolean streaming;
     @Nullable private final MergeEngineType mergeEngineType;
     private final boolean ignoreDelete;
     private final int numBucket;
     private final List<String> bucketKeys;
-    private final boolean sinkReHash;
+    private final boolean shuffleByBucketId;
+    private final @Nullable DataLakeFormat lakeFormat;
 
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
@@ -82,22 +82,26 @@ public class FlinkTableSink
             Configuration flussConfig,
             RowType tableRowType,
             int[] primaryKeyIndexes,
+            List<String> partitionKeys,
             boolean streaming,
             @Nullable MergeEngineType mergeEngineType,
+            @Nullable DataLakeFormat lakeFormat,
             boolean ignoreDelete,
             int numBucket,
             List<String> bucketKeys,
-            boolean sinkReHash) {
+            boolean shuffleByBucketId) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
         this.primaryKeyIndexes = primaryKeyIndexes;
+        this.partitionKeys = partitionKeys;
         this.streaming = streaming;
         this.mergeEngineType = mergeEngineType;
         this.ignoreDelete = ignoreDelete;
         this.numBucket = numBucket;
         this.bucketKeys = bucketKeys;
-        this.sinkReHash = sinkReHash;
+        this.shuffleByBucketId = shuffleByBucketId;
+        this.lakeFormat = lakeFormat;
     }
 
     @Override
@@ -182,10 +186,20 @@ public class FlinkTableSink
                                 targetColumnIndexes,
                                 ignoreDelete,
                                 numBucket,
-                                KeyEncoder.of(toFlussRowType(tableRowType), bucketKeys, null),
-                                sinkReHash)
+                                bucketKeys,
+                                partitionKeys,
+                                lakeFormat,
+                                shuffleByBucketId)
                         : new FlinkSink.AppendSinkWriterBuilder(
-                                tablePath, flussConfig, tableRowType, ignoreDelete);
+                                tablePath,
+                                flussConfig,
+                                tableRowType,
+                                ignoreDelete,
+                                numBucket,
+                                bucketKeys,
+                                partitionKeys,
+                                lakeFormat,
+                                shuffleByBucketId);
 
         FlinkSink flinkSink = new FlinkSink(flinkSinkWriterBuilder);
 
@@ -208,12 +222,14 @@ public class FlinkTableSink
                         flussConfig,
                         tableRowType,
                         primaryKeyIndexes,
+                        partitionKeys,
                         streaming,
                         mergeEngineType,
+                        lakeFormat,
                         ignoreDelete,
                         numBucket,
                         bucketKeys,
-                        sinkReHash);
+                        shuffleByBucketId);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;
