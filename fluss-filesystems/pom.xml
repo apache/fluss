@@ -31,6 +31,7 @@
         <module>fluss-fs-hadoop-shaded</module>
         <module>fluss-fs-oss</module>
         <module>fluss-fs-s3</module>
+        <module>fluss-fs-gs</module>
     </modules>
     <packaging>pom</packaging>
 
