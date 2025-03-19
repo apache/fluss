@@ -1461,7 +1461,8 @@ public final class Replica {
         return updatedState;
     }
 
-    private CompletableFuture<LeaderAndIsr> submitAdjustIsr(
+    @VisibleForTesting
+    public CompletableFuture<LeaderAndIsr> submitAdjustIsr(
             IsrState.PendingIsrState proposedIsrState) {
         LOG.debug("Submitting ISR state change {}.", proposedIsrState);
         CompletableFuture<LeaderAndIsr> future =
@@ -1592,6 +1593,12 @@ public final class Replica {
                 LOG.debug(
                         "Failed to adjust isr to {} because the request is invalid. Replica state may be out of sync, "
                                 + "awaiting new the latest metadata.",
+                        proposedIsrState);
+                return false;
+            case FENCED_LEADER_EPOCH_EXCEPTION:
+                LOG.debug(
+                        "Failed to adjust isr to {} because the leader epoch is fenced which indicate this replica "
+                                + "maybe no long leader. Replica state may be out of sync, awaiting new the latest metadata.",
                         proposedIsrState);
                 return false;
             default:
@@ -1790,5 +1797,10 @@ public final class Replica {
     @VisibleForTesting
     public List<Integer> getIsr() {
         return isrState.isr();
+    }
+
+    @VisibleForTesting
+    public AdjustIsrManager getAdjustIsrManager() {
+        return adjustIsrManager;
     }
 }

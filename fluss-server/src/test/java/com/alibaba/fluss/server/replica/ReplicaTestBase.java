@@ -29,6 +29,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -192,7 +193,7 @@ public class ReplicaTestBase {
         initRemoteLogEnv();
 
         // init replica manager
-        replicaManager = buildReplicaManager();
+        replicaManager = buildReplicaManager(testCoordinatorGateway);
         replicaManager.startup();
 
         // We will register all tables in TestData in zk client previously.
@@ -264,7 +265,8 @@ public class ReplicaTestBase {
         return tableId;
     }
 
-    protected ReplicaManager buildReplicaManager() throws Exception {
+    protected ReplicaManager buildReplicaManager(CoordinatorGateway coordinatorGateway)
+            throws Exception {
         return new ReplicaManager(
                 conf,
                 scheduler,
@@ -274,7 +276,7 @@ public class ReplicaTestBase {
                 TABLET_SERVER_ID,
                 serverMetadataCache,
                 rpcClient,
-                new TestCoordinatorGateway(),
+                coordinatorGateway,
                 snapshotReporter,
                 NOPErrorHandler.INSTANCE,
                 TestingMetricGroups.TABLET_SERVER_METRICS,

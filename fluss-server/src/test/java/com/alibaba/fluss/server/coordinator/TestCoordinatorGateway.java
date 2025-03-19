@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
@@ -68,6 +69,7 @@ import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -77,6 +79,7 @@ import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -92,6 +95,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     private final @Nullable ZooKeeperClient zkClient;
     public final AtomicBoolean commitRemoteLogManifestFail = new AtomicBoolean(false);
+    public final Map<TableBucket, Integer> currentLeaderEpoch = new HashMap<>();
 
     public TestCoordinatorGateway() {
         this(null);
@@ -217,17 +221,34 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         Map<TableBucket, LeaderAndIsr> adjustIsrData = getAdjustIsrData(request);
         List<AdjustIsrResultForBucket> resultForBuckets = new ArrayList<>();
+
         adjustIsrData.forEach(
-                (tb, leaderAndIsr) ->
-                        resultForBuckets.add(
+                (tb, leaderAndIsr) -> {
+                    Integer currentLeaderEpoch = this.currentLeaderEpoch.getOrDefault(tb, 0);
+                    int requestLeaderEpoch = leaderAndIsr.leaderEpoch();
+
+                    AdjustIsrResultForBucket adjustIsrResultForBucket;
+                    if (requestLeaderEpoch < currentLeaderEpoch) {
+                        adjustIsrResultForBucket =
+                                new AdjustIsrResultForBucket(
+                                        tb,
+                                        ApiError.fromThrowable(
+                                                new FencedLeaderEpochException(
+                                                        "request leader epoch is fenced.")));
+                    } else {
+                        adjustIsrResultForBucket =
                                 new AdjustIsrResultForBucket(
                                         tb,
                                         new LeaderAndIsr(
                                                 leaderAndIsr.leader(),
-                                                leaderAndIsr.leaderEpoch(),
+                                                currentLeaderEpoch,
                                                 leaderAndIsr.isr(),
                                                 leaderAndIsr.coordinatorEpoch(),
-                                                leaderAndIsr.bucketEpoch() + 1))));
+                                                leaderAndIsr.bucketEpoch() + 1));
+                    }
+
+                    resultForBuckets.add(adjustIsrResultForBucket);
+                });
         return CompletableFuture.completedFuture(makeAdjustIsrResponse(resultForBuckets));
     }
 
@@ -265,5 +286,9 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     public CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(
             CommitLakeTableSnapshotRequest request) {
         throw new UnsupportedOperationException();
+    }
+
+    public void setCurrentLeaderEpoch(TableBucket tableBucket, int leaderEpoch) {
+        currentLeaderEpoch.put(tableBucket, leaderEpoch);
     }
 }
