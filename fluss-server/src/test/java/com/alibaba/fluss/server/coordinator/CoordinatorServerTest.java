@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.server.ServerBase;
@@ -55,9 +54,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @Override
     protected ServerBase getStartFailServer() {
         Configuration configuration = createConfiguration();
-        configuration.set(
-                ConfigOptions.BIND_LISTENERS,
-                new Endpoint("localhost", -12, "CLIENT").connectionString());
+        configuration.set(ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:-12");
         return new CoordinatorServer(configuration);
     }
 

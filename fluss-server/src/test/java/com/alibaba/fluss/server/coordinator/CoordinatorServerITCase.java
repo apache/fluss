@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
@@ -30,7 +29,7 @@ import com.alibaba.fluss.testutils.common.EachCallbackWrapper;
 
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.util.Collections;
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 
 /** IT Case for {@link CoordinatorServer} . */
 class CoordinatorServerITCase extends ServerITCaseBase {
@@ -61,12 +60,7 @@ class CoordinatorServerITCase extends ServerITCaseBase {
         Configuration conf = new Configuration();
         conf.set(
                 ConfigOptions.BIND_LISTENERS,
-                Endpoint.toListenersString(
-                        Collections.singletonList(
-                                new Endpoint(
-                                        HOSTNAME,
-                                        getPort(),
-                                        ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()))));
+                String.format("%s://%s:%d", DEFAULT_LISTENER_NAME, HOSTNAME, getPort()));
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;
     }

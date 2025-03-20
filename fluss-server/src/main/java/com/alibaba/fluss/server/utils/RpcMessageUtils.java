@@ -212,10 +212,14 @@ public class RpcMessageUtils {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
+            List<Endpoint> endpoints = serverInfo.endpoints();
             aliveTableServerNodes.add(
                     new PbServerNode()
                             .setNodeId(serverInfo.id())
-                            .setListeners(Endpoint.toListenersString(serverInfo.endpoints())));
+                            .setListeners(Endpoint.toListenersString(endpoints))
+                            // for backward compatibility for versions <= 0.6
+                            .setHost(endpoints.get(0).getHost())
+                            .setPort(endpoints.get(0).getPort()));
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         coordinatorServer.map(
@@ -223,7 +227,10 @@ public class RpcMessageUtils {
                         updateMetadataRequest
                                 .setCoordinatorServer()
                                 .setNodeId(node.id())
-                                .setListeners(Endpoint.toListenersString(node.endpoints())));
+                                .setListeners(Endpoint.toListenersString(node.endpoints()))
+                                // for backward compatibility for versions <= 0.6
+                                .setHost(node.endpoints().get(0).getHost())
+                                .setPort(node.endpoints().get(0).getPort()));
         return updateMetadataRequest;
     }
 

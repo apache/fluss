@@ -1,23 +1,21 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ *  Copyright (c) 2025 Alibaba Group Holding Ltd.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
  */
 
-package cluster;
+package com.alibaba.fluss.cluster;
 
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 
@@ -126,7 +124,7 @@ public class EndpointTest {
     void testCoordinatorEndpointsCompatibility(ServerType serverType) {
         Configuration configuration = new Configuration();
         assertThatThrownBy(() -> Endpoint.loadBindEndpoints(configuration, serverType))
-                .hasMessageContaining("No server listeners are configured");
+                .hasMessageContaining("The 'bind.listeners' is not configured.");
         configuration.setString(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
         configuration.setString(
                 serverType == ServerType.COORDINATOR
@@ -141,12 +139,12 @@ public class EndpointTest {
         // if no bind.listeners setting, not allowed to set internal listener name as not FLUSS.
         assertThatThrownBy(() -> Endpoint.loadBindEndpoints(configuration, serverType))
                 .hasMessageContaining(
-                        "internal.listener.name cannot be set without bind.listeners");
+                        "Config 'internal.listener.name' cannot be set without 'bind.listeners'");
         configuration.removeConfig(ConfigOptions.INTERNAL_LISTENER_NAME);
         assertThat(Endpoint.loadBindEndpoints(configuration, serverType))
                 .containsExactlyElementsOf(
                         Collections.singletonList(new Endpoint("my_host", 9122, "FLUSS")));
-        // if internal.listeners is set, use it at first.
+        // if bind.listeners is set, use it at first.
         configuration.setString(ConfigOptions.BIND_LISTENERS, "FLUSS://127.0.0.1:9124");
         assertThat(Endpoint.loadBindEndpoints(configuration, serverType))
                 .containsExactlyElementsOf(

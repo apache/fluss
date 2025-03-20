@@ -167,37 +167,38 @@ public class ClusterMetadataInfo {
         Optional<ServerInfo> coordinatorServer = Optional.empty();
         if (request.hasCoordinatorServer()) {
             PbServerNode pbCoordinatorServer = request.getCoordinatorServer();
-
+            List<Endpoint> endpoints =
+                    pbCoordinatorServer.hasListeners()
+                            ? Endpoint.fromListenersString(pbCoordinatorServer.getListeners())
+                            // backward compatible with old version that doesn't have listeners
+                            : Collections.singletonList(
+                                    new Endpoint(
+                                            pbCoordinatorServer.getHost(),
+                                            pbCoordinatorServer.getPort(),
+                                            // TODO: maybe use internal listener name from conf
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
             coordinatorServer =
                     Optional.of(
                             new ServerInfo(
                                     pbCoordinatorServer.getNodeId(),
-                                    pbCoordinatorServer.hasListeners()
-                                            ? Endpoint.fromListenersString(
-                                                    pbCoordinatorServer.getListeners())
-                                            : Collections.singletonList(
-                                                    new Endpoint(
-                                                            pbCoordinatorServer.getHost(),
-                                                            pbCoordinatorServer.getPort(),
-                                                            ConfigOptions.INTERNAL_LISTENER_NAME
-                                                                    .defaultValue())),
+                                    endpoints,
                                     ServerType.COORDINATOR));
         }
 
         Set<ServerInfo> aliveTabletServers = new HashSet<>();
         for (PbServerNode tabletServer : request.getTabletServersList()) {
+            List<Endpoint> endpoints =
+                    tabletServer.hasListeners()
+                            ? Endpoint.fromListenersString(tabletServer.getListeners())
+                            // backward compatible with old version that doesn't have listeners
+                            : Collections.singletonList(
+                                    new Endpoint(
+                                            tabletServer.getHost(),
+                                            tabletServer.getPort(),
+                                            // TODO: maybe use internal listener name from conf
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
             aliveTabletServers.add(
-                    new ServerInfo(
-                            tabletServer.getNodeId(),
-                            tabletServer.hasListeners()
-                                    ? Endpoint.fromListenersString(tabletServer.getListeners())
-                                    : Collections.singletonList(
-                                            new Endpoint(
-                                                    tabletServer.getHost(),
-                                                    tabletServer.getPort(),
-                                                    ConfigOptions.INTERNAL_LISTENER_NAME
-                                                            .defaultValue())),
-                            ServerType.TABLET_SERVER));
+                    new ServerInfo(tabletServer.getNodeId(), endpoints, ServerType.TABLET_SERVER));
         }
         return new ClusterMetadataInfo(coordinatorServer, aliveTabletServers);
     }

@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.zk.data;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import com.alibaba.fluss.utils.json.JsonDeserializer;
@@ -27,6 +26,8 @@ import com.alibaba.fluss.utils.json.JsonSerializer;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 
 /** Json serializer and deserializer for {@link TabletServerRegistration}. */
 @Internal
@@ -65,12 +66,7 @@ public class TabletServerRegistrationJsonSerde
         if (version == 1) {
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
-            endpoints =
-                    Collections.singletonList(
-                            new Endpoint(
-                                    host,
-                                    port,
-                                    ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
+            endpoints = Collections.singletonList(new Endpoint(host, port, DEFAULT_LISTENER_NAME));
         } else {
             endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         }

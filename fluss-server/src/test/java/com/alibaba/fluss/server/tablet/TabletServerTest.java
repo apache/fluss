@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.tablet;
 
-import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.server.ServerBase;
@@ -64,9 +63,7 @@ class TabletServerTest extends ServerTestBase {
     protected ServerBase getStartFailServer() {
         Configuration configuration = createTabletServerConfiguration();
         // configure with a invalid port, the server should fail to start
-        configuration.set(
-                ConfigOptions.BIND_LISTENERS,
-                new Endpoint("localhost", -12, "FLUSS").connectionString());
+        configuration.set(ConfigOptions.BIND_LISTENERS, "FLUSS://localhost:-12");
         return new TabletServer(configuration);
     }
 

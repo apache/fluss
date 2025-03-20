@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.tablet;
 
-import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
@@ -30,7 +29,7 @@ import com.alibaba.fluss.testutils.common.EachCallbackWrapper;
 
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.util.Collections;
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 
 /** IT Case for {@link TabletServer} . */
 public class TabletServerITCase extends ServerITCaseBase {
@@ -61,12 +60,7 @@ public class TabletServerITCase extends ServerITCaseBase {
         Configuration conf = new Configuration();
         conf.set(
                 ConfigOptions.BIND_LISTENERS,
-                Endpoint.toListenersString(
-                        Collections.singletonList(
-                                new Endpoint(
-                                        HOSTNAME,
-                                        getPort(),
-                                        ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()))));
+                String.format("%s://%s:%d", DEFAULT_LISTENER_NAME, HOSTNAME, getPort()));
         conf.set(ConfigOptions.TABLET_SERVER_ID, 1);
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;

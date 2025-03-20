@@ -65,7 +65,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
     /** The memory size, in bytes. */
     private final long bytes;
 
-    /** The memorized value returned by connectionString(). */
+    /** The memorized value returned by toString(). */
     private transient String stringified;
 
     /** The memorized value returned by toHumanReadableString(). */

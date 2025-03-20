@@ -22,7 +22,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 /**
  * An object that can serialize itself. The serialization protocol is versioned. Messages also
- * implement connectionString, equals, and hashCode.
+ * implement toString, equals, and hashCode.
  */
 @Internal
 public interface ApiMessage {

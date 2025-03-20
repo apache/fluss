@@ -104,7 +104,7 @@ public abstract class ServerTestBase {
                         .get();
         List<Endpoint> expectedEndpoints =
                 Endpoint.fromListenersString(
-                        internal.connectionString() + ", CLIENT://198.168.0.1:100");
+                        internal.listenerString() + ", CLIENT://198.168.0.1:100");
         assertThat(registeredEndpoints).containsExactlyInAnyOrderElementsOf(expectedEndpoints);
     }
 

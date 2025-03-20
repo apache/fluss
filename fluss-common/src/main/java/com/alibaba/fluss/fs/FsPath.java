@@ -311,7 +311,7 @@ public class FsPath implements Serializable {
 
     @Override
     public String toString() {
-        // we can't use uri.connectionString(), which escapes everything, because we want
+        // we can't use uri.toString(), which escapes everything, because we want
         // illegal characters unescaped in the string, for glob processing, etc.
         final StringBuilder buffer = new StringBuilder();
         if (uri.getScheme() != null) {

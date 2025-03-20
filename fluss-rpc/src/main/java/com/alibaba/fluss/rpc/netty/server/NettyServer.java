@@ -183,9 +183,7 @@ public final class NettyServer implements RpcServer {
         } catch (Exception e) {
             // syncUninterruptibly() throws checked exceptions via Unsafe
             // continue if the exception is due to the port being in use, fail early
-            // otherwise
-            LOG.debug("Failed to bind Netty server on port {}: {}", port, e.getMessage());
-            throw new IOException("Failed to start Netty server", e);
+            throw new IOException("Failed to start Netty server on endpoint " + endpoint, e);
         }
     }
 

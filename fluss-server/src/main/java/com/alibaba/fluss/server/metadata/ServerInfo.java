@@ -19,7 +19,7 @@ package com.alibaba.fluss.server.metadata;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.exception.EndpointNotAvailableException;
+import com.alibaba.fluss.server.exception.EndpointNotAvailableException;
 
 import javax.annotation.Nullable;
 
@@ -95,5 +95,17 @@ public class ServerInfo {
     @Override
     public int hashCode() {
         return Objects.hash(id, endpointMap);
+    }
+
+    @Override
+    public String toString() {
+        return "ServerInfo{"
+                + "id="
+                + id
+                + ", endpoints="
+                + endpointMap.values()
+                + ", type="
+                + serverType
+                + '}';
     }
 }

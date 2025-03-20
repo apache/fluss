@@ -81,6 +81,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.checkLeaderAndIsr;
 import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
 import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext;
@@ -137,10 +138,7 @@ class CoordinatorEventProcessorTest {
                     i,
                     new TabletServerRegistration(
                             Collections.singletonList(
-                                    new Endpoint(
-                                            "host" + i,
-                                            1000,
-                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue())),
+                                    new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
                             System.currentTimeMillis()));
         }
     }
@@ -287,9 +285,7 @@ class CoordinatorEventProcessorTest {
         int newlyServerId = 3;
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        Endpoint.fromListenersString(
-                                ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()
-                                        + "://host3:1234"),
+                        Endpoint.fromListenersString(DEFAULT_LISTENER_NAME + "://host3:1234"),
                         System.currentTimeMillis());
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 

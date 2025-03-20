@@ -77,7 +77,7 @@ public class DataTypeVisitorTest {
 
     // ----------------------------------------------------------------------------------------
 
-    /** A connectionString() visitor for DataType. */
+    /** A toString() visitor for DataType. */
     static class ToStringVisitor extends DataTypeDefaultVisitor<String> {
         @Override
         protected String defaultMethod(DataType dataType) {

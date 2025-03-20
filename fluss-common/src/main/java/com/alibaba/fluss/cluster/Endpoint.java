@@ -33,6 +33,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+
 /**
  * Endpoint is what fluss server is listened for. It includes host, port and listener name. Listener
  * name is used for routing, all the fluss servers can have the same listener names to listen. For
@@ -86,7 +88,7 @@ public class Endpoint {
         if (conf.getOptional(ConfigOptions.INTERNAL_LISTENER_NAME).isPresent()) {
             throw new IllegalArgumentException(
                     String.format(
-                            "%s cannot be set without %s",
+                            "Config '%s' cannot be set without '%s'",
                             ConfigOptions.INTERNAL_LISTENER_NAME.key(),
                             ConfigOptions.BIND_LISTENERS.key()));
         }
@@ -94,15 +96,14 @@ public class Endpoint {
         String host = getHost(conf, serverType);
         String port = getPort(conf, serverType);
 
+        // backward compatibility
         if (host != null && port != null) {
             return Collections.singletonList(
-                    new Endpoint(
-                            host,
-                            Integer.parseInt(port),
-                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
+                    new Endpoint(host, Integer.parseInt(port), DEFAULT_LISTENER_NAME));
         }
 
-        throw new IllegalArgumentException("No server listeners are configured");
+        throw new IllegalArgumentException(
+                String.format("The '%s' is not configured.", ConfigOptions.BIND_LISTENERS.key()));
     }
 
     public static List<Endpoint> loadAdvertisedEndpoints(
@@ -144,7 +145,7 @@ public class Endpoint {
 
         List<Endpoint> endpoints =
                 Arrays.stream(listeners.split(","))
-                        .map(Endpoint::fromConnectionString)
+                        .map(Endpoint::fromListenerString)
                         .collect(Collectors.toList());
 
         Set<String> distinctListenerNames =
@@ -186,23 +187,23 @@ public class Endpoint {
     }
 
     /**
-     * Create Endpoint object from {@code connectionString}.
+     * Create Endpoint object from {@code listenerString}.
      *
-     * @param connectionString the format is listener_name://host:port or listener_name://[ipv6
+     * @param listenerString the format is listener_name://host:port or listener_name://[ipv6
      *     host]:port for example: INTERNAL://my_host:9092, CLIENT://my_host:9093 or
      *     REPLICATION://[::1]:9094
      */
-    private static Endpoint fromConnectionString(String connectionString) {
-        Matcher matcher = ENDPOINT_PARSE_EXP.matcher(connectionString.trim());
+    private static Endpoint fromListenerString(String listenerString) {
+        Matcher matcher = ENDPOINT_PARSE_EXP.matcher(listenerString.trim());
         if (!matcher.matches()) {
-            throw new IllegalArgumentException("Invalid endpoint format: " + connectionString);
+            throw new IllegalArgumentException("Invalid endpoint format: " + listenerString);
         }
 
         return new Endpoint(matcher.group(2), Integer.parseInt(matcher.group(3)), matcher.group(1));
     }
 
     public static String toListenersString(List<Endpoint> endpoints) {
-        return endpoints.stream().map(Endpoint::connectionString).collect(Collectors.joining(","));
+        return endpoints.stream().map(Endpoint::listenerString).collect(Collectors.joining(","));
     }
 
     @Override
@@ -221,12 +222,12 @@ public class Endpoint {
         return Objects.hash(host, port, listenerName);
     }
 
-    public String connectionString() {
+    public String listenerString() {
         return listenerName + "://" + host + ":" + port;
     }
 
     @Override
     public String toString() {
-        return connectionString();
+        return listenerString();
     }
 }

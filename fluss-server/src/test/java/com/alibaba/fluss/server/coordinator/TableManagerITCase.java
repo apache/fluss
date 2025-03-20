@@ -114,15 +114,13 @@ class TableManagerITCase {
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setCoordinatorServerListeners(
-                            Endpoint.toListenersString(
-                                    Arrays.asList(
-                                            new Endpoint("localhost", 0, DEFAULT_LISTENER_NAME),
-                                            new Endpoint("localhost", 0, CLIENT_LISTENER))))
+                            String.format(
+                                    "%s://localhost:0, %s://localhost:0",
+                                    DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
                     .setTabletServerListeners(
-                            Endpoint.toListenersString(
-                                    Arrays.asList(
-                                            new Endpoint("localhost", 0, DEFAULT_LISTENER_NAME),
-                                            new Endpoint("localhost", 0, CLIENT_LISTENER))))
+                            String.format(
+                                    "%s://localhost:0, %s://localhost:0",
+                                    DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
                     .setClusterConf(initConf())
                     .build();
 
