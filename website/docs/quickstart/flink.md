@@ -190,6 +190,11 @@ CREATE CATALOG fluss_catalog WITH (
 USE CATALOG fluss_catalog;
 ```
 
+:::info
+By default, catalog configurations are not persisted across Flink SQL client sessions.
+For further information how to store catalog configurations, see [Flink's Catalog Store](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/table/catalogs/#catalog-store).
+:::
+
 ### Create Tables
 Running the following SQL to create Fluss tables to be used in this guide:
 ```sql  title="Flink SQL"
