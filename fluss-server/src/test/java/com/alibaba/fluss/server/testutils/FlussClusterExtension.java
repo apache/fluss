@@ -618,13 +618,13 @@ public final class FlussClusterExtension
     }
 
     public int waitAndGetLeader(TableBucket tb) {
+        return waitLeaderAndIsrReady(tb).leader();
+    }
+
+    public LeaderAndIsr waitLeaderAndIsrReady(TableBucket tb) {
         ZooKeeperClient zkClient = getZooKeeperClient();
-        LeaderAndIsr leaderAndIsr =
-                waitValue(
-                        () -> zkClient.getLeaderAndIsr(tb),
-                        Duration.ofMinutes(1),
-                        "leader is not ready");
-        return leaderAndIsr.leader();
+        return waitValue(
+                () -> zkClient.getLeaderAndIsr(tb), Duration.ofMinutes(1), "leader is not ready");
     }
 
     private List<AdminReadOnlyGateway> collectAllRpcGateways() {

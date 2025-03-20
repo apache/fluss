@@ -65,7 +65,9 @@ import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getFetchLogData;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeLookupResponse;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeNotifyLeaderAndIsrResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makePrefixLookupResponse;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toLookupData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toPrefixLookupData;
@@ -186,9 +188,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<NotifyLeaderAndIsrResponse> response = new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
                 notifyLeaderAndIsrRequest.getCoordinatorEpoch(),
-                RpcMessageUtils.getNotifyLeaderAndIsrData(notifyLeaderAndIsrRequest),
-                result ->
-                        response.complete(RpcMessageUtils.makeNotifyLeaderAndIsrResponse(result)));
+                getNotifyLeaderAndIsrRequestData(notifyLeaderAndIsrRequest),
+                result -> response.complete(makeNotifyLeaderAndIsrResponse(result)));
         return response;
     }
 

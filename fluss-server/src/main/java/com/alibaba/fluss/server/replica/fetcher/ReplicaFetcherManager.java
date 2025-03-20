@@ -233,6 +233,23 @@ public class ReplicaFetcherManager {
             this.serverNode = serverNode;
             this.fetcherId = fetcherId;
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            ServerAndFetcherId that = (ServerAndFetcherId) o;
+            return fetcherId == that.fetcherId && serverNode.equals(that.serverNode);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(serverNode, fetcherId);
+        }
     }
 
     /** Class to represent server id and fetcher id. */

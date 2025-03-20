@@ -137,6 +137,7 @@ import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -234,6 +235,13 @@ public class RpcMessageUtils {
         return updateMetadataRequest;
     }
 
+    public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
+            int coordinatorEpoch, Collection<PbNotifyLeaderAndIsrReqForBucket> notifyLeaders) {
+        return new NotifyLeaderAndIsrRequest()
+                .setCoordinatorEpoch(coordinatorEpoch)
+                .addAllNotifyBucketsLeaderReqs(notifyLeaders);
+    }
+
     public static PbNotifyLeaderAndIsrReqForBucket makeNotifyBucketLeaderAndIsr(
             NotifyLeaderAndIsrData notifyLeaderAndIsrData) {
         PbNotifyLeaderAndIsrReqForBucket reqForBucket =
@@ -261,7 +269,7 @@ public class RpcMessageUtils {
         return reqForBucket;
     }
 
-    public static List<NotifyLeaderAndIsrData> getNotifyLeaderAndIsrData(
+    public static List<NotifyLeaderAndIsrData> getNotifyLeaderAndIsrRequestData(
             NotifyLeaderAndIsrRequest request) {
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList = new ArrayList<>();
         for (PbNotifyLeaderAndIsrReqForBucket reqForBucket :
@@ -315,6 +323,26 @@ public class RpcMessageUtils {
         }
         notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(respForBuckets);
         return notifyLeaderAndIsrResponse;
+    }
+
+    public static List<NotifyLeaderAndIsrResultForBucket> getNotifyLeaderAndIsrResponseData(
+            NotifyLeaderAndIsrResponse response) {
+        List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
+                new ArrayList<>();
+        for (PbNotifyLeaderAndIsrRespForBucket protoNotifyLeaderRespForBucket :
+                response.getNotifyBucketsLeaderRespsList()) {
+            TableBucket tableBucket =
+                    toTableBucket(protoNotifyLeaderRespForBucket.getTableBucket());
+            // construct the result for notify bucket leader and isr
+            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket =
+                    protoNotifyLeaderRespForBucket.hasErrorCode()
+                            ? new NotifyLeaderAndIsrResultForBucket(
+                                    tableBucket,
+                                    ApiError.fromErrorMessage(protoNotifyLeaderRespForBucket))
+                            : new NotifyLeaderAndIsrResultForBucket(tableBucket);
+            notifyLeaderAndIsrResultForBuckets.add(notifyLeaderAndIsrResultForBucket);
+        }
+        return notifyLeaderAndIsrResultForBuckets;
     }
 
     public static PbStopReplicaReqForBucket makeStopBucketReplica(

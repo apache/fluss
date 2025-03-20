@@ -22,7 +22,6 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
@@ -35,6 +34,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
@@ -91,7 +91,7 @@ class CoordinatorChannelManagerTest {
         AtomicInteger sendFlag = new AtomicInteger(0);
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
-                RpcMessageUtils.makeUpdateMetadataRequest(Optional.empty(), Collections.emptySet());
+                makeUpdateMetadataRequest(Optional.empty(), Collections.emptySet());
         coordinatorChannelManager.sendRequest(
                 targetServerId,
                 updateMetadataRequest,

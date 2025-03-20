@@ -25,7 +25,6 @@ import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.PbNotifyLakeTableOffsetReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
-import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
@@ -53,6 +52,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.getNotifyLeaderAndIsrResponseData;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeNotifyBucketLeaderAndIsr;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeNotifyLeaderAndIsrRequest;
+import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTableBucket;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
@@ -185,7 +188,7 @@ public class CoordinatorRequestBatch {
                                             notifyLeaderAndIsrRequestMap.computeIfAbsent(
                                                     id, k -> new HashMap<>());
                             PbNotifyLeaderAndIsrReqForBucket notifyLeaderAndIsrForBucket =
-                                    RpcMessageUtils.makeNotifyBucketLeaderAndIsr(
+                                    makeNotifyBucketLeaderAndIsr(
                                             new NotifyLeaderAndIsrData(
                                                     tablePath,
                                                     tableBucket,
@@ -229,7 +232,7 @@ public class CoordinatorRequestBatch {
                         id ->
                                 updateMetadataRequestTabletServerSet.put(
                                         id,
-                                        RpcMessageUtils.makeUpdateMetadataRequest(
+                                        makeUpdateMetadataRequest(
                                                 coordinatorServer, aliveTabletServers)));
     }
 
@@ -286,54 +289,31 @@ public class CoordinatorRequestBatch {
                 notifyRequestEntry : notifyLeaderAndIsrRequestMap.entrySet()) {
             // send request for each tablet server
             Integer serverId = notifyRequestEntry.getKey();
-            Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket> notifyLeaders =
-                    notifyRequestEntry.getValue();
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
-                    new NotifyLeaderAndIsrRequest()
-                            .setCoordinatorEpoch(coordinatorEpoch)
-                            .addAllNotifyBucketsLeaderReqs(notifyLeaders.values());
+                    makeNotifyLeaderAndIsrRequest(
+                            coordinatorEpoch, notifyRequestEntry.getValue().values());
 
             coordinatorChannelManager.sendBucketLeaderAndIsrRequest(
                     serverId,
                     notifyLeaderAndIsrRequest,
                     (response, throwable) -> {
-                        List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
-                                new ArrayList<>();
                         if (throwable != null) {
                             LOG.warn(
                                     "Failed to send notify leader and isr request to tablet server {}.",
                                     serverId,
                                     throwable);
                             // todo: in FLUSS-55886145, we will introduce a sender thread to send
-                            // the request,
-                            // and retry if encounter any error; It may happens that the tablet
-                            // server
-                            // is offline and will always got error. But, coordinator will remove
-                            // the sender for the tablet server and mark all replica in the tablet
-                            // server as offline.
-                            // so, in here, if encounter any error, we just ignore it.
+                            // the request, and retry if encounter any error; It may happens that
+                            // the tablet server is offline and will always got error. But,
+                            // coordinator will remove the sender for the tablet server and mark all
+                            // replica in the tablet server as offline. so, in here, if encounter
+                            // any error, we just ignore it.
                             return;
-                        }
-                        // handle the response
-                        for (PbNotifyLeaderAndIsrRespForBucket protoNotifyLeaderRespForBucket :
-                                response.getNotifyBucketsLeaderRespsList()) {
-                            TableBucket tableBucket =
-                                    toTableBucket(protoNotifyLeaderRespForBucket.getTableBucket());
-                            // construct the result for notify bucket leader and isr
-                            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket =
-                                    protoNotifyLeaderRespForBucket.hasErrorCode()
-                                            ? new NotifyLeaderAndIsrResultForBucket(
-                                                    tableBucket,
-                                                    ApiError.fromErrorMessage(
-                                                            protoNotifyLeaderRespForBucket))
-                                            : new NotifyLeaderAndIsrResultForBucket(tableBucket);
-                            notifyLeaderAndIsrResultForBuckets.add(
-                                    notifyLeaderAndIsrResultForBucket);
                         }
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        notifyLeaderAndIsrResultForBuckets, serverId));
+                                        getNotifyLeaderAndIsrResponseData(response), serverId));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();
