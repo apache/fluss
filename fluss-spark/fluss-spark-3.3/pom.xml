@@ -27,7 +27,7 @@
 
     <artifactId>fluss-spark-3.3</artifactId>
 
-    <name>Fluss : Spark : 3.3</name>
+    <name>Fluss : Engine Spark : 3.3</name>
 
     <properties>
         <spark.version>3.3.3</spark.version>
@@ -50,7 +50,7 @@
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-connector-spark-common</artifactId>
+            <artifactId>fluss-spark-common</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>
@@ -70,7 +70,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes combine.children="append">
-                                    <include>com.alibaba.fluss:fluss-connector-spark-common</include>
+                                    <include>com.alibaba.fluss:fluss-spark-common</include>
                                     <include>com.alibaba.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>

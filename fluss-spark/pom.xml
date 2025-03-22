@@ -27,7 +27,7 @@
 
     <artifactId>fluss-spark</artifactId>
 
-    <name>Fluss : Spark</name>
+    <name>Fluss : Engine Spark :</name>
 
     <packaging>pom</packaging>
 

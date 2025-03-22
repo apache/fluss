@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.connector.spark
+package com.alibaba.fluss.spark
 
 import com.alibaba.fluss.metadata.TableBucket
-import com.alibaba.fluss.spark.TableBucketInfo
 
 import org.apache.spark.sql.connector.read.InputPartition
 

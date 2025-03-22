@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.connector.spark
+package com.alibaba.fluss.spark
 
 import com.alibaba.fluss.config.Configuration
 import com.alibaba.fluss.metadata.{PartitionSpec, TableInfo}
@@ -22,7 +22,6 @@ import com.alibaba.fluss.spark.catalog.SparkCatalog
 import com.alibaba.fluss.spark.utils.SparkTypeUtils
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.expressions.{BoundReference, Cast, GenericInternalRow, Literal}
 import org.apache.spark.sql.connector.catalog.{SupportsPartitionManagement, SupportsRead, SupportsWrite, Table, TableCapability, TableCatalog}
 import org.apache.spark.sql.connector.read.ScanBuilder

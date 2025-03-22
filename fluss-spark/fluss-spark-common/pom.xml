@@ -26,7 +26,7 @@
     </parent>
 
     <artifactId>fluss-spark-common</artifactId>
-    <name>Fluss : Spark : Common</name>
+    <name>Fluss : Engine Spark : Common</name>
 
     <properties>
         <spark.version>3.5.0</spark.version>
