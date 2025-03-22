@@ -48,7 +48,7 @@ import java.util.Arrays;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link com.alibaba.fluss.flink.sink.writer.FlinkSinkWriter}. */
-public class FlinkSinkWriterTest extends FlinkTestBase {
+public class FlussSinkWriterTest extends FlinkTestBase {
 
     @ParameterizedTest
     @ValueSource(strings = {"", "1"})

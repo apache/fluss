@@ -36,13 +36,13 @@ import java.io.IOException;
 import java.io.Serializable;
 
 /** Flink sink for Fluss. */
-class FlinkSink implements Sink<RowData> {
+class FlussSink implements Sink<RowData> {
 
     private static final long serialVersionUID = 1L;
 
     private final SinkWriterBuilder<? extends FlinkSinkWriter> builder;
 
-    FlinkSink(SinkWriterBuilder<? extends FlinkSinkWriter> builder) {
+    FlussSink(SinkWriterBuilder<? extends FlinkSinkWriter> builder) {
         this.builder = builder;
     }
 
