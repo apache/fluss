@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.tablet;
 
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
@@ -49,6 +48,7 @@ import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -777,14 +777,14 @@ public class TabletServiceITCase {
         LeaderAndIsr originLeaderAndIsr = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tb);
         int leader = originLeaderAndIsr.leader();
         int follower = getOneFollower(originLeaderAndIsr);
-        TabletServerGateway followerGateWay =
+        TabletServerGateway followerGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(follower);
 
         // 1. first send one NotifyLeaderAndIsr request with same LeaderAndIsr to mock the
         // coordinator is offline and recovery to send NotifyLeaderAndIsr request with same
         // leader but leader epoch plus 1.
         NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse =
-                followerGateWay
+                followerGateway
                         .notifyLeaderAndIsr(
                                 makeNotifyLeaderAndIsrRequest(
                                         DATA1_PHYSICAL_TABLE_PATH,
@@ -801,22 +801,22 @@ public class TabletServiceITCase {
         assertThat(result.size()).isEqualTo(1);
         assertThat(result.get(0).getErrorCode()).isEqualTo(Errors.NONE.code());
 
-        // 2. send one UpdateMetadata request to followerGateWay to mock the tabletServer where the
+        // 2. send one UpdateMetadata request to followerGateway to mock the tabletServer where the
         // leader resides is offline.
-        ServerNode coordinatorServerNode = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode();
-        Set<ServerNode> newTabletServerNodes = new HashSet<>();
+        ServerInfo coordinatorServerInfo = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerInfo();
+        Set<ServerInfo> newTabletServerInfos = new HashSet<>();
         FLUSS_CLUSTER_EXTENSION
-                .getTabletServerNodes()
+                .getTabletServerInfos()
                 .forEach(
                         serverNode -> {
                             if (serverNode.id() != leader) {
-                                newTabletServerNodes.add(serverNode);
+                                newTabletServerInfos.add(serverNode);
                             }
                         });
-        followerGateWay
+        followerGateway
                 .updateMetadata(
                         makeUpdateMetadataRequest(
-                                Optional.of(coordinatorServerNode), newTabletServerNodes))
+                                Optional.of(coordinatorServerInfo), newTabletServerInfos))
                 .get();
 
         // 3. send one NotifyLeaderAndIsr request again with same LeaderAndIsr to mock the
@@ -824,7 +824,7 @@ public class TabletServiceITCase {
         // same leader but leader epoch plus 1. Bucket level NotLeaderOrFollower exception will be
         // thrown.
         notifyLeaderAndIsrResponse =
-                followerGateWay
+                followerGateway
                         .notifyLeaderAndIsr(
                                 makeNotifyLeaderAndIsrRequest(
                                         DATA1_PHYSICAL_TABLE_PATH,

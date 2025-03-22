@@ -828,8 +828,8 @@ public class ReplicaManager {
                                                         serverId, tb)))));
             } else {
                 // fetch from leader server node with internal endpoint.
-            Optional<ServerNode> leader =
-                    metadataCache.getTabletServer(leaderId, internalListenerName);
+                Optional<ServerNode> leader =
+                        metadataCache.getTabletServer(leaderId, internalListenerName);
                 if (!leader.isPresent()) {
                     // If leader serverNode is not in the metadata, we need to return a bucket level
                     // error to let CoordinatorServer retry sending makeLeaderOrFollower request.
