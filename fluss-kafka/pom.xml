@@ -37,24 +37,50 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
+
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>fluss-shaded-netty</artifactId>
-            <version>${netty.version}-${fluss.shaded.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-        </dependency>
+
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
         </dependency>
+
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>fluss-rpc</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- test dependency -->
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-common</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-server</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

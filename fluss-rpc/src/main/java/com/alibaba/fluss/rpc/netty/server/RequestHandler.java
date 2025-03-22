@@ -18,12 +18,16 @@ package com.alibaba.fluss.rpc.netty.server;
 
 import com.alibaba.fluss.rpc.protocol.RequestType;
 
-/** Represents a request received from the RPC channel. */
-public interface RpcRequest {
+/**
+ * Handles a specific type of RPC request.
+ *
+ * @param <T> the type of the RPC request that is handled by this handler
+ */
+public interface RequestHandler<T extends RpcRequest> {
 
-    /** Returns the type of the RPC request. */
-    RequestType getRequestType();
+    /** Returns the type of the RPC requests that is handled by this handler. */
+    RequestType requestType();
 
-    /** Releases the Netty buffer associated with this request. */
-    void releaseBuffer();
+    /** Processes the RPC request. */
+    void processRequest(T request);
 }

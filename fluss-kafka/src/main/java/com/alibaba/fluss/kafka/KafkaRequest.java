@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.kafka;
 
+import com.alibaba.fluss.rpc.netty.server.RpcRequest;
+import com.alibaba.fluss.rpc.protocol.RequestType;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
@@ -34,7 +36,8 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class KafkaRequest {
+/** Represents a request received from Kafka protocol channel. */
+public class KafkaRequest implements RpcRequest {
     private static final AtomicLong ID_GENERATOR = new AtomicLong(0);
 
     private final ApiKeys apiKey;
@@ -66,6 +69,16 @@ public class KafkaRequest {
         this.future = future;
     }
 
+    @Override
+    public RequestType getRequestType() {
+        return RequestType.KAFKA;
+    }
+
+    @Override
+    public void releaseBuffer() {
+        ReferenceCountUtil.safeRelease(buffer);
+    }
+
     public ApiKeys apiKey() {
         return apiKey;
     }
@@ -84,10 +97,6 @@ public class KafkaRequest {
 
     public <T> T request() {
         return (T) request;
-    }
-
-    public void release() {
-        ReferenceCountUtil.safeRelease(buffer);
     }
 
     public ChannelHandlerContext ctx() {
@@ -118,7 +127,7 @@ public class KafkaRequest {
         return cancelled;
     }
 
-    public ByteBuf serialize() {
+    public ByteBuf responseBuffer() {
         try {
             AbstractResponse response = future.join();
             return serialize(response);
@@ -126,7 +135,7 @@ public class KafkaRequest {
             AbstractResponse response = request.getErrorResponse(t);
             return serialize(response);
         } finally {
-            release();
+            releaseBuffer();
         }
     }
 

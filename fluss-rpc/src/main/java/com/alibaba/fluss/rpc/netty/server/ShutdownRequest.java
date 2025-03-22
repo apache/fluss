@@ -18,12 +18,20 @@ package com.alibaba.fluss.rpc.netty.server;
 
 import com.alibaba.fluss.rpc.protocol.RequestType;
 
-/** Represents a request received from the RPC channel. */
-public interface RpcRequest {
+/** Special request to represent a shutdown event of the server. */
+public class ShutdownRequest implements RpcRequest {
 
-    /** Returns the type of the RPC request. */
-    RequestType getRequestType();
+    public static final ShutdownRequest INSTANCE = new ShutdownRequest();
 
-    /** Releases the Netty buffer associated with this request. */
-    void releaseBuffer();
+    private ShutdownRequest() {}
+
+    @Override
+    public RequestType getRequestType() {
+        return RequestType.SHUTDOWN;
+    }
+
+    @Override
+    public void releaseBuffer() {
+        // no-op
+    }
 }

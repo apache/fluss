@@ -49,7 +49,7 @@ public final class RequestChannel {
      * shutdown.
      */
     public void putShutdownRequest() throws Exception {
-        putRequest(RpcRequest.SHUTDOWN_REQUEST);
+        putRequest(ShutdownRequest.INSTANCE);
     }
 
     /**

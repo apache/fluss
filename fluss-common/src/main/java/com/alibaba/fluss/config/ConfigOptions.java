@@ -1453,17 +1453,21 @@ public class ConfigOptions {
                     .withDescription(
                             "Whether enable fluss kafka. Disabled by default. "
                                     + "When this option is set to true, the fluss kafka will be enabled.");
-    public static final ConfigOption<Integer> KAFKA_PORT =
-            key("kafka.port")
-                    .intType()
-                    .defaultValue(9092)
-                    .withDescription("The port for fluss kafka. The default port is 9092.");
+
+    public static final ConfigOption<List<String>> KAFKA_LISTENER_NAMES =
+            key("kafka.listener.names")
+                    .stringType()
+                    .asList()
+                    .defaultValues("KAFKA")
+                    .withDescription(
+                            "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
+
     public static final ConfigOption<String> KAFKA_DATABASE =
             key("kafka.database")
                     .stringType()
-                    .defaultValue("_kafka")
+                    .defaultValue("kafka")
                     .withDescription(
-                            "The database for fluss kafka. The default database is '_kafka'.");
+                            "The database for fluss kafka. The default database is 'kafka'.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

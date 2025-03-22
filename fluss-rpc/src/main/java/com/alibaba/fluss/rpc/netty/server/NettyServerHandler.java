@@ -84,8 +84,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 needRelease = true;
             }
 
-            RpcRequest request =
-                    new RpcRequest(
+            FlussRequest request =
+                    new FlussRequest(
                             apiKey,
                             apiVersion,
                             requestId,

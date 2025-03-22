@@ -14,16 +14,17 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package com.alibaba.fluss.rpc.protocol;
 
-import com.alibaba.fluss.rpc.protocol.RequestType;
+/** The type of protocol used for communication. */
+public enum RequestType {
+    SHUTDOWN(-1),
+    FLUSS(0),
+    KAFKA(1);
 
-/** Represents a request received from the RPC channel. */
-public interface RpcRequest {
+    public final int id;
 
-    /** Returns the type of the RPC request. */
-    RequestType getRequestType();
-
-    /** Releases the Netty buffer associated with this request. */
-    void releaseBuffer();
+    RequestType(int id) {
+        this.id = id;
+    }
 }

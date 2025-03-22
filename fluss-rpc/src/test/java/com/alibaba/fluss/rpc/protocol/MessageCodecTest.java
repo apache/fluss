@@ -24,9 +24,9 @@ import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
 import com.alibaba.fluss.rpc.messages.PbApiVersion;
 import com.alibaba.fluss.rpc.netty.client.ClientHandlerCallback;
 import com.alibaba.fluss.rpc.netty.client.NettyClientHandler;
+import com.alibaba.fluss.rpc.netty.server.FlussRequest;
 import com.alibaba.fluss.rpc.netty.server.NettyServerHandler;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-import com.alibaba.fluss.rpc.netty.server.RpcRequest;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
@@ -78,7 +78,7 @@ class MessageCodecTest {
                         request);
         serverHandler.channelRead(ctx, byteBuf);
 
-        RpcRequest rpcRequest = requestChannel.pollRequest(1000);
+        FlussRequest rpcRequest = (FlussRequest) requestChannel.pollRequest(1000);
         assertThat(rpcRequest).isNotNull();
         assertThat(rpcRequest.getApiKey()).isEqualTo(ApiKeys.API_VERSIONS.id);
         assertThat(rpcRequest.getApiVersion())

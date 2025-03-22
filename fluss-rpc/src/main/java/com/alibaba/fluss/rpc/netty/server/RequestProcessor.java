@@ -16,27 +16,13 @@
 
 package com.alibaba.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.record.send.Send;
 import com.alibaba.fluss.rpc.RpcGatewayService;
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.rpc.protocol.ApiKeys;
-import com.alibaba.fluss.rpc.protocol.ApiMethod;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import com.alibaba.fluss.rpc.protocol.RequestType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.InvocationTargetException;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeSuccessResponse;
-import static com.alibaba.fluss.utils.ExceptionUtils.stripException;
 
 /** A thread that processes and answer incoming {@link RpcRequest}. */
 final class RequestProcessor implements Runnable {
@@ -46,8 +32,7 @@ final class RequestProcessor implements Runnable {
     private final RpcGatewayService service;
     private final RequestChannel requestChannel;
     private final CompletableFuture<Void> shutdownComplete = new CompletableFuture<>();
-
-    private final RequestsMetrics requestsMetrics;
+    private final RequestHandler<?>[] requestHandlers;
 
     private volatile boolean isRunning;
 
@@ -55,12 +40,12 @@ final class RequestProcessor implements Runnable {
             int processorId,
             RequestChannel requestChannel,
             RpcGatewayService service,
-            RequestsMetrics requestsMetrics) {
+            RequestHandler<?>[] requestHandlers) {
         this.processorId = processorId;
         this.service = service;
         this.requestChannel = requestChannel;
+        this.requestHandlers = requestHandlers;
         this.isRunning = true;
-        this.requestsMetrics = requestsMetrics;
     }
 
     @Override
@@ -68,15 +53,15 @@ final class RequestProcessor implements Runnable {
         while (isRunning) {
             RpcRequest request = requestChannel.pollRequest(300);
             if (request != null) {
-                if (request == RpcRequest.SHUTDOWN_REQUEST) {
+                if (request == ShutdownRequest.INSTANCE) {
                     LOG.debug(
-                            "Fluss request processor {} on server {} received shutdown command.",
+                            "Request processor {} on server {} received shutdown command.",
                             service.name(),
                             processorId);
                     completeShutdown();
                 } else {
                     LOG.debug(
-                            "Fluss request processor {} on server {} processing request {}.",
+                            "Request processor {} on server {} processing request {}.",
                             processorId,
                             service.name(),
                             request);
@@ -98,101 +83,18 @@ final class RequestProcessor implements Runnable {
     }
 
     private void processRequest(RpcRequest request) {
-        long requestDequeTimeMs = System.currentTimeMillis();
-        ApiMethod api = request.getApiMethod();
-        ApiMessage message = request.getMessage();
-        try {
-            service.setCurrentSession(
-                    new Session(request.getApiVersion(), request.getListenerName()));
-            // invoke the corresponding method on RpcGateway instance.
-            CompletableFuture<?> responseFuture =
-                    (CompletableFuture<?>) api.getMethod().invoke(service, message);
-            responseFuture.whenComplete(
-                    (response, throwable) -> {
-                        if (throwable != null) {
-                            sendError(request, throwable);
-                        } else {
-                            if (response instanceof ApiMessage) {
-                                sendResponse(request, requestDequeTimeMs, (ApiMessage) response);
-                            } else {
-                                sendError(
-                                        request,
-                                        new ClassCastException(
-                                                "The response "
-                                                        + response.getClass().getName()
-                                                        + " is not an instance of ApiMessage."));
-                            }
-                        }
-                    });
-        } catch (Throwable t) {
-            LOG.debug("Error while executing RPC {}", api, t);
-            sendError(request, stripException(t, InvocationTargetException.class));
-        }
-    }
-
-    private void sendResponse(
-            RpcRequest request, long requestDequeTimeMs, ApiMessage responseMessage) {
-        long requestCompletedTimeMs = System.currentTimeMillis();
-        // TODO: use a memory managed allocator
-        ChannelHandlerContext channelContext = request.getChannelContext();
-        ByteBufAllocator alloc = channelContext.alloc();
-        try {
-            Send send = encodeSuccessResponse(alloc, request.getRequestId(), responseMessage);
-            send.writeTo(channelContext);
-            channelContext.flush();
-            long requestEndTimeMs = System.currentTimeMillis();
-            updateRequestMetrics(
-                    request, requestDequeTimeMs, requestCompletedTimeMs, requestEndTimeMs);
-        } catch (Throwable t) {
-            LOG.error("Failed to send response to client.", t);
-            sendError(request, t);
-        }
-    }
-
-    private void updateRequestMetrics(
-            RpcRequest request,
-            long requestDequeTimeMs,
-            long requestCompletedTimeMs,
-            long requestEndTimeMs) {
-        // get the metrics to be updated for this kind of request
-        Optional<RequestsMetrics.Metrics> optMetrics = getMetrics(request);
-        // no any metrics registered for the kind of request
-        if (!optMetrics.isPresent()) {
+        RequestType requestType = request.getRequestType();
+        if (requestType.id >= requestHandlers.length) {
+            LOG.error("Invalid request type {}", requestType);
             return;
         }
-
-        // now, we need to update metrics
-        RequestsMetrics.Metrics metrics = optMetrics.get();
-
-        metrics.getRequestsCount().inc();
-        metrics.getRequestBytes().update(request.getMessage().totalSize());
-
-        // update metrics related to time
-        metrics.getRequestQueueTimeMs().update(requestDequeTimeMs - request.getStartTimeMs());
-        metrics.getRequestProcessTimeMs().update(requestCompletedTimeMs - requestDequeTimeMs);
-        metrics.getResponseSendTimeMs().update(requestEndTimeMs - requestCompletedTimeMs);
-        metrics.getTotalTimeMs().update(requestEndTimeMs - request.getStartTimeMs());
-    }
-
-    private void sendError(RpcRequest request, Throwable t) {
-        ApiError error = ApiError.fromThrowable(t);
-        // TODO: use a memory managed allocator
-        ByteBufAllocator alloc = request.getChannelContext().alloc();
-        ByteBuf byteBuf = encodeErrorResponse(alloc, request.getRequestId(), error);
-        request.getChannelContext().writeAndFlush(byteBuf);
-
-        getMetrics(request).ifPresent(metrics -> metrics.getErrorsCount().inc());
-    }
-
-    private Optional<RequestsMetrics.Metrics> getMetrics(RpcRequest request) {
-        boolean isFromFollower = false;
-        ApiMessage requestMessage = request.getMessage();
-        if (request.getApiKey() == ApiKeys.FETCH_LOG.id) {
-            // for fetch, we need to identify it's from client or follower
-            FetchLogRequest fetchLogRequest = (FetchLogRequest) requestMessage;
-            isFromFollower = fetchLogRequest.getFollowerServerId() >= 0;
+        RequestHandler handler = requestHandlers[requestType.id];
+        if (handler == null) {
+            LOG.error("No handler found for request type {}", requestType);
+            return;
         }
-        return requestsMetrics.getMetrics(request.getApiKey(), isFromFollower);
+        //noinspection unchecked
+        handler.processRequest(request);
     }
 
     public void initiateShutdown() {

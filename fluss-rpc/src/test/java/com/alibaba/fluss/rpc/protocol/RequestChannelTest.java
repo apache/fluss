@@ -18,6 +18,7 @@ package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
+import com.alibaba.fluss.rpc.netty.server.FlussRequest;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.rpc.netty.server.RpcRequest;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.EmptyByteBuf;
@@ -42,7 +43,7 @@ public class RequestChannelTest {
         // push rpc requests
         for (int i = 0; i < 100; i++) {
             RpcRequest rpcRequest =
-                    new RpcRequest(
+                    new FlussRequest(
                             ApiKeys.GET_TABLE_INFO.id,
                             (short) 0,
                             i,
@@ -62,7 +63,7 @@ public class RequestChannelTest {
 
         // 2. Different request type, Use FIFO.
         RpcRequest rpcRequest1 =
-                new RpcRequest(
+                new FlussRequest(
                         ApiKeys.GET_TABLE_INFO.id,
                         (short) 0,
                         3,
@@ -72,7 +73,7 @@ public class RequestChannelTest {
                         "CLIENT",
                         null);
         RpcRequest rpcRequest2 =
-                new RpcRequest(
+                new FlussRequest(
                         ApiKeys.FETCH_LOG.id,
                         (short) 0,
                         100,
