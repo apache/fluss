@@ -39,6 +39,7 @@ import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
@@ -846,7 +847,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .map(
                         kvFileHandleAndLocalPath ->
                                 new FsPathAndFileName(
-                                        kvFileHandleAndLocalPath.getKvFileHandle().getFilePath(),
+                                        new FsPath(
+                                                kvFileHandleAndLocalPath
+                                                        .getKvFileHandle()
+                                                        .getFilePath()),
                                         kvFileHandleAndLocalPath.getLocalPath()))
                 .collect(Collectors.toList());
     }

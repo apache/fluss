@@ -1062,10 +1062,7 @@ public class RpcMessageUtils {
                         kvFileHandleAndLocalPath -> {
                             // get the remote file path
                             String filePath =
-                                    kvFileHandleAndLocalPath
-                                            .getKvFileHandle()
-                                            .getFilePath()
-                                            .toString();
+                                    kvFileHandleAndLocalPath.getKvFileHandle().getFilePath();
                             // get the local name for the file
                             String localPath = kvFileHandleAndLocalPath.getLocalPath();
                             return new PbRemotePathAndLocalFile()

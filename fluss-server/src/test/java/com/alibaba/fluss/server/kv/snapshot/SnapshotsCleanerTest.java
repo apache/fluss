@@ -151,12 +151,10 @@ class SnapshotsCleanerTest {
         for (int i = 0; i < 4; i++) {
             sharedFileHandles.add(
                     KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(new FsPath("share_remote_path"), 1),
-                            "share_local_path"));
+                            new KvFileHandle("share_remote_path", 1), "share_local_path"));
             privateFileHandles.add(
                     KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(new FsPath("private_remote_path"), 1),
-                            "private_local_path"));
+                            new KvFileHandle("private_remote_path", 1), "private_local_path"));
         }
 
         TestKvSnapshotHandle kvSnapshotHandle =

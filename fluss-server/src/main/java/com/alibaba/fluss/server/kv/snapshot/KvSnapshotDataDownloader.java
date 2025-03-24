@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
+import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.fs.utils.FileDownloadSpec;
 import com.alibaba.fluss.fs.utils.FileDownloadUtils;
@@ -69,9 +70,10 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
                             .map(
                                     kvFileHandleAndLocalPath ->
                                             new FsPathAndFileName(
-                                                    kvFileHandleAndLocalPath
-                                                            .getKvFileHandle()
-                                                            .getFilePath(),
+                                                    new FsPath(
+                                                            kvFileHandleAndLocalPath
+                                                                    .getKvFileHandle()
+                                                                    .getFilePath()),
                                                     kvFileHandleAndLocalPath.getLocalPath()))
                             .collect(Collectors.toList());
             fileDownloadSpecs.add(
