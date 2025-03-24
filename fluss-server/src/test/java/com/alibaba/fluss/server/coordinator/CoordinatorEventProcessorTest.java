@@ -56,6 +56,7 @@ import com.alibaba.fluss.server.zk.data.ZkData.TableIdsZNode;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;
@@ -75,6 +76,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -152,14 +154,7 @@ class CoordinatorEventProcessorTest {
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
@@ -221,14 +216,7 @@ class CoordinatorEventProcessorTest {
         metadataManager.dropTable(t2, false);
 
         // start the coordinator
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         initCoordinatorChannel();
         eventProcessor.startup();
         // make sure the table can still be deleted successfully
@@ -386,14 +374,7 @@ class CoordinatorEventProcessorTest {
 
         // let's restart to check everything is ok
         eventProcessor.shutdown();
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
 
         // in this test case, so make requests to gateway should always be
         // successful for when start up, it will send request to tablet servers
@@ -431,14 +412,7 @@ class CoordinatorEventProcessorTest {
         // let's restart
         initCoordinatorChannel();
         eventProcessor.shutdown();
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         int failedServer = 0;
         initCoordinatorChannel(failedServer);
         eventProcessor.startup();
@@ -602,14 +576,7 @@ class CoordinatorEventProcessorTest {
         metadataManager.dropTable(tablePath, false);
 
         // start the coordinator
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         initCoordinatorChannel();
         eventProcessor.startup();
         verifyPartitionDropped(tableId, partition2Id);
@@ -656,14 +623,7 @@ class CoordinatorEventProcessorTest {
         zookeeperClient.deletePartition(tablePath, partition2Name);
 
         // start the coordinator
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         initCoordinatorChannel();
         eventProcessor.startup();
 
@@ -675,6 +635,17 @@ class CoordinatorEventProcessorTest {
                 partitionAssignment,
                 nBuckets,
                 replicationFactor);
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return new CoordinatorEventProcessor(
+                zookeeperClient,
+                serverMetadataCache,
+                testCoordinatorChannelManager,
+                autoPartitionManager,
+                TestingMetricGroups.COORDINATOR_METRICS,
+                new Configuration(),
+                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")));
     }
 
     private void initCoordinatorChannel() throws Exception {

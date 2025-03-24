@@ -400,6 +400,13 @@ public class TabletServer extends ServerBase {
                             ConfigOptions.TABLET_SERVER_ID.key()));
         }
 
+        if (conf.get(ConfigOptions.BACKGROUND_THREADS) < 1) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 1.",
+                            ConfigOptions.BACKGROUND_THREADS.key()));
+        }
+
         if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
             throw new IllegalConfigurationException(
                     String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));

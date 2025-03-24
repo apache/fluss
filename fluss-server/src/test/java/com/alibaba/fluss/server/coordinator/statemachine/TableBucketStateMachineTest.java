@@ -40,6 +40,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Sets;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +52,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
+import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.NewBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
@@ -234,7 +236,9 @@ class TableBucketStateMachineTest {
                         coordinatorContext,
                         autoPartitionManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+                        new Configuration(),
+                        Executors.newFixedThreadPool(
+                                1, new ExecutorThreadFactory("test-coordinator-io")));
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(coordinatorEventProcessor);
         coordinatorRequestBatch =
