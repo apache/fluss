@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.flink.sink;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.bucketing.BucketingFunction;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
 import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
@@ -33,6 +34,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** {@link ChannelComputer} for flink {@link RowData}. */
 public class FlinkRowDataChannelComputer implements ChannelComputer<RowData> {
+
+    private static final long serialVersionUID = 1L;
 
     private final @Nullable DataLakeFormat lakeFormat;
     private final int numBucket;
@@ -79,8 +82,7 @@ public class FlinkRowDataChannelComputer implements ChannelComputer<RowData> {
         // 'partition0-bucket1' and 'partition1-bucket1'. As partition number increases, this
         // situation becomes even more severe.
         this.combineShuffleWithPartitionName =
-                partitionGetter != null
-                        && (numBucket % numChannels != 0 || numChannels % numBucket != 0);
+                partitionGetter != null && numBucket % numChannels != 0;
     }
 
     @Override
@@ -99,5 +101,10 @@ public class FlinkRowDataChannelComputer implements ChannelComputer<RowData> {
     @Override
     public String toString() {
         return "BUCKET_SHUFFLE";
+    }
+
+    @VisibleForTesting
+    boolean isCombineShuffleWithPartitionName() {
+        return combineShuffleWithPartitionName;
     }
 }

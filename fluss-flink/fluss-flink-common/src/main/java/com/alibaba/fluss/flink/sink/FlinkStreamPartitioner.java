@@ -26,6 +26,8 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 /** A {@link StreamPartitioner} which wraps a {@link ChannelComputer}. */
 public class FlinkStreamPartitioner<T> extends StreamPartitioner<T> {
 
+    private static final long serialVersionUID = 1L;
+
     private final ChannelComputer<T> channelComputer;
 
     public FlinkStreamPartitioner(ChannelComputer<T> channelComputer) {

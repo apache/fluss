@@ -156,6 +156,7 @@ class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    // TODO change these two tests to ParameterizedTest: https://github.com/alibaba/fluss/issues/659
     @Test
     void testAppendLogWithBucketKeyWithSinkBucketShuffle() throws Exception {
         testAppendLogWithBucketKey(true);
@@ -308,6 +309,7 @@ class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    // TODO change these two tests to ParameterizedTest: https://github.com/alibaba/fluss/issues/659
     @Test
     void testPutWithSinkBucketShuffle() throws Exception {
         testPut(true);
@@ -520,6 +522,7 @@ class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    // TODO change these tests to ParameterizedTest: https://github.com/alibaba/fluss/issues/659
     @Test
     void testWritePartitionedLogTable() throws Exception {
         testWritePartitionedTable(false, false);
