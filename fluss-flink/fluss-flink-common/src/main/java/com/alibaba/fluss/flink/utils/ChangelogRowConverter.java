@@ -31,7 +31,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 /** Changelog converter that adds metadata columns using JoinedRowData. */
-// 1. First, update the ChangelogRowConverter to properly handle metadata field selection
 public class ChangelogRowConverter implements RecordToFlinkRowConverter {
     private static final Logger LOG = LoggerFactory.getLogger(ChangelogRowConverter.class);
     private final FlussRowToFlinkRowConverter converter;
@@ -45,12 +44,10 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
     @Override
     public RowData convert(ScanRecord scanRecord) {
         try {
-            // Get the base data from the physical table
             RowData baseRowData = converter.toFlinkRowData(scanRecord);
 
-            // CRITICAL FIX: If no metadata fields are selected, return ONLY the base row
             if (selectedMetadataFields == null || selectedMetadataFields.length == 0) {
-                return baseRowData; // Return ONLY physical fields without metadata
+                return baseRowData;
             }
 
             // Create metadata row with selected fields
@@ -58,14 +55,14 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
             for (int i = 0; i < selectedMetadataFields.length; i++) {
                 int metadataIndex = selectedMetadataFields[i];
                 switch (metadataIndex) {
-                    case 0: // _change_type
+                    case 0:
                         metadataRow.setField(
                                 i, StringData.fromString(determineRowKind(scanRecord)));
                         break;
-                    case 1: // _log_offset
+                    case 1:
                         metadataRow.setField(i, scanRecord.logOffset());
                         break;
-                    case 2: // _commit_timestamp
+                    case 2:
                         metadataRow.setField(
                                 i, TimestampData.fromEpochMillis(scanRecord.timestamp()));
                         break;
@@ -75,7 +72,6 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
                 }
             }
 
-            // Only join metadata with base row if metadata fields are requested
             return new JoinedRowData(metadataRow, baseRowData);
         } catch (Exception e) {
             LOG.error("Error converting record: {}", e.getMessage(), e);
@@ -92,7 +88,6 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         } else if (scanRecord.getChangeType() == ChangeType.DELETE) {
             changeType = "-D";
         } else {
-            // Default case (handles INSERT and any other values)
             changeType = "+I";
         }
         return changeType;

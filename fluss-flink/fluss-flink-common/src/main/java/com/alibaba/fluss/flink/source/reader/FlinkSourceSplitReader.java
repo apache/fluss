@@ -131,7 +131,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
-        sanityCheck(sourceOutputType, projectedFields, selectedMetadataFields);
+        sanityCheck(table.getTableInfo().getRowType(), projectedFields, selectedMetadataFields);
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
@@ -547,22 +547,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             @Nullable int[] projectedFields,
             @Nullable int[] selectedMetadataFields) {
         if (enableChangelog) {
-            int metadataColumnCount =
-                    selectedMetadataFields != null ? selectedMetadataFields.length : 3;
-
-            if (sourceOutputType.getFieldCount() >= flussTableRowType.getFieldCount()) {
-                return;
-            } else {
-                throw new ValidationException(
-                        "Changelog schema detected but field count is insufficient. "
-                                + "\nFlink query schema: "
-                                + sourceOutputType
-                                + "\nExpected at least "
-                                + flussTableRowType.getFieldCount()
-                                + " fields for data"
-                                + "\nFluss table schema: "
-                                + flussTableRowType);
-            }
+            return;
         }
         RowType tableRowType =
                 projectedFields != null
