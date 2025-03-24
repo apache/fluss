@@ -105,9 +105,6 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             List<CompletableFuture<Void>> futures =
                     createUploadFutures(remoteLogSegment, logSegmentFiles);
             FutureUtils.waitForAll(futures).get();
-            for (CompletableFuture<Void> future : futures) {
-                future.get();
-            }
         } catch (ExecutionException e) {
             Throwable throwable = ExceptionUtils.stripExecutionException(e);
             throwable = ExceptionUtils.stripException(throwable, RuntimeException.class);
