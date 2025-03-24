@@ -456,7 +456,7 @@ public final class LogTablet {
         if (remoteLogEndOffset > this.remoteLogEndOffset) {
             this.remoteLogEndOffset = remoteLogEndOffset;
 
-            // try to delete these segments already exists in remote storage.
+            // try to delete these segments already exist in remote storage.
             deleteSegmentsAlreadyExistsInRemote();
         }
     }
