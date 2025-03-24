@@ -66,6 +66,18 @@ public interface IsrState {
         }
 
         @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            CommittedIsrState that = (CommittedIsrState) o;
+            return isr.equals(that.isr);
+        }
+
+        @Override
         public String toString() {
             return "CommittedIsrState{" + "isr=" + isr + '}';
         }
@@ -135,6 +147,20 @@ public interface IsrState {
         }
 
         @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PendingExpandIsrState that = (PendingExpandIsrState) o;
+            return newInSyncReplicaId == that.newInSyncReplicaId
+                    && sentLeaderAndIsr.equals(that.sentLeaderAndIsr)
+                    && lastCommittedState.equals(that.lastCommittedState);
+        }
+
+        @Override
         public String toString() {
             return "PendingExpandIsrState{"
                     + "newInSyncReplicaId="
@@ -186,6 +212,20 @@ public interface IsrState {
         @Override
         public boolean isInflight() {
             return true;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PendingShrinkIsrState that = (PendingShrinkIsrState) o;
+            return outOfSyncReplicaIds.equals(that.outOfSyncReplicaIds)
+                    && sentLeaderAndIsr.equals(that.sentLeaderAndIsr)
+                    && lastCommittedState.equals(that.lastCommittedState);
         }
 
         @Override

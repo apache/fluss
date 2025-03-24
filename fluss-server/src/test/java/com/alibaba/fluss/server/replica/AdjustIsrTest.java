@@ -23,7 +23,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.server.entity.FetchData;
 import com.alibaba.fluss.server.log.FetchParams;
-import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
@@ -118,45 +117,24 @@ public class AdjustIsrTest extends ReplicaTestBase {
 
     @Test
     void testSubmitShrinkIsrAsLeaderFenced() throws Exception {
-        // replica set is 1,2,3 , isr set is 1.
+        // replica set is 1,2,3 , isr set is 1,2,3.
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
-        makeLogTableAsLeader(tb, Arrays.asList(1, 2, 3), Collections.singletonList(1), false);
+        makeLogTableAsLeader(tb, Arrays.asList(1, 2, 3), Arrays.asList(1, 2, 3), false);
 
         Replica replica = replicaManager.getReplicaOrException(tb);
-        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1);
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
 
-        AdjustIsrManager adjustIsrManager = replica.getAdjustIsrManager();
-        // 1. isr with correct leader epoch.
-        LeaderAndIsr tryToAdjustIsr = new LeaderAndIsr(1, 0, Collections.singletonList(1), 0, 1);
-        LeaderAndIsr adjustedIsr = adjustIsrManager.submit(tb, tryToAdjustIsr).get();
-        assertThat(adjustedIsr.leaderEpoch()).isEqualTo(tryToAdjustIsr.leaderEpoch());
-        assertThat(adjustedIsr.bucketEpoch()).isEqualTo(2);
-        adjustedIsr =
-                replica.submitAdjustIsr(
-                                new IsrState.PendingShrinkIsrState(
-                                        Collections.singletonList(1),
-                                        tryToAdjustIsr,
-                                        new IsrState.CommittedIsrState(Collections.emptyList())))
-                        .get();
-        assertThat(adjustedIsr.leaderEpoch()).isEqualTo(tryToAdjustIsr.leaderEpoch());
-        assertThat(adjustedIsr.bucketEpoch()).isEqualTo(2);
+        // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
+        IsrState.PendingShrinkIsrState pendingShrinkIsrState =
+                replica.prepareIsrShrink(
+                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        Arrays.asList(1, 2),
+                        Collections.singletonList(3));
 
+        // Set leader epoch of this bucket in coordinatorServer gateway to 1 to mock leader epoch is
+        // fenced.
         testCoordinatorGateway.setCurrentLeaderEpoch(tb, 1);
-        // 2. isr with fenced leader epoch.
-        assertThatThrownBy(() -> adjustIsrManager.submit(tb, tryToAdjustIsr).get())
-                .rootCause()
-                .isInstanceOf(FencedLeaderEpochException.class)
-                .hasMessageContaining("request leader epoch is fenced.");
-
-        assertThatThrownBy(
-                        () ->
-                                replica.submitAdjustIsr(
-                                                new IsrState.PendingShrinkIsrState(
-                                                        Collections.singletonList(1),
-                                                        tryToAdjustIsr,
-                                                        new IsrState.CommittedIsrState(
-                                                                Collections.emptyList())))
-                                        .get())
+        assertThatThrownBy(() -> replica.submitAdjustIsr(pendingShrinkIsrState).get())
                 .rootCause()
                 .isInstanceOf(FencedLeaderEpochException.class)
                 .hasMessageContaining("request leader epoch is fenced.");
