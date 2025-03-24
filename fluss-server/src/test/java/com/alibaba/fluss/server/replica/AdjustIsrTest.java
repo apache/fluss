@@ -31,6 +31,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
@@ -134,7 +135,10 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // Set leader epoch of this bucket in coordinatorServer gateway to 1 to mock leader epoch is
         // fenced.
         testCoordinatorGateway.setCurrentLeaderEpoch(tb, 1);
-        assertThatThrownBy(() -> replica.submitAdjustIsr(pendingShrinkIsrState).get())
+        assertThatThrownBy(
+                        () ->
+                                replica.submitAdjustIsr(pendingShrinkIsrState)
+                                        .get(1, TimeUnit.MINUTES))
                 .rootCause()
                 .isInstanceOf(FencedLeaderEpochException.class)
                 .hasMessageContaining("request leader epoch is fenced.");

@@ -1443,7 +1443,7 @@ public final class Replica {
     }
 
     @VisibleForTesting
-    public IsrState.PendingShrinkIsrState prepareIsrShrink(
+    IsrState.PendingShrinkIsrState prepareIsrShrink(
             IsrState.CommittedIsrState currentState,
             List<Integer> isrToSend,
             List<Integer> outOfSyncFollowerReplicas) {
@@ -1464,8 +1464,7 @@ public final class Replica {
     }
 
     @VisibleForTesting
-    public CompletableFuture<LeaderAndIsr> submitAdjustIsr(
-            IsrState.PendingIsrState proposedIsrState) {
+    CompletableFuture<LeaderAndIsr> submitAdjustIsr(IsrState.PendingIsrState proposedIsrState) {
         return submitAdjustIsr(proposedIsrState, new CompletableFuture<>());
     }
 
