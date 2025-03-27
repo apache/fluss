@@ -806,7 +806,8 @@ public class ReplicaManager {
 
         // Truncate the follower replicas LEO to highWatermark.
         // TODO this logic need to be removed after we introduce leader epoch cache, and fetcher
-        // manager support truncating while fetching. See FLUSS-56112423
+        // manager support truncating while fetching. Trace by
+        // https://github.com/alibaba/fluss/issues/673
         truncateToHighWatermark(replicasBecomeFollower);
 
         // add fetcher for those follower replicas.

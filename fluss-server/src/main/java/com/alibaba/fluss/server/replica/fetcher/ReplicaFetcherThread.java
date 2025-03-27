@@ -482,7 +482,13 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         // For the follower replica, we do not need to keep its segment base offset and physical
         // position. These values will be computed upon becoming leader or handling a preferred read
         // replica fetch.
-        logTablet.updateHighWatermark(replicaData.getHighWatermark());
+        // TODO, to avoid lose data in case of leader change, we now change to update highWatermark
+        // first for follower instead of first for leader. The reason why can see
+        // https://cwiki.apache.org/confluence/display/KAFKA/KIP-101+-+Alter+Replication+Protocol+to+use+Leader+Epoch+rather+than+High+Watermark+for+Truncation
+        // for more details. However, this is just a temporary solution, if we want to have a strong
+        // consistency guarantee, we should do as KIP-101 do, trace by:
+        // https://github.com/alibaba/fluss/issues/673
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
         LOG.trace(
                 "Follower received high watermark {} from the leader for replica {}",
                 replicaData.getHighWatermark(),
@@ -502,7 +508,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         RemoteLogManager rlm = replicaManager.getRemoteLogManager();
 
         // TODO after introduce leader epoch cache, we need to rebuild the local leader epoch
-        // cache.
+        // cache. Trace by https://github.com/alibaba/fluss/issues/673
 
         // update next fetch offset and writer id snapshot in local.
         for (RemoteLogSegment remoteLogSegment : rlFetchInfo.remoteLogSegmentList()) {
