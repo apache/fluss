@@ -18,6 +18,7 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.client.metadata.TestingMetadataUpdater;
 import com.alibaba.fluss.client.metrics.TestingWriterMetricGroup;
+import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -38,9 +39,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -249,6 +254,79 @@ final class SenderTest {
         assertThat(idempotenceManager.inflightBatchSize(tb1))
                 .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
         assertThat(accumulator.ready(metadataUpdater.getCluster()).readyNodes.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testIdempotenceWithInflightBatchesExceedMaxInflightBatch() throws Exception {
+        // When more than 5 batches (MAX_INFLIGHT_REQUEST_PER_BUCKET) of data are incorrectly
+        // returned with retriable error, we can still continue to send requests, but only for the
+        // one with the smallest batchSequence (first batchSequence) among the failed requests.
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender = setupWithIdempotenceState(idempotenceManager);
+        sender.runOnce();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
+
+        // 1. send five batches first to full MAX_INFLIGHT_REQUEST_PER_BUCKET.
+        for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
+            CompletableFuture<Exception> future = new CompletableFuture<>();
+            appendToAccumulator(tb1, row(1, "a"), future::complete);
+            assertThat(idempotenceManager.canSendMoreRequests(tb1)).isTrue();
+            sender.runOnce(); // runOnce to send request.
+        }
+        assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(5);
+        assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
+
+        // 2. try to append more data into accumulator, it will not be drained from accumulator.
+        for (int i = 0; i < 1000; i++) {
+            CompletableFuture<Exception> future = new CompletableFuture<>();
+            appendToAccumulator(tb1, row(1, "a"), future::complete);
+        }
+        // No batches can be drained from accumulator as the inflight request size is max in
+        // IdempotenceManager.
+        Set<ServerNode> readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
+        assertThat(readyNodes.isEmpty()).isFalse();
+        Map<Integer, List<WriteBatch>> drained =
+                accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
+        assertThat(drained.isEmpty()).isTrue();
+
+        // try to send, no request will send.
+        assertThat(pendingRequestSize(tb1)).isEqualTo(5);
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isEqualTo(5);
+
+        // 3. try to finish already send requests with retriable error.
+        for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
+            finishIdempotentProduceLogRequest(
+                    i, tb1, 0, createProduceLogResponse(tb1, Errors.STORAGE_EXCEPTION));
+        }
+        assertThat(pendingRequestSize(tb1)).isEqualTo(0);
+
+        // 4. try to re-send many iterators.
+        for (int i = 0; i < 20; i++) {
+            // add more data into accumulator to make sure accumulator.ready() not return
+            // empty.
+            for (int j = 0; j < 50; j++) {
+                CompletableFuture<Exception> future = new CompletableFuture<>();
+                appendToAccumulator(tb1, row(1, "a"), future::complete);
+            }
+
+            // already have five batches in idempotenceManager inflight batches.
+            assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
+            readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
+            assertThat(readyNodes.isEmpty()).isFalse();
+            drained =
+                    accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
+            if (i == 0) {
+                // for first batch (retried first batch), we can send.
+                assertThat(drained.isEmpty()).isFalse();
+                List<WriteBatch> writeBatches = new ArrayList<>(drained.values()).get(0);
+                assertThat(writeBatches.size()).isEqualTo(1);
+                assertThat(writeBatches.get(0).batchSequence()).isEqualTo(0);
+            } else {
+                // for other batches, we will wait the result of the first batch and cannot be send.
+                assertThat(drained.isEmpty()).isTrue();
+            }
+        }
     }
 
     @Test
@@ -545,6 +623,13 @@ final class SenderTest {
                 (TestTabletServerGateway)
                         metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
         gateway.response(index, response);
+    }
+
+    private int pendingRequestSize(TableBucket tb) {
+        TestTabletServerGateway gateway =
+                (TestTabletServerGateway)
+                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+        return gateway.pendingRequestSize();
     }
 
     private void finishIdempotentProduceLogRequest(

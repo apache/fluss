@@ -653,21 +653,33 @@ public final class RecordAccumulator {
                 return true;
             }
 
-            if (!idempotenceManager.canSendMoreRequests(tableBucket)) {
-                // we have reached the max inflight requests for this table bucket, so we need stop
-                // drain this batch.
-                return true;
-            }
-
-            int firstInFlightSequence = idempotenceManager.firstInFlightBatchSequence(tableBucket);
             // If the queued batch already has an assigned batch sequence, then it is being
             // retried. In this case, we wait until the next immediate batch is ready and
             // drain that. We only move on when the next in line batch is complete (either
             // successfully or due to a fatal server error). This effectively reduces our in
             // flight request count to 1.
-            return firstInFlightSequence != LogRecordBatch.NO_BATCH_SEQUENCE
-                    && first.hasBatchSequence()
-                    && first.batchSequence() != firstInFlightSequence;
+            int firstInFlightSequence = idempotenceManager.firstInFlightBatchSequence(tableBucket);
+            boolean isFirstInFlightBatch =
+                    firstInFlightSequence != LogRecordBatch.NO_BATCH_SEQUENCE
+                            && first.hasBatchSequence()
+                            && first.batchSequence() == firstInFlightSequence;
+
+            if (isFirstInFlightBatch) {
+                return false;
+            } else {
+                if (!first.hasBatchSequence()) {
+                    // For batches that haven't been assigned a batchSequence, we consider them as
+                    // new batches. In this case, we need to ensure that the number of inflight
+                    // requests does not exceed maxInflightRequestsPerBucket.
+                    return !idempotenceManager.canSendMoreRequests(tableBucket);
+                } else {
+                    // For batches that have been assigned a batchSequence, we consider that these
+                    // batches have encountered a retriable error. In such cases, only the first
+                    // batch  allow to be sent until the retriable error is resolved. This
+                    // approach helps reduce the number of requests sent over the network.
+                    return true;
+                }
+            }
         }
         return false;
     }

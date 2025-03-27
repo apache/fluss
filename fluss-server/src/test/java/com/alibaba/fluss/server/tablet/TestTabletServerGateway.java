@@ -306,6 +306,10 @@ public class TestTabletServerGateway implements TabletServerGateway {
         throw new UnsupportedOperationException();
     }
 
+    public int pendingRequestSize() {
+        return requests.size();
+    }
+
     public ApiMessage getRequest(int index) {
         if (requests.isEmpty()) {
             throw new IllegalStateException("No requests pending for inbound response.");
