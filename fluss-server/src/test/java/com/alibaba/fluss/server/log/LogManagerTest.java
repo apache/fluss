@@ -58,6 +58,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA2_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
+import static com.alibaba.fluss.server.log.LogManager.CLEAN_SHUTDOWN_FILE;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -207,6 +208,37 @@ final class LogManagerTest extends LogTestBase {
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
 
         newLogManager.shutdown();
+    }
+
+    @ParameterizedTest
+    @MethodSource("partitionProvider")
+    void testHasCleanShutdownMarkerAfterLogManagerShutdown(String partitionName) throws Exception {
+        initTableBuckets(partitionName);
+        LogTablet log1 = getOrCreateLog(tablePath1, partitionName, tableBucket1);
+        for (int i = 0; i < 50; i++) {
+            MemoryLogRecords mr = genMemoryLogRecordsByObject(DATA1);
+            log1.appendAsLeader(mr);
+        }
+
+        LogTablet log2 = getOrCreateLog(tablePath2, partitionName, tableBucket2);
+        for (int i = 0; i < 50; i++) {
+            MemoryLogRecords mr = genMemoryLogRecordsByObject(DATA1);
+            log2.appendAsLeader(mr);
+        }
+
+        // test clean shutdown.
+        logManager.shutdown();
+        logManager = null;
+
+        String dataDir = conf.getString(ConfigOptions.DATA_DIR);
+        assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
+
+        LogManager newLogManager =
+                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+        assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
+        newLogManager.startup();
+        logManager = newLogManager;
+        assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isFalse();
     }
 
     @ParameterizedTest

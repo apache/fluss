@@ -93,7 +93,8 @@ final class LogTabletTest extends LogTestBase {
                         LogFormat.ARROW,
                         1,
                         false,
-                        SystemClock.getInstance());
+                        SystemClock.getInstance(),
+                        true);
     }
 
     @AfterEach
@@ -494,7 +495,8 @@ final class LogTabletTest extends LogTestBase {
                 LogFormat.ARROW,
                 1,
                 false,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                true);
     }
 
     private void assertFetchSizeAndOffsets(

@@ -273,7 +273,8 @@ public final class LogTablet {
             LogFormat logFormat,
             int tieredLogLocalSegments,
             boolean isChangelog,
-            Clock clock)
+            Clock clock,
+            boolean isCleanShutdown)
             throws Exception {
         // create the log directory if it doesn't exist
         Files.createDirectories(tabletDir.toPath());
@@ -295,7 +296,8 @@ public final class LogTablet {
                                 segments,
                                 recoveryPoint,
                                 logFormat,
-                                writerStateManager)
+                                writerStateManager,
+                                isCleanShutdown)
                         .load();
 
         LocalLog log =

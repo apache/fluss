@@ -47,6 +47,7 @@ final class LogLoader {
     private final long recoveryPointCheckpoint;
     private final LogFormat logFormat;
     private final WriterStateManager writerStateManager;
+    private final boolean isCleanShutdown;
 
     public LogLoader(
             File logTabletDir,
@@ -54,13 +55,15 @@ final class LogLoader {
             LogSegments logSegments,
             long recoveryPointCheckpoint,
             LogFormat logFormat,
-            WriterStateManager writerStateManager) {
+            WriterStateManager writerStateManager,
+            boolean isCleanShutdown) {
         this.logTabletDir = logTabletDir;
         this.conf = conf;
         this.logSegments = logSegments;
         this.recoveryPointCheckpoint = recoveryPointCheckpoint;
         this.logFormat = logFormat;
         this.writerStateManager = writerStateManager;
+        this.isCleanShutdown = isCleanShutdown;
     }
 
     /**
@@ -93,8 +96,8 @@ final class LogLoader {
         // WriterStateManager used during log recovery may have deleted some files without the
         // LogLoader.writerStateManager instance witnessing the deletion.
         writerStateManager.removeStraySnapshots(logSegments.baseOffsets());
-        // TODO get the clean shutdown info from LogManager.
-        LogTablet.rebuildWriterState(writerStateManager, logSegments, 0, nextOffset, true);
+        LogTablet.rebuildWriterState(
+                writerStateManager, logSegments, 0, nextOffset, isCleanShutdown);
 
         LogSegment activeSegment = logSegments.lastSegment().get();
         activeSegment.resizeIndexes((int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
