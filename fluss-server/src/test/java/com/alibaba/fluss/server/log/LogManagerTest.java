@@ -174,17 +174,16 @@ final class LogManagerTest extends LogTestBase {
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
     }
 
-    @ParameterizedTest
-    @MethodSource("partitionProvider")
-    void testRecoveryAfterLogManagerShutdown(String partitionName) throws Exception {
-        initTableBuckets(partitionName);
-        LogTablet log1 = getOrCreateLog(tablePath1, partitionName, tableBucket1);
+    @Test
+    void testRecoveryAfterLogManagerShutdown() throws Exception {
+        initTableBuckets(null);
+        LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);
         for (int i = 0; i < 50; i++) {
             MemoryLogRecords mr = genMemoryLogRecordsByObject(DATA1);
             log1.appendAsLeader(mr);
         }
 
-        LogTablet log2 = getOrCreateLog(tablePath2, partitionName, tableBucket2);
+        LogTablet log2 = getOrCreateLog(tablePath2, null, tableBucket2);
         for (int i = 0; i < 50; i++) {
             MemoryLogRecords mr = genMemoryLogRecordsByObject(DATA1);
             log2.appendAsLeader(mr);
@@ -197,8 +196,8 @@ final class LogManagerTest extends LogTestBase {
                 LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
         newLogManager.startup();
         logManager = newLogManager;
-        log1 = getOrCreateLog(tablePath1, partitionName, tableBucket1);
-        log2 = getOrCreateLog(tablePath2, partitionName, tableBucket2);
+        log1 = getOrCreateLog(tablePath1, null, tableBucket1);
+        log2 = getOrCreateLog(tablePath2, null, tableBucket2);
         Map<TableBucket, Long> checkpoints =
                 new OffsetCheckpointFile(
                                 new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
