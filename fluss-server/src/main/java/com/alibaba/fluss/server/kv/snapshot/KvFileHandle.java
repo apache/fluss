@@ -74,9 +74,8 @@ public class KvFileHandle implements Serializable {
      *
      * @throws Exception Thrown, if the file deletion (not the directory deletion) fails.
      */
-    public void discard() throws Exception {
-        // TODO refactor
-        FsPath fsPath = new FsPath(filePath);
+    public void discard(String fileBasePath) throws Exception {
+        FsPath fsPath = new FsPath(fileBasePath, filePath);
         final FileSystem fs = fsPath.getFileSystem();
 
         IOException actualException = null;

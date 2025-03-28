@@ -119,7 +119,8 @@ public class KvSnapshotHandle {
             SnapshotUtil.bestEffortDiscardAllKvFiles(
                     privateFileHandles.stream()
                             .map(KvFileHandleAndLocalPath::getKvFileHandle)
-                            .collect(Collectors.toList()));
+                            .collect(Collectors.toList()),
+                    privateFileBasePath);
         } catch (Exception e) {
             LOG.warn("Could not properly discard misc file states.", e);
         }
@@ -129,7 +130,8 @@ public class KvSnapshotHandle {
                 SnapshotUtil.bestEffortDiscardAllKvFiles(
                         sharedFileHandles.stream()
                                 .map(KvFileHandleAndLocalPath::getKvFileHandle)
-                                .collect(Collectors.toSet()));
+                                .collect(Collectors.toSet()),
+                        sharedFileBasePath);
             } catch (Exception e) {
                 LOG.warn("Could not properly discard new sst file states.", e);
             }

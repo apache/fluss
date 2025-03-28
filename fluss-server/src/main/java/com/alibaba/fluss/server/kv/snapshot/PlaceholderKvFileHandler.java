@@ -29,7 +29,7 @@ public class PlaceholderKvFileHandler extends KvFileHandle {
     }
 
     @Override
-    public void discard() throws Exception {
+    public void discard(String fileBasePath) throws Exception {
         // do nothing
     }
 }

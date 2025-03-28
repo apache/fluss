@@ -116,7 +116,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
         return entry.kvFileHandle;
     }
 
-    public void unregisterUnusedKvFile(long lowestSnapshotID) {
+    public void unregisterUnusedKvFile(long lowestSnapshotID, String sharedFileBasePath) {
         // delete kv files that aren't used
         LOG.debug(
                 "Discard kv files created before snapshot {} and not used afterwards",
@@ -138,7 +138,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
         }
         LOG.trace("Discard {} kv files asynchronously", subsumed.size());
         for (KvFileHandle handle : subsumed) {
-            scheduleAsyncDelete(handle);
+            scheduleAsyncDelete(handle, sharedFileBasePath);
         }
     }
 
@@ -156,11 +156,12 @@ public class SharedKvFileRegistry implements AutoCloseable {
         registerAll(completedSnapshot.getKvSnapshotHandle(), completedSnapshot.getSnapshotID());
     }
 
-    private void scheduleAsyncDelete(KvFileHandle kvFileHandle) {
+    private void scheduleAsyncDelete(KvFileHandle kvFileHandle, String sharedFileBasePath) {
         // We do the small optimization to not issue discards for placeholders, which are NOPs.
         if (kvFileHandle != null && !isPlaceholder(kvFileHandle)) {
             LOG.debug("Scheduled delete of kv handle {}.", kvFileHandle);
-            AsyncDisposalRunnable asyncDisposalRunnable = new AsyncDisposalRunnable(kvFileHandle);
+            AsyncDisposalRunnable asyncDisposalRunnable =
+                    new AsyncDisposalRunnable(kvFileHandle, sharedFileBasePath);
             asyncDisposalExecutor.execute(asyncDisposalRunnable);
         }
     }
@@ -180,15 +181,17 @@ public class SharedKvFileRegistry implements AutoCloseable {
     private static final class AsyncDisposalRunnable implements Runnable {
 
         private final KvFileHandle toDispose;
+        private final String sharedFileBasePath;
 
-        public AsyncDisposalRunnable(KvFileHandle toDispose) {
+        public AsyncDisposalRunnable(KvFileHandle toDispose, String sharedFileBasePath) {
             this.toDispose = checkNotNull(toDispose);
+            this.sharedFileBasePath = checkNotNull(sharedFileBasePath);
         }
 
         @Override
         public void run() {
             try {
-                toDispose.discard();
+                toDispose.discard(sharedFileBasePath);
             } catch (Exception e) {
                 LOG.warn(
                         "A problem occurred during asynchronous disposal of a shared kv object: {}",
