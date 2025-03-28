@@ -176,7 +176,7 @@ class RecordAccumulatorTest {
         int bucketNum = 10;
         RecordAccumulator accum =
                 createTestRecordAccumulator(
-                        Integer.MAX_VALUE, batchSize, batchSize, Integer.MAX_VALUE);
+                        Long.MAX_VALUE, Integer.MAX_VALUE, batchSize, batchSize, Integer.MAX_VALUE);
         List<BucketLocation> bucketLocations = new ArrayList<>();
         for (int b = 0; b < bucketNum; b++) {
             bucketLocations.add(
@@ -288,7 +288,8 @@ class RecordAccumulatorTest {
     void testAppendLarge() throws Exception {
         int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
-        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, batchSize, 10L * 1024);
+        RecordAccumulator accum =
+                createTestRecordAccumulator(Long.MAX_VALUE, 0, batchSize, batchSize, 10L * 1024);
 
         // a row with size > 2 * batchSize
         IndexedRow row1 =
@@ -326,6 +327,7 @@ class RecordAccumulatorTest {
         StickyBucketAssigner bucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         RecordAccumulator accum =
                 createTestRecordAccumulator(
+                        Long.MAX_VALUE,
                         (int) Duration.ofMinutes(1).toMillis(),
                         batchSize,
                         batchSize,
@@ -440,7 +442,8 @@ class RecordAccumulatorTest {
     void testTableWithUnknownLeader() throws Exception {
         int batchSize = 100;
         // set batch timeout as 0 to make sure batch are always ready.
-        RecordAccumulator accum = createTestRecordAccumulator(0, batchSize, batchSize, 10L * 1024);
+        RecordAccumulator accum =
+                createTestRecordAccumulator(Long.MAX_VALUE, 0, batchSize, batchSize, 10L * 1024);
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
         BucketLocation bucket1 =
@@ -484,7 +487,8 @@ class RecordAccumulatorTest {
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         // test case assumes that the records do not fill the batch completely
         RecordAccumulator accum =
-                createTestRecordAccumulator(batchTimeout, batchSize, 256, 10 * batchSize);
+                createTestRecordAccumulator(
+                        Long.MAX_VALUE, batchTimeout, batchSize, 256, 10 * batchSize);
         // Just short of going over the limit so we trigger linger time
         int appends = expectedNumAppends(row, batchSize);
 
@@ -518,8 +522,38 @@ class RecordAccumulatorTest {
         assertThat(result.nextReadyCheckDelayMs).isLessThanOrEqualTo(batchTimeout);
     }
 
+    @Test
+    void testExpiredWriteBatches() throws Exception {
+        long batchDeliveryTimeout = 3200;
+        int batchSize = 1024;
+
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum =
+                createTestRecordAccumulator(
+                        batchDeliveryTimeout, 30, batchSize, 256, 10 * batchSize);
+        int appends = expectedNumAppends(row, batchSize);
+        for (int i = 0; i < appends; i++) {
+            accum.append(createRecord(row), writeCallback, cluster, bucket1.getBucketId(), false);
+            assertThat(accum.ready(cluster).readyNodes.size()).isEqualTo(0);
+        }
+
+        accum.append(createRecord(row), writeCallback, cluster, bucket1.getBucketId(), false);
+        // Make the batches ready due to batch full.
+        assertThat(accum.ready(cluster).readyNodes.size()).isEqualTo(1);
+
+        // Advance the clock lower than expire time.
+        clock.advanceTime(batchDeliveryTimeout / 2, TimeUnit.MILLISECONDS);
+        List<WriteBatch> expiredBatches = accum.expiredBatches(clock.milliseconds());
+        assertThat(expiredBatches.size()).isEqualTo(0);
+
+        // Advance the clock to expire the batch.
+        clock.advanceTime(batchDeliveryTimeout / 2 + 1, TimeUnit.MILLISECONDS);
+        expiredBatches = accum.expiredBatches(clock.milliseconds());
+        assertThat(expiredBatches.size()).isEqualTo(2);
+    }
+
     /**
-     * Creates a indexed WriteRecord as the DATA1_PHYSICAL_TABLE_PATH is registered as a INDEXED
+     * Creates an indexed WriteRecord as the DATA1_PHYSICAL_TABLE_PATH is registered as a INDEXED
      * format , see {@link #updateCluster(List)}.
      */
     private WriteRecord createRecord(IndexedRow row) {
@@ -607,12 +641,19 @@ class RecordAccumulatorTest {
     }
 
     private RecordAccumulator createTestRecordAccumulator(int batchSize, long totalSize) {
-        return createTestRecordAccumulator(5000, batchSize, 256, totalSize);
+        return createTestRecordAccumulator(Long.MAX_VALUE, 5000, batchSize, 256, totalSize);
     }
 
     private RecordAccumulator createTestRecordAccumulator(
-            int batchTimeoutMs, int batchSize, int pageSize, long totalSize) {
+            long deliveryTimeoutMs,
+            int batchTimeoutMs,
+            int batchSize,
+            int pageSize,
+            long totalSize) {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
+        conf.set(
+                ConfigOptions.CLIENT_WRITER_BATCH_DELIVERY_TIMEOUT,
+                Duration.ofMillis(deliveryTimeoutMs));
         // TODO client writer buffer maybe removed.
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(totalSize));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(pageSize));
@@ -627,7 +668,8 @@ class RecordAccumulatorTest {
                                 RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                                 TabletServerGateway.class)),
                 TestingWriterMetricGroup.newInstance(),
-                clock);
+                clock,
+                deliveryTimeoutMs);
     }
 
     private long getTestBatchSize(BinaryRow row) {

@@ -140,6 +140,18 @@ public abstract class WriteBatch {
         return requestFuture;
     }
 
+    long getCreatedMs() {
+        return createdMs;
+    }
+
+    boolean hasReachedDeliveryTimeout(long batchDeliveryTimeoutMs, long now) {
+        return batchDeliveryTimeoutMs <= now - this.createdMs;
+    }
+
+    FinalState getFinalState() {
+        return finalState.get();
+    }
+
     public long waitedTimeMs(long nowMs) {
         return Math.max(0, nowMs - createdMs);
     }

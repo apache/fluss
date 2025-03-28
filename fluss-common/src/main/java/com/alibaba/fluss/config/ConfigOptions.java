@@ -842,6 +842,23 @@ public class ConfigOptions {
                                     + "this timeout is the max time that delayed write try to complete. "
                                     + "The default setting is 30 seconds.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_DELIVERY_TIMEOUT =
+            key("client.writer.batch-delivery-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(2))
+                    .withDescription(
+                            "An upper bound on the time to report success or failure after a call to "
+                                    + "<code>Sender#send()</code> returns. This limits the total time that a record "
+                                    + "will be delayed prior to sending, the time to await ack from the tabletServer"
+                                    + "(if expected), and the time allowed either an unrecoverable error is encountered, "
+                                    + "the retries have been exhausted, or the record is added to a batch which reached "
+                                    + "an earlier delivery expiration deadline. Thw vale of this config should be greater "
+                                    + "than or equal to the sum of '"
+                                    + CLIENT_REQUEST_TIMEOUT.key()
+                                    + "' and '"
+                                    + CLIENT_WRITER_BATCH_TIMEOUT.key()
+                                    + "'.");
+
     public static final ConfigOption<Boolean> CLIENT_SCANNER_LOG_CHECK_CRC =
             key("client.scanner.log.check-crc")
                     .booleanType()

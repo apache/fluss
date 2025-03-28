@@ -31,6 +31,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
+import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -97,10 +98,16 @@ public class WriterClient {
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
+            long batchDeliveryTimeoutMs = configureBatchDeliveryTimeout(conf);
+            SystemClock clock = SystemClock.getInstance();
             this.accumulator =
                     new RecordAccumulator(
-                            conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
-            this.sender = newSender(acks, retries);
+                            conf,
+                            idempotenceManager,
+                            writerMetricGroup,
+                            clock,
+                            batchDeliveryTimeoutMs);
+            this.sender = newSender(acks, retries, clock);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
         } catch (Throwable t) {
@@ -249,7 +256,27 @@ public class WriterClient {
         return retries;
     }
 
-    private Sender newSender(short acks, int retries) {
+    private long configureBatchDeliveryTimeout(Configuration conf) {
+        long batchDeliveryTimeoutMs =
+                conf.get(ConfigOptions.CLIENT_WRITER_BATCH_DELIVERY_TIMEOUT).toMillis();
+        long batchTimeoutMs = conf.get(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT).toMillis();
+        long requestTimeoutMs = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
+        long batchAndRequestTimeoutMs = Math.min(batchTimeoutMs + requestTimeoutMs, Long.MAX_VALUE);
+
+        if (batchDeliveryTimeoutMs < batchAndRequestTimeoutMs) {
+            throw new IllegalConfigurationException(
+                    "The value of "
+                            + ConfigOptions.CLIENT_WRITER_BATCH_DELIVERY_TIMEOUT.key()
+                            + " should be greater than or equal to "
+                            + ConfigOptions.CLIENT_REQUEST_TIMEOUT.key()
+                            + " + "
+                            + ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT.key()
+                            + ".");
+        }
+        return batchDeliveryTimeoutMs;
+    }
+
+    private Sender newSender(short acks, int retries, Clock clock) {
         return new Sender(
                 accumulator,
                 (int) conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis(),
@@ -258,6 +285,7 @@ public class WriterClient {
                 retries,
                 metadataUpdater,
                 idempotenceManager,
+                clock,
                 writerMetricGroup);
     }
 

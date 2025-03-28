@@ -108,15 +108,21 @@ public final class RecordAccumulator {
     private final IdempotenceManager idempotenceManager;
     private final Clock clock;
 
+    /**
+     * An upper bound on the time to report success or failure on record delivery when append into
+     * WriteBatch.
+     */
+    private final long batchDeliveryTimeoutMs;
+
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
-    // TODO add deliveryTimeoutMs to report success or failure on record delivery.
-    // TODO add nextBatchExpiryTimeMs
+    // TODO add nextBatchExpiryTimeMs. Trace by https://github.com/alibaba/fluss/pull/300
 
     RecordAccumulator(
             Configuration conf,
             IdempotenceManager idempotenceManager,
             WriterMetricGroup writerMetricGroup,
-            Clock clock) {
+            Clock clock,
+            long batchDeliveryTimeoutMs) {
         this.closed = false;
         this.flushesInProgress = new AtomicInteger(0);
         this.appendsInProgress = new AtomicInteger(0);
@@ -136,6 +142,7 @@ public final class RecordAccumulator {
         this.nodesDrainIndex = new HashMap<>();
         this.idempotenceManager = idempotenceManager;
         this.clock = clock;
+        this.batchDeliveryTimeoutMs = batchDeliveryTimeoutMs;
         registerMetrics(writerMetricGroup);
     }
 
@@ -292,6 +299,31 @@ public final class RecordAccumulator {
                 deque.addFirst(batch);
             }
         }
+    }
+
+    public List<WriteBatch> expiredBatches(long now) {
+        List<WriteBatch> expiredBatches = new ArrayList<>();
+        for (BucketAndWriteBatches bucketAndWriteBatch : writeBatches.values()) {
+            for (Deque<WriteBatch> deque : bucketAndWriteBatch.batches.values()) {
+                // expire the batches in the order of sending.
+                synchronized (deque) {
+                    while (!deque.isEmpty()) {
+                        WriteBatch batch = deque.getFirst();
+                        if (batch.hasReachedDeliveryTimeout(batchDeliveryTimeoutMs, now)) {
+                            deque.poll();
+                            expiredBatches.add(batch);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return expiredBatches;
+    }
+
+    public long getDeliveryTimeoutMs() {
+        return batchDeliveryTimeoutMs;
     }
 
     /** Get the deque for the given table-bucket, creating it if necessary. */
