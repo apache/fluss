@@ -65,16 +65,30 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
             KvSnapshotHandle kvSnapshotHandle = kvSnapshotDownloadSpec.getKvSnapshotHandle();
             List<FsPathAndFileName> fsPathAndFileNames =
                     Stream.concat(
-                                    kvSnapshotHandle.getSharedKvFileHandles().stream(),
-                                    kvSnapshotHandle.getPrivateFileHandles().stream())
-                            .map(
-                                    kvFileHandleAndLocalPath ->
-                                            new FsPathAndFileName(
-                                                    new FsPath(
-                                                            kvFileHandleAndLocalPath
-                                                                    .getKvFileHandle()
-                                                                    .getFilePath()),
-                                                    kvFileHandleAndLocalPath.getLocalPath()))
+                                    kvSnapshotHandle.getSharedKvFileHandles().stream()
+                                            .map(
+                                                    kvFileHandleAndLocalPath ->
+                                                            new FsPathAndFileName(
+                                                                    new FsPath(
+                                                                            kvSnapshotHandle
+                                                                                    .getSharedFileBasePath(),
+                                                                            kvFileHandleAndLocalPath
+                                                                                    .getKvFileHandle()
+                                                                                    .getFilePath()),
+                                                                    kvFileHandleAndLocalPath
+                                                                            .getLocalPath())),
+                                    kvSnapshotHandle.getPrivateFileHandles().stream()
+                                            .map(
+                                                    kvFileHandleAndLocalPath ->
+                                                            new FsPathAndFileName(
+                                                                    new FsPath(
+                                                                            kvSnapshotHandle
+                                                                                    .getPrivateFileBasePath(),
+                                                                            kvFileHandleAndLocalPath
+                                                                                    .getKvFileHandle()
+                                                                                    .getFilePath()),
+                                                                    kvFileHandleAndLocalPath
+                                                                            .getLocalPath())))
                             .collect(Collectors.toList());
             fileDownloadSpecs.add(
                     new FileDownloadSpec(

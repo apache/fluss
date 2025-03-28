@@ -167,7 +167,12 @@ class CompletedSnapshotTest {
                             new KvFileHandle(privateFile.getPath(), privateFile.length()),
                             localFile.getPath()));
         }
-        return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 10);
+        return new KvSnapshotHandle(
+                sharedFileHandles,
+                privateFileHandles,
+                shareDir.toString(),
+                baseSnapshotDir.toString(),
+                10);
     }
 
     private Path makeDir(Path basePath, String dirName) {

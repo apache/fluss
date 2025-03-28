@@ -23,6 +23,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -191,7 +192,12 @@ class CompletedSnapshotStoreTest {
                 tableBucket,
                 id,
                 new FsPath(tempDir.toString(), "test_snapshot"),
-                new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0));
+                new KvSnapshotHandle(
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        StringUtils.EMPTY,
+                        StringUtils.EMPTY,
+                        0));
     }
 
     private void testSnapshotRetention(
@@ -239,7 +245,11 @@ class CompletedSnapshotStoreTest {
                             i,
                             new FsPath("test_snapshot"),
                             new KvSnapshotHandle(
-                                    Collections.emptyList(), Collections.emptyList(), -1));
+                                    Collections.emptyList(),
+                                    Collections.emptyList(),
+                                    StringUtils.EMPTY,
+                                    StringUtils.EMPTY,
+                                    -1));
             final CompletedSnapshotHandle snapshotStateHandle =
                     new TestingCompletedSnapshotHandle(
                             completedSnapshot, failSnapshots.contains(num));

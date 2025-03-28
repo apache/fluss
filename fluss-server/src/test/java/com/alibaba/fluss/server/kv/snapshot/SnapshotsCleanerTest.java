@@ -116,8 +116,15 @@ class SnapshotsCleanerTest {
 
         public TestKvSnapshotHandle(
                 List<KvFileHandleAndLocalPath> sharedFileHandles,
-                List<KvFileHandleAndLocalPath> privateFileHandles) {
-            super(sharedFileHandles, privateFileHandles, -1);
+                List<KvFileHandleAndLocalPath> privateFileHandles,
+                String sharedFileBasePath,
+                String privateFileBasePath) {
+            super(
+                    sharedFileHandles,
+                    privateFileHandles,
+                    sharedFileBasePath,
+                    privateFileBasePath,
+                    -1);
         }
 
         @Override
@@ -157,8 +164,15 @@ class SnapshotsCleanerTest {
                             new KvFileHandle("private_remote_path", 1), "private_local_path"));
         }
 
+        String sharedFileBasePath = "oss://bucket/snapshot/shared/";
+        String privateFileBasePath = "oss://bucket/snapshot/snapshot1/";
+
         TestKvSnapshotHandle kvSnapshotHandle =
-                new TestKvSnapshotHandle(sharedFileHandles, privateFileHandles);
+                new TestKvSnapshotHandle(
+                        sharedFileHandles,
+                        privateFileHandles,
+                        sharedFileBasePath,
+                        privateFileBasePath);
         return new TestCompletedSnapshot(tableBucket, snapshotId, snapshotPath, kvSnapshotHandle);
     }
 }

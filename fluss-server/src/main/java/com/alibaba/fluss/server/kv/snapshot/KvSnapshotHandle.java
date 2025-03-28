@@ -41,6 +41,9 @@ public class KvSnapshotHandle {
     /** The private file(like meta file) handles of the kv snapshot. */
     private final List<KvFileHandleAndLocalPath> privateFileHandles;
 
+    private final String sharedFileBasePath;
+    private final String privateFileBasePath;
+
     /** The size of the incremental snapshot. */
     private final long incrementalSize;
 
@@ -57,9 +60,13 @@ public class KvSnapshotHandle {
     public KvSnapshotHandle(
             List<KvFileHandleAndLocalPath> sharedFileHandles,
             List<KvFileHandleAndLocalPath> privateFileHandles,
+            String sharedFileBasePath,
+            String privateFileBasePath,
             long incrementalSize) {
         this.sharedFileHandles = sharedFileHandles;
         this.privateFileHandles = privateFileHandles;
+        this.sharedFileBasePath = sharedFileBasePath;
+        this.privateFileBasePath = privateFileBasePath;
         this.incrementalSize = incrementalSize;
     }
 
@@ -69,6 +76,14 @@ public class KvSnapshotHandle {
 
     public List<KvFileHandleAndLocalPath> getPrivateFileHandles() {
         return privateFileHandles;
+    }
+
+    public String getSharedFileBasePath() {
+        return sharedFileBasePath;
+    }
+
+    public String getPrivateFileBasePath() {
+        return privateFileBasePath;
     }
 
     public long getIncrementalSize() {

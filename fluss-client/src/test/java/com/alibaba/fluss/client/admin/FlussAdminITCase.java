@@ -842,16 +842,28 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     private List<FsPathAndFileName> toFsPathAndFileNames(KvSnapshotHandle kvSnapshotHandle) {
         return Stream.concat(
-                        kvSnapshotHandle.getSharedKvFileHandles().stream(),
-                        kvSnapshotHandle.getPrivateFileHandles().stream())
-                .map(
-                        kvFileHandleAndLocalPath ->
-                                new FsPathAndFileName(
-                                        new FsPath(
-                                                kvFileHandleAndLocalPath
-                                                        .getKvFileHandle()
-                                                        .getFilePath()),
-                                        kvFileHandleAndLocalPath.getLocalPath()))
+                        kvSnapshotHandle.getSharedKvFileHandles().stream()
+                                .map(
+                                        kvFileHandleAndLocalPath ->
+                                                new FsPathAndFileName(
+                                                        new FsPath(
+                                                                kvSnapshotHandle
+                                                                        .getSharedFileBasePath(),
+                                                                kvFileHandleAndLocalPath
+                                                                        .getKvFileHandle()
+                                                                        .getFilePath()),
+                                                        kvFileHandleAndLocalPath.getLocalPath())),
+                        kvSnapshotHandle.getPrivateFileHandles().stream()
+                                .map(
+                                        kvFileHandleAndLocalPath ->
+                                                new FsPathAndFileName(
+                                                        new FsPath(
+                                                                kvSnapshotHandle
+                                                                        .getPrivateFileBasePath(),
+                                                                kvFileHandleAndLocalPath
+                                                                        .getKvFileHandle()
+                                                                        .getFilePath()),
+                                                        kvFileHandleAndLocalPath.getLocalPath())))
                 .collect(Collectors.toList());
     }
 }
