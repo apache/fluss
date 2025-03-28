@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,7 +52,7 @@ public class RequestChannelTest {
                             new GetTableInfoRequest(),
                             new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                             "CLIENT",
-                            null);
+                            new CompletableFuture<>());
             channel.putRequest(rpcRequest);
             rpcRequests.add(rpcRequest);
         }
@@ -71,7 +72,7 @@ public class RequestChannelTest {
                         new GetTableInfoRequest(),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         "CLIENT",
-                        null);
+                        new CompletableFuture<>());
         RpcRequest rpcRequest2 =
                 new FlussRequest(
                         ApiKeys.FETCH_LOG.id,
@@ -81,7 +82,7 @@ public class RequestChannelTest {
                         new FetchLogRequest().setMaxBytes(100).setFollowerServerId(2),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         "CLIENT",
-                        null);
+                        new CompletableFuture<>());
         channel.putRequest(rpcRequest1);
         channel.putRequest(rpcRequest2);
         RpcRequest rpcRequest = channel.pollRequest(100);

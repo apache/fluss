@@ -27,10 +27,10 @@ import java.util.concurrent.TimeUnit;
 
 /** A blocking queue channel that can receive requests and send responses. */
 @ThreadSafe
-public final class RequestChannel {
+public class RequestChannel {
     private static final Logger LOG = LoggerFactory.getLogger(RequestChannel.class);
 
-    private final BlockingQueue<RpcRequest> requestQueue;
+    protected final BlockingQueue<RpcRequest> requestQueue;
 
     public RequestChannel(int queueCapacity) {
         this.requestQueue = new ArrayBlockingQueue<>(queueCapacity);

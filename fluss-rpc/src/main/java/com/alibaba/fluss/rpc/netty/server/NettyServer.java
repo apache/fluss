@@ -76,6 +76,7 @@ public final class NettyServer implements RpcServer {
     private final List<NetworkProtocolPlugin> protocols;
     private final List<Channel> bindChannels;
     private final List<Endpoint> bindEndpoints;
+    private final RequestsMetrics requestsMetrics;
 
     private EventLoopGroup acceptorGroup;
     private EventLoopGroup selectorGroup;
@@ -89,6 +90,7 @@ public final class NettyServer implements RpcServer {
             MetricGroup serverMetricGroup,
             RequestsMetrics requestsMetrics) {
         this.conf = checkNotNull(conf, "conf");
+        this.requestsMetrics = requestsMetrics;
         this.serverMetricGroup = checkNotNull(serverMetricGroup, "serverMetricGroup");
         this.apiManager = new ApiManager(service.providerType());
         this.endpoints = checkNotNull(endpoints, "endpoints");
@@ -171,10 +173,10 @@ public final class NettyServer implements RpcServer {
             protocolName = "FLUSS";
             channelHandler =
                     new ServerChannelInitializer(
-                            new NettyServerHandler(
-                                    workerPool.getRequestChannels(),
-                                    apiManager,
-                                    endpoint.getListenerName()),
+                            workerPool.getRequestChannels(),
+                            apiManager,
+                            endpoint.getListenerName(),
+                            requestsMetrics,
                             conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds());
         } else {
             // plugin protocol

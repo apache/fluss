@@ -24,6 +24,7 @@ import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.LookupResponse;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.server.entity.FetchData;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -298,10 +300,13 @@ public class ReplicaFetcherITCase {
                                 Tuple2.of("k2", new Object[] {3, "b1"})));
 
         // but we can't lookup the kv since it hasn't been flushed
+        // Currently, the request response will return in order, so we need to first cache the
+        // CompletableFuture.
+        List<CompletableFuture<LookupResponse>> nullFutures = new ArrayList<>();
         for (Tuple2<byte[], byte[]> keyValue : expectedKeyValues) {
-            assertLookupResponse(
-                    leaderGateWay.lookup(newLookupRequest(tableId, bucketId, keyValue.f0)).get(),
-                    null);
+            CompletableFuture<LookupResponse> future =
+                    leaderGateWay.lookup(newLookupRequest(tableId, bucketId, keyValue.f0));
+            nullFutures.add(future);
         }
 
         // start the follower replica by notify leaderAndIsr,
@@ -319,6 +324,10 @@ public class ReplicaFetcherITCase {
 
         // wait util the put future is done
         putResponse.get();
+
+        for (CompletableFuture<LookupResponse> future : nullFutures) {
+            assertLookupResponse(future.get(), null);
+        }
 
         // then we can check all the value
         for (Tuple2<byte[], byte[]> keyValue : expectedKeyValues) {

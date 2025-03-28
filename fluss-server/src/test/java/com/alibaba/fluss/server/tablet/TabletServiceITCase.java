@@ -43,6 +43,7 @@ import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
+import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -69,8 +70,11 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
@@ -103,6 +107,7 @@ import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -157,6 +162,42 @@ public class TabletServiceITCase {
                 .cause()
                 .isInstanceOf(InvalidRequiredAcksException.class)
                 .hasMessageContaining("Invalid required acks");
+    }
+
+    @Test
+    void testProduceLogResponseReturnInOrder() throws Exception {
+        long tableId =
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        Queue<Integer> responseOrder = new ConcurrentLinkedQueue<>();
+        Random random = new Random();
+        for (int i = 0; i < 1000; i++) {
+            boolean needAck = random.nextBoolean();
+            CompletableFuture<ProduceLogResponse> produceLogFuture =
+                    leaderGateWay.produceLog(
+                            newProduceLogRequest(
+                                    tableId,
+                                    0,
+                                    needAck ? -1 : 0, // 0 means return immediately.
+                                    genMemoryLogRecordsByObject(DATA1)));
+            final int number = i;
+            produceLogFuture.whenComplete((r, e) -> responseOrder.add(number));
+        }
+
+        retry(Duration.ofMinutes(1), () -> assertThat(responseOrder.size()).isEqualTo(1000));
+        int previousValue = -1;
+        while (!responseOrder.isEmpty()) {
+            int currentValue = responseOrder.poll();
+            assertThat(currentValue).isGreaterThan(previousValue);
+            previousValue = currentValue;
+        }
     }
 
     @Test

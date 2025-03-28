@@ -51,8 +51,7 @@ final class RequestProcessorPool {
         this.processors = new RequestProcessor[numProcessors];
         this.requestChannels = new RequestChannel[numProcessors];
 
-        RequestHandler<?>[] requestHandlers =
-                initializeRequestHandlers(protocols, service, requestsMetrics);
+        RequestHandler<?>[] requestHandlers = initializeRequestHandlers(protocols, service);
         for (int i = 0; i < numProcessors; i++) {
             requestChannels[i] = new RequestChannel(totalQueueCapacity / numProcessors);
             // bind processor to a single channel to make requests from the
@@ -108,16 +107,14 @@ final class RequestProcessorPool {
     }
 
     private RequestHandler<?>[] initializeRequestHandlers(
-            List<NetworkProtocolPlugin> protocolPlugins,
-            RpcGatewayService service,
-            RequestsMetrics requestsMetrics) {
+            List<NetworkProtocolPlugin> protocolPlugins, RpcGatewayService service) {
         int maxRequestTypeId =
                 Arrays.stream(RequestType.values())
                         .mapToInt(type -> type.id)
                         .max()
                         .orElseThrow(() -> new IllegalStateException("No response type found."));
         RequestHandler<?>[] requestHandlers = new RequestHandler[maxRequestTypeId + 1];
-        requestHandlers[RequestType.FLUSS.id] = new FlussRequestHandler(service, requestsMetrics);
+        requestHandlers[RequestType.FLUSS.id] = new FlussRequestHandler(service);
         for (NetworkProtocolPlugin protocol : protocolPlugins) {
             RequestHandler<?> requestHandler = protocol.createRequestHandler(service);
             int id = requestHandler.requestType().id;

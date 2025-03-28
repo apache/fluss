@@ -17,6 +17,8 @@
 package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
+import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 import com.alibaba.fluss.record.send.Send;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
@@ -27,11 +29,13 @@ import com.alibaba.fluss.rpc.netty.client.NettyClientHandler;
 import com.alibaba.fluss.rpc.netty.server.FlussRequest;
 import com.alibaba.fluss.rpc.netty.server.NettyServerHandler;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
+import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelId;
+import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** Tests for {@link com.alibaba.fluss.rpc.protocol.MessageCodec}. */
+/** Tests for {@link MessageCodec}. */
 class MessageCodecTest {
 
     private NettyClientHandler clientHandler;
@@ -57,11 +61,13 @@ class MessageCodecTest {
         this.responseReceiver = new ResponseReceiver();
         this.clientHandler = new NettyClientHandler(responseReceiver);
         this.requestChannel = new RequestChannel(100);
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         this.serverHandler =
                 new NettyServerHandler(
-                        new RequestChannel[] {requestChannel},
+                        requestChannel,
                         new ApiManager(ServerType.TABLET_SERVER),
-                        "CLIENT");
+                        "CLIENT",
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
         this.ctx = mockChannelHandlerContext();
     }
 
@@ -188,6 +194,8 @@ class MessageCodecTest {
         when(channel.id()).thenReturn(channelId);
         ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
         when(ctx.channel()).thenReturn(channel);
+        EventExecutor eventExecutor = mock(EventExecutor.class);
+        when(ctx.executor()).thenReturn(eventExecutor);
         return ctx;
     }
 }
