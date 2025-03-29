@@ -353,7 +353,7 @@ public class ClientRpcMessageUtils {
     public static ListOffsetsRequest makeListOffsetsRequest(
             long tableId,
             @Nullable Long partitionId,
-            List<Integer> bucketIdList,
+            Collection<Integer> bucketIdList,
             OffsetSpec offsetSpec) {
         ListOffsetsRequest listOffsetsRequest = new ListOffsetsRequest();
         listOffsetsRequest
