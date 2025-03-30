@@ -21,6 +21,7 @@ import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.client.builder.AwsClientBuilder;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
 import com.amazonaws.services.securitytoken.model.Credentials;
@@ -46,18 +47,39 @@ public class S3DelegationTokenProvider {
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
 
+    private static final String STS_REGION_KEY = "fs.s3a.sts.region";
+    private static final String STS_ENDPOINT_KEY = "fs.s3a.sts.endpoint";
+
+    private final AWSSecurityTokenService stsClient;
     private final String scheme;
-    private final String region;
-    private final String accessKey;
-    private final String secretKey;
     private final Map<String, String> additionInfos;
 
     public S3DelegationTokenProvider(String scheme, Configuration conf) {
         this.scheme = scheme;
-        this.region = conf.get(REGION_KEY);
+
+        String region = conf.get(REGION_KEY);
         checkNotNull(region, "Region is not set.");
-        this.accessKey = conf.get(ACCESS_KEY_ID);
-        this.secretKey = conf.get(ACCESS_KEY_SECRET);
+        String accessKey = conf.get(ACCESS_KEY_ID);
+        String secretKey = conf.get(ACCESS_KEY_SECRET);
+
+        AWSSecurityTokenServiceClientBuilder stsClientBuilder =
+                AWSSecurityTokenServiceClientBuilder.standard()
+                        .withCredentials(
+                                new AWSStaticCredentialsProvider(
+                                        new BasicAWSCredentials(accessKey, secretKey)));
+        String stsEndpoint = conf.get(STS_ENDPOINT_KEY);
+        String stsRegion = conf.get(STS_REGION_KEY, REGION_KEY);
+        if (stsEndpoint != null) {
+            LOG.debug("Building STS client with endpoint {} and region {}", stsEndpoint, stsRegion);
+            AwsClientBuilder.EndpointConfiguration endpointConfiguration =
+                    new AwsClientBuilder.EndpointConfiguration(stsEndpoint, stsRegion);
+            stsClientBuilder.withEndpointConfiguration(endpointConfiguration);
+        } else {
+            LOG.debug("Building STS client with default endpoint and region {}", stsRegion);
+            stsClientBuilder.withRegion(stsRegion);
+        }
+        this.stsClient = stsClientBuilder.build();
+
         this.additionInfos = new HashMap<>();
         for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY)) {
             if (conf.get(key) != null) {
@@ -67,15 +89,8 @@ public class S3DelegationTokenProvider {
     }
 
     public ObtainedSecurityToken obtainSecurityToken() {
-        LOG.info("Obtaining session credentials token with access key: {}", accessKey);
+        LOG.info("Obtaining session credentials token");
 
-        AWSSecurityTokenService stsClient =
-                AWSSecurityTokenServiceClientBuilder.standard()
-                        .withRegion(region)
-                        .withCredentials(
-                                new AWSStaticCredentialsProvider(
-                                        new BasicAWSCredentials(accessKey, secretKey)))
-                        .build();
         GetSessionTokenResult sessionTokenResult = stsClient.getSessionToken();
         Credentials credentials = sessionTokenResult.getCredentials();
 
