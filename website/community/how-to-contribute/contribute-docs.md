@@ -39,7 +39,7 @@ cd fluss
 ```
 
 # Create a Branch
-    git checkout -b docs-add-{feature}
+    git checkout -b feature-branch-name
 
 # Install Dependencies
    ```bash
@@ -141,11 +141,11 @@ npm run build -- --no-minify
 1. Commit your changes with a descriptive message:
 ```bash
    git add .
-   git commit -m "[docs]: add/update documentation for {feature}"
+   git commit -m "[docs]: add/update documentation for feature..."
 ```
 2. Push to your fork:
 ```bash
-   git push origin docs-update-{feature}
+   git push origin feature-branch-name
 ```
 3. Create a pull request on GitHub from your branch to the appropriate branch
     - For latest docs: target the main branch
