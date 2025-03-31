@@ -16,7 +16,12 @@
 
 package com.alibaba.fluss.exception;
 
-/** This exception is thrown if the number of table partitions is exceed max.partition.num. */
+/**
+ * This exception is thrown if the number of table partitions is exceed max.partition.num.
+ *
+ * @since 0.7
+ */
+@PublicEvolving
 public class TooManyPartitionsException extends ApiException {
 
     private static final long serialVersionUID = 1L;
