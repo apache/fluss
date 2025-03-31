@@ -58,6 +58,7 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.exception.TimeoutException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.exception.UnknownServerException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
@@ -187,7 +188,9 @@ public enum Errors {
     LEADER_NOT_AVAILABLE_EXCEPTION(
             44,
             "There is no currently available leader for the given partition.",
-            LeaderNotAvailableException::new);
+            LeaderNotAvailableException::new),
+    PARTITION_MAX_NUM_EXCEPTION(
+            45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

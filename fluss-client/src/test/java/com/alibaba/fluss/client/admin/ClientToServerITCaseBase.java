@@ -115,6 +115,8 @@ public abstract class ClientToServerITCaseBase {
 
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
+
+        conf.set(ConfigOptions.MAX_PARTITION_NUM, 10);
         return conf;
     }
 

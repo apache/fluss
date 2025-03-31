@@ -119,6 +119,14 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> MAX_PARTITION_NUM =
+            key("max.partition.num")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "Limits the maximum number of partitions that can be created for a partitioned table "
+                                    + "to avoid creating too many partitions.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------

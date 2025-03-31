@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
@@ -27,6 +28,7 @@ import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
@@ -65,6 +67,7 @@ public class MetadataManager {
 
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> defaultTableLakeOptions;
+    private final Configuration conf;
 
     /**
      * Creates a new metadata manager.
@@ -75,6 +78,7 @@ public class MetadataManager {
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
+        this.conf = conf;
     }
 
     public void createDatabase(
@@ -341,6 +345,23 @@ public class MetadataManager {
                     String.format(
                             "Partition '%s' already exists for table %s",
                             partition.getPartitionQualifiedName(), tablePath));
+        }
+
+        try {
+            int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
+            int configMaxSize = conf.get(ConfigOptions.MAX_PARTITION_NUM);
+            if (partitionNumber + 1 > configMaxSize) {
+                throw new TooManyPartitionsException(
+                        String.format(
+                                "Exceed the maximum number of partitions for table %s", tablePath));
+            }
+        } catch (TooManyPartitionsException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.error(
+                    "Get the number of partition from zookeeper failed for table [{}]",
+                    tablePath,
+                    e);
         }
 
         try {

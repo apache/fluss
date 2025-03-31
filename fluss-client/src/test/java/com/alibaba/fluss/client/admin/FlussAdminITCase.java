@@ -39,6 +39,7 @@ import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.DataLakeFormat;
@@ -774,6 +775,38 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                     .getTableName())
                     .isEqualTo("test_table_1");
         }
+    }
+
+    @Test
+    void testAddTooManyPartitions() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("age")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_add_too_many_partitioned_table");
+        admin.createTable(tablePath, partitionedTable, true).get();
+
+        // add 10 partitions.
+        for (int i = 0; i < 10; i++) {
+            admin.createPartition(tablePath, newPartitionSpec("age", String.valueOf(i)), false)
+                    .get();
+        }
+        // add out of limit partition
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath, newPartitionSpec("age", "11"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TooManyPartitionsException.class);
     }
 
     private void assertHasTabletServerNumber(int tabletServerNumber) {

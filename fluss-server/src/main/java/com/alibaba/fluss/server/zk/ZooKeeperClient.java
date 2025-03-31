@@ -408,6 +408,13 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(PartitionZNode::decode);
     }
 
+    /** Get partition num of a table in ZK. */
+    public int getPartitionNumber(TablePath tablePath) throws Exception {
+        String path = PartitionsZNode.path(tablePath);
+        Stat stat = zkClient.checkExists().forPath(path);
+        return stat.getNumChildren();
+    }
+
     /** Create a partition for a table in ZK. */
     public void registerPartition(
             TablePath tablePath, long tableId, String partitionName, long partitionId)

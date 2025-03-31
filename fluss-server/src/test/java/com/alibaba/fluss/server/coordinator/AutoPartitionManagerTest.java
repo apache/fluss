@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -54,6 +55,7 @@ import java.util.stream.Stream;
 
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link AutoPartitionManager}. */
 class AutoPartitionManagerTest {
@@ -106,6 +108,7 @@ class AutoPartitionManagerTest {
                                         "2024091007",
                                         "2024091008",
                                         "2024091009")
+                                .manualCreatedTooManyPartitions("2024091010")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.DAY)
@@ -130,6 +133,7 @@ class AutoPartitionManagerTest {
                                         "20240916",
                                         "20240917",
                                         "20240918")
+                                .manualCreatedTooManyPartitions("20240919")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.MONTH)
@@ -144,6 +148,7 @@ class AutoPartitionManagerTest {
                                 .advanceClock2(c -> c.plusMonths(2))
                                 .expectedPartitionsFinal(
                                         "202412", "202501", "202502", "202503", "202504", "202505")
+                                .manualCreatedTooManyPartitions("202506")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.QUARTER)
@@ -158,6 +163,7 @@ class AutoPartitionManagerTest {
                                 .advanceClock2(c -> c.plusMonths(2 * 3))
                                 .expectedPartitionsFinal(
                                         "20252", "20253", "20254", "20261", "20262", "20263")
+                                .manualCreatedTooManyPartitions("20264")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.YEAR)
@@ -172,6 +178,7 @@ class AutoPartitionManagerTest {
                                 .advanceClock2(c -> c.plusYears(2))
                                 .expectedPartitionsFinal(
                                         "2027", "2028", "2029", "2030", "2031", "2032")
+                                .manualCreatedTooManyPartitions("2033")
                                 .build()));
     }
 
@@ -242,6 +249,26 @@ class AutoPartitionManagerTest {
         periodicExecutor.triggerPeriodicScheduledTasks();
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
+
+        // create too many partitions
+        int expectPartitionNumber = params.expectedPartitionsFinal.length;
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.MAX_PARTITION_NUM, expectPartitionNumber);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
+
+        assertThatThrownBy(
+                        () ->
+                                metadataManager.createPartition(
+                                        tablePath,
+                                        tableId,
+                                        partitionAssignment,
+                                        fromPartitionName(
+                                                table.getPartitionKeys(),
+                                                params.manualCreatedTooManyPartitions),
+                                        false))
+                .isInstanceOf(TooManyPartitionsException.class);
+        int afterPartitionNumber = zookeeperClient.getPartitionNumber(tablePath);
+        assertThat(afterPartitionNumber).isEqualTo(expectPartitionNumber);
     }
 
     private static class TestParams {
@@ -254,6 +281,7 @@ class AutoPartitionManagerTest {
         final String[] expectedPartitionsAfterAdvance;
         final Duration advanceDuration2;
         final String[] expectedPartitionsFinal;
+        final String manualCreatedTooManyPartitions;
 
         private TestParams(
                 AutoPartitionTimeUnit timeUnit,
@@ -264,7 +292,8 @@ class AutoPartitionManagerTest {
                 Duration advanceDuration,
                 String[] expectedPartitionsAfterAdvance,
                 Duration advanceDuration2,
-                String[] expectedPartitionsFinal) {
+                String[] expectedPartitionsFinal,
+                String manualCreatedTooManyPartitions) {
             this.timeUnit = timeUnit;
             this.startTimeMs = startTimeMs;
             this.manualCreatedPartition = manualCreatedPartition;
@@ -274,6 +303,7 @@ class AutoPartitionManagerTest {
             this.expectedPartitionsAfterAdvance = expectedPartitionsAfterAdvance;
             this.advanceDuration2 = advanceDuration2;
             this.expectedPartitionsFinal = expectedPartitionsFinal;
+            this.manualCreatedTooManyPartitions = manualCreatedTooManyPartitions;
         }
 
         @Override
@@ -296,6 +326,7 @@ class AutoPartitionManagerTest {
         String[] expectedPartitionsAfterAdvance;
         long advanceSeconds2;
         String[] expectedPartitionsFinal;
+        String manualCreatedTooManyPartitions;
 
         TestParamsBuilder(AutoPartitionTimeUnit timeUnit) {
             this.timeUnit = timeUnit;
@@ -349,6 +380,12 @@ class AutoPartitionManagerTest {
             return this;
         }
 
+        public TestParamsBuilder manualCreatedTooManyPartitions(
+                String manualCreatedTooManyPartitions) {
+            this.manualCreatedTooManyPartitions = manualCreatedTooManyPartitions;
+            return this;
+        }
+
         public TestParams build() {
             return new TestParams(
                     timeUnit,
@@ -359,7 +396,8 @@ class AutoPartitionManagerTest {
                     Duration.ofSeconds(advanceSeconds),
                     expectedPartitionsAfterAdvance,
                     Duration.ofSeconds(advanceSeconds2),
-                    expectedPartitionsFinal);
+                    expectedPartitionsFinal,
+                    manualCreatedTooManyPartitions);
         }
     }
 
