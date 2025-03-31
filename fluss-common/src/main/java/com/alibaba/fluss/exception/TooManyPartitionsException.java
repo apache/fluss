@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.exception;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 /**
  * This exception is thrown if the number of table partitions is exceed max.partition.num.
  *
