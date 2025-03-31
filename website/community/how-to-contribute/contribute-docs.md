@@ -39,7 +39,7 @@ cd fluss
 ```
 
 # Create a Branch
-    git checkout -b docs-add-<feature>
+    git checkout -b docs-add-{feature}
 
 # Install Dependencies
    ```bash
@@ -47,17 +47,8 @@ cd fluss
    npm install
    ```
 
-# Making Changes
-    - Edit or create Markdown files in the appropriate directories
-    - Start the local development server to preview changes
-   ```bash
-   npm run start
-   ```
-    - View your changes at http://localhost:3000
-
-
 # Directory Structure
-   - The Fluss documentation is organized as follows:
+- The Fluss documentation is organized as follows:
    ```
      fluss/
      └── website/
@@ -74,22 +65,39 @@ cd fluss
      ├── build_versioned_docs.sh  # Script for building versioned docs
      └── ...
    ```
+# Validation (including versioned docs)
+- Edit or create Markdown files in the appropriate directories
+- Generate versioned docs (simulates what CI does)
+```bash
+./build_versioned_docs.sh
+```
+
+- Then build the complete site
+``` bash
+npm run build -- --no-minify
+```
+  
+# Preview Changes
+- Start the local development server to preview changes
+```bash
+   npm run start
+```
+- View your changes at [http://localhost:3000](http://localhost:3000)
+
+
 # Version Expressions
    - Fluss documentation uses placeholder variables that are automatically replaced during the build process
      - **FLUSS_VERSION**: Expands to the full version (e.g., "0.6.0")
      - **FLUSS_VERSION_SHORT**: Expands to the short version (e.g., "0.6")
-   ```markdown
-   Download [Fluss $FLUSS_VERSION$](https://example.com/download/fluss-$FLUSS_VERSION$.tar.gz)
-   Compatible with Flink $FLUSS_VERSION_SHORT$
-   ```
+
 # Versioned Documentation
-   - Only content in website/docs/* is versioned
+   - Only content in `website/docs/* `is versioned
    - Each version corresponds to a branch (e.g., release-0.5, release-0.6)
    - The main branch contains the latest (unreleased) documentation
    - Other pages (community, roadmap) are only maintained in the main branch
 
 # Updating Existing Versions
-   - Checkout the corresponding release branch:
+   - Checkout the corresponding release branch
    ``` bash
     git checkout release-0.5
    ```
@@ -106,12 +114,12 @@ cd fluss
 
 ## Do's
 
-   - Use file paths with .md extensions:
+   - Use file paths with .md extensions
    ``` markdown
     [Table Design](table-design/overview.md)
    ```
 
-   - Use paths relative to the docs/ directory:
+   - Use paths relative to the docs/ directory
    ``` markdown
     [Flink Engine](engine-flink/getting-started.md)
    ```
@@ -133,11 +141,11 @@ cd fluss
 1. Commit your changes with a descriptive message:
 ```bash
    git add .
-   git commit -m "docs: add/update documentation for <feature>"
+   git commit -m "[docs]: add/update documentation for {feature}"
 ```
 2. Push to your fork:
 ```bash
-   git push origin docs-update-<feature>
+   git push origin docs-update-{feature}
 ```
 3. Create a pull request on GitHub from your branch to the appropriate branch
     - For latest docs: target the main branch
