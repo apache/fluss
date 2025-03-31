@@ -412,6 +412,9 @@ public class ZooKeeperClient implements AutoCloseable {
     public int getPartitionNumber(TablePath tablePath) throws Exception {
         String path = PartitionsZNode.path(tablePath);
         Stat stat = zkClient.checkExists().forPath(path);
+        if (stat == null) {
+            return 0;
+        }
         return stat.getNumChildren();
     }
 

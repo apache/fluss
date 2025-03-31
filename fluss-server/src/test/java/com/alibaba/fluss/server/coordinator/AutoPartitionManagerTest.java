@@ -19,7 +19,6 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -39,6 +38,7 @@ import com.alibaba.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -55,7 +55,6 @@ import java.util.stream.Stream;
 
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link AutoPartitionManager}. */
 class AutoPartitionManagerTest {
@@ -108,7 +107,6 @@ class AutoPartitionManagerTest {
                                         "2024091007",
                                         "2024091008",
                                         "2024091009")
-                                .manualCreatedTooManyPartitions("2024091010")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.DAY)
@@ -133,7 +131,6 @@ class AutoPartitionManagerTest {
                                         "20240916",
                                         "20240917",
                                         "20240918")
-                                .manualCreatedTooManyPartitions("20240919")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.MONTH)
@@ -148,7 +145,6 @@ class AutoPartitionManagerTest {
                                 .advanceClock2(c -> c.plusMonths(2))
                                 .expectedPartitionsFinal(
                                         "202412", "202501", "202502", "202503", "202504", "202505")
-                                .manualCreatedTooManyPartitions("202506")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.QUARTER)
@@ -163,7 +159,6 @@ class AutoPartitionManagerTest {
                                 .advanceClock2(c -> c.plusMonths(2 * 3))
                                 .expectedPartitionsFinal(
                                         "20252", "20253", "20254", "20261", "20262", "20263")
-                                .manualCreatedTooManyPartitions("20264")
                                 .build()),
                 Arguments.of(
                         TestParams.builder(AutoPartitionTimeUnit.YEAR)
@@ -178,7 +173,6 @@ class AutoPartitionManagerTest {
                                 .advanceClock2(c -> c.plusYears(2))
                                 .expectedPartitionsFinal(
                                         "2027", "2028", "2029", "2030", "2031", "2032")
-                                .manualCreatedTooManyPartitions("2033")
                                 .build()));
     }
 
@@ -198,7 +192,7 @@ class AutoPartitionManagerTest {
                         periodicExecutor);
         autoPartitionManager.start();
 
-        TableInfo table = createPartitionedTable(params.timeUnit);
+        TableInfo table = createPartitionedTable(2, 4, params.timeUnit);
         TablePath tablePath = table.getTablePath();
         autoPartitionManager.addAutoPartitionTable(table);
         // the first auto-partition task is a non-periodic task
@@ -249,26 +243,80 @@ class AutoPartitionManagerTest {
         periodicExecutor.triggerPeriodicScheduledTasks();
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
+    }
 
-        // create too many partitions
-        int expectPartitionNumber = params.expectedPartitionsFinal.length;
+    @Test
+    void testMaxPartitions() throws Exception {
+        int expectPartitionNumber = 10;
         Configuration config = new Configuration();
         config.set(ConfigOptions.MAX_PARTITION_NUM, expectPartitionNumber);
         MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
 
-        assertThatThrownBy(
-                        () ->
-                                metadataManager.createPartition(
-                                        tablePath,
-                                        tableId,
-                                        partitionAssignment,
-                                        fromPartitionName(
-                                                table.getPartitionKeys(),
-                                                params.manualCreatedTooManyPartitions),
-                                        false))
-                .isInstanceOf(TooManyPartitionsException.class);
-        int afterPartitionNumber = zookeeperClient.getPartitionNumber(tablePath);
-        assertThat(afterPartitionNumber).isEqualTo(expectPartitionNumber);
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingMetadataCache(3),
+                        metadataManager,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // create a partitioned with -1 retention to never auto-drop partitions
+        TableInfo table = createPartitionedTable(-1, 4, AutoPartitionTimeUnit.DAY);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table);
+        // the first auto-partition task is a non-periodic task
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        // pre-create 4 partitions including current partition
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
+
+        // manually create 4 future partitions.
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                TableAssignmentUtils.generateAssignment(
+                                table.getNumBuckets(), replicaFactor, new int[] {0, 1, 2})
+                        .getBucketAssignments();
+        long tableId = table.getTableId();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, bucketAssignments);
+        for (int i = 20250101; i <= 20250104; i++) {
+            metadataManager.createPartition(
+                    tablePath,
+                    tableId,
+                    partitionAssignment,
+                    fromPartitionName(table.getPartitionKeys(), i + ""),
+                    false);
+            // mock the partition is created in zk.
+            autoPartitionManager.addPartition(tableId, i + "");
+        }
+
+        clock.advanceTime(Duration.ofDays(4));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "20240910",
+                        "20240911",
+                        "20240912",
+                        "20240913",
+                        // only 20240914, 20240915 are created in this round
+                        "20240914",
+                        "20240915",
+                        // 20250101 ~ 20250102 are retained
+                        "20250101",
+                        "20250102",
+                        "20250103",
+                        "20250104");
     }
 
     private static class TestParams {
@@ -281,7 +329,6 @@ class AutoPartitionManagerTest {
         final String[] expectedPartitionsAfterAdvance;
         final Duration advanceDuration2;
         final String[] expectedPartitionsFinal;
-        final String manualCreatedTooManyPartitions;
 
         private TestParams(
                 AutoPartitionTimeUnit timeUnit,
@@ -292,8 +339,7 @@ class AutoPartitionManagerTest {
                 Duration advanceDuration,
                 String[] expectedPartitionsAfterAdvance,
                 Duration advanceDuration2,
-                String[] expectedPartitionsFinal,
-                String manualCreatedTooManyPartitions) {
+                String[] expectedPartitionsFinal) {
             this.timeUnit = timeUnit;
             this.startTimeMs = startTimeMs;
             this.manualCreatedPartition = manualCreatedPartition;
@@ -303,7 +349,6 @@ class AutoPartitionManagerTest {
             this.expectedPartitionsAfterAdvance = expectedPartitionsAfterAdvance;
             this.advanceDuration2 = advanceDuration2;
             this.expectedPartitionsFinal = expectedPartitionsFinal;
-            this.manualCreatedTooManyPartitions = manualCreatedTooManyPartitions;
         }
 
         @Override
@@ -326,7 +371,6 @@ class AutoPartitionManagerTest {
         String[] expectedPartitionsAfterAdvance;
         long advanceSeconds2;
         String[] expectedPartitionsFinal;
-        String manualCreatedTooManyPartitions;
 
         TestParamsBuilder(AutoPartitionTimeUnit timeUnit) {
             this.timeUnit = timeUnit;
@@ -380,12 +424,6 @@ class AutoPartitionManagerTest {
             return this;
         }
 
-        public TestParamsBuilder manualCreatedTooManyPartitions(
-                String manualCreatedTooManyPartitions) {
-            this.manualCreatedTooManyPartitions = manualCreatedTooManyPartitions;
-            return this;
-        }
-
         public TestParams build() {
             return new TestParams(
                     timeUnit,
@@ -396,14 +434,15 @@ class AutoPartitionManagerTest {
                     Duration.ofSeconds(advanceSeconds),
                     expectedPartitionsAfterAdvance,
                     Duration.ofSeconds(advanceSeconds2),
-                    expectedPartitionsFinal,
-                    manualCreatedTooManyPartitions);
+                    expectedPartitionsFinal);
         }
     }
 
     // -------------------------------------------------------------------------------------------
 
-    private TableInfo createPartitionedTable(AutoPartitionTimeUnit timeUnit) throws Exception {
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
+            throws Exception {
         long tableId = 1;
         TablePath tablePath = TablePath.of("db", "test_partition_" + UUID.randomUUID());
         TableDescriptor descriptor =
@@ -422,8 +461,12 @@ class AutoPartitionManagerTest {
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 2)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 4)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
+                                partitionRetentionNum)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
+                                partitionPreCreateNum)
                         .build();
         long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =

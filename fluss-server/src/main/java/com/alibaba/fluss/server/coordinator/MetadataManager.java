@@ -67,7 +67,7 @@ public class MetadataManager {
 
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> defaultTableLakeOptions;
-    private final Configuration conf;
+    private final int maxPartitionNum;
 
     /**
      * Creates a new metadata manager.
@@ -78,7 +78,7 @@ public class MetadataManager {
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
-        this.conf = conf;
+        maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
     }
 
     public void createDatabase(
@@ -349,8 +349,7 @@ public class MetadataManager {
 
         try {
             int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
-            int configMaxSize = conf.get(ConfigOptions.MAX_PARTITION_NUM);
-            if (partitionNumber + 1 > configMaxSize) {
+            if (partitionNumber + 1 > maxPartitionNum) {
                 throw new TooManyPartitionsException(
                         String.format(
                                 "Exceed the maximum number of partitions for table %s", tablePath));
@@ -358,10 +357,10 @@ public class MetadataManager {
         } catch (TooManyPartitionsException e) {
             throw e;
         } catch (Exception e) {
-            LOG.error(
-                    "Get the number of partition from zookeeper failed for table [{}]",
-                    tablePath,
-                    e);
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Get the number of partition from zookeeper failed for table %s",
+                            tablePath));
         }
 
         try {
@@ -373,11 +372,10 @@ public class MetadataManager {
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (Exception e) {
-            LOG.error(
-                    "Register partition to zookeeper failed to create partition {} for table [{}]",
-                    partitionName,
-                    tablePath,
-                    e);
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Register partition to zookeeper failed to create partition %s for table [%s]",
+                            partitionName, tablePath));
         }
     }
 

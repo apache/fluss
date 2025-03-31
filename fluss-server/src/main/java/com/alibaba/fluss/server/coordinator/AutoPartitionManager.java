@@ -21,6 +21,7 @@ import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
@@ -255,7 +256,10 @@ public class AutoPartitionManager implements AutoCloseable {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
                                 + "because exceed the maximum number of partitions.",
+                        partition,
                         tablePath);
+            } catch (FlussRuntimeException f) {
+                LOG.warn(f.getMessage());
             }
 
             currentPartitions.add(partition.getPartitionName());
