@@ -28,6 +28,7 @@ import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.runtime.metrics.groups.InternalSinkWriterMetricGroup;
+import org.apache.flink.streaming.api.connector.sink2.SupportsPreWriteTopology;
 import org.apache.flink.streaming.api.connector.sink2.WithPreWriteTopology;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.table.data.RowData;
@@ -42,13 +43,9 @@ import java.util.List;
 import static com.alibaba.fluss.flink.sink.FlinkStreamPartitioner.partition;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussRowType;
 
-/**
- * Flink sink for Fluss.
- *
- * <p>TODO: WithPreWriteTopology need to be changed to supportsPreWriteTopology in Flink 1.20. Trace
- * by https://github.com/alibaba/fluss/issues/622.
- */
-class FlinkSink implements Sink<RowData>, WithPreWriteTopology<RowData> {
+/** Flink sink for Fluss. */
+class FlinkSink
+        implements Sink<RowData>, SupportsPreWriteTopology<RowData>, WithPreWriteTopology<RowData> {
 
     private static final long serialVersionUID = 1L;
 
