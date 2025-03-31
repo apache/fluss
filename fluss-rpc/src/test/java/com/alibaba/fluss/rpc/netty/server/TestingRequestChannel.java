@@ -25,7 +25,7 @@ final class TestingRequestChannel extends RequestChannel {
         super(queueCapacity);
     }
 
-    public RpcRequest getRequest(int index) {
+    public RpcRequest getAndRemoveRequest(int index) {
         if (requestQueue.isEmpty()) {
             throw new IllegalStateException("No requests pending for request channel.");
         }

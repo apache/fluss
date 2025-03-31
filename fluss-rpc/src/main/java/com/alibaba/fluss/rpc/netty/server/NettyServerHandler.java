@@ -39,10 +39,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.SocketAddress;
+import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
@@ -55,10 +57,10 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(NettyServerHandler.class);
 
     /**
-     * Need to use a Queue to store the inflight responses, because fluss clients require the
-     * responses to be sent in order.
+     * Map from API key to inflight responses. In here, we need to use a Queue to store the inflight
+     * responses of each API key, because fluss clients require the responses to be sent in order.
      */
-    private final Deque<FlussRequest> inflightResponses = new ConcurrentLinkedDeque<>();
+    private final Map<Short, Deque<FlussRequest>> inflightResponseMap = new HashMap<>();
 
     private final RequestChannel requestChannel;
     private final ApiManager apiManager;
@@ -118,8 +120,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             buffer,
                             listenerName,
                             future);
+
+            Deque<FlussRequest> inflightResponses =
+                    inflightResponseMap.computeIfAbsent(apiKey, k -> new ArrayDeque<>());
             inflightResponses.addLast(request);
-            future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
+            future.whenCompleteAsync((r, t) -> sendResponse(ctx, apiKey), ctx.executor());
             requestChannel.putRequest(request);
 
             if (!isActive.get()) {
@@ -179,15 +184,22 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         close();
     }
 
-    private void sendResponse(ChannelHandlerContext ctx) {
+    private void close() {
+        isActive.set(false);
+        ctx.close();
+        LOG.warn(
+                "Close channel {} with {} pending requests.",
+                remoteAddress,
+                inflightResponseMap.size());
+        inflightResponseMap.forEach((k, v) -> v.forEach(FlussRequest::cancel));
+    }
+
+    private void sendResponse(ChannelHandlerContext ctx, short apiKey) {
         FlussRequest request;
+        Deque<FlussRequest> inflightResponses = inflightResponseMap.get(apiKey);
         while ((request = inflightResponses.peekFirst()) != null) {
             CompletableFuture<ApiMessage> f = request.getResponseFuture();
-            boolean isDone = f.isDone();
             boolean cancelled = request.cancelled();
-            if (!isDone) {
-                break;
-            }
 
             if (cancelled) {
                 inflightResponses.pollFirst();
@@ -195,11 +207,16 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 continue;
             }
 
+            boolean isDone = f.isDone();
+            if (!isDone) {
+                break;
+            }
+
             inflightResponses.pollFirst();
             if (isActive.get()) {
                 try {
                     ApiMessage response = f.join();
-                    sendResponse(ctx, request, response);
+                    sendSuccessResponse(ctx, request, response);
                 } catch (Throwable t) {
                     sendError(ctx, request, t);
                 }
@@ -209,19 +226,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void close() {
-        isActive.set(false);
-        ctx.close();
-        LOG.warn(
-                "Close channel {} with {} pending requests.",
-                remoteAddress,
-                inflightResponses.size());
-        for (FlussRequest request : inflightResponses) {
-            request.cancel();
-        }
-    }
-
-    private void sendResponse(
+    private void sendSuccessResponse(
             ChannelHandlerContext ctx, FlussRequest request, ApiMessage responseMessage) {
         // TODO: use a memory managed allocator
         ByteBufAllocator alloc = ctx.alloc();
@@ -282,7 +287,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     @VisibleForTesting
-    Deque<FlussRequest> inflightResponses() {
-        return inflightResponses;
+    Deque<FlussRequest> inflightResponses(short apiKey) {
+        return inflightResponseMap.get(apiKey);
     }
 }

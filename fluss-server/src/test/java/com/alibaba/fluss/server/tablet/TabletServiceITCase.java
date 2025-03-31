@@ -167,7 +167,10 @@ public class TabletServiceITCase {
     @Test
     void testProduceLogResponseReturnInOrder() throws Exception {
         long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_DESCRIPTOR.withReplicationFactor(3));
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
