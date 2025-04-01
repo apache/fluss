@@ -62,8 +62,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
 
         // TODO: we can introduce a smarter and dynamic strategy to distribute requests to
         //  channels
-        int channelIndex =
-                MathUtils.murmurHash(ch.id().asLongText().hashCode()) % requestChannels.length;
+        int channelIndex = MathUtils.murmurHash(ch.id().hashCode()) % requestChannels.length;
 
         ch.pipeline()
                 .addLast(
