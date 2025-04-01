@@ -64,6 +64,8 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -153,6 +155,113 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 }
             }
             logScanner.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPollOnce(boolean indexedFormat) throws Exception {
+        TableDescriptor desc =
+                indexedFormat
+                        ? TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                .distributedBy(3)
+                                .logFormat(LogFormat.INDEXED)
+                                .build()
+                        : DATA1_TABLE_DESCRIPTOR;
+        createTable(DATA1_TABLE_PATH, desc, false);
+        Configuration config = new Configuration(clientConf);
+        int expectedSize = 20;
+        try (Connection conn = ConnectionFactory.createConnection(config)) {
+            Table table = conn.getTable(DATA1_TABLE_PATH);
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
+            // should exceed the buffer size, but append successfully
+            for (int i = 0; i < expectedSize; i++) {
+                appendWriter.append(row(1, value));
+            }
+            appendWriter.flush();
+
+            // assert the written data
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+            int count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                assertThat(scanRecords.isEmpty()).isFalse();
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    InternalRow row = scanRecord.getRow();
+                    assertThat(row.getInt(0)).isEqualTo(1);
+                    assertThat(row.getString(1)).isEqualTo(value);
+                    count++;
+                }
+            }
+            logScanner.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPollOnceEmpty(boolean indexedFormat) throws Exception {
+        TableDescriptor desc =
+                indexedFormat
+                        ? TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                .distributedBy(3)
+                                .logFormat(LogFormat.INDEXED)
+                                .build()
+                        : DATA1_TABLE_DESCRIPTOR;
+        createTable(DATA1_TABLE_PATH, desc, false);
+        Configuration config = new Configuration(clientConf);
+        int expectedSize = 20;
+        try (Connection conn = ConnectionFactory.createConnection(config)) {
+            Table table = conn.getTable(DATA1_TABLE_PATH);
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
+            // should exceed the buffer size, but append successfully
+            for (int i = 0; i < expectedSize; i++) {
+                appendWriter.append(row(1, value));
+            }
+
+            // assert the written data
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+            AtomicBoolean finish = new AtomicBoolean(false);
+            AtomicInteger emptyCount = new AtomicInteger(0);
+            Thread thread =
+                    new Thread(
+                            () -> {
+                                int count = 0;
+                                while (count < expectedSize) {
+                                    ScanRecords scanRecords =
+                                            logScanner.poll(Duration.ofMillis(10));
+                                    if (scanRecords.isEmpty()) {
+                                        emptyCount.incrementAndGet();
+                                    }
+                                    for (ScanRecord scanRecord : scanRecords) {
+                                        assertThat(scanRecord.getChangeType())
+                                                .isEqualTo(ChangeType.APPEND_ONLY);
+                                        InternalRow row = scanRecord.getRow();
+                                        assertThat(row.getInt(0)).isEqualTo(1);
+                                        assertThat(row.getString(1)).isEqualTo(value);
+                                        count++;
+                                    }
+                                }
+                                try {
+                                    logScanner.close();
+                                } catch (Exception e) {
+                                    throw new RuntimeException(e);
+                                }
+                                finish.set(true);
+                            });
+            thread.start();
+            Thread.sleep(100);
+            appendWriter.flush();
+            while (!finish.get()) {
+                Thread.sleep(100);
+            }
+            assertThat(emptyCount.get()).isGreaterThan(0);
         }
     }
 
