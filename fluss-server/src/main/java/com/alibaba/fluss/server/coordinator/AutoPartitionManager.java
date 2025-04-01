@@ -21,7 +21,6 @@ import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
@@ -247,6 +246,11 @@ public class AutoPartitionManager implements AutoCloseable {
             try {
                 metadataManager.createPartition(
                         tablePath, tableId, partitionAssignment, partition, false);
+                currentPartitions.add(partition.getPartitionName());
+                LOG.info(
+                        "Auto partitioning created partition {} for table [{}].",
+                        partition,
+                        tablePath);
             } catch (PartitionAlreadyExistsException e) {
                 LOG.info(
                         "Auto partitioning skip to create partition {} for table [{}] as the partition is exist.",
@@ -258,13 +262,13 @@ public class AutoPartitionManager implements AutoCloseable {
                                 + "because exceed the maximum number of partitions.",
                         partition,
                         tablePath);
-            } catch (FlussRuntimeException f) {
-                LOG.warn(f.getMessage());
+            } catch (Exception e) {
+                LOG.error(
+                        "Auto partitioning failed to create partition {} for table [{}].",
+                        partition,
+                        tablePath,
+                        e);
             }
-
-            currentPartitions.add(partition.getPartitionName());
-            LOG.info(
-                    "Auto partitioning created partition {} for table [{}].", partition, tablePath);
         }
     }
 

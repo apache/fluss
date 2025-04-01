@@ -352,7 +352,8 @@ public class MetadataManager {
             if (partitionNumber + 1 > maxPartitionNum) {
                 throw new TooManyPartitionsException(
                         String.format(
-                                "Exceed the maximum number of partitions for table %s", tablePath));
+                                "Exceed the maximum number of partitions for table %s, only allow %s partitions.",
+                                tablePath, maxPartitionNum));
             }
         } catch (TooManyPartitionsException e) {
             throw e;
@@ -360,7 +361,8 @@ public class MetadataManager {
             throw new FlussRuntimeException(
                     String.format(
                             "Get the number of partition from zookeeper failed for table %s",
-                            tablePath));
+                            tablePath),
+                    e);
         }
 
         try {
@@ -375,7 +377,8 @@ public class MetadataManager {
             throw new FlussRuntimeException(
                     String.format(
                             "Register partition to zookeeper failed to create partition %s for table [%s]",
-                            partitionName, tablePath));
+                            partitionName, tablePath),
+                    e);
         }
     }
 
