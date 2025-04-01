@@ -17,4 +17,4 @@
 package org.apache.flink.streaming.api.connector.sink2;
 
 /** Placeholder class to resolve compatibility issues. */
-public interface SupportsPreWriteTopology {}
+public interface SupportsPreWriteTopology<InputT> extends WithPreWriteTopology<InputT> {}
