@@ -72,6 +72,14 @@
         <!-- test dependency -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-flink-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>

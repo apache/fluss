@@ -70,7 +70,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for using flink sql to read fluss table. */
-class FlinkTableSourceITCase extends FlinkTestBase {
+abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     private static final String CATALOG_NAME = "testcatalog";
     private static final String DEFAULT_DB = "defaultdb";

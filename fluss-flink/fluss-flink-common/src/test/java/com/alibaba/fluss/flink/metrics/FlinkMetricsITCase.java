@@ -52,7 +52,7 @@ import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_D
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for fluss reporting metrics to Flink. */
-class FlinkMetricsITCase extends FlinkTestBase {
+abstract class FlinkMetricsITCase extends FlinkTestBase {
 
     private static final int DEFAULT_PARALLELISM = 4;
     private static final InMemoryReporter reporter = InMemoryReporter.createWithRetainedMetrics();

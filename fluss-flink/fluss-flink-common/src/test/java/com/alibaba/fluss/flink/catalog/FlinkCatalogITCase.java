@@ -54,7 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link com.alibaba.fluss.flink.catalog.FlinkCatalog}. */
-class FlinkCatalogITCase {
+abstract class FlinkCatalogITCase {
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
