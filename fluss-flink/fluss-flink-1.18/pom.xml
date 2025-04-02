@@ -44,7 +44,7 @@
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
+            <artifactId>fluss-flink-1</artifactId>
             <version>${project.version}</version>
             <exclusions>
                 <exclusion>
@@ -79,7 +79,7 @@
         <!-- test dependency -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
+            <artifactId>fluss-flink-1</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>
@@ -168,7 +168,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes combine.children="append">
-                                    <include>com.alibaba.fluss:fluss-flink-common</include>
+                                    <include>com.alibaba.fluss:fluss-flink-1</include>
                                     <include>com.alibaba.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>

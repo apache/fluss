@@ -163,6 +163,18 @@
 
     </dependencies>
 
+    <profiles>
+        <profile>
+            <id>java11</id>
+            <activation>
+                <jdk>[11,)</jdk>
+            </activation>
+            <properties>
+                <flink.minor.version>2.0.0</flink.minor.version>
+            </properties>
+        </profile>
+    </profiles>
+
     <build>
         <plugins>
             <plugin>

@@ -22,7 +22,8 @@ import com.alibaba.fluss.config.FlussConfigUtils;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.config.Password;
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
-import com.alibaba.fluss.flink.catalog.FlinkCatalogFactory;
+import com.alibaba.fluss.flink.catalog.AbstractCatalogFactory;
+import com.alibaba.fluss.flink.catalog.CatalogTableFunction;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -87,7 +88,8 @@ public class FlinkConversions {
     }
 
     /** Convert Fluss's table to Flink's table. */
-    public static CatalogTable toFlinkTable(TableInfo tableInfo) {
+    public static CatalogTable toFlinkTable(
+            TableInfo tableInfo, CatalogTableFunction catalogTableFunction) {
         Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
 
         // put fluss table properties into flink options, to make the properties visible to users
@@ -132,7 +134,7 @@ public class FlinkConversions {
         // deserialize watermark
         CatalogPropertiesUtils.deserializeWatermark(newOptions, schemaBuilder);
 
-        return CatalogTable.of(
+        return catalogTableFunction.apply(
                 schemaBuilder.build(),
                 tableInfo.getComment().orElse(null),
                 tableInfo.getPartitionKeys(),
@@ -144,7 +146,7 @@ public class FlinkConversions {
         Configuration flinkTableConf = Configuration.fromMap(catalogTable.getOptions());
         String connector = flinkTableConf.get(CONNECTOR);
         if (!StringUtils.isNullOrWhitespaceOnly(connector)
-                && !FlinkCatalogFactory.IDENTIFIER.equals(connector)) {
+                && !AbstractCatalogFactory.IDENTIFIER.equals(connector)) {
             throw new CatalogException(
                     "Fluss Catalog only supports fluss tables,"
                             + " but you specify  'connector'= '"

@@ -165,7 +165,7 @@
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
+            <artifactId>fluss-flink-1</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>

@@ -16,9 +16,9 @@
 
 package com.alibaba.fluss.flink.source.metrics;
 
-import com.alibaba.fluss.flink.source.reader.FlinkSourceReader;
 import com.alibaba.fluss.metadata.TableBucket;
 
+import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
 import org.apache.flink.runtime.metrics.MetricNames;
@@ -29,7 +29,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * A collection class for handling metrics in {@link FlinkSourceReader} of Fluss.
+ * A collection class for handling metrics in {@link SourceReader} of Fluss.
  *
  * <p>All metrics of the source reader are registered under group "fluss.reader", which is a child
  * group of {@link org.apache.flink.metrics.groups.OperatorMetricGroup}. Metrics related to a
