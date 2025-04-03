@@ -28,7 +28,9 @@ import com.alibaba.fluss.utils.ArrayUtils;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static com.alibaba.fluss.config.ConfigBuilder.key;
 import static com.alibaba.fluss.config.ConfigOptions.CompactionStyle.FIFO;
@@ -276,6 +278,16 @@ public class ConfigOptions {
                     .withDescription(
                             "The external RPC port where the TabletServer is exposed."
                                     + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
+
+    public static final ConfigOption<Map<String, String>> SERVER_SECURITY_PROTOCOL_MAP =
+            key("security.protocol.map")
+                    .mapType()
+                    .defaultValue(Collections.emptyMap())
+                    .withDescription(
+                            "A map defining the authentication protocol for each listener. "
+                                    + "The format is 'listenerName1:protocol1,listenerName2:protocol2', e.g., 'INTERNAL:PLAINTEXT,CLIENT:GSSAPI'. "
+                                    + "Each listener can be associated with a specific authentication protocol. "
+                                    + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
@@ -868,6 +880,13 @@ public class ConfigOptions {
                                     + "Note that this config doesn't impact the underlying fetching behavior. "
                                     + "The Scanner will cache the records from each fetch request and returns "
                                     + "them incrementally from each poll.");
+
+    public static final ConfigOption<String> CLIENT_SECURITY_PROTOCOL =
+            key("client.security.protocol")
+                    .stringType()
+                    .defaultValue("PLAINTEXT")
+                    .withDescription(
+                            "The authentication protocol used to authenticate the client.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")

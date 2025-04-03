@@ -114,7 +114,6 @@ final class RequestProcessorPool {
                         .max()
                         .orElseThrow(() -> new IllegalStateException("No response type found."));
         RequestHandler<?>[] requestHandlers = new RequestHandler[maxRequestTypeId + 1];
-        requestHandlers[RequestType.FLUSS.id] = new FlussRequestHandler(service);
         for (NetworkProtocolPlugin protocol : protocolPlugins) {
             RequestHandler<?> requestHandler = protocol.createRequestHandler(service);
             int id = requestHandler.requestType().id;

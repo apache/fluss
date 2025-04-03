@@ -743,3 +743,13 @@ message PbPartitionInfo {
 message PbPartitionSpec {
   repeated PbKeyValue partition_key_values = 1;
 }
+
+message AuthenticateRequest {
+  required string protocol = 1;
+  required bytes token = 2;
+}
+
+message AuthenticateResponse {
+  optional bytes challenge = 1;
+}
+

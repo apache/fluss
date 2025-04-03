@@ -124,6 +124,14 @@
             <type>test-jar</type>
         </dependency>
 
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-rpc</artifactId>
+            <scope>test</scope>
+            <type>test-jar</type>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- for curator TestingServer  -->
         <dependency>
             <groupId>org.apache.curator</groupId>

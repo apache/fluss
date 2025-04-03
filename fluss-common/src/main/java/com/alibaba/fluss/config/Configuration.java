@@ -460,6 +460,15 @@ public class Configuration implements Serializable, ReadableConfig {
         }
     }
 
+    /**
+     * Returns the value associated with the given config option as a map.
+     *
+     * @param configOption The configuration option
+     * @return the (default) value associated with the given config option
+     */
+    public Map<String, String> getMap(ConfigOption<Map<String, String>> configOption) {
+        return getOptional(configOption).orElseGet(configOption::defaultValue);
+    }
     // --------------------------------------------------------------------------------------------
 
     /**

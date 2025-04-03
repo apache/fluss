@@ -30,6 +30,7 @@ import com.alibaba.fluss.rpc.messages.PbValue;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.MessageCodec;
+import com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
@@ -59,7 +60,7 @@ final class NettyServerHandlerTest {
     private ChannelHandlerContext ctx;
 
     @BeforeEach
-    void beforeEach() {
+    void beforeEach() throws Exception {
         this.requestChannel = new TestingRequestChannel(100);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         this.serverHandler =
@@ -67,8 +68,10 @@ final class NettyServerHandlerTest {
                         requestChannel,
                         new ApiManager(ServerType.TABLET_SERVER),
                         "CLIENT",
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
+        serverHandler.channelActive(ctx);
     }
 
     @Test

@@ -17,6 +17,7 @@
 package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.exception.ApiException;
+import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.CorruptMessageException;
 import com.alibaba.fluss.exception.CorruptRecordException;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
@@ -190,7 +191,8 @@ public enum Errors {
             "There is no currently available leader for the given partition.",
             LeaderNotAvailableException::new),
     PARTITION_MAX_NUM_EXCEPTION(
-            45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new);
+            45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
+    AUTHENTICATE_EXCEPTION(46, "The authentication failed.", AuthenticationException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

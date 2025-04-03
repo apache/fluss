@@ -17,15 +17,19 @@
 package com.alibaba.fluss.rpc.netty.server;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.NetworkException;
 import com.alibaba.fluss.record.send.Send;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
+import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
+import com.alibaba.fluss.rpc.messages.AuthenticateResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.MessageCodec;
+import com.alibaba.fluss.security.auth.ServerAuthenticator;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
@@ -45,7 +49,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
 import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeServerFailure;
@@ -66,19 +69,25 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private final ApiManager apiManager;
     private final String listenerName;
     private final RequestsMetrics requestsMetrics;
-    private final AtomicBoolean isActive = new AtomicBoolean(true);
     private volatile ChannelHandlerContext ctx;
     private SocketAddress remoteAddress;
+
+    private final ServerAuthenticator authenticator;
+
+    private volatile ConnectionState state;
 
     public NettyServerHandler(
             RequestChannel requestChannel,
             ApiManager apiManager,
             String listenerName,
-            RequestsMetrics requestsMetrics) {
+            RequestsMetrics requestsMetrics,
+            ServerAuthenticator authenticator) {
         this.requestChannel = requestChannel;
         this.apiManager = apiManager;
         this.listenerName = listenerName;
         this.requestsMetrics = requestsMetrics;
+        this.authenticator = authenticator;
+        this.state = ConnectionState.START;
     }
 
     @Override
@@ -125,9 +134,13 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                     inflightResponseMap.computeIfAbsent(apiKey, k -> new ArrayDeque<>());
             inflightResponses.addLast(request);
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, apiKey), ctx.executor());
-            requestChannel.putRequest(request);
+            if (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id) {
+                handleAuthenticateRequest(apiKey, requestMessage, future);
+            } else {
+                requestChannel.putRequest(request);
+            }
 
-            if (!isActive.get()) {
+            if (!state.isActive()) {
                 LOG.warn("Received a request on an inactive channel: {}", remoteAddress);
                 request.fail(new NetworkException("Channel is inactive"));
                 needRelease = true;
@@ -148,7 +161,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         super.channelActive(ctx);
         this.ctx = ctx;
         this.remoteAddress = ctx.channel().remoteAddress();
-        isActive.set(true);
+        switchState(
+                authenticator.isComplete()
+                        ? ConnectionState.READY
+                        : ConnectionState.AUTHENTICATING);
+
         // TODO: connection metrics (count, client tags, receive request avg idle time, etc.)
     }
 
@@ -179,13 +196,14 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                     ctx.channel().remoteAddress(),
                     ExceptionUtils.stringifyException(cause));
         }
+
         ByteBuf byteBuf = encodeServerFailure(ctx.alloc(), ApiError.fromThrowable(cause));
         ctx.writeAndFlush(byteBuf).addListener(ChannelFutureListener.CLOSE);
         close();
     }
 
     private void close() {
-        isActive.set(false);
+        switchState(ConnectionState.CLOSE);
         ctx.close();
         LOG.warn(
                 "Close channel {} with {} pending requests.",
@@ -213,7 +231,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             }
 
             inflightResponses.pollFirst();
-            if (isActive.get()) {
+            if (state.isActive()) {
                 try {
                     ApiMessage response = f.join();
                     sendSuccessResponse(ctx, request, response);
@@ -289,5 +307,63 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     @VisibleForTesting
     Deque<FlussRequest> inflightResponses(short apiKey) {
         return inflightResponseMap.get(apiKey);
+    }
+
+    private void handleAuthenticateRequest(
+            short apiKey, ApiMessage requestMessage, CompletableFuture<ApiMessage> future) {
+        if (apiKey != ApiKeys.AUTHENTICATE.id) {
+            LOG.warn(
+                    "Connection is still in the authentication process. Unable to handle API key: {}.",
+                    apiKey);
+            future.completeExceptionally(
+                    new AuthenticationException(
+                            "The connection has not completed authentication yet."));
+            return;
+        }
+
+        AuthenticateRequest authenticateRequest = (AuthenticateRequest) requestMessage;
+        if (!authenticator.protocol().equals(authenticateRequest.getProtocol())) {
+            future.completeExceptionally(
+                    new AuthenticationException(
+                            String.format(
+                                    "Authenticate protocol not match: protocol of server is %s while protocol of client is %s",
+                                    authenticator.protocol(), authenticateRequest.getProtocol())));
+            return;
+        }
+
+        AuthenticateResponse authenticateResponse = new AuthenticateResponse();
+        if (!authenticator.isComplete()) {
+            byte[] token = authenticateRequest.getToken();
+            byte[] response =
+                    !authenticator.isComplete()
+                            ? authenticator.evaluateResponse(token)
+                            : new byte[0];
+            authenticateResponse.setChallenge(response);
+        }
+        future.complete(authenticateResponse);
+
+        if (authenticator.isComplete()) {
+            switchState(ConnectionState.READY);
+        }
+    }
+
+    private void switchState(ConnectionState targetState) {
+        LOG.info("switch state form {} to {}", state, targetState);
+        state = targetState;
+    }
+
+    private enum ConnectionState {
+        START,
+        AUTHENTICATING,
+        READY,
+        CLOSE;
+
+        public boolean isActive() {
+            return this == AUTHENTICATING || this == READY;
+        }
+
+        public boolean isAuthenticating() {
+            return this == AUTHENTICATING;
+        }
     }
 }

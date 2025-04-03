@@ -278,23 +278,27 @@ public class MetadataUpdater {
         List<InetSocketAddress> inetSocketAddresses =
                 ClientUtils.parseAndValidateAddresses(conf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         Cluster cluster = null;
-        Exception exception = null;
+        Exception lastException = null;
         for (InetSocketAddress address : inetSocketAddresses) {
             try {
                 cluster = tryToInitializeCluster(rpcClient, address);
                 break;
             } catch (Exception e) {
-                exception = e;
+                LOG.error(
+                        "Failed to initialize fluss client connection to bootstrap server: {}",
+                        address,
+                        e);
+                lastException = e;
             }
         }
 
-        if (cluster == null && exception != null) {
+        if (cluster == null && lastException != null) {
             String errorMsg =
                     "Failed to initialize fluss client connection to server because no "
                             + "bootstrap server is validate. bootstrap servers: "
                             + inetSocketAddresses;
             LOG.error(errorMsg);
-            throw new IllegalStateException(errorMsg, exception);
+            throw new IllegalStateException(errorMsg, lastException);
         }
 
         return cluster;
