@@ -28,6 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -70,6 +71,17 @@ public class Endpoint {
     }
 
     public static List<Endpoint> loadBindEndpoints(Configuration conf, ServerType serverType) {
+        if (conf.getOptional(ConfigOptions.BIND_LISTENERS).isPresent()
+                && getHost(conf, serverType).isPresent()) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Config options are incompatible. Only one of '%s' and '%s' must be set.",
+                            ConfigOptions.BIND_LISTENERS.key(),
+                            serverType == ServerType.COORDINATOR
+                                    ? ConfigOptions.COORDINATOR_HOST.key()
+                                    : ConfigOptions.TABLET_SERVER_HOST.key()));
+        }
+
         if (conf.getOptional(ConfigOptions.BIND_LISTENERS).isPresent()) {
             String listeners = conf.getString(ConfigOptions.BIND_LISTENERS);
             List<Endpoint> endpoints = fromListenersString(listeners, true);
@@ -93,13 +105,16 @@ public class Endpoint {
                             ConfigOptions.BIND_LISTENERS.key()));
         }
 
-        String host = getHost(conf, serverType);
-        String port = getPort(conf, serverType);
+        Optional<String> maybeHost = getHost(conf, serverType);
+        Optional<String> maybePort = getPort(conf, serverType);
 
         // backward compatibility
-        if (host != null && port != null) {
+        if (maybeHost.isPresent() && maybePort.isPresent()) {
             return Collections.singletonList(
-                    new Endpoint(host, Integer.parseInt(port), DEFAULT_LISTENER_NAME));
+                    new Endpoint(
+                            maybeHost.get(),
+                            Integer.parseInt(maybePort.get()),
+                            DEFAULT_LISTENER_NAME));
         }
 
         throw new IllegalArgumentException(
@@ -174,16 +189,16 @@ public class Endpoint {
         return endpoints;
     }
 
-    private static String getHost(Configuration conf, ServerType serverType) {
+    private static Optional<String> getHost(Configuration conf, ServerType serverType) {
         return serverType == ServerType.COORDINATOR
-                ? conf.get(ConfigOptions.COORDINATOR_HOST)
-                : conf.get(ConfigOptions.TABLET_SERVER_HOST);
+                ? conf.getOptional(ConfigOptions.COORDINATOR_HOST)
+                : conf.getOptional(ConfigOptions.TABLET_SERVER_HOST);
     }
 
-    private static String getPort(Configuration conf, ServerType serverType) {
+    private static Optional<String> getPort(Configuration conf, ServerType serverType) {
         return serverType == ServerType.COORDINATOR
-                ? conf.get(ConfigOptions.COORDINATOR_PORT)
-                : conf.get(ConfigOptions.TABLET_SERVER_PORT);
+                ? conf.getOptional(ConfigOptions.COORDINATOR_PORT)
+                : conf.getOptional(ConfigOptions.TABLET_SERVER_PORT);
     }
 
     /**

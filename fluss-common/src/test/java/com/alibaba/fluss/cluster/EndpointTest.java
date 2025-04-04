@@ -141,10 +141,21 @@ public class EndpointTest {
                 .hasMessageContaining(
                         "Config 'internal.listener.name' cannot be set without 'bind.listeners'");
         configuration.removeConfig(ConfigOptions.INTERNAL_LISTENER_NAME);
+        // if bind.listeners is not set, use deprecated [coordinator|tablet.server].host config
+        // options
         assertThat(Endpoint.loadBindEndpoints(configuration, serverType))
                 .containsExactlyElementsOf(
                         Collections.singletonList(new Endpoint("my_host", 9122, "FLUSS")));
-        // if bind.listeners is set, use it at first.
+        // setting both bind.listeners and [coordinator|tablet.server].host is incompatible
+        configuration.setString(ConfigOptions.BIND_LISTENERS, "FLUSS://127.0.0.1:9124");
+        assertThatThrownBy(() -> Endpoint.loadBindEndpoints(configuration, serverType))
+                .hasMessageContaining("Config options are incompatible.");
+        // if [coordinator|tablet.server].host is not set and bind.listeners is set, use
+        // bind.listeners
+        configuration.removeConfig(
+                serverType == ServerType.COORDINATOR
+                        ? ConfigOptions.COORDINATOR_HOST
+                        : ConfigOptions.TABLET_SERVER_HOST);
         configuration.setString(ConfigOptions.BIND_LISTENERS, "FLUSS://127.0.0.1:9124");
         assertThat(Endpoint.loadBindEndpoints(configuration, serverType))
                 .containsExactlyElementsOf(
