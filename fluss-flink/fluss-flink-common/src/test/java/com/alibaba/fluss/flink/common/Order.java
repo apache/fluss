@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.deserializer;
+package com.alibaba.fluss.flink.common;
 
 import java.util.Objects;
 

@@ -17,6 +17,7 @@
 package com.alibaba.fluss.flink.source.deserializer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.flink.common.Order;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.RowType;

@@ -17,8 +17,8 @@
 package com.alibaba.fluss.flink.source.emitter;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.flink.common.Order;
 import com.alibaba.fluss.flink.source.deserializer.InitializationContextImpl;
-import com.alibaba.fluss.flink.source.deserializer.Order;
 import com.alibaba.fluss.flink.source.deserializer.OrderDeserializationSchema;
 import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
