@@ -17,7 +17,6 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
 
 import org.slf4j.Logger;
@@ -50,8 +49,8 @@ public class GlobalConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(GlobalConfiguration.class);
 
-    @VisibleForTesting
-    public static final String[] FLUSS_CONF_FILENAME = new String[] {"server.yaml", "common.yaml"};
+    private static final String[] FLUSS_CONF_FILENAMES =
+            new String[] {"server.yaml", "common.yaml"};
 
     // --------------------------------------------------------------------------------------------
 
@@ -136,28 +135,28 @@ public class GlobalConfiguration {
             }
 
             // get Fluss yaml configuration files from dir
-            final File serverYamlFile = new File(confDirFile, FLUSS_CONF_FILENAME[0]);
-            final File commonYamlFile = new File(confDirFile, FLUSS_CONF_FILENAME[1]);
+            final File serverYamlFile = new File(confDirFile, FLUSS_CONF_FILENAMES[0]);
+            final File commonYamlFile = new File(confDirFile, FLUSS_CONF_FILENAMES[1]);
 
             // 1. check if old and new configuration files are mixed which is not supported
             if (serverYamlFile.exists() && commonYamlFile.exists()) {
                 throw new IllegalConfigurationException(
                         "Only one of "
-                                + FLUSS_CONF_FILENAME[0]
+                                + FLUSS_CONF_FILENAMES[0]
                                 + " and "
-                                + FLUSS_CONF_FILENAME[1]
+                                + FLUSS_CONF_FILENAMES[1]
                                 + " may be specified.");
             }
 
             // 2. backward compatability, use server.yaml
             if (serverYamlFile.exists()) {
-                yamlConfigFiles.add(new File(confDirFile, FLUSS_CONF_FILENAME[0]));
+                yamlConfigFiles.add(new File(confDirFile, FLUSS_CONF_FILENAMES[0]));
             }
 
             // 3. latest configuration setup: load common.yaml and additionally specified, dedicated
             // configuration files
             if (commonYamlFile.exists()) {
-                yamlConfigFiles.add(new File(confDirFile, FLUSS_CONF_FILENAME[1]));
+                yamlConfigFiles.add(new File(confDirFile, FLUSS_CONF_FILENAMES[1]));
 
                 for (String additionalDefaultFile : additionalDefaultFiles) {
                     yamlConfigFiles.add(new File(confDirFile, additionalDefaultFile));
