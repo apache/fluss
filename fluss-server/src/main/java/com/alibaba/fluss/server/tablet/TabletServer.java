@@ -72,6 +72,7 @@ import static com.alibaba.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 public class TabletServer extends ServerBase {
 
     private static final String SERVER_NAME = "TabletServer";
+    private static final ServerType SERVER_TYPE = ServerType.TABLET_SERVER;
 
     private static final Logger LOG = LoggerFactory.getLogger(TabletServer.class);
 
@@ -136,7 +137,8 @@ public class TabletServer extends ServerBase {
     }
 
     public static void main(String[] args) {
-        Configuration configuration = loadConfiguration(args, TabletServer.class.getSimpleName());
+        Configuration configuration =
+                loadConfiguration(args, TabletServer.class.getSimpleName(), SERVER_TYPE);
         TabletServer tabletServer = new TabletServer(configuration);
         startServer(tabletServer);
     }
@@ -146,7 +148,7 @@ public class TabletServer extends ServerBase {
         synchronized (lock) {
             LOG.info("Initializing Tablet services.");
 
-            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.TABLET_SERVER);
+            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, SERVER_TYPE);
 
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);

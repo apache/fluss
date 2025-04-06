@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server;
 
+import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussException;
@@ -71,9 +72,10 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
 
     private Thread shutDownHook;
 
-    protected static Configuration loadConfiguration(String[] args, String serverClassName) {
+    protected static Configuration loadConfiguration(
+            String[] args, String serverClassName, ServerType serverType) {
         try {
-            return ConfigurationParserUtils.loadCommonConfiguration(args, serverClassName);
+            return ConfigurationParserUtils.loadConfiguration(args, serverClassName, serverType);
         } catch (FlussParseException fpe) {
             LOG.error("Could not load the configuration.", fpe);
             System.exit(FAILURE_EXIT_CODE);

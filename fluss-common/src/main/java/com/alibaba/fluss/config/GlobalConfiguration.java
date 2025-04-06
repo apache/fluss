@@ -17,6 +17,7 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
 
 import org.slf4j.Logger;
@@ -29,6 +30,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -46,19 +50,20 @@ public class GlobalConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(GlobalConfiguration.class);
 
-    public static final String FLUSS_CONF_FILENAME = "server.yaml";
+    @VisibleForTesting
+    public static final String[] FLUSS_CONF_FILENAME = new String[] {"server.yaml", "common.yaml"};
 
     // --------------------------------------------------------------------------------------------
 
     private GlobalConfiguration() {}
 
     /**
-     * Load the configuration files from the config file specified by key {@link
+     * Loads the configuration files from the config file specified by key {@link
      * #SERVER_CONFIG_FILE} in {@code dynamicProperties}. If no config file is specified, it'll load
-     * the configuration from the specified {@code defaultConfigDir}.
+     * the common configuration from the specified {@code defaultConfigDir}.
      *
      * <p>If the {@code dynamicProperties} is not null, then it is added to the loaded
-     * configuration.
+     * configuration. Dynamic configuration options take precedence over file configuration options.
      *
      * @param defaultConfigDir directory to load the configuration from when no config file is
      *     specified in the dynamic properties
@@ -67,8 +72,34 @@ public class GlobalConfiguration {
      */
     public static Configuration loadConfiguration(
             final String defaultConfigDir, @Nullable final Configuration dynamicProperties) {
+        return loadConfiguration(defaultConfigDir, Collections.emptyList(), dynamicProperties);
+    }
 
-        File yamlConfigFile = null;
+    /**
+     * Loads the configuration as described in {@link GlobalConfiguration#loadConfiguration(String,
+     * Configuration)}, but allows to specify a list of files that should be loaded from {@code
+     * defaultConfigDir} in addition to the common configuration, in case the user does not specify
+     * {@link #SERVER_CONFIG_FILE} in {@code dynamicProperties}.
+     *
+     * <p>The configuration files are read in the specified order. If multiple configuration files
+     * are given, and a configuration option is present in at least two of them, the configuration
+     * option in the <i>latest</i> configuration file that contains the option takes precedence.
+     * Additionally, dynamic configuration options take precedence over configuration options given
+     * in <i>any</i> file.
+     *
+     * @param defaultConfigDir see {@link GlobalConfiguration#loadConfiguration(String,
+     *     Configuration)}
+     * @param additionalDefaultFiles a list of additional config files that should be loaded from
+     *     defaultConfigDir that will be read in the given order
+     * @param dynamicProperties see {@link GlobalConfiguration#loadConfiguration(String,
+     *     Configuration)}
+     */
+    public static Configuration loadConfiguration(
+            final String defaultConfigDir,
+            final List<String> additionalDefaultFiles,
+            @Nullable final Configuration dynamicProperties) {
+
+        List<File> yamlConfigFiles = new ArrayList<>();
 
         // first, try to get the config file name from the dynamic properties
         // user passed
@@ -76,7 +107,7 @@ public class GlobalConfiguration {
             // get the config file name passed by user
             String configFileName = dynamicProperties.getString(SERVER_CONFIG_FILE);
             dynamicProperties.removeConfig(SERVER_CONFIG_FILE);
-            yamlConfigFile = new File(configFileName);
+            File yamlConfigFile = new File(configFileName);
             if (!yamlConfigFile.exists() && !yamlConfigFile.isFile()) {
                 throw new IllegalConfigurationException(
                         "The given configuration file name '"
@@ -85,9 +116,10 @@ public class GlobalConfiguration {
                                 + yamlConfigFile.getAbsolutePath()
                                 + ") does not describe an existing file.");
             }
+            yamlConfigFiles.add(yamlConfigFile);
         }
 
-        if (yamlConfigFile == null) {
+        if (yamlConfigFiles.isEmpty()) {
             // try to load from the default conf dir
             if (defaultConfigDir == null) {
                 throw new IllegalArgumentException(
@@ -102,11 +134,41 @@ public class GlobalConfiguration {
                                 + confDirFile.getAbsolutePath()
                                 + ") does not describe an existing directory.");
             }
-            // get Fluss yaml configuration file from dir
-            yamlConfigFile = new File(confDirFile, FLUSS_CONF_FILENAME);
+
+            // get Fluss yaml configuration files from dir
+            final File serverYamlFile = new File(confDirFile, FLUSS_CONF_FILENAME[0]);
+            final File commonYamlFile = new File(confDirFile, FLUSS_CONF_FILENAME[1]);
+
+            // 1. check if old and new configuration files are mixed which is not supported
+            if (serverYamlFile.exists() && commonYamlFile.exists()) {
+                throw new IllegalConfigurationException(
+                        "Only one of "
+                                + FLUSS_CONF_FILENAME[0]
+                                + " and "
+                                + FLUSS_CONF_FILENAME[1]
+                                + " may be specified.");
+            }
+
+            // 2. backward compatability, use server.yaml
+            if (serverYamlFile.exists()) {
+                yamlConfigFiles.add(new File(confDirFile, FLUSS_CONF_FILENAME[0]));
+            }
+
+            // 3. latest configuration setup: load common.yaml and additionally specified, dedicated
+            // configuration files
+            if (commonYamlFile.exists()) {
+                yamlConfigFiles.add(new File(confDirFile, FLUSS_CONF_FILENAME[1]));
+
+                for (String additionalDefaultFile : additionalDefaultFiles) {
+                    yamlConfigFiles.add(new File(confDirFile, additionalDefaultFile));
+                }
+            }
         }
 
-        Configuration configuration = loadYAMLResource(yamlConfigFile);
+        Configuration configuration = loadYAMLResource(yamlConfigFiles.remove(0));
+        for (File yamlConfigFile : yamlConfigFiles) {
+            configuration.addAll(loadYAMLResource(yamlConfigFile));
+        }
 
         logConfiguration("Loading", configuration);
 

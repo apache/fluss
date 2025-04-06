@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.utils;
 
+import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigBuilder;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -23,8 +24,9 @@ import com.alibaba.fluss.config.GlobalConfiguration;
 import com.alibaba.fluss.server.exception.FlussParseException;
 
 import org.apache.commons.cli.MissingOptionException;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,8 +38,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link ConfigurationParserUtils}. */
 public class ConfigurationParserUtilsTest {
 
-    @Test
-    void testLoadCommonConfiguration(@TempDir Path tempFolder) throws Exception {
+    @ParameterizedTest
+    @EnumSource(ServerType.class)
+    void testLoadConfiguration(ServerType serverType, @TempDir Path tempFolder) throws Exception {
         Path yamlFile = tempFolder.resolve("server.yaml");
         Files.write(yamlFile, Collections.singleton("coordinator.port: 9124"));
         String confDir = tempFolder.toAbsolutePath().toString();
@@ -51,8 +54,8 @@ public class ConfigurationParserUtilsTest {
         };
 
         Configuration configuration =
-                ConfigurationParserUtils.loadCommonConfiguration(
-                        args, ConfigurationParserUtilsTest.class.getSimpleName());
+                ConfigurationParserUtils.loadConfiguration(
+                        args, ConfigurationParserUtilsTest.class.getSimpleName(), serverType);
         // should respect the configurations in args
         assertThat(configuration.getString(ConfigBuilder.key(key).stringType().noDefaultValue()))
                 .isEqualTo(value);
@@ -61,8 +64,10 @@ public class ConfigurationParserUtilsTest {
         assertThat(configuration.getString(ConfigOptions.COORDINATOR_PORT)).isEqualTo("9124");
     }
 
-    @Test
-    void testLoadWithUserSpecifiedConfigFile(@TempDir Path tempFolder) throws Exception {
+    @ParameterizedTest
+    @EnumSource(ServerType.class)
+    void testLoadWithUserSpecifiedConfigFile(ServerType serverType, @TempDir Path tempFolder)
+            throws Exception {
         Path yamlFile = tempFolder.resolve("server.yaml");
         Files.write(yamlFile, Collections.singleton("coordinator.port: 9124"));
         String confDir = tempFolder.toAbsolutePath().toString();
@@ -70,15 +75,15 @@ public class ConfigurationParserUtilsTest {
         Path userDefinedConfigFile = tempFolder.resolve("user-defined-server.yaml");
         Files.write(yamlFile, Collections.singleton("coordinator.port: 1000"));
 
-        final String configKey = GlobalConfiguration.FLUSS_CONF_FILENAME;
+        final String configKey = GlobalConfiguration.FLUSS_CONF_FILENAME[0];
         final String configValue = userDefinedConfigFile.toString();
 
         final String[] args = {
             "--configDir", confDir, String.format("-D%s=%s", configKey, configValue)
         };
         Configuration configuration =
-                ConfigurationParserUtils.loadCommonConfiguration(
-                        args, ConfigurationParserUtilsTest.class.getSimpleName());
+                ConfigurationParserUtils.loadConfiguration(
+                        args, ConfigurationParserUtilsTest.class.getSimpleName(), serverType);
         // should use the configurations in the user-defined-server.yaml
         assertThat(
                         configuration.get(
@@ -86,14 +91,16 @@ public class ConfigurationParserUtilsTest {
                 .isEqualTo(1000);
     }
 
-    @Test
-    void testLoadCommonConfigurationThrowException() {
+    @ParameterizedTest
+    @EnumSource(ServerType.class)
+    void testLoadConfigurationThrowException(ServerType serverType) {
         // should throw exception when miss options 'c'('configDir')
         assertThatThrownBy(
                         () ->
-                                ConfigurationParserUtils.loadCommonConfiguration(
+                                ConfigurationParserUtils.loadConfiguration(
                                         new String[0],
-                                        ConfigurationParserUtilsTest.class.getSimpleName()))
+                                        ConfigurationParserUtilsTest.class.getSimpleName(),
+                                        serverType))
                 .isInstanceOf(FlussParseException.class)
                 .hasMessageContaining("Failed to parse the command line arguments")
                 .cause()

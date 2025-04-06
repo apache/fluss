@@ -70,6 +70,7 @@ public class CoordinatorServer extends ServerBase {
 
     public static final String DEFAULT_DATABASE = "fluss";
     private static final String SERVER_NAME = "CoordinatorServer";
+    private static final ServerType SERVER_TYPE = ServerType.COORDINATOR;
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorServer.class);
 
@@ -127,7 +128,7 @@ public class CoordinatorServer extends ServerBase {
 
     public static void main(String[] args) {
         Configuration configuration =
-                loadConfiguration(args, CoordinatorServer.class.getSimpleName());
+                loadConfiguration(args, CoordinatorServer.class.getSimpleName(), SERVER_TYPE);
         CoordinatorServer coordinatorServer = new CoordinatorServer(configuration);
         startServer(coordinatorServer);
     }
@@ -136,7 +137,7 @@ public class CoordinatorServer extends ServerBase {
     protected void startServices() throws Exception {
         synchronized (lock) {
             LOG.info("Initializing Coordinator services.");
-            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
+            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, SERVER_TYPE);
             this.serverId = UUID.randomUUID().toString();
 
             // for metrics

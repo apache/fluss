@@ -33,7 +33,7 @@ public class CommandLineOptions {
                     .required(true)
                     .hasArg(true)
                     .argName("configuration directory")
-                    .desc("Directory which contains the configuration file server.yaml.")
+                    .desc("Directory which contains the YAML configuration files.")
                     .build();
 
     public static final Option DYNAMIC_PROPERTY_OPTION =

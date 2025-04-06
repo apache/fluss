@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.utils;
 
+import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.ConfigurationUtils;
 import com.alibaba.fluss.config.GlobalConfiguration;
@@ -27,6 +28,8 @@ import com.alibaba.fluss.server.exception.FlussParseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+
 /**
  * Utility class to extract related parameters from {@link Configuration} and to sanity check them.
  */
@@ -34,16 +37,20 @@ public class ConfigurationParserUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(ConfigurationParserUtils.class);
 
+    private static final String COORDINATOR_SERVER_CONF_FILE = "coordinator-server.yaml";
+    private static final String TABLET_SERVER_CONF_FILE = "tablet-server.yaml";
+
     /**
      * Generate configuration from only the config file and dynamic properties.
      *
      * @param args the commandline arguments
      * @param cmdLineSyntax the syntax for this application
+     * @param serverType the server type
      * @return generated configuration
      * @throws FlussParseException if the configuration cannot be generated
      */
-    public static Configuration loadCommonConfiguration(String[] args, String cmdLineSyntax)
-            throws FlussParseException {
+    public static Configuration loadConfiguration(
+            String[] args, String cmdLineSyntax, ServerType serverType) throws FlussParseException {
         final CommandLineParser<ServerConfiguration> commandLineParser =
                 new CommandLineParser<>(new ServerConfigurationParserFactory());
 
@@ -59,7 +66,12 @@ public class ConfigurationParserUtils {
 
         final Configuration dynamicProperties =
                 ConfigurationUtils.createConfiguration(serverConfiguration.getDynamicProperties());
+
         return GlobalConfiguration.loadConfiguration(
-                serverConfiguration.getConfigDir(), dynamicProperties);
+                serverConfiguration.getConfigDir(),
+                serverType == ServerType.COORDINATOR
+                        ? Collections.singletonList(COORDINATOR_SERVER_CONF_FILE)
+                        : Collections.singletonList(TABLET_SERVER_CONF_FILE),
+                dynamicProperties);
     }
 }
