@@ -1,0 +1,42 @@
+################################################################################
+# Copyright (c) 2025 Alibaba Group Holding Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+# Dedicated default configuration file for tablet servers.
+
+#==============================================================================
+# Tablet Server
+#==============================================================================
+# The id of the tablet server to be run, must be set and should be different
+# when running multiple tablet servers.
+tablet-server.id: 0
+
+#==============================================================================
+# Listeners
+#==============================================================================
+# The network address and port to which the server binds for accepting connections.
+# The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas.
+bind.listeners: FLUSS://localhost:9124
+
+#==============================================================================
+# Data and FileSystems
+#==============================================================================
+# The local data directory to be used for Fluss to storing kv and log data.
+data.dir: /tmp/fluss-data
+
+#==============================================================================
+# Fluss Kafka Configs
+#==============================================================================
+kafka.port: 9093

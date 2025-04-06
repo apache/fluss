@@ -164,11 +164,26 @@ findLakehousePaimonJar() {
   echo "$LAKEHOUSE_PAIMON"
 }
 
+findFlussConfFile() {
+  fluss_conf_dir=$1
+
+  if [[ -f "$fluss_conf_dir/server.yaml" && -f "$fluss_conf_dir/common.yaml" ]]; then
+    (>&2 echo "[ERROR] Misconfiguration detected. Only one of server.yaml and common.yaml must be present in $fluss_conf_dir.")
+    exit 1
+  elif [[ -f "$fluss_conf_dir/server.yaml" ]]; then
+    # backward compatability (< 0.7.0)
+    echo "server.yaml"
+  elif [[ -f "$fluss_conf_dir/common.yaml" ]]; then
+    # from 0.7.0 onwards
+    echo "common.yaml"
+  else
+    (>&2 echo "[ERROR] Could neither find server.yaml nor common.yaml in $fluss_conf_dir.")
+    exit 1
+  fi
+}
 
 
-
-# WARNING !!! , these values are only used if there is nothing else is specified in
-# conf/server.yaml
+# WARNING !!! , these values are only used if there is nothing else is specified in conf/common.yaml
 
 DEFAULT_ENV_PID_DIR="/tmp"                          # Directory to store *.pid files to
 DEFAULT_ENV_LOG_MAX=10                              # Maximum number of old log files to keep
@@ -181,7 +196,7 @@ DEFAULT_ENV_SSH_OPTS=""                             # Optional SSH parameters ru
 
 
 ########################################################################################################################
-# CONFIG KEYS: The default values can be overwritten by the following keys in conf/server.yaml
+# CONFIG KEYS: The default values can be overwritten by the following keys in conf/common.yaml
 ########################################################################################################################
 KEY_ENV_PID_DIR="env.pid.dir"
 KEY_ENV_LOG_DIR="env.log.dir"
@@ -238,7 +253,7 @@ if [ -z "$FLUSS_CONF_DIR" ]; then FLUSS_CONF_DIR=$FLUSS_HOME_DIR_MANGLED/conf; f
 FLUSS_BIN_DIR=$FLUSS_HOME_DIR_MANGLED/bin
 FLUSS_OPT_DIR=$FLUSS_HOME_DIR_MANGLED/opt
 DEFAULT_FLUSS_LOG_DIR=$FLUSS_HOME_DIR_MANGLED/log
-FLUSS_CONF_FILE="server.yaml"
+FLUSS_CONF_FILE=$(findFlussConfFile "${FLUSS_CONF_DIR}")
 YAML_CONF=${FLUSS_CONF_DIR}/${FLUSS_CONF_FILE}
 
 
@@ -262,7 +277,7 @@ if [ -z "${MY_JAVA_HOME}" ]; then
 fi
 # check if we have a valid JAVA_HOME and if java is not available
 if [ -z "${MY_JAVA_HOME}" ] && ! type java > /dev/null 2> /dev/null; then
-    echo "Please specify JAVA_HOME. Either in Fluss config ./conf/server.yaml or as system-wide JAVA_HOME."
+    echo "Please specify JAVA_HOME. Either in Fluss config ./conf/$FLUSS_CONF_FILE or as system-wide JAVA_HOME."
     exit 1
 else
     JAVA_HOME="${MY_JAVA_HOME}"

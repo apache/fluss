@@ -14,9 +14,9 @@
  limitations under the License.
 -->
 <assembly
-    xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.0"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.0 http://maven.apache.org/xsd/assembly-1.1.0.xsd">
+        xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.0"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.0 http://maven.apache.org/xsd/assembly-1.1.0.xsd">
     <id>bin</id>
     <formats>
         <format>dir</format>
@@ -54,9 +54,19 @@
             <fileMode>0644</fileMode>
         </file>
 
-        <!-- copy the config file -->
+        <!-- copy config files -->
         <file>
-            <source>src/main/resources/server.yaml</source>
+            <source>src/main/resources/common.yaml</source>
+            <outputDirectory>conf</outputDirectory>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>src/main/resources/coordinator-server.yaml</source>
+            <outputDirectory>conf</outputDirectory>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>src/main/resources/tablet-server.yaml</source>
             <outputDirectory>conf</outputDirectory>
             <fileMode>0644</fileMode>
         </file>

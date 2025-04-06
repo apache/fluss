@@ -14,6 +14,12 @@
 # limitations under the License.
 ################################################################################
 
+# Common default configuration file that is used by ALL start scripts, the Fluss Servers and the Lakehouse CLI.
+# In addition, there exist additional, dedicated default configuration files for some components that are also placed
+# in this folder. The dedicated configuration files are ONLY read by the respective Java applications but NOT by the
+# start scripts. In that case, configuration options in the dedicated files overwrite configuration options
+# in the common (i.e., this) file.
+
 # These parameters are required to run ./bin/lakehouse.sh for Java 17 support.
 # They can be safely removed when using Java 8/11.
 env.java.opts.all: --add-opens=java.base/java.util=ALL-UNNAMED
@@ -21,7 +27,6 @@ env.java.opts.all: --add-opens=java.base/java.util=ALL-UNNAMED
 #==============================================================================
 # Zookeeper
 #==============================================================================
-
 # Zookeeper connection string (see zookeeper docs for details).
 # This is a comma separated host:port pairs, each corresponding to a zk
 # server. e.g. "127.0.0.1:3000,127.0.0.1:3001,127.0.0.1:3002".
@@ -30,46 +35,12 @@ env.java.opts.all: --add-opens=java.base/java.util=ALL-UNNAMED
 zookeeper.address: localhost:2181
 
 #==============================================================================
-# Common
+# Data and FileSystems
 #==============================================================================
-
-# THe default bucket number to be used when creating tables if no bucket number
-# is specified for the table.
-default.bucket.number: 1
-
-# The default replication factor to be used when creating tables if no replication
-# factor is specified for the table.
-default.replication.factor: 1
-
-# The local data directory to be used for Fluss to storing kv and log data.
-data.dir: /tmp/fluss-data
-
 # The remote data directory to be used for Fluss. Now, it is only used for storing
 # kv snapshot data. Expected be set to a remote location like: oss://bucket/path for oss
 # filesystem or hdfs://namenode:port/path for hdfs filesystem
 remote.data.dir: /tmp/fluss-remote-data
-
-#==============================================================================
-# Listeners
-#==============================================================================
-
-# The network address and port to which the server binds for accepting connections.
-# The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas.
-bind.listeners: FLUSS://localhost:9123
-
-
-#==============================================================================
-# Tablet Server
-#==============================================================================
-
-
-# The id of the tablet server to be run, must be set and should be different
-# when running multiple tablet servers.
-tablet-server.id: 0
-
-#==============================================================================
-# OSS FileSystem
-#==============================================================================
 
 # The configuration for oss filesystem when using oss as the remote data directory
 # fs.oss.endpoint: xxx
@@ -77,8 +48,14 @@ tablet-server.id: 0
 # fs.oss.accessKeySecret: xxx
 
 #==============================================================================
+# Lakehouse
+#==============================================================================
+#datalake.format: paimon
+#datalake.paimon.metastore: filesystem
+#datalake.paimon.warehouse: /tmp/paimon
+
+#==============================================================================
 # Fluss Kafka Configs
 #==============================================================================
 kafka.enabled: false
-kafka.port: 9092
 kafka.database: _kafka
