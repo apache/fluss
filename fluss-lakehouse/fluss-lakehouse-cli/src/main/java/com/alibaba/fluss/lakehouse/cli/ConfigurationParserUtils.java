@@ -48,7 +48,8 @@ public class ConfigurationParserUtils {
                         .required(true)
                         .hasArg(true)
                         .argName("configuration directory")
-                        .desc("Directory which contains the configuration file server.yaml.")
+                        .desc(
+                                "Directory which contains the common.yaml or server.yaml configuration file.")
                         .build();
         Option dynamicOption =
                 Option.builder("D")

@@ -21,8 +21,8 @@ import org.apache.commons.cli.Option;
 /**
  * Container class for command line options.
  *
- * <p>It's used to initialize the Fluss configuration from server.yaml in the directory configured
- * in {@link #CONFIG_DIR_OPTION} and the user specified parameters as {@link
+ * <p>It's used to initialize the Fluss configuration from common.yaml or server.yaml in the
+ * directory configured in {@link #CONFIG_DIR_OPTION} and the user specified parameters as {@link
  * #DYNAMIC_PROPERTY_OPTION}.
  */
 public class CommandLineOptions {
