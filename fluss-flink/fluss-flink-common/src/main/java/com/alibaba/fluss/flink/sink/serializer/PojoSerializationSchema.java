@@ -49,11 +49,11 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
  * <p>Usage example:
  *
  * <pre>{@code
- * FlussSink<User> sink = FlussSink.<User>builder()
+ * FlussSink<Order> sink = FlussSink.<Order>builder()
  *     .setBootstrapServers("localhost:9092")
  *     .setDatabase("fluss")
- *     .setTable("users")
- *     .setSerializer(new PojoSerializationSchema<>(User.class))
+ *     .setTable("orders")
+ *     .setSerializer(new PojoSerializationSchema<>(Order.class))
  *     .build();
  * }</pre>
  *
