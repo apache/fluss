@@ -74,8 +74,8 @@ abstract class FlinkTableSinkITCase {
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
 
-    private static final String CATALOG_NAME = "testcatalog";
-    private static final String DEFAULT_DB = "defaultdb";
+    static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = "defaultdb";
     static StreamExecutionEnvironment env;
     static StreamTableEnvironment tEnv;
     static TableEnvironment tBatchEnv;

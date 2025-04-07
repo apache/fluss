@@ -53,8 +53,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** IT case for using flink sql to read fluss table. */
 abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
-    private static final String CATALOG_NAME = "testcatalog";
-    private static final String DEFAULT_DB = "defaultdb";
+    static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = "defaultdb";
     static StreamExecutionEnvironment execEnv;
     static StreamTableEnvironment tEnv;
 

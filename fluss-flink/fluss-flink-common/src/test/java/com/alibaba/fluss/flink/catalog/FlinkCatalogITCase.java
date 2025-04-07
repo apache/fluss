@@ -45,6 +45,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
@@ -60,8 +61,8 @@ abstract class FlinkCatalogITCase {
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
-    private static final String CATALOG_NAME = "testcatalog";
-    private static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
+    static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static Catalog catalog;
     static TableEnvironment tEnv;
 
@@ -349,8 +350,10 @@ abstract class FlinkCatalogITCase {
         tEnv.executeSql("create database test_db");
         List<Row> databases =
                 CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
-        assertThat(databases.toString())
-                .isEqualTo(String.format("[+I[%s], +I[test_db]]", DEFAULT_DB));
+
+        assertThat(databases.stream().map(Row::toString).collect(Collectors.toList()))
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.asList(String.format("+I[%s]", DEFAULT_DB), "+I[test_db]"));
         tEnv.executeSql("drop database test_db");
         databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
         assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
