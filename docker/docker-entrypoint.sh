@@ -20,6 +20,9 @@ COMMON_CONF_FILE="${FLUSS_HOME}/conf/common.yaml"
 prepare_configuration() {
     additional_conf_file="${FLUSS_HOME}/conf/$1"
 
+    # backward compatability: allow to use old [coordinator|tablet-server].host option in FLUSS_PROPERTIES
+    sed -i '/bind.listeners:/d' "${COMMON_CONF_FILE}" "$additional_conf_file"
+
     if [ -n "${FLUSS_PROPERTIES}" ]; then
         # copy over all configuration options of FLUSS_PROPERTIES to the common and the additional configuration file
         # since we cannot tell which configuration options are specific and which are not
