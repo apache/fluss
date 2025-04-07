@@ -222,7 +222,7 @@ This recreates `shared-tmpfs` and all data is lost (created tables, running jobs
 Make sure that the modified and added containers are up and running using
 
 ```shell
-docker ps
+docker container ls -a
 ```
 
 4. Now you are all set! You can visit
