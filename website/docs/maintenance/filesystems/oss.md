@@ -28,7 +28,7 @@ sidebar_position: 3
 
 ## Configurations setup
 
-To enabled OSS as remote storage, there are some required configurations that must be add to Fluss' `server.yaml`:
+To enabled OSS as remote storage, there are some required configurations that must be add to Fluss' `common.yaml`:
 
 ```yaml
 # The dir that used to be as the remote storage of Fluss
@@ -57,5 +57,5 @@ such as `acs:ram::123456789012:role/testrole`. Since client will use the STS tok
 See more detail in [AssumeRole](https://help.aliyun.com/zh/ram/developer-reference/api-sts-2015-04-01-assumerole).
 
 Apart from the above configurations, you can also define the configuration keys mentioned in the [Hadoop OSS documentation](http://hadoop.apache.org/docs/current/hadoop-aliyun/tools/hadoop-aliyun/index.html)
-in the Fluss' `server.yaml`. These configurations defines in Hadoop OSS documentation are advanced configurations which are usually used by performance tuning.
+in the Fluss' `common.yaml`. These configurations defines in Hadoop OSS documentation are advanced configurations which are usually used by performance tuning.
 

@@ -92,7 +92,7 @@ PROPERTIES
 );
 ```
 
-**NOTE**: The configuration value `paimon.catalog.type` and `paimon.catalog.warehouse` should be same as how you configure the Paimon as lakehouse storage for Fluss in `server.yaml`.
+**NOTE**: The configuration value `paimon.catalog.type` and `paimon.catalog.warehouse` should be same as how you configure the Paimon as lakehouse storage for Fluss in `common.yaml`.
 
 Then, you can query the `orders` table by StarRocks:
 ```sql title="StarRocks SQL"

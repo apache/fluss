@@ -21,14 +21,15 @@ sidebar_position: 1
 
 # Server Configuration
 
-All configurations can be set in Fluss configuration file `conf/server.yaml`
+Server configurations refer to a set of configurations used to specify the running parameters of a server.
+Configuration are parsed and evaluated when Fluss processes are **started**.
 
-The configuration is parsed and evaluated when the Fluss processes are started.
-Changes to the configuration file require restarting the relevant processes.
+## Common Configurations
 
+Common configurations that are the same across all Fluss cluster components can be set in `conf/common.yaml`
 Users can organize config in format `key: value`, such as:
 
-```yaml title="conf/server.yaml"
+```yaml title="conf/common.yaml"
 default.bucket.number: 8
 default.replication.factor: 3
 remote.data.dir: /home/fluss/data
@@ -36,9 +37,27 @@ remote.fs.write-buffer-size: 10mb
 auto-partition.check.interval: 5min
 ```
 
-Server configuration refers to a set of configurations used to specify the running parameters of a server.
-These settings can only be configured at the time of cluster startup and do not support dynamic modification
-during the Fluss cluster working.
+## Instance-specific Configurations
+
+Instance-specific configurations can be set in `conf/[coordinator|tablet]-server.yaml`.
+Instance-specific configurations are only parsed by the respective modules, e.g., `conf/coordinator-server.yaml` is only parsed by CoordinatorServer instances.
+In case a configuration option is present in both `conf/common.yaml` and an instance-specific configuration, the instance-specific configuration takes precedence and will overwrite the value given in the common configuration.
+
+Examples for instance-specific configurations:
+
+```yaml title="conf/coordinator-server.yaml"
+bind.listeners: FLUSS://192.168.10.1:9123
+```
+
+```yaml title="conf/tablet-server.yaml"
+bind.listeners: FLUSS://192.168.10.1:9124
+tablet-server.id: 1
+```
+
+:::warning
+Settings can only be configured at the time of _cluster startup_ and do **not** support dynamic modification
+during the Fluss cluster working. Changes to the configuration file require restarting the relevant processes.
+:::
 
 ## Common
 

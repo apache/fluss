@@ -33,7 +33,7 @@ File system instances are instantiated once per process and then cached/pooled, 
 ## Local File System
 
 Fluss has built-in support for the file system of the local machine, including any NFS or SAN drives mounted into that local file system. Local files are referenced with the `file://` URI scheme. You 
-can use local file system as remote storage for testing purposes with the following configuration in Fluss' `server.yaml`:
+can use local file system as remote storage for testing purposes with the following configuration in Fluss' `common.yaml`:
 ```yaml
 remote.data.dir: file:///path/to/remote/storage
 ```

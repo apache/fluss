@@ -22,8 +22,8 @@ sidebar_position: 2
 # Metric Reporters
 
 Fluss allows reporting [metrics](monitor-metrics.md) to external system. 
-Metrics can be exposed to an external system by configuring one or several reporters in `conf/server.yaml`. These 
-reporters will be instantiated on each CoordinatorServer and TabletServers when they started.
+Metrics can be exposed to an external system by configuring one or several reporters in `conf/common.yaml` (or also in instance-specific configuration files, e.g., `conf/coordinator-server.yaml`). 
+These reporters will be instantiated on each CoordinatorServer and TabletServers when they started.
 
 Example reporter configuration that specifies multiple reporters:
 

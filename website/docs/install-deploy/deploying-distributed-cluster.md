@@ -46,16 +46,16 @@ Flink requires the `JAVA_HOME` environment variable to be set on all nodes and p
 ## Fluss Setup
 
 This part will describe how to set up Fluss cluster consisting of one coordinator server and multiple tablet servers
-across three machines. Suppose you have three nodes have ip address:
+across three machines. Suppose you have three nodes in a `192.168.10/24` subnet with the following IP address assignment:
 - Node1: `192.168.10.1`
 - Node2: `192.168.10.2`
 - Node3: `192.168.10.3`
 
-Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 will deploy one TabletServer.
+Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 will each deploy one TabletServer.
 
 ### Preparation
 
-1. Make sure ZooKeeper has been deployed, and assuming the ZooKeeper address is `192.168.10.99:2181`. see [Running zookeeper cluster](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper) to deploy a distributed ZooKeeper.
+1. Make sure ZooKeeper has been deployed, and assuming ZooKeeper is also part of the subnet and listens on `192.168.10.99:2181`. See [Running zookeeper cluster](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper) how to deploy a distributed ZooKeeper.
 
 2. Download Fluss
 
@@ -69,57 +69,48 @@ cd fluss-$FLUSS_VERSION$/
 
 ### Configuring Fluss
 
-After having extracted the archived files, you need to configure Fluss for the cluster by editing `conf/server.yaml`
+After having extracted the archived files, you need to configure Fluss for the cluster by editing the respective YAML configuration files in `conf/`.
 
-For **Node1**, the config is as follows:
-```yaml
-coordinator.host: 192.168.10.1
-coordinator.port: 9123
+The common configuration for **all nodes** is as follows.
+
+```yaml title="common.yaml"
 zookeeper.address: 192.168.10.99:2181
 zookeeper.path.root: /fluss
-
-tablet-server.host: 192.168.10.1
-tablet-server.id: 1
 ```
 
-For **Node2**, the config is as follows:
-```yaml
-zookeeper.address: 192.168.10.99:2181
-zookeeper.path.root: /fluss
+The CoordinatorServer configuration (**Node1**) is as follows.
 
-tablet-server.host: 192.168.10.2
-tablet-server.id: 2
+```yaml title="coordinator-server.yaml"
+bind.listeners: FLUSS://192.168.10.1:9123
 ```
 
-For **Node3**, the config is as follows:
-```yaml
-zookeeper.address: 192.168.10.99:2181
-zookeeper.path.root: /fluss
-
-tablet-server.host: 192.168.10.3
-tablet-server.id: 3
+The TabletServer configuration needs to adapted on **each node** based on the node number as follows.
+```yaml title="tablet-server.yaml"
+# Replace [1-3] with corresponding node number
+bind.listeners: FLUSS://192.168.10.[1-3]:9124
+tablet-server.id: [1-3]
 ```
 
 :::note
-- `tablet-server.id` is the unique id of the TabletServer, if you have multiple TabletServers, you should set different id for each TabletServer.
-- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](maintenance/configuration.md) for more details.
+- `tablet-server.id` is the unique id of the TabletServer. If you have multiple TabletServers, you should set a different id for each TabletServer.
+- In this example, we only set the mandatory properties. For additional properties, you can refer to [Configuration](maintenance/configuration.md) for more details.
   :::
 
 ### Starting Fluss
 
-To start Fluss, you should first to start a CoordinatorServer in **node1** and
-then start each TabletServer in **node1**, **node2**, **node3**. The command is as follows:
+To start Fluss, you should first start a CoordinatorServer instance on **Node1**. 
+Then, start a TabletServer instance on **Node1**, **Node2**, and **Node3**, respectively. 
 
 #### Starting CoordinatorServer
 
-In **node1**, starting a CoordinatorServer:
+On **Node1**, start a CoordinatorServer instance.
 ```shell
 ./bin/coordinator-server.sh start
 ```
 
 #### Starting TabletServer
 
-In **node1**, **node2**, **node3**, starting a TabletServer is as follows:
+On **Node1**, **Node2**, and **Node3**, start a TabletServer instance.
 ```shell
 ./bin/tablet-server.sh start
 ```

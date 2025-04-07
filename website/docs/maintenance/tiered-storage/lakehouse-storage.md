@@ -36,7 +36,7 @@ can gain much storage cost reduction and analytics performance improvement.
 Lakehouse Storage disabled by default, you must enable it manually.
 
 ### Lakehouse Storage Cluster Configurations
-First, you must configure the lakehouse storage in `server.yaml`. Take Paimon
+First, you must configure the lakehouse storage in `common.yaml`. Take Paimon
 as an example, you must configure the following configurations:
 ```yaml
 datalake.format: paimon
