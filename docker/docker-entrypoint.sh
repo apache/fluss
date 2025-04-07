@@ -15,16 +15,22 @@
 # limitations under the License.
 #
 
-CONF_FILE="${FLUSS_HOME}/conf/server.yaml"
+COMMON_CONF_FILE="${FLUSS_HOME}/conf/common.yaml"
 
 prepare_configuration() {
-    if [ -n "${FLUSS_PROPERTIES}" ]; then
-        echo "${FLUSS_PROPERTIES}" >> "${CONF_FILE}"
-    fi
-    envsubst < "${CONF_FILE}" > "${CONF_FILE}.tmp" && mv "${CONF_FILE}.tmp" "${CONF_FILE}"
-}
+    additional_conf_file="${FLUSS_HOME}/conf/$1"
 
-prepare_configuration
+    if [ -n "${FLUSS_PROPERTIES}" ]; then
+        # copy over all configuration options of FLUSS_PROPERTIES to the common and the additional configuration file
+        # since we cannot tell which configuration options are specific and which are not
+        echo "#==============================================================================" | tee -a "${COMMON_CONF_FILE}" "$additional_conf_file"
+        echo "# Configuration Options from FLUSS_PROPERTIES Environment Variable" | tee -a "${COMMON_CONF_FILE}" "$additional_conf_file"
+        echo "#=============================================================================="  | tee -a "${COMMON_CONF_FILE}" "$additional_conf_file"
+        echo "${FLUSS_PROPERTIES}" | tee -a "${COMMON_CONF_FILE}" "$additional_conf_file"
+    fi
+    envsubst < "${COMMON_CONF_FILE}" > "${COMMON_CONF_FILE}.tmp" && mv "${COMMON_CONF_FILE}.tmp" "${COMMON_CONF_FILE}"
+    envsubst < "$additional_conf_file" > "$additional_conf_file.tmp" && mv "$additional_conf_file.tmp" "$additional_conf_file"
+}
 
 args=("$@")
 
@@ -33,10 +39,12 @@ if [ "$1" = "help" ]; then
   printf "    Or $(basename "$0") help\n\n"
   exit 0
 elif [ "$1" = "coordinatorServer" ]; then
+  prepare_configuration "coordinator-server.yaml"
   args=("${args[@]:1}")
   echo "Starting Coordinator Server"
   exec "$FLUSS_HOME/bin/coordinator-server.sh" start-foreground "${args[@]}"
 elif [ "$1" = "tabletServer" ]; then
+  prepare_configuration "tablet-server.yaml"
   args=("${args[@]:1}")
   echo "Starting Tablet Server"
   exec "$FLUSS_HOME/bin/tablet-server.sh" start-foreground "${args[@]}"
