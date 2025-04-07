@@ -81,7 +81,7 @@ docker run \
     --name coordinator-server \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-coordinator.host: coordinator-server" \
+bind.listeners: FLUSS://coordinator-server:9123" \
     -p 9123:9123 \
     -d fluss/fluss:$FLUSS_VERSION$ coordinatorServer
 ```
@@ -100,9 +100,8 @@ docker run \
     --name tablet-server \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-tablet-server.host: tablet-server
+bind.listeners: FLUSS://tablet-server:9124
 tablet-server.id: 0
-tablet-server.port: 9124
 data.dir: /tmp/fluss/data
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9124 \
@@ -115,15 +114,14 @@ remote.data.dir: /tmp/fluss/remote-data" \
 In a production environment, you need to start multiple Fluss TabletServer nodes.
 Here we start 3 Fluss TabletServer nodes in daemon and connect to Zookeeper. The command is as follows:
 
-1. start tablet-server-0
+1. Start tablet-server-0
 ```bash
 docker run \
     --name tablet-server-0 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-tablet-server.host: tablet-server-0
+bind.listeners: FLUSS://tablet-server-0:9124
 tablet-server.id: 0
-tablet-server.port: 9124
 data.dir: /tmp/fluss/data/tablet-server-0
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9124 \
@@ -131,15 +129,14 @@ remote.data.dir: /tmp/fluss/remote-data" \
     -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
 
-2. start tablet-server-1
+2. Start tablet-server-1
 ```bash
 docker run \
     --name tablet-server-1 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-tablet-server.host: tablet-server-1
+bind.listeners: FLUSS://tablet-server-1:9125
 tablet-server.id: 1
-tablet-server.port: 9125
 data.dir: /tmp/fluss/data/tablet-server-1
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9125:9125 \
@@ -147,15 +144,14 @@ remote.data.dir: /tmp/fluss/remote-data" \
     -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
 
-3. start tablet-server-2
+3. Start tablet-server-2
 ```bash
 docker run \
     --name tablet-server-2 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-tablet-server.host: tablet-server-2
+bind.listeners: FLUSS://tablet-server-2:9126
 tablet-server.id: 2
-tablet-server.port: 9126
 data.dir: /tmp/fluss/data/tablet-server-2
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9126:9126 \
@@ -179,7 +175,7 @@ to interact with Fluss.
 
 #### Start Flink Cluster
 
-1. start jobManager
+1. Start jobManager
 
 ```bash
 docker run \
@@ -191,7 +187,7 @@ docker run \
     -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ jobmanager
 ```
 
-2. start taskManager
+2. Start taskManager
 
 ```bash
 docker run \
@@ -253,7 +249,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server:
     image: fluss/fluss:$FLUSS_VERSION$
@@ -264,7 +260,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server
+        bind.listeners: FLUSS://tablet-server:9123
         tablet-server.id: 0
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data
@@ -298,7 +294,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server-0:
     image: fluss/fluss:$FLUSS_VERSION$
@@ -309,7 +305,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server-0
+        bind.listeners: FLUSS://tablet-server-0:9123
         tablet-server.id: 0
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-0
@@ -325,7 +321,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server-1
+        bind.listeners: FLUSS://tablet-server-1:9123
         tablet-server.id: 1
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-1
@@ -341,7 +337,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server-2
+        bind.listeners: FLUSS://tablet-server-2:9123
         tablet-server.id: 2
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-2
@@ -387,7 +383,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
   tablet-server-0:
     image: fluss/fluss:$FLUSS_VERSION$
@@ -398,7 +394,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server-0
+        bind.listeners: FLUSS://tablet-server-0:9123
         tablet-server.id: 0
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-0
@@ -414,7 +410,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server-1
+        bind.listeners: FLUSS://tablet-server-1:9123
         tablet-server.id: 1
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-1
@@ -430,7 +426,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server-2
+        bind.listeners: FLUSS://tablet-server-2:9123
         tablet-server.id: 2
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-2
