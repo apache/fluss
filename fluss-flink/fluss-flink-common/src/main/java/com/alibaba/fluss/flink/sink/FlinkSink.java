@@ -24,6 +24,7 @@ import com.alibaba.fluss.flink.sink.writer.UpsertSinkWriter;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.api.connector.sink2.WriterInitContext;
@@ -56,14 +57,15 @@ class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
     @Deprecated
     @Override
     public SinkWriter<RowData> createWriter(InitContext context) throws IOException {
-        FlinkSinkWriter flinkSinkWriter = builder.createWriter();
+
+        FlinkSinkWriter flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
     @Override
     public SinkWriter<RowData> createWriter(WriterInitContext context) throws IOException {
-        FlinkSinkWriter flinkSinkWriter = builder.createWriter();
+        FlinkSinkWriter flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
@@ -75,7 +77,7 @@ class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
 
     @Internal
     interface SinkWriterBuilder<W extends FlinkSinkWriter> extends Serializable {
-        W createWriter();
+        W createWriter(MailboxExecutor mailboxExecutor);
 
         DataStream<RowData> addPreWriteTopology(DataStream<RowData> input);
     }
@@ -117,8 +119,9 @@ class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
         }
 
         @Override
-        public AppendSinkWriter createWriter() {
-            return new AppendSinkWriter(tablePath, flussConfig, tableRowType, ignoreDelete);
+        public AppendSinkWriter createWriter(MailboxExecutor mailboxExecutor) {
+            return new AppendSinkWriter(
+                    tablePath, flussConfig, tableRowType, ignoreDelete, mailboxExecutor);
         }
 
         @Override
@@ -180,9 +183,14 @@ class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
         }
 
         @Override
-        public UpsertSinkWriter createWriter() {
+        public UpsertSinkWriter createWriter(MailboxExecutor mailboxExecutor) {
             return new UpsertSinkWriter(
-                    tablePath, flussConfig, tableRowType, targetColumnIndexes, ignoreDelete);
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    targetColumnIndexes,
+                    ignoreDelete,
+                    mailboxExecutor);
         }
 
         @Override
