@@ -57,6 +57,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.getProduceLogData;
 import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeProduceLogResponse;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** ITCase for {@link Sender}. */
@@ -416,6 +417,52 @@ final class SenderTest {
         assertThat(future4.isDone()).isTrue();
         assertThat(future4.get()).isNull();
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+    }
+
+    @Test
+    void testRetryAfterResettingInFlightBatchSequence() throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
+
+        // Send the first ProduceLogRequest.
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        sender1.runOnce();
+        // Send the second ProduceLogRequest.
+        CompletableFuture<Exception> future2 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        sender1.runOnce();
+
+        // response 0 with retrievable error which will reEnqueue the batch.
+        finishIdempotentProduceLogRequest(
+                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        // response 1 with UnknownWriterIdException which will reset writer
+        finishIdempotentProduceLogRequest(
+                1, tb1, 0, createProduceLogResponse(tb1, Errors.UNKNOWN_WRITER_ID_EXCEPTION));
+        retry(
+                Duration.ofMinutes(1),
+                () -> { // after response 1 is received, the writer will be reset
+                    assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
+                    assertThat(accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1)).hasSize(1);
+                    assertThat(
+                                    accumulator
+                                            .getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1)
+                                            .peek()
+                                            .batchSequence())
+                            .isEqualTo(0);
+                });
+        assertThat(future1.isDone()).isFalse();
+        assertThat(future2.isDone()).isTrue();
+
+        // resend the first ProduceLogRequest.
+        sender1.runOnce();
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        sender1.runOnce();
+        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+        assertThat(future1.isDone()).isTrue();
     }
 
     @Test

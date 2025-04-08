@@ -660,9 +660,9 @@ public final class RecordAccumulator {
             // flight request count to 1.
             int firstInFlightSequence = idempotenceManager.firstInFlightBatchSequence(tableBucket);
             boolean isFirstInFlightBatch =
-                    firstInFlightSequence != LogRecordBatch.NO_BATCH_SEQUENCE
-                            && first.hasBatchSequence()
-                            && first.batchSequence() == firstInFlightSequence;
+                    firstInFlightSequence == LogRecordBatch.NO_BATCH_SEQUENCE
+                            || (first.hasBatchSequence()
+                                    && first.batchSequence() == firstInFlightSequence);
 
             if (isFirstInFlightBatch) {
                 return false;
