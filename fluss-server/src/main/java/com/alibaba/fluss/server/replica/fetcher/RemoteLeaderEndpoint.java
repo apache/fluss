@@ -19,14 +19,18 @@ package com.alibaba.fluss.server.replica.fetcher;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
+import com.alibaba.fluss.server.replica.Replica;
+import com.alibaba.fluss.server.replica.ReplicaManager;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -35,12 +39,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeListOffsetsRequest;
+import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.getFetchLogResultForBucket;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
 final class RemoteLeaderEndpoint implements LeaderEndpoint {
     private final int followerServerId;
     private final int remoteServerId;
+    private final ReplicaManager replicaManager;
     private final TabletServerGateway tabletServerGateway;
     /** The max size for the fetch response. */
     private final int maxFetchSize;
@@ -54,6 +60,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
             Configuration conf,
             int followerServerId,
             int remoteServerId,
+            ReplicaManager replicaManager,
             TabletServerGateway tabletServerGateway) {
         this.followerServerId = followerServerId;
         this.remoteServerId = remoteServerId;
@@ -63,6 +70,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
         this.minFetchBytes = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MIN_BYTES).getBytes();
         this.maxFetchWaitMs =
                 (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_WAIT_MAX_TIME).toMillis();
+        this.replicaManager = replicaManager;
         this.tabletServerGateway = tabletServerGateway;
     }
 
@@ -91,7 +99,36 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
             FetchLogRequest fetchLogRequest) {
         return tabletServerGateway
                 .fetchLog(fetchLogRequest)
-                .thenApply(RpcMessageUtils::getFetchLogResult);
+                .thenApply(
+                        fetchLogResponse -> {
+                            Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap =
+                                    new HashMap<>();
+                            List<PbFetchLogRespForTable> tablesRespList =
+                                    fetchLogResponse.getTablesRespsList();
+                            for (PbFetchLogRespForTable tableResp : tablesRespList) {
+                                long tableId = tableResp.getTableId();
+                                List<PbFetchLogRespForBucket> bucketsRespList =
+                                        tableResp.getBucketsRespsList();
+                                for (PbFetchLogRespForBucket bucketResp : bucketsRespList) {
+                                    TableBucket tableBucket =
+                                            new TableBucket(
+                                                    tableId,
+                                                    bucketResp.hasPartitionId()
+                                                            ? bucketResp.getPartitionId()
+                                                            : null,
+                                                    bucketResp.getBucketId());
+                                    Replica replica =
+                                            replicaManager.getReplicaOrException(tableBucket);
+                                    TablePath tablePath = replica.getTablePath();
+                                    FetchLogResultForBucket fetchLogResultForBucket =
+                                            getFetchLogResultForBucket(
+                                                    tableBucket, tablePath, bucketResp);
+                                    fetchLogResultMap.put(tableBucket, fetchLogResultForBucket);
+                                }
+                            }
+
+                            return fetchLogResultMap;
+                        });
     }
 
     @Override

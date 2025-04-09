@@ -542,22 +542,25 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     private long processFetchResultFromRemoteStorage(
-            TableBucket tb, FetchLogResultForBucket replicaData) throws Exception {
+            TableBucket tb, FetchLogResultForBucket replicaData) {
         RemoteLogFetchInfo rlFetchInfo = replicaData.remoteLogFetchInfo();
         checkNotNull(rlFetchInfo, "RemoteLogFetchInfo is null");
         Replica replica = replicaManager.getReplicaOrException(tb);
-        long nextFetchOffset = -1L;
         RemoteLogManager rlm = replicaManager.getRemoteLogManager();
 
         // TODO after introduce leader epoch cache, we need to rebuild the local leader epoch
         // cache. Trace by https://github.com/alibaba/fluss/issues/673
 
         // update next fetch offset and writer id snapshot in local.
-        for (RemoteLogSegment remoteLogSegment : rlFetchInfo.remoteLogSegmentList()) {
-            // build writer snapshots until remoteLogSegment.endOffset() and start segment from
-            // until remoteLogSegment.endOffset().
-            nextFetchOffset = remoteLogSegment.remoteLogEndOffset();
+        RemoteLogSegment remoteLogSegmentWithMaxStartOffset =
+                rlFetchInfo
+                        .remoteLogSegmentList()
+                        .get(rlFetchInfo.remoteLogSegmentList().size() - 1);
+        // build writer snapshots until remoteLogSegment.endOffset() and start segment from
+        // until remoteLogSegment.endOffset().
+        long nextFetchOffset = remoteLogSegmentWithMaxStartOffset.remoteLogEndOffset();
 
+        try {
             // Truncate the existing local log before restoring the writer id snapshots.
             replica.truncateFullyAndStartAt(nextFetchOffset);
 
@@ -565,17 +568,23 @@ final class ReplicaFetcherThread extends ShutdownableThread {
 
             // Restore writer snapshot.
             LogTablet log = replica.getLogTablet();
-            File snapshotFile = FlussPaths.writerSnapshotFile(log.getLogDir(), nextFetchOffset);
-            buildWriterIdSnapshotFile(snapshotFile, remoteLogSegment, rlm);
+            log.writerStateManager().truncateFullyAndStartAt(0L);
 
-            // Reload writer id snapshot.
-            log.writerStateManager().truncateFullyAndReloadSnapshots();
+            File snapshotFile = FlussPaths.writerSnapshotFile(log.getLogDir(), nextFetchOffset);
+            buildWriterIdSnapshotFile(snapshotFile, remoteLogSegmentWithMaxStartOffset, rlm);
+            log.writerStateManager().reloadSnapshots();
             log.loadWriterSnapshot(nextFetchOffset);
-            LOG.debug(
-                    "Build the writer snapshots from remote storage for {} with active writer size: {} and remoteLogEndOffset: {}",
+            LOG.info(
+                    "Build the writer snapshots from remote storage for {} with active "
+                            + "writer size: {} and remoteLogEndOffset: {}",
                     tb,
                     log.writerStateManager().activeWriters().size(),
                     nextFetchOffset);
+        } catch (Exception e) {
+            LOG.error(
+                    "Failed to truncate and restore writer snapshot for {} while log hash been moved to remote",
+                    tb,
+                    e);
         }
         return nextFetchOffset;
     }

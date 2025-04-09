@@ -341,7 +341,7 @@ final class LogTabletTest extends LogTestBase {
         log.truncateFullyAndStartAt(29);
         assertThat(log.logSegments().size()).isEqualTo(1);
         assertThat(latestWriterStateEndOffset(log)).isEqualTo(29);
-        assertThat(latestWriterSnapshotOffset(log)).isEmpty();
+        assertThat(latestWriterSnapshotOffset(log).get()).isEqualTo(29);
     }
 
     @Test

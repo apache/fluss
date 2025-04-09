@@ -22,13 +22,14 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.function.Supplier;
+
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeCommitKvSnapshotRequest;
 
 /**
  * A default implementation of {@link CompletedKvSnapshotCommitter} which will send the completed
@@ -60,8 +61,7 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
             throws Exception {
         coordinatorGateway
                 .commitKvSnapshot(
-                        RpcMessageUtils.makeCommitKvSnapshotRequest(
-                                snapshot, coordinatorEpoch, bucketLeaderEpoch))
+                        makeCommitKvSnapshotRequest(snapshot, coordinatorEpoch, bucketLeaderEpoch))
                 .get();
     }
 

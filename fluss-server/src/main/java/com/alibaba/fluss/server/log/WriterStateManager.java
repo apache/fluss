@@ -171,6 +171,11 @@ public class WriterStateManager {
         lastMapOffset = offset;
     }
 
+    public void reloadSnapshots() throws IOException {
+        LOG.info("Reloading the writer state snapshots");
+        snapshots = loadSnapshots();
+    }
+
     public void truncateFullyAndReloadSnapshots() throws IOException {
         LOG.info("Reloading the writer state snapshots");
         truncateFullyAndStartAt(0L);

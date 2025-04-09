@@ -97,8 +97,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getFetchLogData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeFetchLogResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 
 /** A {@link TabletServerGateway} for test purpose. */
 public class TestTabletServerGateway implements TabletServerGateway {

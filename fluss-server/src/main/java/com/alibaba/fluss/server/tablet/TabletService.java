@@ -55,7 +55,6 @@ import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.replica.ReplicaManager;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import java.util.List;
@@ -64,13 +63,28 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getFetchLogData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getNotifyLeaderAndIsrRequestData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeLookupResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeNotifyLeaderAndIsrResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makePrefixLookupResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toLookupData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toPrefixLookupData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyRemoteLogOffsetsData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifySnapshotOffsetData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPutKvData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeLimitScanResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeLookupResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyLeaderAndIsrResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makePrefixLookupResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makePutKvResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopReplicaResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase implements TabletServerGateway {
@@ -101,15 +115,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
-        Map<TableBucket, MemoryLogRecords> produceLogData =
-                RpcMessageUtils.getProduceLogData(request);
+        Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
         replicaManager.appendRecordsToLog(
                 request.getTimeoutMs(),
                 request.getAcks(),
                 produceLogData,
-                bucketResponseMap ->
-                        response.complete(
-                                RpcMessageUtils.makeProduceLogResponse(bucketResponseMap)));
+                bucketResponseMap -> response.complete(makeProduceLogResponse(bucketResponseMap)));
         return response;
     }
 
@@ -133,22 +144,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         replicaManager.fetchLogRecords(
                 fetchParams,
                 fetchLogData,
-                fetchResponseMap ->
-                        response.complete(RpcMessageUtils.makeFetchLogResponse(fetchResponseMap)));
+                fetchResponseMap -> response.complete(makeFetchLogResponse(fetchResponseMap)));
         return response;
     }
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
-        Map<TableBucket, KvRecordBatch> putKvData = RpcMessageUtils.getPutKvData(request);
+        Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
         replicaManager.putRecordsToKv(
                 request.getTimeoutMs(),
                 request.getAcks(),
                 putKvData,
-                RpcMessageUtils.getTargetColumns(request),
-                bucketResponseMap ->
-                        response.complete(RpcMessageUtils.makePutKvResponse(bucketResponseMap)));
+                getTargetColumns(request),
+                bucketResponseMap -> response.complete(makePutKvResponse(bucketResponseMap)));
         return response;
     }
 
@@ -178,7 +187,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         request.hasPartitionId() ? request.getPartitionId() : null,
                         request.getBucketId()),
                 request.getLimit(),
-                value -> response.complete(RpcMessageUtils.makeLimitScanResponse(value)));
+                value -> response.complete(makeLimitScanResponse(value)));
         return response;
     }
 
@@ -199,30 +208,29 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<StopReplicaResponse> response = new CompletableFuture<>();
         replicaManager.stopReplicas(
                 stopReplicaRequest.getCoordinatorEpoch(),
-                RpcMessageUtils.getStopReplicaData(stopReplicaRequest),
-                result -> response.complete(RpcMessageUtils.makeStopReplicaResponse(result)));
+                getStopReplicaData(stopReplicaRequest),
+                result -> response.complete(makeStopReplicaResponse(result)));
         return response;
     }
 
     @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
         CompletableFuture<ListOffsetsResponse> response = new CompletableFuture<>();
-        Set<TableBucket> tableBuckets = RpcMessageUtils.getListOffsetsData(request);
+        Set<TableBucket> tableBuckets = getListOffsetsData(request);
         replicaManager.listOffsets(
                 new ListOffsetsParam(
                         request.getFollowerServerId(),
                         request.hasOffsetType() ? request.getOffsetType() : null,
                         request.hasStartTimestamp() ? request.getStartTimestamp() : null),
                 tableBuckets,
-                (responseList) ->
-                        response.complete(RpcMessageUtils.makeListOffsetsResponse(responseList)));
+                (responseList) -> response.complete(makeListOffsetsResponse(responseList)));
         return response;
     }
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
         CompletableFuture<InitWriterResponse> response = new CompletableFuture<>();
-        response.complete(RpcMessageUtils.makeInitWriterResponse(metadataManager.initWriterId()));
+        response.complete(makeInitWriterResponse(metadataManager.initWriterId()));
         return response;
     }
 
@@ -231,7 +239,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             NotifyRemoteLogOffsetsRequest request) {
         CompletableFuture<NotifyRemoteLogOffsetsResponse> response = new CompletableFuture<>();
         replicaManager.notifyRemoteLogOffsets(
-                RpcMessageUtils.getNotifyRemoteLogOffsetsData(request), response::complete);
+                getNotifyRemoteLogOffsetsData(request), response::complete);
         return response;
     }
 
@@ -240,7 +248,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             NotifyKvSnapshotOffsetRequest request) {
         CompletableFuture<NotifyKvSnapshotOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyKvSnapshotOffset(
-                RpcMessageUtils.getNotifySnapshotOffsetData(request), response::complete);
+                getNotifySnapshotOffsetData(request), response::complete);
         return response;
     }
 
@@ -248,8 +256,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request) {
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
-        replicaManager.notifyLakeTableOffset(
-                RpcMessageUtils.getNotifyLakeTableOffset(request), response::complete);
+        replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
         return response;
     }
 }

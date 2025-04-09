@@ -80,7 +80,6 @@ import com.alibaba.fluss.server.metadata.PartitionMetadataInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TableMetadataInfo;
 import com.alibaba.fluss.server.tablet.TabletService;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
@@ -103,9 +102,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeGetLatestKvSnapshotsResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeKvSnapshotMetadataResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestKvSnapshotsResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestLakeSnapshotResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapshotMetadataResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toPhysicalTablePath;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
@@ -256,8 +259,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
         for (PbPhysicalTablePath partitionPath : partitions) {
             partitionMetadataInfos.add(
-                    getPartitionMetadata(
-                            RpcMessageUtils.toPhysicalTablePath(partitionPath), listenerName));
+                    getPartitionMetadata(toPhysicalTablePath(partitionPath), listenerName));
         }
 
         // get partition info from partition ids
@@ -379,7 +381,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             }
 
             return CompletableFuture.completedFuture(
-                    RpcMessageUtils.toGetFileSystemSecurityTokenResponse(
+                    toGetFileSystemSecurityTokenResponse(
                             remoteFileSystem.getUri().getScheme(), securityToken));
         } catch (Exception e) {
             throw new SecurityTokenException(
@@ -395,7 +397,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
     }
 
     @Override
@@ -427,7 +429,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
         LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+                makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
     }
 
     private Set<ServerNode> getAllTabletServerNodes(String listenerName) {

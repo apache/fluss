@@ -71,7 +71,6 @@ import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
 import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
@@ -107,6 +106,7 @@ import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.Off
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static com.alibaba.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
 /** An implementation for {@link EventProcessor}. */
@@ -468,7 +468,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 completeFromCallable(
                         callback,
                         () ->
-                                RpcMessageUtils.makeAdjustIsrResponse(
+                                makeAdjustIsrResponse(
                                         tryProcessAdjustIsr(
                                                 adjustIsrReceivedEvent.getLeaderAndIsrMap())));
             } else if (event instanceof CommitKvSnapshotEvent) {

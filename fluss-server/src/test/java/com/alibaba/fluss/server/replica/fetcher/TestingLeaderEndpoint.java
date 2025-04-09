@@ -36,7 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getFetchLogData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static com.alibaba.fluss.utils.function.ThrowingRunnable.unchecked;
 
 /** The leader end point used for test, which replica manager in local. */

@@ -69,7 +69,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.getFetchLogResultForBucket;
+import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache

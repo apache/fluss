@@ -131,7 +131,6 @@ import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 import javax.annotation.Nullable;
 
@@ -147,28 +146,14 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Utils for making rpc request/response from inner object or convert inner class to rpc
  * request/response.
  */
-public class RpcMessageUtils {
-
-    public static ByteBuffer toByteBuffer(ByteBuf buf) {
-        if (buf.isDirect()) {
-            return buf.nioBuffer();
-        } else if (buf.hasArray()) {
-            int offset = buf.arrayOffset() + buf.readerIndex();
-            int length = buf.readableBytes();
-            return ByteBuffer.wrap(buf.array(), offset, length);
-        } else {
-            // fallback to deep copy
-            byte[] bytes = new byte[buf.readableBytes()];
-            buf.getBytes(buf.readerIndex(), bytes);
-            return ByteBuffer.wrap(bytes);
-        }
-    }
+public class ServerRpcMessageUtils {
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -569,38 +554,6 @@ public class RpcMessageUtils {
         FetchLogResponse fetchLogResponse = new FetchLogResponse();
         fetchLogResponse.addAllTablesResps(fetchLogRespForTables);
         return fetchLogResponse;
-    }
-
-    public static Map<TableBucket, FetchLogResultForBucket> getFetchLogResult(
-            FetchLogResponse fetchLogResponse) {
-        Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap = new HashMap<>();
-        List<PbFetchLogRespForTable> tablesRespList = fetchLogResponse.getTablesRespsList();
-        for (PbFetchLogRespForTable tableResp : tablesRespList) {
-            long tableId = tableResp.getTableId();
-            List<PbFetchLogRespForBucket> bucketsRespList = tableResp.getBucketsRespsList();
-            for (PbFetchLogRespForBucket bucketResp : bucketsRespList) {
-                TableBucket tableBucket =
-                        new TableBucket(
-                                tableId,
-                                bucketResp.hasPartitionId() ? bucketResp.getPartitionId() : null,
-                                bucketResp.getBucketId());
-                if (bucketResp.hasErrorCode()) {
-                    fetchLogResultMap.put(
-                            tableBucket,
-                            new FetchLogResultForBucket(
-                                    tableBucket, ApiError.fromErrorMessage(bucketResp)));
-                } else {
-                    ByteBuffer recordsBuffer = toByteBuffer(bucketResp.getRecordsSlice());
-                    MemoryLogRecords logRecords = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
-                    fetchLogResultMap.put(
-                            tableBucket,
-                            new FetchLogResultForBucket(
-                                    tableBucket, logRecords, bucketResp.getHighWatermark()));
-                }
-            }
-        }
-
-        return fetchLogResultMap;
     }
 
     public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {

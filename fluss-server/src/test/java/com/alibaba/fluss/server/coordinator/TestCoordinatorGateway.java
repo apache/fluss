@@ -85,9 +85,9 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getAdjustIsrData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getCommitRemoteLogManifestData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeAdjustIsrResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** A {@link CoordinatorGateway} for test purpose. */

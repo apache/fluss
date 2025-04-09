@@ -47,7 +47,7 @@ import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.tablet.TabletServer;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
+import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperTestUtils;
@@ -82,9 +82,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeNotifyBucketLeaderAndIsr;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeStopBucketReplica;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toServerNode;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.zk.ZooKeeperTestUtils.createZooKeeperClient;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -646,7 +646,7 @@ public final class FlussClusterExtension
                                 replicas,
                                 leaderAndIsr));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
-                RpcMessageUtils.makeNotifyLeaderAndIsrRequest(
+                ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));
         followerGateway.notifyLeaderAndIsr(notifyLeaderAndIsrRequest);
     }

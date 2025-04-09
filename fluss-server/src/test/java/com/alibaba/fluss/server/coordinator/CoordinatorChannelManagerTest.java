@@ -34,7 +34,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeUpdateMetadataRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 

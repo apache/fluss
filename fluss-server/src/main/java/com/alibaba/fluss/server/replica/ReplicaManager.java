@@ -1030,9 +1030,7 @@ public class ReplicaManager {
                 }
 
                 FetchLogResultForBucket result;
-                if (replica != null
-                        && e instanceof LogOffsetOutOfRangeException
-                        && !isFromFollower) {
+                if (replica != null && e instanceof LogOffsetOutOfRangeException) {
                     result = handleFetchOutOfRangeException(replica, fetchOffset, e);
                 } else {
                     result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));

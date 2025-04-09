@@ -93,9 +93,9 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newGetTable
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newListTablesRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newMetadataRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newTableExistsRequest;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeUpdateMetadataRequest;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toServerNode;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;

@@ -1043,12 +1043,8 @@ public final class LogTablet {
             throws IOException {
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
-            rebuildWriterState(
-                    writerStateManager,
-                    localLog.getSegments(),
-                    localLog.getLocalLogStartOffset(),
-                    lastOffset,
-                    false);
+            // TODO, set to logStartOffset instead of 0 if we introduce logStartOffset.
+            rebuildWriterState(writerStateManager, localLog.getSegments(), 0, lastOffset, false);
         }
     }
 

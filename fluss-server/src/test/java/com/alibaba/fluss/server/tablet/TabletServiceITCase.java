@@ -51,7 +51,7 @@ import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
+import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataTypes;
@@ -100,9 +100,9 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRe
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newPrefixLookupRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getNotifyLeaderAndIsrResponseData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeNotifyBucketLeaderAndIsr;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeUpdateMetadataRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -941,7 +941,7 @@ public class TabletServiceITCase {
                 makeNotifyBucketLeaderAndIsr(
                         new NotifyLeaderAndIsrData(
                                 physicalTablePath, tableBucket, leaderAndIsr.isr(), leaderAndIsr));
-        return RpcMessageUtils.makeNotifyLeaderAndIsrRequest(
+        return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
     }
 }
