@@ -17,7 +17,10 @@
 package com.alibaba.fluss.server.replica.fetcher;
 
 import com.alibaba.fluss.exception.CorruptRecordException;
+import com.alibaba.fluss.exception.DuplicateSequenceException;
+import com.alibaba.fluss.exception.InvalidOffsetException;
 import com.alibaba.fluss.exception.InvalidRecordException;
+import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.RemoteStorageException;
 import com.alibaba.fluss.exception.StorageException;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -317,6 +320,27 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                         currentFetchStatus.fetchOffset(),
                         e);
                 removeBucket(tableBucket);
+            } else if (e instanceof DuplicateSequenceException
+                    || e instanceof OutOfOrderSequenceException
+                    || e instanceof InvalidOffsetException) {
+                // TODO this part of logic need to be removed after we introduce leader epoch cache.
+                // Trace by https://github.com/alibaba/fluss/issues/673
+                LOG.error(
+                        "Founding recoverable error while processing data for bucket {} at offset {}, try to "
+                                + "truncate to LeaderEndOffsetSnapshot",
+                        tableBucket,
+                        currentFetchStatus.fetchOffset(),
+                        e);
+                try {
+                    truncateToLeaderEndOffsetSnapshot(tableBucket);
+                } catch (Exception ex) {
+                    LOG.error(
+                            "Error while truncating bucket {} at offset {}",
+                            tableBucket,
+                            currentFetchStatus.fetchOffset(),
+                            ex);
+                    removeBucket(tableBucket);
+                }
             } else {
                 LOG.error(
                         "Unexpected error occurred while processing data for bucket {} at offset {}",
@@ -325,6 +349,24 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                         e);
                 removeBucket(tableBucket);
             }
+        }
+    }
+
+    private void truncateToLeaderEndOffsetSnapshot(TableBucket tableBucket) throws Exception {
+        long leaderLocalEndOffsetWhileBecomeLeader =
+                leader.fetchLeaderEndOffsetSnapshot(tableBucket).get();
+        long localLogEndOffset =
+                replicaManager.getReplicaOrException(tableBucket).getLocalLogEndOffset();
+        if (leaderLocalEndOffsetWhileBecomeLeader != 0L
+                && leaderLocalEndOffsetWhileBecomeLeader < localLogEndOffset) {
+            // truncate to leaderEndOffsetSnapshot to reset follower's WriterState and fetch offset.
+            truncate(tableBucket, leaderLocalEndOffsetWhileBecomeLeader);
+
+            // update fetch status.
+            BucketFetchStatus bucketFetchStatus =
+                    new BucketFetchStatus(
+                            tableBucket.getTableId(), leaderLocalEndOffsetWhileBecomeLeader, null);
+            fairBucketStatusMap.updateAndMoveToEnd(tableBucket, bucketFetchStatus);
         }
     }
 

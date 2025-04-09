@@ -74,6 +74,7 @@ import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_CO
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
+import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -197,6 +198,75 @@ public class ReplicaFetcherThreadTest {
             assertThat(followerReplica.getLogHighWatermark())
                     .isGreaterThanOrEqualTo(leaderReplica.getLogHighWatermark());
         }
+    }
+
+    // TODO this test need to be removed after we introduce leader epoch cache. Trace by
+    // https://github.com/alibaba/fluss/issues/673
+    @Test
+    void testAppendAsFollowerThrowDuplicatedBatchException() throws Exception {
+        Replica leaderReplica = leaderRM.getReplicaOrException(tb);
+        Replica followerReplica = followerRM.getReplicaOrException(tb);
+
+        // 1. append same batches to leader and follower with different writer id.
+        CompletableFuture<List<ProduceLogResultForBucket>> future;
+        List<Long> writerIds = Arrays.asList(100L, 101L);
+        long baseOffset = 0L;
+        for (long writerId : writerIds) {
+            for (int i = 0; i < 5; i++) {
+                future = new CompletableFuture<>();
+                leaderRM.appendRecordsToLog(
+                        1000,
+                        1,
+                        Collections.singletonMap(
+                                tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, i, 0)),
+                        future::complete);
+                assertThat(future.get())
+                        .containsOnly(
+                                new ProduceLogResultForBucket(tb, baseOffset, baseOffset + 10L));
+
+                followerReplica.appendRecordsToFollower(
+                        genMemoryLogRecordsWithWriterId(DATA1, writerId, i, baseOffset));
+                assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(baseOffset + 10L);
+                baseOffset = baseOffset + 10L;
+            }
+        }
+
+        // 2. append one batch to follower with (writerId=100L, batchSequence=5 offset=100L) to mock
+        // follower have one batch ahead of leader.
+        followerReplica.appendRecordsToFollower(
+                genMemoryLogRecordsWithWriterId(DATA1, 100L, 5, 100L));
+        assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(110L);
+
+        // 3. mock becomeLeaderAndFollower as follower end.
+        leaderReplica.updateLeaderEndOffsetSnapshot();
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        tb, new InitialFetchStatus(DATA1_TABLE_ID, leader.id(), 110L)));
+        followerFetcher.start();
+
+        // 4. mock append to leader with different writer id (writerId=101L, batchSequence=5
+        // offset=100L) to mock leader receive different batch from recovery follower.
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsWithWriterId(DATA1, 101L, 5, 100L)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 100L, 110L));
+
+        // 5. mock append to leader with (writerId=100L, batchSequence=5 offset=110L) to mock
+        // follower fetch duplicated batch from leader. In this case follower will truncate to
+        // LeaderEndOffsetSnapshot and fetch again.
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsWithWriterId(DATA1, 100L, 5, 110L)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 110L, 120L));
+        retry(
+                Duration.ofSeconds(20),
+                () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(120L));
     }
 
     private void registerTableInZkClient() throws Exception {

@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.CorruptRecordException;
+import com.alibaba.fluss.exception.DuplicateSequenceException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidTimestampException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
@@ -104,6 +105,9 @@ public final class LogTablet {
 
     @GuardedBy("lock")
     private volatile LogOffsetMetadata highWatermarkMetadata;
+
+    /** The leader end offset snapshot when become leader. */
+    private volatile long leaderEndOffsetSnapshot = -1L;
 
     // The minimum offset that should be retained in the local log. This is used to ensure that,
     // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
@@ -259,6 +263,10 @@ public final class LogTablet {
         return logFormat;
     }
 
+    public long getLeaderEndOffsetSnapshot() {
+        return leaderEndOffsetSnapshot;
+    }
+
     @VisibleForTesting
     public WriterStateManager writerStateManager() {
         return writerStateManager;
@@ -334,6 +342,16 @@ public final class LogTablet {
         metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
         metricGroup.histogram(
                 MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
+    }
+
+    public void updateLeaderEndOffsetSnapshot() {
+        synchronized (lock) {
+            LOG.info(
+                    "Update leaderEndOffsetSnapshot to {} for tb {} while become leader",
+                    localLogEndOffset(),
+                    localLog.getTableBucket());
+            leaderEndOffsetSnapshot = localLog.getLocalLogEndOffset();
+        }
     }
 
     /**
@@ -582,10 +600,10 @@ public final class LogTablet {
      * segment if necessary.
      *
      * <p>This method will generally be responsible for assigning offsets to the messages, however
-     * if the needAssignOffsetAndTimestamp=false flag is passed we will only check that the existing
-     * offsets are valid.
+     * if the appendAsLeader=false flag is passed we will only check that the existing offsets are
+     * valid.
      */
-    private LogAppendInfo append(MemoryLogRecords records, boolean needAssignOffsetAndTimestamp)
+    private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader)
             throws Exception {
         LogAppendInfo appendInfo = analyzeAndValidateRecords(records);
 
@@ -599,7 +617,7 @@ public final class LogTablet {
 
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
-            if (needAssignOffsetAndTimestamp) {
+            if (appendAsLeader) {
                 long offset = localLog.getLocalLogEndOffset();
                 // assign offsets to the message set.
                 appendInfo.setFirstOffset(offset);
@@ -630,11 +648,24 @@ public final class LogTablet {
                 // have duplicated batch metadata, skip the append and update append info.
                 WriterStateEntry.BatchMetadata duplicatedBatch = validateResult.left();
                 long startOffset = duplicatedBatch.firstOffset();
-                appendInfo.setFirstOffset(startOffset);
-                appendInfo.setLastOffset(duplicatedBatch.lastOffset);
-                appendInfo.setMaxTimestamp(duplicatedBatch.timestamp);
-                appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
-                appendInfo.setDuplicated(true);
+                if (appendAsLeader) {
+                    appendInfo.setFirstOffset(startOffset);
+                    appendInfo.setLastOffset(duplicatedBatch.lastOffset);
+                    appendInfo.setMaxTimestamp(duplicatedBatch.timestamp);
+                    appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
+                    appendInfo.setDuplicated(true);
+                } else {
+                    String errorMsg =
+                            String.format(
+                                    "Found duplicated batch for table bucket %s, duplicated offset is %s, "
+                                            + "writer id is %s and batch sequence is: %s",
+                                    getTableBucket(),
+                                    duplicatedBatch.lastOffset,
+                                    duplicatedBatch.writerId,
+                                    duplicatedBatch.batchSequence);
+                    LOG.error(errorMsg);
+                    throw new DuplicateSequenceException(errorMsg);
+                }
             } else {
                 // Append the records, and increment the local log end offset immediately after
                 // append because write to the transaction index below may fail, and we want to

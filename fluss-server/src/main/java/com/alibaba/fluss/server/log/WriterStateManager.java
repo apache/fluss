@@ -437,6 +437,7 @@ public class WriterStateManager {
                                             snapshotEntry.writerId,
                                             snapshotEntry.lastBatchTimestamp,
                                             new WriterStateEntry.BatchMetadata(
+                                                    snapshotEntry.writerId,
                                                     snapshotEntry.lastBatchSequence,
                                                     snapshotEntry.lastBatchBaseOffset,
                                                     snapshotEntry.lastBatchOffsetDelta,

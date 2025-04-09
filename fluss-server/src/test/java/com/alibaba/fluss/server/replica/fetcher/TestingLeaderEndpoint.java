@@ -76,6 +76,12 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     }
 
     @Override
+    public CompletableFuture<Long> fetchLeaderEndOffsetSnapshot(TableBucket tableBucket) {
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        return CompletableFuture.completedFuture(replica.getLeaderEndOffsetSnapshot());
+    }
+
+    @Override
     public CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
             FetchLogRequest fetchLogRequest) {
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> response =

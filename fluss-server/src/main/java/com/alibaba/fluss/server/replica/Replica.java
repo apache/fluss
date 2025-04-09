@@ -506,6 +506,8 @@ public final class Replica {
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader() {
+        updateLeaderEndOffsetSnapshot();
+
         if (isKvTable()) {
             // if it's become new leader, we must
             // first destroy the old kv tablet
@@ -521,6 +523,11 @@ public final class Replica {
             // it should be from leader to follower, we need to destroy the kv tablet
             dropKv();
         }
+    }
+
+    @VisibleForTesting
+    public void updateLeaderEndOffsetSnapshot() {
+        logTablet.updateLeaderEndOffsetSnapshot();
     }
 
     private void createKv() {
@@ -790,6 +797,10 @@ public final class Replica {
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot failed.", e);
         }
+    }
+
+    public long getLeaderEndOffsetSnapshot() {
+        return logTablet.getLeaderEndOffsetSnapshot();
     }
 
     public LogAppendInfo appendRecordsToLeader(MemoryLogRecords memoryLogRecords, int requiredAcks)
@@ -1235,6 +1246,8 @@ public final class Replica {
                         }
                     } else if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
                         return getLatestOffset(listOffsetsParam.getFollowerServerId());
+                    } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
+                        return logTablet.getLeaderEndOffsetSnapshot();
                     } else {
                         throw new IllegalArgumentException(
                                 "Invalid list offset type: " + offsetType);

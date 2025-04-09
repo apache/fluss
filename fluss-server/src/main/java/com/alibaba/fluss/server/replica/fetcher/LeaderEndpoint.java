@@ -36,6 +36,8 @@ interface LeaderEndpoint {
     /** Fetches the local log start offset of the given table bucket. */
     CompletableFuture<Long> fetchLocalLogStartOffset(TableBucket tableBucket);
 
+    CompletableFuture<Long> fetchLeaderEndOffsetSnapshot(TableBucket tableBucket);
+
     /**
      * Given a fetchLogRequest, carries out the expected request and returns the results from
      * fetching from the leader.
