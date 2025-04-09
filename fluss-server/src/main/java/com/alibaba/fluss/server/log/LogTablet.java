@@ -1160,7 +1160,7 @@ public final class LogTablet {
                                     logStartOffset);
                     writerStateManager.updateMapEndOffset(startOffset);
 
-                    if (offsetsToSnapshot.contains(Optional.of(startOffset))) {
+                    if (offsetsToSnapshot.contains(Optional.of(segment.getBaseOffset()))) {
                         writerStateManager.takeSnapshot();
                     }
 
