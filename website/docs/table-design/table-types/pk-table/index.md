@@ -136,9 +136,9 @@ For primary key tables, Fluss supports various kinds of querying abilities.
 ### Reads
 
 For a primary key table, the default read method is a full snapshot followed by incremental data. First, the
-snapshot data of the table is consumed, followed by the binlog data of the table.
+snapshot data of the table is consumed, followed by the changelog data of the table.
 
-It is also possible to only consume the binlog data of the table. For more details, please refer to the [Flink Reads](engine-flink/reads.md)
+It is also possible to only consume the changelog data of the table. For more details, please refer to the [Flink Reads](engine-flink/reads.md)
 
 ### Lookup
 
