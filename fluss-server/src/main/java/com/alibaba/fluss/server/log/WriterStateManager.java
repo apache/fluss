@@ -182,20 +182,12 @@ public class WriterStateManager {
      * change to the device.
      */
     public void takeSnapshot() throws IOException {
-        takeSnapshot(true);
-    }
-
-    /**
-     * Take a snapshot at the current end offset if one does not already exist, then return the
-     * snapshot file if taken.
-     */
-    public Optional<File> takeSnapshot(boolean sync) throws IOException {
         // If not a new offset, then it is not worth taking another snapshot
         if (lastMapOffset > lastSnapOffset) {
             SnapshotFile snapshotFile =
                     new SnapshotFile(writerSnapshotFile(logTabletDir, lastMapOffset));
             long start = System.currentTimeMillis();
-            writeSnapshot(snapshotFile.file(), writers, sync);
+            writeSnapshot(snapshotFile.file(), writers);
             LOG.info(
                     "Wrote writer snapshot at offset {} with {} producer ids for table bucket {} in {} ms.",
                     lastMapOffset,
@@ -207,10 +199,7 @@ public class WriterStateManager {
 
             // Update the last snap offset according to the serialized map
             lastSnapOffset = lastMapOffset;
-
-            return Optional.of(snapshotFile.file());
         }
-        return Optional.empty();
     }
 
     /**
@@ -447,7 +436,7 @@ public class WriterStateManager {
         }
     }
 
-    private static void writeSnapshot(File file, Map<Long, WriterStateEntry> entries, boolean sync)
+    private static void writeSnapshot(File file, Map<Long, WriterStateEntry> entries)
             throws IOException {
         List<WriterSnapshotEntry> snapshotEntries = new ArrayList<>();
         entries.forEach(
@@ -469,9 +458,7 @@ public class WriterStateManager {
                 FileChannel.open(
                         file.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
             fileChannel.write(buffer);
-            if (sync) {
-                fileChannel.force(true);
-            }
+            fileChannel.force(true);
         }
     }
 

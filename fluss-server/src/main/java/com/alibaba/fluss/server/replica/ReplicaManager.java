@@ -1397,11 +1397,14 @@ public class ReplicaManager {
 
     private void truncateToHighWatermark(List<Replica> replicas) {
         for (Replica replica : replicas) {
+            long highWatermark = replica.getLogTablet().getHighWatermark();
             LOG.info(
-                    "Truncating the log end offset fot replica id {} of table bucket {} to local high watermark as it becomes the follower",
+                    "Truncating the logEndOffset for replica id {} of table bucket {} to local "
+                            + "highWatermark {} as it becomes the follower",
                     serverId,
-                    replica.getTableBucket());
-            replica.truncateTo(replica.getLogTablet().getHighWatermark());
+                    replica.getTableBucket(),
+                    highWatermark);
+            replica.truncateTo(highWatermark);
         }
     }
 

@@ -782,16 +782,12 @@ public final class LogTablet {
             // current writer state end offset (which corresponds to the log end offset),
             // we manually override the state offset here prior to taking the snapshot.
             writerStateManager.updateMapEndOffset(segment.getBaseOffset());
-            // We avoid potentially-costly fsync call, since we acquire UnifiedLog#lock here which
-            // could block subsequent produces in the meantime.
-            // flush is done in the scheduler thread along with segment flushing below.
-            Optional<File> maybeSnapshot = writerStateManager.takeSnapshot(false);
+            writerStateManager.takeSnapshot();
             updateHighWatermarkWithLogEndOffset();
 
             scheduler.scheduleOnce(
                     "flush-log",
                     () -> {
-                        maybeSnapshot.ifPresent(f -> flushWriterStateSnapshot(f.toPath()));
                         flushUptoOffsetExclusive(segment.getBaseOffset());
                     });
         }
