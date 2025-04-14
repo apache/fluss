@@ -43,6 +43,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
     private final RequestChannel[] requestChannels;
     private final ApiManager apiManager;
     private final String endpointListenerName;
+    private final boolean isInternal;
     private final RequestsMetrics requestsMetrics;
     private final Supplier<ServerAuthenticator> authenticatorSupplier;
 
@@ -52,6 +53,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
             RequestChannel[] requestChannels,
             ApiManager apiManager,
             String endpointListenerName,
+            boolean isInternal,
             RequestsMetrics requestsMetrics,
             long maxIdleTimeSeconds,
             Supplier<ServerAuthenticator> authenticatorSupplier) {
@@ -59,6 +61,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
         this.requestChannels = requestChannels;
         this.apiManager = apiManager;
         this.endpointListenerName = endpointListenerName;
+        this.isInternal = isInternal;
         this.requestsMetrics = requestsMetrics;
         this.maxIdleTimeSeconds = (int) maxIdleTimeSeconds;
         this.authenticatorSupplier = authenticatorSupplier;
@@ -93,6 +96,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
                                 requestChannels[channelIndex],
                                 apiManager,
                                 endpointListenerName,
+                                isInternal,
                                 requestsMetrics,
                                 serverAuthenticator));
     }

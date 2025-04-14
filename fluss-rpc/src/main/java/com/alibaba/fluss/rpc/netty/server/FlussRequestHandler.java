@@ -51,7 +51,12 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
         ApiMessage message = request.getMessage();
         try {
             service.setCurrentSession(
-                    new Session(request.getApiVersion(), request.getListenerName()));
+                    new Session(
+                            request.getApiVersion(),
+                            request.getListenerName(),
+                            request.isInternal(),
+                            request.getAddress(),
+                            request.getPrincipal()));
             // invoke the corresponding method on RpcGateway instance.
             CompletableFuture<?> responseFuture =
                     (CompletableFuture<?>) api.getMethod().invoke(service, message);

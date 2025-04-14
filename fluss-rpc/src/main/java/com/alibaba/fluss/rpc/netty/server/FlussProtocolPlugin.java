@@ -41,6 +41,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
     private final long maxIdleTimeSeconds;
     private final List<String> listeners;
     private final RequestsMetrics requestsMetrics;
+    private final String internalListenerName;
 
     public FlussProtocolPlugin(
             Configuration conf,
@@ -50,6 +51,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
         this.authenticatorSuppliers = AuthenticationFactory.loadServerAuthenticatorSuppliers(conf);
         this.apiManager = new ApiManager(serverType);
         maxIdleTimeSeconds = conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
+        this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.listeners = listeners;
         this.requestsMetrics = requestsMetrics;
     }
@@ -71,6 +73,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
                 requestChannels,
                 apiManager,
                 listenerName,
+                listenerName.equals(internalListenerName),
                 requestsMetrics,
                 maxIdleTimeSeconds,
                 Optional.ofNullable(authenticatorSuppliers.get(listenerName))

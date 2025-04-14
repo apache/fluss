@@ -129,6 +129,29 @@ public class ConfigOptions {
                             "Limits the maximum number of partitions that can be created for a partitioned table "
                                     + "to avoid creating too many partitions.");
 
+    public static final ConfigOption<Duration> ACL_NOTIFICATION_EXPIRATION_TIME =
+            key("acl.notification.expiration-time")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(15))
+                    .withDescription(
+                            "The unit of auto partition check interval. "
+                                    + "The default value is 1 second.");
+
+    public static final ConfigOption<String> AUTHORIZER_PLUGIN_TYPE =
+            key("authorizer.type")
+                    .stringType()
+                    .defaultValue("zookeeper")
+                    .withDescription("The class name of the authorizer plugin. ");
+
+    public static final ConfigOption<String> SUPER_USERS =
+            key("super.users")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A comma-separated list of superusers who have unrestricted access to all operations and resources. "
+                                    + "Each superuser should be specified in the format 'principal_type:principal_name', e.g., 'User:admin'. "
+                                    + "This configuration is critical for defining administrative privileges in the system.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------
