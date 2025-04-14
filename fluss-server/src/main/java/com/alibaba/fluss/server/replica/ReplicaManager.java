@@ -835,7 +835,10 @@ public class ReplicaManager {
                 bucketAndStatus.put(
                         tb,
                         new InitialFetchStatus(
-                                tb.getTableId(), leaderId, logTablet.localLogEndOffset()));
+                                tb.getTableId(),
+                                replica.getTablePath(),
+                                leaderId,
+                                logTablet.localLogEndOffset()));
             }
         }
         replicaFetcherManager.addFetcherForBuckets(bucketAndStatus);

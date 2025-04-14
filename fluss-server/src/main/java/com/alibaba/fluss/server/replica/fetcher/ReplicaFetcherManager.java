@@ -186,7 +186,6 @@ public class ReplicaFetcherManager {
                         conf,
                         serverId,
                         leaderId,
-                        replicaManager,
                         GatewayClientProxy.createGatewayProxy(
                                 () -> {
                                     Optional<ServerNode> optionalServerNode =

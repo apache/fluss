@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.replica.fetcher;
 
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 
 import java.util.Map;
 import java.util.Optional;
@@ -42,19 +41,19 @@ interface LeaderEndpoint {
      * Given a fetchLogRequest, carries out the expected request and returns the results from
      * fetching from the leader.
      *
-     * @param fetchLogRequest The fetch request we want to carry out.
+     * @param fetchLogContext The fetch log context we want to carry out.
      * @return A map of table bucket -> fetch data.
      */
     CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
-            FetchLogRequest fetchLogRequest);
+            FetchLogContext fetchLogContext);
 
     /**
      * Builds a fetch request, given a bucket map.
      *
      * @param replicas A map of table replicas to their respective bucket fetch state.
-     * @return A FetchRequest，
+     * @return fetchLogContext.
      */
-    Optional<FetchLogRequest> buildFetchLogRequest(Map<TableBucket, BucketFetchStatus> replicas);
+    Optional<FetchLogContext> buildFetchLogContext(Map<TableBucket, BucketFetchStatus> replicas);
 
     /** Closes access to fetch from leader. */
     void close();

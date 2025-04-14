@@ -1043,7 +1043,15 @@ public final class LogTablet {
             throws IOException {
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
-            // TODO, set to logStartOffset instead of 0 if we introduce logStartOffset.
+            // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason
+            // is that the current implementation of logStartOffset in Fluss is not yet fully
+            // refined, and there may be cases where logStartOffset is not updated. As a result,
+            // logStartOffset is not yet reliable. Once the issue with correctly updating
+            // logStartOffset is resolved in issue https://github.com/alibaba/fluss/issues/744, we
+            // can use logStartOffset here.
+            // Additionally, using 0 versus using logStartOffset does not affect correctness—they
+            // both can restore the complete WriterState. The only difference is that using
+            // logStartOffset can potentially skip over more segments.
             rebuildWriterState(writerStateManager, localLog.getSegments(), 0, lastOffset, false);
         }
     }

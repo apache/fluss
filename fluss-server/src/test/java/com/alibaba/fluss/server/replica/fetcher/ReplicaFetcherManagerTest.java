@@ -62,7 +62,6 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                 conf,
                                 TABLET_SERVER_ID,
                                 leader.id(),
-                                replicaManager,
                                 new TestTabletServerGateway(false)),
                         (int)
                                 conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL)
@@ -96,7 +95,7 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                 result -> {});
 
         InitialFetchStatus initialFetchStatus =
-                new InitialFetchStatus(DATA1_TABLE_ID, leader.id(), fetchOffset);
+                new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), fetchOffset);
 
         Map<TableBucket, InitialFetchStatus> initialFetchStateMap = new HashMap<>();
         initialFetchStateMap.put(tb, initialFetchStatus);

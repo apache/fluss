@@ -138,7 +138,8 @@ public class ReplicaFetcherThreadTest {
 
         followerFetcher.addBuckets(
                 Collections.singletonMap(
-                        tb, new InitialFetchStatus(DATA1_TABLE_ID, leader.id(), 0L)));
+                        tb,
+                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
         assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset()).isEqualTo(0L);
 
         // begin fetcher thread.
@@ -171,7 +172,8 @@ public class ReplicaFetcherThreadTest {
 
         followerFetcher.addBuckets(
                 Collections.singletonMap(
-                        tb, new InitialFetchStatus(DATA1_TABLE_ID, leader.id(), 0L)));
+                        tb,
+                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
         assertThat(leaderReplica.getLocalLogEndOffset()).isEqualTo(0L);
         assertThat(leaderReplica.getLogHighWatermark()).isEqualTo(0L);
         assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(0L);
@@ -241,7 +243,9 @@ public class ReplicaFetcherThreadTest {
         leaderReplica.updateLeaderEndOffsetSnapshot();
         followerFetcher.addBuckets(
                 Collections.singletonMap(
-                        tb, new InitialFetchStatus(DATA1_TABLE_ID, leader.id(), 110L)));
+                        tb,
+                        new InitialFetchStatus(
+                                DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 110L)));
         followerFetcher.start();
 
         // 4. mock append to leader with different writer id (writerId=101L, batchSequence=5

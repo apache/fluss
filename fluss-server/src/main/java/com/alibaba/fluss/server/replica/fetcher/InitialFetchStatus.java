@@ -16,16 +16,20 @@
 
 package com.alibaba.fluss.server.replica.fetcher;
 
+import com.alibaba.fluss.metadata.TablePath;
+
 import java.util.Objects;
 
 /** Initial fetch state for specify table. */
 public class InitialFetchStatus {
     private final long tableId;
+    private final TablePath tablePath;
     private final int leader;
     private final long initOffset;
 
-    public InitialFetchStatus(long tableId, int leader, long initOffset) {
+    public InitialFetchStatus(long tableId, TablePath tablePath, int leader, long initOffset) {
         this.tableId = tableId;
+        this.tablePath = tablePath;
         this.leader = leader;
         this.initOffset = initOffset;
     }
@@ -38,6 +42,10 @@ public class InitialFetchStatus {
         return leader;
     }
 
+    public TablePath tablePath() {
+        return tablePath;
+    }
+
     public long initOffset() {
         return initOffset;
     }
@@ -47,6 +55,8 @@ public class InitialFetchStatus {
         return "InitialFetchState{"
                 + "tableId="
                 + tableId
+                + ", tablePath="
+                + tablePath
                 + ", leader="
                 + leader
                 + ", initOffset="
@@ -63,11 +73,14 @@ public class InitialFetchStatus {
             return false;
         }
         InitialFetchStatus that = (InitialFetchStatus) object;
-        return tableId == that.tableId && leader == that.leader && initOffset == that.initOffset;
+        return tableId == that.tableId
+                && tablePath.equals(that.tablePath)
+                && leader == that.leader
+                && initOffset == that.initOffset;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, leader, initOffset);
+        return Objects.hash(tableId, tablePath, leader, initOffset);
     }
 }

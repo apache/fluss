@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.server.replica.fetcher;
 
+import com.alibaba.fluss.metadata.TablePath;
+
 import javax.annotation.Nullable;
 
 import java.util.concurrent.TimeUnit;
@@ -31,11 +33,17 @@ import java.util.concurrent.TimeUnit;
  */
 public class BucketFetchStatus {
     private final long tableId;
+    private final TablePath tablePath;
     private final long fetchOffset;
     private final @Nullable DelayedItem delayedItem;
 
-    public BucketFetchStatus(long tableId, long fetchOffset, @Nullable DelayedItem delayedItem) {
+    public BucketFetchStatus(
+            long tableId,
+            TablePath tablePath,
+            long fetchOffset,
+            @Nullable DelayedItem delayedItem) {
         this.tableId = tableId;
+        this.tablePath = tablePath;
         this.fetchOffset = fetchOffset;
         this.delayedItem = delayedItem;
     }
@@ -52,6 +60,10 @@ public class BucketFetchStatus {
         return tableId;
     }
 
+    public TablePath tablePath() {
+        return tablePath;
+    }
+
     public long fetchOffset() {
         return fetchOffset;
     }
@@ -59,7 +71,10 @@ public class BucketFetchStatus {
     @Override
     public String toString() {
         return String.format(
-                "BucketFetchStatus(tableId=%s, fetchOffset=%d, delay=%s ms)",
-                tableId, fetchOffset, delayedItem == null ? 0 : delayedItem.getDelayMs());
+                "BucketFetchStatus(tableId=%s, tablePath=%s, fetchOffset=%d, delay=%s ms)",
+                tableId,
+                tablePath,
+                fetchOffset,
+                delayedItem == null ? 0 : delayedItem.getDelayMs());
     }
 }

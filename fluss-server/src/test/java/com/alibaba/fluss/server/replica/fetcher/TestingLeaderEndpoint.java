@@ -83,9 +83,10 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
 
     @Override
     public CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
-            FetchLogRequest fetchLogRequest) {
+            FetchLogContext fetchLogContext) {
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> response =
                 new CompletableFuture<>();
+        FetchLogRequest fetchLogRequest = fetchLogContext.getFetchLogRequest();
         Map<TableBucket, FetchData> fetchLogData = getFetchLogData(fetchLogRequest);
         replicaManager.fetchLogRecords(
                 new FetchParams(
@@ -96,9 +97,9 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     }
 
     @Override
-    public Optional<FetchLogRequest> buildFetchLogRequest(
+    public Optional<FetchLogContext> buildFetchLogContext(
             Map<TableBucket, BucketFetchStatus> replicas) {
-        return RemoteLeaderEndpoint.buildFetchLogRequest(
+        return RemoteLeaderEndpoint.buildFetchLogContext(
                 replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket, -1, -1);
     }
 
