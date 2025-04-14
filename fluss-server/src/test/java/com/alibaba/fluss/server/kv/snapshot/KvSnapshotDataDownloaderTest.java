@@ -147,7 +147,7 @@ class KvSnapshotDataDownloaderTest {
         for (int i = 0; i < numSubHandles; ++i) {
             Path path = srcPath.resolve(String.format("state-%d-%d", remoteHandleId, i));
             Files.write(path, content[i]);
-            handles.add(new KvFileHandle(path.toString(), content.length));
+            handles.add(new KvFileHandle(path.getFileName().toString(), content.length));
         }
 
         List<KvFileHandleAndLocalPath> sharedStates = new ArrayList<>(numSubHandles);
@@ -161,7 +161,9 @@ class KvSnapshotDataDownloaderTest {
                             handles.get(i), String.format("private-%d-%d", remoteHandleId, i)));
         }
 
-        KvSnapshotHandle kvSnapshotHandle = new KvSnapshotHandle(sharedStates, privateStates, -1);
+        KvSnapshotHandle kvSnapshotHandle =
+                new KvSnapshotHandle(
+                        sharedStates, privateStates, srcPath.toString(), srcPath.toString(), -1);
 
         return new KvSnapshotDownloadSpec(kvSnapshotHandle, dstPath);
     }

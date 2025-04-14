@@ -1056,19 +1056,40 @@ public class RpcMessageUtils {
             CompletedSnapshot completedSnapshot) {
         KvSnapshotHandle kvSnapshotHandle = completedSnapshot.getKvSnapshotHandle();
         return Stream.concat(
-                        kvSnapshotHandle.getPrivateFileHandles().stream(),
-                        kvSnapshotHandle.getSharedKvFileHandles().stream())
-                .map(
-                        kvFileHandleAndLocalPath -> {
-                            // get the remote file path
-                            String filePath =
-                                    kvFileHandleAndLocalPath.getKvFileHandle().getFilePath();
-                            // get the local name for the file
-                            String localPath = kvFileHandleAndLocalPath.getLocalPath();
-                            return new PbRemotePathAndLocalFile()
-                                    .setRemotePath(filePath)
-                                    .setLocalFileName(localPath);
-                        })
+                        kvSnapshotHandle.getPrivateFileHandles().stream()
+                                .map(
+                                        kvFileHandleAndLocalPath -> {
+                                            // get the remote file path
+                                            String filePath =
+                                                    kvSnapshotHandle.getPrivateFileBasePath()
+                                                            + FsPath.SEPARATOR
+                                                            + kvFileHandleAndLocalPath
+                                                                    .getKvFileHandle()
+                                                                    .getFilePath();
+                                            // get the local name for the file
+                                            String localPath =
+                                                    kvFileHandleAndLocalPath.getLocalPath();
+                                            return new PbRemotePathAndLocalFile()
+                                                    .setRemotePath(filePath)
+                                                    .setLocalFileName(localPath);
+                                        }),
+                        kvSnapshotHandle.getSharedKvFileHandles().stream()
+                                .map(
+                                        kvFileHandleAndLocalPath -> {
+                                            // get the remote file path
+                                            String filePath =
+                                                    kvSnapshotHandle.getSharedFileBasePath()
+                                                            + FsPath.SEPARATOR
+                                                            + kvFileHandleAndLocalPath
+                                                                    .getKvFileHandle()
+                                                                    .getFilePath();
+                                            // get the local name for the file
+                                            String localPath =
+                                                    kvFileHandleAndLocalPath.getLocalPath();
+                                            return new PbRemotePathAndLocalFile()
+                                                    .setRemotePath(filePath)
+                                                    .setLocalFileName(localPath);
+                                        }))
                 .collect(Collectors.toList());
     }
 

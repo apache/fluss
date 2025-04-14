@@ -148,7 +148,12 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             }
             // tmp resource registry will be closed when the snapshot is not completed,
             // which will then discard the uploaded files
-            tmpResourcesRegistry.registerCloseable(() -> SnapshotUtil.discardKvFileQuietly(result));
+            String basePath =
+                    snapshotFileScope == SnapshotFileScope.SHARED
+                            ? snapshotLocation.getSharedSnapshotDirectory().toString()
+                            : snapshotLocation.getSnapshotDirectory().toString();
+            tmpResourcesRegistry.registerCloseable(
+                    () -> SnapshotUtil.discardKvFileQuietly(result, basePath));
             return KvFileHandleAndLocalPath.of(result, filePath.getFileName().toString());
         } finally {
             if (closeableRegistry.unregisterCloseable(inputStream)) {

@@ -127,7 +127,8 @@ public class CompletedSnapshotStore {
                         id -> {
                             // unregister the unused kv file, which will then cause the kv file
                             // deletion
-                            sharedKvFileRegistry.unregisterUnusedKvFile(id);
+                            sharedKvFileRegistry.unregisterUnusedKvFile(
+                                    id, snapshot.getKvSnapshotHandle().getPrivateFileBasePath());
                             snapshotsCleaner.cleanSubsumedSnapshots(
                                     id, Collections.emptySet(), postCleanup, ioExecutor);
                         });

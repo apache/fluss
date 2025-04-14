@@ -44,7 +44,7 @@ class SharedKvFileRegistryTest {
         assertThat(firstHandle.discarded).isFalse();
         assertThat(secondHandle.discarded).isFalse();
 
-        sharedKvFileRegistry.unregisterUnusedKvFile(1L);
+        sharedKvFileRegistry.unregisterUnusedKvFile(1L, "");
         assertThat(firstHandle.discarded).isTrue();
         assertThat(secondHandle.discarded).isTrue();
 
@@ -59,11 +59,11 @@ class SharedKvFileRegistryTest {
         KvFileHandle placeHolder = new PlaceholderKvFileHandler(handle);
         sharedKvFileRegistry.registerReference(
                 SharedKvFileRegistryKey.fromKvFileHandle(placeHolder), placeHolder, 1);
-        sharedKvFileRegistry.unregisterUnusedKvFile(1L);
+        sharedKvFileRegistry.unregisterUnusedKvFile(1L, "");
         // the handle shouldn't be discarded since snapshot1 is still referring to it
         assertThat(testKvHandle.discarded).isFalse();
 
-        sharedKvFileRegistry.unregisterUnusedKvFile(2L);
+        sharedKvFileRegistry.unregisterUnusedKvFile(2L, "");
         // now, should be discarded
         assertThat(testKvHandle.discarded).isTrue();
     }
@@ -72,8 +72,8 @@ class SharedKvFileRegistryTest {
     @Test
     void testUnregisterWithUnexistedKey() {
         SharedKvFileRegistry sharedStateRegistry = new SharedKvFileRegistry();
-        sharedStateRegistry.unregisterUnusedKvFile(-1);
-        sharedStateRegistry.unregisterUnusedKvFile(Long.MAX_VALUE);
+        sharedStateRegistry.unregisterUnusedKvFile(-1, "");
+        sharedStateRegistry.unregisterUnusedKvFile(Long.MAX_VALUE, "");
     }
 
     private static class TestKvHandle extends KvFileHandle {
@@ -87,7 +87,7 @@ class SharedKvFileRegistryTest {
         }
 
         @Override
-        public void discard() throws Exception {
+        public void discard(String fileBasePath) throws Exception {
             this.discarded = true;
         }
     }

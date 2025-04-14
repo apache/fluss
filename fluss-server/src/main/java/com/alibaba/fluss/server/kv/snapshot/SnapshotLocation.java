@@ -86,6 +86,10 @@ public class SnapshotLocation {
         return snapshotDirectory;
     }
 
+    public FsPath getSharedSnapshotDirectory() {
+        return sharedSnapshotDirectory;
+    }
+
     // ------------------------------------------------------------------------
 
     /**
@@ -288,7 +292,7 @@ public class SnapshotLocation {
 
                         outStream.close();
 
-                        return new KvFileHandle(kvFilePath.toString(), size);
+                        return new KvFileHandle(kvFilePath.getName(), size);
                     } catch (Exception exception) {
                         try {
                             if (kvFilePath != null) {

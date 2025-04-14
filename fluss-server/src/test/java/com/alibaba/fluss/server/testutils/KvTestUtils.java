@@ -38,6 +38,7 @@ import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.commons.lang3.StringUtils;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksIterator;
 
@@ -127,7 +128,12 @@ public class KvTestUtils {
                                         tableBucket.getTableId(),
                                         tableBucket.getBucket(),
                                         snapshotId)),
-                new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0),
+                new KvSnapshotHandle(
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        StringUtils.EMPTY,
+                        StringUtils.EMPTY,
+                        0),
                 0);
     }
 

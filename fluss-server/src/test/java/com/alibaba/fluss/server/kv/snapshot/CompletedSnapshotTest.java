@@ -119,10 +119,16 @@ class CompletedSnapshotTest {
                 kvSnapshotHandle.getSharedKvFileHandles()) {
             // share files should also be deleted, but the local file should still remain
             if (isShareFileShouldDelete) {
-                assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
+                assertThat(
+                                new File(
+                                        kvSnapshotHandle.getSharedFileBasePath(),
+                                        kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                         .doesNotExist();
             } else {
-                assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
+                assertThat(
+                                new File(
+                                        kvSnapshotHandle.getSharedFileBasePath(),
+                                        kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                         .exists();
             }
             assertThat(new File(kvFileHandleAndLocalPath.getLocalPath())).exists();
@@ -148,7 +154,7 @@ class CompletedSnapshotTest {
             writeRandomDataToFile(shareFile, perFileSize);
             sharedFileHandles.add(
                     KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(shareFile.getPath(), shareFile.length()),
+                            new KvFileHandle(shareFile.getName(), shareFile.length()),
                             localFile.getPath()));
         }
 
@@ -164,10 +170,15 @@ class CompletedSnapshotTest {
             writeRandomDataToFile(privateFile, perFileSize);
             privateFileHandles.add(
                     KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(privateFile.getPath(), privateFile.length()),
+                            new KvFileHandle(privateFile.getName(), privateFile.length()),
                             localFile.getPath()));
         }
-        return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 10);
+        return new KvSnapshotHandle(
+                sharedFileHandles,
+                privateFileHandles,
+                shareDir.toString(),
+                baseSnapshotDir.toString(),
+                10);
     }
 
     private Path makeDir(Path basePath, String dirName) {

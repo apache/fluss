@@ -35,20 +35,24 @@ public class SnapshotUtil {
      *
      * @param handlesToDiscard Kv file handles to discard. Passed iterable is allowed to deliver
      *     null values.
+     * @param sharedFileBasePath
      * @throws Exception exception that is a collection of all suppressed exceptions that were
      *     caught during iteration
      */
     public static void bestEffortDiscardAllKvFiles(
-            Iterable<? extends KvFileHandle> handlesToDiscard) throws Exception {
-        applyToAllWhileSuppressingExceptions(handlesToDiscard, KvFileHandle::discard);
+            Iterable<? extends KvFileHandle> handlesToDiscard, String fileBasePath)
+            throws Exception {
+        for (KvFileHandle handle : handlesToDiscard) {
+            applyToAllWhileSuppressingExceptions(handle, i -> handle.discard(fileBasePath));
+        }
     }
 
-    public static void discardKvFileQuietly(KvFileHandle kvFileHandle) {
+    public static void discardKvFileQuietly(KvFileHandle kvFileHandle, String fileBasePath) {
         if (kvFileHandle == null) {
             return;
         }
         try {
-            kvFileHandle.discard();
+            kvFileHandle.discard(fileBasePath);
         } catch (Exception exception) {
             LOG.warn("Discard {} exception.", kvFileHandle, exception);
         }
@@ -67,20 +71,16 @@ public class SnapshotUtil {
      *     the input elements.
      */
     public static <T> void applyToAllWhileSuppressingExceptions(
-            Iterable<T> inputs, ThrowingConsumer<T, ? extends Exception> throwingConsumer)
-            throws Exception {
+            T input, ThrowingConsumer<T, ? extends Exception> throwingConsumer) throws Exception {
 
-        if (inputs != null && throwingConsumer != null) {
+        if (input != null && throwingConsumer != null) {
             Exception exception = null;
 
-            for (T input : inputs) {
-
-                if (input != null) {
-                    try {
-                        throwingConsumer.accept(input);
-                    } catch (Exception ex) {
-                        exception = ExceptionUtils.firstOrSuppressed(ex, exception);
-                    }
+            if (input != null) {
+                try {
+                    throwingConsumer.accept(input);
+                } catch (Exception ex) {
+                    exception = ExceptionUtils.firstOrSuppressed(ex, exception);
                 }
             }
 

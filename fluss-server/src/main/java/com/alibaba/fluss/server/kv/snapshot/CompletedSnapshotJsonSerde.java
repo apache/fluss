@@ -53,6 +53,8 @@ public class CompletedSnapshotJsonSerde
     private static final String KV_FILE_SIZE = "size";
     private static final String KV_FILE_LOCAL_PATH = "local_path";
     private static final String SNAPSHOT_INCREMENTAL_SIZE = "snapshot_incremental_size";
+    private static final String SHARED_SNAPSHOT_BASE_PATH = "shared_snapshot_base_path";
+    private static final String PRIVATE_SNAPSHOT_BASE_PATH = "private_snapshot_base_path";
 
     // -- for the next log offset when the snapshot is triggered;
     private static final String LOG_OFFSET = "log_offset";
@@ -93,6 +95,14 @@ public class CompletedSnapshotJsonSerde
         generator.writeArrayFieldStart(KV_PRIVATE_FILES_HANDLE);
         serializeKvFileHandles(generator, kvSnapshotHandle.getPrivateFileHandles());
         generator.writeEndArray();
+
+        // serialize shared file base path
+        generator.writeStringField(
+                SHARED_SNAPSHOT_BASE_PATH, kvSnapshotHandle.getSharedFileBasePath());
+
+        // serialize private file base path
+        generator.writeStringField(
+                PRIVATE_SNAPSHOT_BASE_PATH, kvSnapshotHandle.getPrivateFileBasePath());
 
         // serialize persisted size of this snapshot
         generator.writeNumberField(
@@ -154,12 +164,23 @@ public class CompletedSnapshotJsonSerde
         // deserialize snapshot incremental size
         long incrementalSize = kvSnapshotFileHandleNode.get(SNAPSHOT_INCREMENTAL_SIZE).asLong();
 
+        String sharedSnapshotBasePath =
+                kvSnapshotFileHandleNode.get(SHARED_SNAPSHOT_BASE_PATH).asText();
+
+        String privateSnapshotBasePath =
+                kvSnapshotFileHandleNode.get(PRIVATE_SNAPSHOT_BASE_PATH).asText();
+
         // deserialize log offset
         long logOffset = node.get(LOG_OFFSET).asLong();
 
         // construct CompletedSnapshot
         KvSnapshotHandle kvSnapshotHandle =
-                new KvSnapshotHandle(sharedFileHandles, privateFileHandles, incrementalSize);
+                new KvSnapshotHandle(
+                        sharedFileHandles,
+                        privateFileHandles,
+                        sharedSnapshotBasePath,
+                        privateSnapshotBasePath,
+                        incrementalSize);
         return new CompletedSnapshot(
                 tableBucket, snapshotId, new FsPath(snapshotLocation), kvSnapshotHandle, logOffset);
     }
@@ -172,7 +193,10 @@ public class CompletedSnapshotJsonSerde
             JsonNode kvFileHandleNode = kvFileHandleAndLocalPathNode.get(KV_FILE_HANDLE);
             String filePath = kvFileHandleNode.get(KV_FILE_PATH).asText();
             long fileSize = kvFileHandleNode.get(KV_FILE_SIZE).asLong();
-            KvFileHandle kvFileHandle = new KvFileHandle(filePath, fileSize);
+            KvFileHandle kvFileHandle =
+                    new KvFileHandle(
+                            filePath.substring(filePath.lastIndexOf(FsPath.SEPARATOR) + 1),
+                            fileSize);
 
             // deserialize kv file local path
             String localPath = kvFileHandleAndLocalPathNode.get(KV_FILE_LOCAL_PATH).asText();

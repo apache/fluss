@@ -34,33 +34,37 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
     protected CompletedSnapshot[] createObjects() {
         List<KvFileHandleAndLocalPath> sharedFileHandles =
                 Arrays.asList(
-                        KvFileHandleAndLocalPath.of(
-                                new KvFileHandle("oss://bucket/snapshot/shared/t1.sst", 1),
-                                "localPath1"),
-                        KvFileHandleAndLocalPath.of(
-                                new KvFileHandle("oss://bucket/snapshot/shared/t2.sst", 2),
-                                "localPath2"));
+                        KvFileHandleAndLocalPath.of(new KvFileHandle("t1.sst", 1), "localPath1"),
+                        KvFileHandleAndLocalPath.of(new KvFileHandle("t2.sst", 2), "localPath2"));
         List<KvFileHandleAndLocalPath> privateFileHandles =
                 Arrays.asList(
-                        KvFileHandleAndLocalPath.of(
-                                new KvFileHandle("oss://bucket/snapshot/snapshot1/t3", 3),
-                                "localPath3"),
-                        KvFileHandleAndLocalPath.of(
-                                new KvFileHandle("oss://bucket/snapshot/snapshot1/t4", 4),
-                                "localPath4"));
+                        KvFileHandleAndLocalPath.of(new KvFileHandle("t3", 3), "localPath3"),
+                        KvFileHandleAndLocalPath.of(new KvFileHandle("t4", 4), "localPath4"));
+        String sharedFileBasePath = "oss://bucket/snapshot/shared/";
+        String privateFileBasePath = "oss://bucket/snapshot/snapshot1/";
         CompletedSnapshot completedSnapshot1 =
                 new CompletedSnapshot(
                         new TableBucket(1, 1),
                         1,
                         new FsPath("oss://bucket/snapshot"),
-                        new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 5),
+                        new KvSnapshotHandle(
+                                sharedFileHandles,
+                                privateFileHandles,
+                                sharedFileBasePath,
+                                privateFileBasePath,
+                                5),
                         10);
         CompletedSnapshot completedSnapshot2 =
                 new CompletedSnapshot(
                         new TableBucket(1, 10L, 1),
                         1,
                         new FsPath("oss://bucket/snapshot"),
-                        new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 5),
+                        new KvSnapshotHandle(
+                                sharedFileHandles,
+                                privateFileHandles,
+                                sharedFileBasePath,
+                                privateFileBasePath,
+                                5),
                         10);
         return new CompletedSnapshot[] {completedSnapshot1, completedSnapshot2};
     }
@@ -73,20 +77,22 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
                     + "\"snapshot_id\":1,"
                     + "\"snapshot_location\":\"oss://bucket/snapshot\","
                     + "\"kv_snapshot_handle\":{"
-                    + "\"shared_file_handles\":[{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/shared/t1.sst\",\"size\":1},\"local_path\":\"localPath1\"},"
-                    + "{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/shared/t2.sst\",\"size\":2},\"local_path\":\"localPath2\"}],"
-                    + "\"private_file_handles\":[{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/snapshot1/t3\",\"size\":3},\"local_path\":\"localPath3\"},"
-                    + "{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/snapshot1/t4\",\"size\":4},\"local_path\":\"localPath4\"}],"
+                    + "\"shared_file_handles\":[{\"kv_file_handle\":{\"path\":\"t1.sst\",\"size\":1},\"local_path\":\"localPath1\"},"
+                    + "{\"kv_file_handle\":{\"path\":\"t2.sst\",\"size\":2},\"local_path\":\"localPath2\"}],"
+                    + "\"private_file_handles\":[{\"kv_file_handle\":{\"path\":\"t3\",\"size\":3},\"local_path\":\"localPath3\"},"
+                    + "{\"kv_file_handle\":{\"path\":\"t4\",\"size\":4},\"local_path\":\"localPath4\"}],"
+                    + "\"shared_snapshot_base_path\":\"oss://bucket/snapshot/shared/\",\"private_snapshot_base_path\":\"oss://bucket/snapshot/snapshot1/\","
                     + "\"snapshot_incremental_size\":5},\"log_offset\":10}",
             "{\"version\":1,"
                     + "\"table_id\":1,\"partition_id\":10,\"bucket_id\":1,"
                     + "\"snapshot_id\":1,"
                     + "\"snapshot_location\":\"oss://bucket/snapshot\","
                     + "\"kv_snapshot_handle\":{"
-                    + "\"shared_file_handles\":[{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/shared/t1.sst\",\"size\":1},\"local_path\":\"localPath1\"},"
-                    + "{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/shared/t2.sst\",\"size\":2},\"local_path\":\"localPath2\"}],"
-                    + "\"private_file_handles\":[{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/snapshot1/t3\",\"size\":3},\"local_path\":\"localPath3\"},"
-                    + "{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/snapshot1/t4\",\"size\":4},\"local_path\":\"localPath4\"}],"
+                    + "\"shared_file_handles\":[{\"kv_file_handle\":{\"path\":\"t1.sst\",\"size\":1},\"local_path\":\"localPath1\"},"
+                    + "{\"kv_file_handle\":{\"path\":\"t2.sst\",\"size\":2},\"local_path\":\"localPath2\"}],"
+                    + "\"private_file_handles\":[{\"kv_file_handle\":{\"path\":\"t3\",\"size\":3},\"local_path\":\"localPath3\"},"
+                    + "{\"kv_file_handle\":{\"path\":\"t4\",\"size\":4},\"local_path\":\"localPath4\"}],"
+                    + "\"shared_snapshot_base_path\":\"oss://bucket/snapshot/shared/\",\"private_snapshot_base_path\":\"oss://bucket/snapshot/snapshot1/\","
                     + "\"snapshot_incremental_size\":5},\"log_offset\":10}"
         };
     }
