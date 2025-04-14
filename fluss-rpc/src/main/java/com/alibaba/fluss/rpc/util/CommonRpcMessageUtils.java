@@ -102,11 +102,13 @@ public class CommonRpcMessageUtils {
             pbAclFilter.setResourceName(resourceFilter.getName());
         }
 
-        if (accessControlEntry.getPrincipal() != null) {
+        if (accessControlEntry.getPrincipal() != null
+                && accessControlEntry.getPrincipal().getName() != null) {
             pbAclFilter.setPrincipalName(accessControlEntry.getPrincipal().getName());
         }
 
-        if (accessControlEntry.getPrincipal() != null) {
+        if (accessControlEntry.getPrincipal() != null
+                && accessControlEntry.getPrincipal().getType() != null) {
             pbAclFilter.setPrincipalType(accessControlEntry.getPrincipal().getType());
         }
 

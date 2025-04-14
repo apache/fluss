@@ -37,7 +37,6 @@ import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -476,7 +475,8 @@ public class ZooKeeperBasedAuthorizerTest {
                                                         "host-1",
                                                         READ,
                                                         PermissionType.ANY))))
-                .hasMessageContaining("Failed to update ACLs for Resource{type=DATABASE, name=''}");
+                .hasRootCauseExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Path must not end with / character");
     }
 
     @Test
@@ -585,9 +585,7 @@ public class ZooKeeperBasedAuthorizerTest {
         assertConcurrent(concurrentFunctions, 30 * 1000);
         retry(
                 Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer, commonResource)).isEqualTo(expectedAcls);
-                });
+                () -> assertThat(listAcls(authorizer, commonResource)).isEqualTo(expectedAcls));
         retry(
                 Duration.ofMinutes(1),
                 () -> {
@@ -595,9 +593,7 @@ public class ZooKeeperBasedAuthorizerTest {
                 });
     }
 
-    // todo: 无法保证，好奇为啥kafka可以保证，不应该把
     @Test
-    @Disabled
     void testHighConcurrencyDeletionOfResourceAcls() {
         Resource commonResource = Resource.database("foo-" + UUID.randomUUID());
         AccessControlEntry acl =
@@ -677,7 +673,8 @@ public class ZooKeeperBasedAuthorizerTest {
                                                         entry.getOperationType(),
                                                         entry.getPermissionType())))
                         .collect(Collectors.toList());
-        authorizer.dropAcls(aclBindings).stream()
+        authorizer
+                .dropAcls(aclBindings)
                 .forEach(
                         result -> {
                             if (result.exception().isPresent()) {

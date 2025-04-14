@@ -31,7 +31,6 @@ import com.alibaba.fluss.security.acl.ResourceType;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperUtils;
-import com.alibaba.fluss.server.zk.data.ResourceAcl;
 import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
 import com.alibaba.fluss.server.zk.data.ZkData.AclChangesNode;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Maps;
@@ -62,14 +61,23 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.security.acl.Resource.TABLE_SPLITTER;
-import static java.util.Collections.emptySet;
+import static com.alibaba.fluss.server.zk.ZooKeeperClient.UNKNOWN_VERSION;
 
 /** An authorization manager that leverages ZooKeeper to store access control lists (ACLs). */
 public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperBasedAuthorizer.class);
 
-    /** Static mapping of ResourceType to allowed resources. */
+    /**
+     * Static mapping of ResourceType to the set of resources it contains. This defines the
+     * hierarchical relationship between resource types.
+     */
     private static final Map<ResourceType, Function<Resource, Set<Resource>>> RESOURCE_MAPPING;
+
+    /**
+     * Static mapping of OperationType to the set of operations it includes. This defines the
+     * inheritance relationship between operation types.
+     */
+    private static final Map<OperationType, Set<OperationType>> OPS_MAPPING;
 
     static {
         Map<ResourceType, Function<Resource, Set<Resource>>> mapping =
@@ -83,6 +91,18 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
         mapping.put(ResourceType.DATABASE, res -> Sets.newHashSet(res, Resource.cluster()));
         mapping.put(ResourceType.CLUSTER, Sets::newHashSet);
         RESOURCE_MAPPING = Collections.unmodifiableMap(mapping);
+
+        Map<OperationType, Set<OperationType>> map = new EnumMap<>(OperationType.class);
+        map.put(
+                OperationType.DESCRIBE,
+                Sets.newHashSet(
+                        OperationType.DESCRIBE,
+                        OperationType.READ,
+                        OperationType.WRITE,
+                        OperationType.CREATE,
+                        OperationType.DROP,
+                        OperationType.ALTER));
+        OPS_MAPPING = Collections.unmodifiableMap(map);
     }
 
     private final Configuration configuration;
@@ -95,12 +115,13 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
     // The maximum number of times we should try to update the resource acls in zookeeper before
     // failing;
     // This should never occur, but is a safeguard just in case.
-    protected int maxUpdateRetries = 10;
+    private final int maxUpdateRetries = 10;
+    private int retryBackoffMs = 100;
+    private final int retryBackoffJitterMs = 50;
 
     // Main cache: Stores the mapping between resources and access control entries, sorted by
     // resource.
-    private final TreeMap<Resource, Set<AccessControlEntry>> aclCache =
-            new TreeMap<>(new ResourceOrdering());
+    private final TreeMap<Resource, VersionedAcls> aclCache = new TreeMap<>(new ResourceOrdering());
 
     // Reverse index cache: Maps access control entry types to resources for quick lookups.
     private final HashMap<ResourceTypeKey, Set<String>> resourceCache = new HashMap<>();
@@ -332,7 +353,7 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
 
         aclCache.forEach(
                 (resource, aclSet) -> {
-                    aclSet.forEach(
+                    aclSet.acls.forEach(
                             acl -> {
                                 AclBinding aclBinding = new AclBinding(resource, acl);
                                 if (aclBindingFilter.matches(aclBinding)) {
@@ -351,13 +372,8 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                 List<String> resourceNames = zooKeeperClient.listResourcesByType(resourceType);
                 for (String resourceName : resourceNames) {
                     Resource resource = new Resource(resourceType, resourceName);
-                    Optional<ResourceAcl> resourceAcl = null;
-                    try {
-                        resourceAcl = zooKeeperClient.getResourceAcl(resource);
-                    } catch (Exception e) {
-                        LOG.error("load cache error", e);
-                    }
-                    resourceAcl.ifPresent(acl -> updateCache(resource, acl.getEntries()));
+                    VersionedAcls versionedAcls = getAclsFromZk(resource);
+                    updateCache(resource, versionedAcls);
                 }
             }
         }
@@ -384,33 +400,47 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
 
     private void updateResourceAcl(
             Resource resource,
-            Function<Set<AccessControlEntry>, Set<AccessControlEntry>> newAclSupplier) {
+            Function<Set<AccessControlEntry>, Set<AccessControlEntry>> newAclSupplier)
+            throws Exception {
+
         boolean writeComplete = false;
         int retries = 0;
         Throwable lastException = null;
 
-        Set<AccessControlEntry> newAces = null;
-        Set<AccessControlEntry> currentAcls = null;
+        VersionedAcls currentVersionedAcls =
+                aclCache.containsKey(resource)
+                        ? getAclsFromCache(resource)
+                        : getAclsFromZk(resource);
+        VersionedAcls newVersionedAcls = null;
+        Set<AccessControlEntry> newAces;
         while (!writeComplete && retries <= maxUpdateRetries) {
+            newAces = newAclSupplier.apply(currentVersionedAcls.acls);
             try {
-                currentAcls =
-                        aclCache.containsKey(resource)
-                                ? getAclsFromCache(resource)
-                                : getAclsFromZk(resource);
-                newAces = newAclSupplier.apply(currentAcls);
+                int updateVersion = 0;
                 if (!newAces.isEmpty()) {
-                    zooKeeperClient.upsertResourceAcl(resource, new ResourceAcl(newAces));
+                    if (currentVersionedAcls.exists()) {
+                        updateVersion =
+                                zooKeeperClient.updateResourceAcl(
+                                        resource, newAces, currentVersionedAcls.zkVersion);
+                    } else {
+                        zooKeeperClient.createResourceAcl(resource, newAces);
+                    }
+
                 } else {
                     LOG.trace("Deleting path for {} because it had no ACLs remaining", resource);
-                    zooKeeperClient.deleteResourceAcl(resource);
+                    zooKeeperClient.contitionalDeleteResourceAcl(
+                            resource, currentVersionedAcls.zkVersion);
                 }
                 writeComplete = true;
+                newVersionedAcls = new VersionedAcls(updateVersion, newAces);
             } catch (Throwable e) {
                 LOG.error(
                         "Failed to update ACLs for {} after trying a of {} times. Retry again.",
                         resource,
                         retries,
                         e);
+                Thread.sleep(backoffTime());
+                currentVersionedAcls = getAclsFromZk(resource);
                 retries++;
                 lastException = e;
             }
@@ -424,18 +454,23 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                     lastException);
         }
 
-        if (!newAces.equals(currentAcls)) {
-            updateCache(resource, newAces);
+        if (!newVersionedAcls.acls.equals(currentVersionedAcls.acls)) {
+            updateCache(resource, newVersionedAcls);
             updateAclChangedFlag(resource);
+        } else {
+            LOG.debug("Updated ACLs for {}, no change was made", resource);
+            // Even if no change, update the version
+            updateCache(resource, newVersionedAcls);
         }
     }
 
-    private void updateCache(Resource resource, Set<AccessControlEntry> newAces) {
-        Set<AccessControlEntry> currentAces = aclCache.getOrDefault(resource, emptySet());
-        Set<AccessControlEntry> acesToAdd = new HashSet<>(newAces);
+    private void updateCache(Resource resource, VersionedAcls versionedAcls) {
+        Set<AccessControlEntry> currentAces =
+                aclCache.containsKey(resource) ? aclCache.get(resource).acls : new HashSet<>();
+        Set<AccessControlEntry> acesToAdd = new HashSet<>(versionedAcls.acls);
         acesToAdd.removeAll(currentAces);
         Set<AccessControlEntry> acesToRemove = new HashSet<>(currentAces);
-        acesToRemove.removeAll(newAces);
+        acesToRemove.removeAll(versionedAcls.acls);
 
         acesToAdd.forEach(
                 ace -> {
@@ -458,10 +493,10 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                     }
                 });
 
-        if (newAces.isEmpty()) {
+        if (versionedAcls.acls.isEmpty()) {
             aclCache.remove(resource);
         } else {
-            aclCache.put(resource, newAces);
+            aclCache.put(resource, versionedAcls);
         }
     }
 
@@ -509,21 +544,9 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
             OperationType operation,
             String host,
             Set<AccessControlEntry> acls) {
-        // Check if there are any Allow ACLs which would allow this operation.
-        // Allowing read, write, delete, or alter implies allowing describe.
-        // See #{org.apache.kafka.common.acl.AclOperation} for more details about ACL inheritance.
-        Set<OperationType> allowOps = new HashSet<>();
-        if (operation == OperationType.DESCRIBE) {
-            allowOps.add(OperationType.DESCRIBE);
-            allowOps.add(OperationType.READ);
-            allowOps.add(OperationType.WRITE);
-            allowOps.add(OperationType.CREATE);
-            allowOps.add(OperationType.DROP);
-            allowOps.add(OperationType.ALTER);
-        } else {
-            allowOps.add(operation);
-        }
 
+        Set<OperationType> allowOps =
+                OPS_MAPPING.getOrDefault(operation, Collections.singleton(operation));
         for (OperationType allowOp : allowOps) {
             if (matchingAclExists(allowOp, resource, principal, host, PermissionType.ALLOW, acls)) {
                 return true;
@@ -568,9 +591,14 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
     }
 
     private Set<AccessControlEntry> matchingAcls(Resource resource) {
-        TreeMap<Resource, Set<AccessControlEntry>> aclCacheSnapshot = aclCache;
+        TreeMap<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
         Set<AccessControlEntry> wildcard =
-                aclCacheSnapshot.get(new Resource(resource.getType(), Resource.WILDCARD_RESOURCE));
+                Optional.ofNullable(
+                                aclCacheSnapshot.get(
+                                        new Resource(
+                                                resource.getType(), Resource.WILDCARD_RESOURCE)))
+                        .map(versionedAcls -> versionedAcls.acls)
+                        .orElse(Collections.emptySet());
 
         Set<Resource> allowResources =
                 RESOURCE_MAPPING
@@ -579,32 +607,27 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
 
         Set<AccessControlEntry> literal = new HashSet<>();
         for (Resource allowResource : allowResources) {
-            Set<AccessControlEntry> allowAcls = aclCacheSnapshot.get(allowResource);
-            if (allowAcls != null) {
-                literal.addAll(allowAcls);
-            }
+            Optional.ofNullable(aclCacheSnapshot.get(allowResource))
+                    .map(versionedAcls -> versionedAcls.acls)
+                    .ifPresent(literal::addAll);
         }
-        return Stream.of(wildcard, literal)
-                .filter(Objects::nonNull)
-                .flatMap(Set::stream)
-                .collect(Collectors.toSet());
+        return Stream.of(wildcard, literal).flatMap(Set::stream).collect(Collectors.toSet());
     }
 
     @Override
     public void onFatalError(Throwable exception) {}
 
-    private Set<AccessControlEntry> getAclsFromCache(Resource resource) throws Exception {
-        return zooKeeperClient
-                .getResourceAcl(resource)
-                .map(ResourceAcl::getEntries)
-                .orElse(emptySet());
+    private VersionedAcls getAclsFromCache(Resource resource) {
+        if (aclCache.containsKey(resource)) {
+            return aclCache.get(resource);
+        }
+
+        throw new IllegalArgumentException(
+                String.format("ACLs do not exist in the cache for resource $resource", resource));
     }
 
-    private Set<AccessControlEntry> getAclsFromZk(Resource resource) throws Exception {
-        return zooKeeperClient
-                .getResourceAcl(resource)
-                .map(ResourceAcl::getEntries)
-                .orElse(emptySet());
+    private VersionedAcls getAclsFromZk(Resource resource) throws Exception {
+        return zooKeeperClient.getResourceAclWithVersion(resource);
     }
 
     private static Set<FlussPrincipal> parseSuperUsers(Configuration configuration) {
@@ -624,6 +647,10 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                 .orElse(Collections.emptySet());
     }
 
+    private int backoffTime() {
+        return (int) (retryBackoffMs + (retryBackoffJitterMs * Math.random()));
+    }
+
     /**
      * ZkNotificationHandler is responsible for processing ACL change notifications received from
      * ZooKeeper. It updates the internal cache based on the changes in ACLs for a specific
@@ -635,9 +662,12 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
         public void processNotification(byte[] notification) throws Exception {
             synchronized (lock) {
                 Resource resource = AclChangeNotificationNode.decode(notification);
-                Set<AccessControlEntry> acls = getAclsFromZk(resource);
-                LOG.info("Processing Acl change notification for {}, acls : {}", resource, acls);
-                updateCache(resource, acls);
+                VersionedAcls versionedAcls = getAclsFromZk(resource);
+                LOG.info(
+                        "Processing Acl change notification for {}, acls : {}",
+                        resource,
+                        versionedAcls);
+                updateCache(resource, versionedAcls);
             }
         }
     }
@@ -683,6 +713,24 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                     + ", resourceType="
                     + resourceType
                     + '}';
+        }
+    }
+
+    /**
+     * VersionedAcls is a wrapper class that holds a set of AccessControlEntry objects along with
+     * zknode version.
+     */
+    public static class VersionedAcls {
+        Set<AccessControlEntry> acls;
+        int zkVersion;
+
+        public VersionedAcls(int zkVersion, Set<AccessControlEntry> acls) {
+            this.zkVersion = zkVersion;
+            this.acls = acls;
+        }
+
+        boolean exists() {
+            return zkVersion != UNKNOWN_VERSION;
         }
     }
 }

@@ -22,8 +22,10 @@ import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceType;
+import com.alibaba.fluss.server.authorizer.ZooKeeperBasedAuthorizer.VersionedAcls;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
@@ -89,6 +91,7 @@ import java.util.Set;
 public class ZooKeeperClient implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperClient.class);
+    public static final int UNKNOWN_VERSION = -2;
 
     private final CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper;
 
@@ -676,24 +679,28 @@ public class ZooKeeperClient implements AutoCloseable {
      * <p>Note: If there is already an acl registration for the given resources and the acl version
      * is smaller than new one, it will be overwritten.(we need to compare the version before
      * upsert)
+     *
+     * @return the version of the acl node after upsert.
      */
-    public void upsertResourceAcl(Resource resource, ResourceAcl newResourceAcl) throws Exception {
+    public int updateResourceAcl(
+            Resource resource, Set<AccessControlEntry> accessControlEntries, int expectedVersion)
+            throws Exception {
         String path = ResourceAclNode.path(resource);
-        Optional<ResourceAcl> oldAclRegistration = getResourceAcl(resource);
-        if (oldAclRegistration.isPresent()) {
-            zkClient.setData().forPath(path, ResourceAclNode.encode(newResourceAcl));
-        } else {
-            LOG.info("insert acl node {} with value {}", resource, newResourceAcl);
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(path, ResourceAclNode.encode(newResourceAcl));
-            LOG.info(
-                    "update acl node {} from {} into {}",
-                    resource,
-                    oldAclRegistration,
-                    newResourceAcl);
-        }
+        LOG.info("update acl node {} with value {}", resource, accessControlEntries);
+        return zkClient.setData()
+                .withVersion(expectedVersion)
+                .forPath(path, ResourceAclNode.encode(new ResourceAcl(accessControlEntries)))
+                .getVersion();
+    }
+
+    public void createResourceAcl(Resource resource, Set<AccessControlEntry> accessControlEntries)
+            throws Exception {
+        String path = ResourceAclNode.path(resource);
+        LOG.info("insert acl node {} with value {}", resource, accessControlEntries);
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, ResourceAclNode.encode(new ResourceAcl(accessControlEntries)));
     }
 
     /**
@@ -703,9 +710,23 @@ public class ZooKeeperClient implements AutoCloseable {
      * @return an Optional containing the ResourceAcl if it exists, or empty if not found
      * @throws Exception if there is an error accessing ZooKeeper
      */
-    public Optional<ResourceAcl> getResourceAcl(Resource resource) throws Exception {
+    public VersionedAcls getResourceAclWithVersion(Resource resource) throws Exception {
         String path = ResourceAclNode.path(resource);
-        return getOrEmpty(path).map(ResourceAclNode::decode);
+        try {
+            Stat stat = new Stat();
+            byte[] bytes = zkClient.getData().storingStatIn(stat).forPath(path);
+            int zkVersion = stat.getVersion();
+            Optional<ResourceAcl> resourceAcl =
+                    Optional.ofNullable(bytes).map(ResourceAclNode::decode);
+
+            return new VersionedAcls(
+                    zkVersion,
+                    resourceAcl.isPresent()
+                            ? resourceAcl.get().getEntries()
+                            : Collections.emptySet());
+        } catch (KeeperException.NoNodeException e) {
+            return new VersionedAcls(UNKNOWN_VERSION, Collections.emptySet());
+        }
     }
 
     /**
@@ -726,9 +747,9 @@ public class ZooKeeperClient implements AutoCloseable {
      * @param resource the resource whose ACL should be deleted
      * @throws Exception if there is an error accessing ZooKeeper
      */
-    public void deleteResourceAcl(Resource resource) throws Exception {
+    public void contitionalDeleteResourceAcl(Resource resource, int zkVersion) throws Exception {
         String path = ResourceAclNode.path(resource);
-        zkClient.delete().forPath(path);
+        zkClient.delete().withVersion(zkVersion).forPath(path);
     }
 
     public void insertAclChangeNotification(Resource resource) throws Exception {
