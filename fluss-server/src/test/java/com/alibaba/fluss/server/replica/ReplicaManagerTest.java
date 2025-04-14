@@ -1057,7 +1057,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete);
+                future::complete,
+                (tableId, path) -> {});
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
@@ -1077,7 +1078,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete);
+                future::complete,
+                (tableId, path) -> {});
         assertThat(future.get())
                 .containsOnly(
                         new NotifyLeaderAndIsrResultForBucket(
@@ -1111,7 +1113,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete);
+                future::complete,
+                (tableId, path) -> {});
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
@@ -1142,7 +1145,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete);
+                future::complete,
+                (tableId, tablePath) -> {});
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 2, INITIAL_BUCKET_EPOCH);

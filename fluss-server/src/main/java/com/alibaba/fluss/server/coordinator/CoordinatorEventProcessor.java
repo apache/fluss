@@ -1049,7 +1049,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void updateServerMetadataCache(
             Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTabletServers) {
         // 1. update local metadata cache.
-        serverMetadataCache.updateMetadata(
+        serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadataInfo(coordinatorServer, aliveTabletServers));
 
         // 2. send update metadata request to all alive tablet servers

@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
@@ -39,19 +40,36 @@ import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
+import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.CreatePartitionResponse;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
+import com.alibaba.fluss.rpc.messages.DeleteAclsMatchingAcl;
+import com.alibaba.fluss.rpc.messages.DropAclsFilterResult;
+import com.alibaba.fluss.rpc.messages.DropAclsRequest;
+import com.alibaba.fluss.rpc.messages.DropAclsResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
+import com.alibaba.fluss.rpc.messages.PbCreateAclRespInfo;
+import com.alibaba.fluss.rpc.netty.server.Session;
+import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.security.acl.AclBindingFilter;
+import com.alibaba.fluss.security.acl.OperationType;
+import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.server.RpcServiceBase;
+import com.alibaba.fluss.server.authorizer.AclCreateResult;
+import com.alibaba.fluss.server.authorizer.AclDeleteResult;
+import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -71,10 +89,16 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
@@ -98,8 +122,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             ZooKeeperClient zkClient,
             Supplier<EventManager> eventManagerSupplier,
             ServerMetadataCache metadataCache,
-            MetadataManager metadataManager) {
-        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataCache, metadataManager);
+            MetadataManager metadataManager,
+            @Nullable Authorizer authorizer) {
+        super(
+                remoteFileSystem,
+                ServerType.COORDINATOR,
+                zkClient,
+                metadataCache,
+                metadataManager,
+                authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.eventManagerSupplier = eventManagerSupplier;
@@ -118,6 +149,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<CreateDatabaseResponse> createDatabase(CreateDatabaseRequest request) {
+        doAuthorize(OperationType.CREATE, Resource.cluster());
+
         CreateDatabaseResponse response = new CreateDatabaseResponse();
         try {
             TablePath.validateDatabaseName(request.getDatabaseName());
@@ -138,6 +171,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
+        doAuthorize(OperationType.DROP, Resource.database(request.getDatabaseName()));
+
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
@@ -146,8 +181,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
+
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
+        doAuthorize(OperationType.CREATE, Resource.database(tablePath.getDatabaseName()));
 
         TableDescriptor tableDescriptor;
         try {
@@ -224,21 +261,41 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropTableResponse> dropTable(DropTableRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        doAuthorize(
+                OperationType.DROP,
+                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+
         DropTableResponse response = new DropTableResponse();
-        metadataManager.dropTable(
-                toTablePath(request.getTablePath()), request.isIgnoreIfNotExists());
+        metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 
     @Override
     public CompletableFuture<CreatePartitionResponse> createPartition(
             CreatePartitionRequest request) {
-        CreatePartitionResponse response = new CreatePartitionResponse();
         TablePath tablePath = toTablePath(request.getTablePath());
+        doAuthorize(
+                OperationType.CREATE,
+                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+
+        CreatePartitionResponse response = new CreatePartitionResponse();
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Only partitioned table support create partition.");
+        }
+
+        Session session = currentSession();
+        if (!authorizer.authorize(
+                session,
+                OperationType.CREATE,
+                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()))) {
+            // todo: 统一一下
+            throw new AuthenticationException(
+                    String.format(
+                            "Principal %s have no authorization to operate %s on resource %s ",
+                            session.getPrincipal(), OperationType.CREATE, Resource.cluster()));
         }
 
         // first, validate the partition spec, and get resolved partition spec.
@@ -269,8 +326,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
-        DropPartitionResponse response = new DropPartitionResponse();
         TablePath tablePath = toTablePath(request.getTablePath());
+        doAuthorize(
+                OperationType.CREATE,
+                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+
+        DropPartitionResponse response = new DropPartitionResponse();
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
@@ -323,6 +384,75 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new CommitRemoteLogManifestEvent(
                                 getCommitRemoteLogManifestData(request), response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<CreateAclsResponse> createAcls(CreateAclsRequest request) {
+        doAuthorize(OperationType.ALTER, Resource.cluster());
+
+        List<AclBinding> aclBindings = toAclBindings(request.getAclsList());
+        List<AclCreateResult> aclCreateResults = authorizer.addAcls(aclBindings);
+        List<PbCreateAclRespInfo> pbAclRespInfos = new ArrayList<>();
+
+        for (AclCreateResult result : aclCreateResults) {
+            PbCreateAclRespInfo pbAclRespInfo = new PbCreateAclRespInfo();
+            pbAclRespInfo.setAcl(toPbAclInfo(result.getAclBinding()));
+            if (result.exception().isPresent()) {
+                ApiError apiError = ApiError.fromThrowable(result.exception().get());
+                pbAclRespInfos.add(
+                        pbAclRespInfo
+                                .setErrorCode(apiError.error().code())
+                                .setErrorMessage(apiError.message()));
+            } else {
+                pbAclRespInfos.add(pbAclRespInfo.setErrorCode(Errors.NONE.code()));
+            }
+        }
+        return CompletableFuture.completedFuture(
+                new CreateAclsResponse().addAllAclRes(pbAclRespInfos));
+    }
+
+    @Override
+    public CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request) {
+        doAuthorize(OperationType.ALTER, Resource.cluster());
+
+        List<AclBindingFilter> filters = toAclBindingFilters(request.getAclFiltersList());
+        List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(filters);
+        List<DropAclsFilterResult> dropAclsFilterResults = new ArrayList<>();
+
+        for (AclDeleteResult result : aclDeleteResults) {
+            if (result.exception().isPresent()) {
+                dropAclsFilterResults.add(
+                        new DropAclsFilterResult()
+                                .setErrorCode(
+                                        ApiError.fromThrowable(result.exception().get())
+                                                .error()
+                                                .code())
+                                .setErrorMessage(
+                                        ApiError.fromThrowable(result.exception().get())
+                                                .error()
+                                                .message()));
+                continue;
+            }
+
+            Collection<AclDeleteResult.AclBindingDeleteResult> aclBindingDeleteResults =
+                    result.aclBindingDeleteResults();
+            List<DeleteAclsMatchingAcl> deleteAclsMatchingAcls = new ArrayList<>();
+            for (AclDeleteResult.AclBindingDeleteResult aclBindingDeleteResult :
+                    aclBindingDeleteResults) {
+                DeleteAclsMatchingAcl deleteAclsMatchingAcl = new DeleteAclsMatchingAcl();
+                deleteAclsMatchingAcl.setAcl(toPbAclInfo(aclBindingDeleteResult.aclBinding()));
+                if (result.exception().isPresent()) {
+                    ApiError apiError = ApiError.fromThrowable(result.exception().get());
+                    deleteAclsMatchingAcl.setErrorCode(apiError.error().code());
+                    deleteAclsMatchingAcl.setErrorMessage(apiError.error().message());
+                }
+                deleteAclsMatchingAcls.add(deleteAclsMatchingAcl);
+            }
+            dropAclsFilterResults.add(
+                    new DropAclsFilterResult().addAllMatchingAcls(deleteAclsMatchingAcls));
+        }
+        return CompletableFuture.completedFuture(
+                new DropAclsResponse().addAllFilterResults(dropAclsFilterResults));
     }
 
     @Override

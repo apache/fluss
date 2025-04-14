@@ -433,8 +433,8 @@ abstract class FlinkCatalogITCase {
         Configuration serverConfig = new Configuration();
         serverConfig.setString(
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        serverConfig.setString("security.username_password.username", "root");
-        serverConfig.setString("security.username_password.password", "password");
+        serverConfig.setString("security.username_password.credentials", "root:password");
+        serverConfig.setString(ConfigOptions.SUPER_USERS.key(), "USER:root");
         FlussClusterExtension flussClusterExtension =
                 FlussClusterExtension.builder()
                         .setCoordinatorServerListeners(

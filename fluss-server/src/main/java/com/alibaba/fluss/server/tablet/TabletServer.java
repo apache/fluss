@@ -30,6 +30,8 @@ import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
+import com.alibaba.fluss.server.authorizer.Authorizer;
+import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
@@ -127,6 +129,9 @@ public class TabletServer extends ServerBase {
     @GuardedBy("lock")
     private ZooKeeperClient zkClient;
 
+    @GuardedBy("lock")
+    private Authorizer authorizer;
+
     public TabletServer(Configuration conf) {
         super(conf);
         validateConfigs(conf);
@@ -171,6 +176,10 @@ public class TabletServer extends ServerBase {
             this.kvManager = KvManager.create(conf, zkClient, logManager);
             kvManager.startup();
 
+            this.authorizer = AuthorizerLoader.createAuthorizer(conf, pluginManager);
+            if (authorizer != null) {
+                authorizer.startup();
+            }
             // rpc client to sent request to the tablet server where the leader replica is located
             // to fetch log.
             this.clientMetricGroup =
@@ -209,7 +218,8 @@ public class TabletServer extends ServerBase {
                             zkClient,
                             replicaManager,
                             metadataCache,
-                            metadataManager);
+                            metadataManager,
+                            authorizer);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -360,6 +370,11 @@ public class TabletServer extends ServerBase {
                 if (replicaManager != null) {
                     replicaManager.shutdown();
                 }
+
+                if (authorizer != null) {
+                    authorizer.close();
+                }
+
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }

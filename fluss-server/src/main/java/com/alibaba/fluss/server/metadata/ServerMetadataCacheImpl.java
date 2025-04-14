@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.server.metadata;
 
+import com.alibaba.fluss.metadata.PhysicalTablePath;
+
 import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
@@ -32,7 +34,7 @@ public class ServerMetadataCacheImpl extends AbstractServerMetadataCache {
     }
 
     @Override
-    public void updateMetadata(ClusterMetadataInfo clusterMetadataInfo) {
+    public void updateClusterMetadata(ClusterMetadataInfo clusterMetadataInfo) {
         inLock(
                 bucketMetadataLock,
                 () -> {
@@ -50,6 +52,15 @@ public class ServerMetadataCacheImpl extends AbstractServerMetadataCache {
                     }
 
                     clusterMetadata = new ServerCluster(coordinatorServer, newAliveTableServers);
+                });
+    }
+
+    @Override
+    public void upsertTableBucketMetadata(Long tableId, PhysicalTablePath physicalTablePath) {
+        inLock(
+                bucketMetadataLock,
+                () -> {
+                    tableBucketMetadata.put(tableId, physicalTablePath);
                 });
     }
 }

@@ -201,7 +201,7 @@ public class ReplicaTestBase {
     }
 
     private void initMetadataCache(ServerMetadataCache metadataCache) {
-        metadataCache.updateMetadata(
+        metadataCache.updateClusterMetadata(
                 new ClusterMetadataInfo(
                         Optional.of(
                                 new ServerInfo(
@@ -396,7 +396,8 @@ public class ReplicaTestBase {
     }
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
-        replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
+        replicaManager.becomeLeaderOrFollower(
+                0, notifyLeaderAndIsrDataList, result -> {}, (tableId, path) -> {});
     }
 
     protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)

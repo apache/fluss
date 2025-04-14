@@ -22,6 +22,8 @@ import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.security.acl.Resource;
+import com.alibaba.fluss.security.acl.ResourceType;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
@@ -29,9 +31,12 @@ import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
+import com.alibaba.fluss.server.zk.data.ResourceAcl;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
+import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
+import com.alibaba.fluss.server.zk.data.ZkData.AclChangesNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
@@ -45,6 +50,7 @@ import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionsZNode;
+import com.alibaba.fluss.server.zk.data.ZkData.ResourceAclNode;
 import com.alibaba.fluss.server.zk.data.ZkData.SchemaZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.SchemasZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
@@ -100,7 +106,7 @@ public class ZooKeeperClient implements AutoCloseable {
         this.writerIdCounter = new ZkSequenceIDCounter(zkClient, WriterIdZNode.path());
     }
 
-    private Optional<byte[]> getOrEmpty(String path) throws Exception {
+    public Optional<byte[]> getOrEmpty(String path) throws Exception {
         try {
             return Optional.of(zkClient.getData().forPath(path));
         } catch (KeeperException.NoNodeException e) {
@@ -635,7 +641,7 @@ public class ZooKeeperClient implements AutoCloseable {
             // after the previous commit
             LakeTableSnapshot previous = optLakeTableSnapshot.get();
 
-            // merge log start offset, current will override the previous
+            // merge log startup offset, current will override the previous
             Map<TableBucket, Long> bucketLogStartOffset =
                     new HashMap<>(previous.getBucketLogStartOffset());
             bucketLogStartOffset.putAll(lakeTableSnapshot.getBucketLogStartOffset());
@@ -664,6 +670,84 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(LakeTableZNode::decode);
     }
 
+    /**
+     * Register or update the acl registration to zookeeper.
+     *
+     * <p>Note: If there is already an acl registration for the given resources and the acl version
+     * is smaller than new one, it will be overwritten.(we need to compare the version before
+     * upsert)
+     */
+    public void upsertResourceAcl(Resource resource, ResourceAcl newResourceAcl) throws Exception {
+        String path = ResourceAclNode.path(resource);
+        Optional<ResourceAcl> oldAclRegistration = getResourceAcl(resource);
+        if (oldAclRegistration.isPresent()) {
+            zkClient.setData().forPath(path, ResourceAclNode.encode(newResourceAcl));
+        } else {
+            LOG.info("insert acl node {} with value {}", resource, newResourceAcl);
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, ResourceAclNode.encode(newResourceAcl));
+            LOG.info(
+                    "update acl node {} from {} into {}",
+                    resource,
+                    oldAclRegistration,
+                    newResourceAcl);
+        }
+    }
+
+    /**
+     * Retrieves the ACL (Access Control List) for a specific resource from ZooKeeper.
+     *
+     * @param resource the resource to query
+     * @return an Optional containing the ResourceAcl if it exists, or empty if not found
+     * @throws Exception if there is an error accessing ZooKeeper
+     */
+    public Optional<ResourceAcl> getResourceAcl(Resource resource) throws Exception {
+        String path = ResourceAclNode.path(resource);
+        return getOrEmpty(path).map(ResourceAclNode::decode);
+    }
+
+    /**
+     * Retrieves all resources of a specific type and their corresponding ACLs from ZooKeeper.
+     *
+     * @param resourceType the type of resource to query
+     * @return a list of child node names representing resources of the given type
+     * @throws Exception if there is an error accessing ZooKeeper
+     */
+    public List<String> listResourcesByType(ResourceType resourceType) throws Exception {
+        String path = ResourceAclNode.path(resourceType);
+        return getChildren(path);
+    }
+
+    /**
+     * Deletes the ACL (Access Control List) for a specific resource from ZooKeeper.
+     *
+     * @param resource the resource whose ACL should be deleted
+     * @throws Exception if there is an error accessing ZooKeeper
+     */
+    public void deleteResourceAcl(Resource resource) throws Exception {
+        String path = ResourceAclNode.path(resource);
+        zkClient.delete().forPath(path);
+    }
+
+    public void insertAclChangeNotification(Resource resource) throws Exception {
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT_SEQUENTIAL)
+                .forPath(
+                        AclChangeNotificationNode.pathPrefix(),
+                        AclChangeNotificationNode.encode(resource));
+        LOG.info("add acl change notification for resource {}  ", resource);
+    }
+
+    public void deleteAclChangeNotifications() throws Exception {
+        List<String> children = getChildren(AclChangesNode.path());
+        for (String child : children) {
+            zkClient.delete().forPath(AclChangesNode.path() + "/" + child);
+        }
+    }
+
     // --------------------------------------------------------------------------------------------
     // Utils
     // --------------------------------------------------------------------------------------------
@@ -679,6 +763,25 @@ public class ZooKeeperClient implements AutoCloseable {
             return zkClient.getChildren().forPath(path);
         } catch (KeeperException.NoNodeException e) {
             return Collections.emptyList();
+        }
+    }
+
+    /** Gets the data and stat of a given zk node path. */
+    public Optional<Stat> getState(String path) throws Exception {
+        try {
+            Stat stat = zkClient.checkExists().forPath(path);
+            LOG.info("stat of path {} is {}", path, stat);
+            return Optional.of(stat);
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** delete a path. */
+    public void deletePath(String path) throws Exception {
+        try {
+            zkClient.delete().forPath(path);
+        } catch (KeeperException.NoNodeException ignored) {
         }
     }
 

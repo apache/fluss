@@ -56,6 +56,7 @@ import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
+import com.alibaba.fluss.rpc.messages.ListAclsResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListOffsetsResponse;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosResponse;
@@ -66,6 +67,7 @@ import com.alibaba.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
+import com.alibaba.fluss.rpc.messages.PbAclInfo;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForBucket;
@@ -112,6 +114,7 @@ import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.entity.CommitLakeTableSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
@@ -1263,5 +1266,22 @@ public class ServerRpcMessageUtils {
             partitionKeyAndValues.put(pbKeyValue.getKey(), pbKeyValue.getValue());
         }
         return new PartitionSpec(partitionKeyAndValues);
+    }
+
+    public static ListAclsResponse makeListAclsResponse(Collection<AclBinding> aclBindings) {
+        ListAclsResponse listAclsResponse = new ListAclsResponse();
+        for (AclBinding aclBinding : aclBindings) {
+            PbAclInfo aclInfo = listAclsResponse.addAcl();
+            aclInfo.setResourceName(aclBinding.getResource().getName())
+                    .setResourceType(aclBinding.getResource().getType().getCode())
+                    .setPrincipalName(aclBinding.getAccessControlEntry().getPrincipal().getName())
+                    .setPrincipalType(aclBinding.getAccessControlEntry().getPrincipal().getType())
+                    .setHost(aclBinding.getAccessControlEntry().getHost())
+                    .setOperationType(
+                            aclBinding.getAccessControlEntry().getOperationType().getCode())
+                    .setPermissionType(
+                            aclBinding.getAccessControlEntry().getPermissionType().getCode());
+        }
+        return listAclsResponse;
     }
 }
