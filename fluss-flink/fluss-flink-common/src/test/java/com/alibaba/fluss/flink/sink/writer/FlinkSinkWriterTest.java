@@ -105,6 +105,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     void testWriteExceptionWhenFlussUnavailable() throws Exception {
         testExceptionWhenFlussUnavailable(
                 (writer, mailboxExecutor) -> {
+                    // Flush client here to make sure last write is finished but not check
+                    // exception.
                     writer.getTableWriter().flush();
                     assertThatThrownBy(
                                     () ->
@@ -120,7 +122,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     void testFlushExceptionWhenFlussUnavailable() throws Exception {
         testExceptionWhenFlussUnavailable(
                 (writer, mailboxExecutor) -> {
-                    writer.getTableWriter().flush();
+                    // Flush SinkWriter here to make sure last write finish and also check
+                    // exception.
                     assertThatThrownBy(() -> writer.flush(true))
                             .hasRootCauseExactlyInstanceOf(NetworkException.class);
                 });
@@ -130,6 +133,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     void testCloseExceptionWhenFlussUnavailable() throws Exception {
         testExceptionWhenFlussUnavailable(
                 (writer, mailboxExecutor) -> {
+                    // Flush client here to make sure last write is finished but not check
+                    // exception.
                     writer.getTableWriter().flush();
                     assertThatThrownBy(writer::close)
                             .hasRootCauseExactlyInstanceOf(NetworkException.class);
@@ -140,7 +145,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     void testMailBoxExceptionWhenFlussUnavailable() throws Exception {
         testExceptionWhenFlussUnavailable(
                 (writer, mailboxExecutor) -> {
-                    writer.getTableWriter().flush();
+                    // Flush client here to make sure last write is finished but not check
+                    // exception.
                     writer.getTableWriter().flush();
                     assertThatThrownBy(
                                     () -> {
@@ -156,31 +162,38 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             BiConsumer<FlinkSinkWriter, MailboxExecutor> actionAfterFlussUnavailable)
             throws Exception {
         FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder().build();
-        flussClusterExtension.start();
+        try {
+            flussClusterExtension.start();
 
-        // prepare table
-        Configuration clientConfig = flussClusterExtension.getClientConfig();
-        clientConfig.set(ConfigOptions.CLIENT_WRITER_RETRIES, 0);
-        clientConfig.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
-        try (Connection connection = ConnectionFactory.createConnection(clientConfig);
-                Admin admin = connection.getAdmin()) {
-            admin.createDatabase(
-                            DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
-                            DatabaseDescriptor.EMPTY,
-                            true)
-                    .get();
-            admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
-        }
+            // prepare table
+            Configuration clientConfig = flussClusterExtension.getClientConfig();
+            clientConfig.set(ConfigOptions.CLIENT_WRITER_RETRIES, 0);
+            clientConfig.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
+            try (Connection connection = ConnectionFactory.createConnection(clientConfig);
+                    Admin admin = connection.getAdmin()) {
+                admin.createDatabase(
+                                DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
+                                DatabaseDescriptor.EMPTY,
+                                true)
+                        .get();
+                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
+            }
 
-        MockWriterInitContext mockWriterInitContext =
-                new MockWriterInitContext(new InterceptingOperatorMetricGroup());
-        // test fluss unavailable.
-        try (FlinkSinkWriter writer =
-                createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor())) {
-            writer.initialize(mockWriterInitContext.metricGroup());
+            MockWriterInitContext mockWriterInitContext =
+                    new MockWriterInitContext(new InterceptingOperatorMetricGroup());
+            // test fluss unavailable.
+            try (FlinkSinkWriter writer =
+                    createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor())) {
+                writer.initialize(mockWriterInitContext.metricGroup());
+                flussClusterExtension.close();
+                writer.write(
+                        GenericRowData.of(1, StringData.fromString("a")),
+                        new MockSinkWriterContext());
+                actionAfterFlussUnavailable.accept(
+                        writer, mockWriterInitContext.getMailboxExecutor());
+            }
+        } finally {
             flussClusterExtension.close();
-            writer.write(
-                    GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
         }
     }
 

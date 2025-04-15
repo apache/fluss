@@ -138,16 +138,8 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
                         }
 
                         // Checking for exceptions from previous writes
-                        // Checking for exceptions from previous writes
                         mailboxExecutor.execute(this::checkAsyncException, "Update error metric");
                     }
-                });
-        writeFuture.exceptionally(
-                exception -> {
-                    if (this.asyncWriterException == null) {
-                        this.asyncWriterException = exception;
-                    }
-                    return null;
                 });
 
         numRecordsOutCounter.inc();
