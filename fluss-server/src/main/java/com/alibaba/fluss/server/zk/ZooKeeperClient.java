@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -445,6 +446,30 @@ public class ZooKeeperClient implements AutoCloseable {
                     partition -> partitions.put(partitionName, partition.getPartitionId()));
         }
         return partitions;
+    }
+
+    /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
+    public Map<String, Long> getPartitionNameAndIdsBySpec(
+            TablePath tablePath,
+            List<String> partitionKeys,
+            ResolvedPartitionSpec partitionSpecFromRequest)
+            throws Exception {
+        Map<String, Long> matchPartitions = new HashMap<>();
+        Set<String> partitions = getPartitions(tablePath);
+
+        for (String partitionName : partitions) {
+            ResolvedPartitionSpec resolvedPartitionSpecFromZK =
+                    ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+            boolean contains = resolvedPartitionSpecFromZK.contains(partitionSpecFromRequest);
+            if (contains) {
+                Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+                optPartition.ifPresent(
+                        partition ->
+                                matchPartitions.put(partitionName, partition.getPartitionId()));
+            }
+        }
+
+        return matchPartitions;
     }
 
     /** Get the id and name for the partitions of a table in ZK. */

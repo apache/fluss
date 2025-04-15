@@ -54,9 +54,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -272,5 +275,15 @@ public abstract class ClientToServerITCaseBase {
 
     protected static PartitionSpec newPartitionSpec(String partitionKey, String partitionValue) {
         return new PartitionSpec(Collections.singletonMap(partitionKey, partitionValue));
+    }
+
+    protected static PartitionSpec newPartitionSpec(
+            List<String> partitionKeys, List<String> partitionValues) {
+        checkArgument(partitionKeys.size() == partitionValues.size());
+        Map<String, String> collectMap =
+                IntStream.range(0, partitionKeys.size())
+                        .boxed()
+                        .collect(Collectors.toMap(partitionKeys::get, partitionValues::get));
+        return new PartitionSpec(collectMap);
     }
 }

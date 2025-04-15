@@ -49,6 +49,7 @@ import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -502,6 +503,78 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
                     .isEqualTo(partitionInfo.getPartitionId());
         }
+    }
+
+    @Test
+    void testListPartitionInfosByPartitionSpec() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .column("secondary_partition", DataTypes.STRING())
+                                        .build())
+                        .comment("test table")
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt", "secondary_partition")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "pt")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        .build();
+        TablePath partitionedTablePath = TablePath.of(dbName, "test_partitioned_table");
+        // create table
+        admin.createTable(partitionedTablePath, partitionedTable, true).get();
+        // add two partitions.
+        admin.createPartition(
+                        partitionedTablePath,
+                        newPartitionSpec(
+                                Arrays.asList("pt", "secondary_partition"),
+                                Arrays.asList("2025", "10")),
+                        false)
+                .get();
+        admin.createPartition(
+                        partitionedTablePath,
+                        newPartitionSpec(
+                                Arrays.asList("pt", "secondary_partition"),
+                                Arrays.asList("2025", "11")),
+                        false)
+                .get();
+        // auto create partitions.
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
+
+        // run listPartitionInfos by partition spec with valid partition name.
+        PartitionSpec partitionSpec = newPartitionSpec("pt", "2025");
+
+        List<PartitionInfo> partitionInfos =
+                admin.listPartitionInfos(partitionedTablePath, partitionSpec).get();
+
+        assertThat(partitionInfos).hasSize(partitionIdByNames.size());
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
+                    .isEqualTo(partitionInfo.getPartitionId());
+        }
+
+        // run listPartitionInfos by partition spec with invalid partition name.
+        PartitionSpec invalidNamePartitionSpec = newPartitionSpec("pt", "2024");
+        List<PartitionInfo> invalidNamePartitionInfos =
+                admin.listPartitionInfos(partitionedTablePath, invalidNamePartitionSpec).get();
+        assertThat(invalidNamePartitionInfos).hasSize(0);
+
+        // run listPartitionInfos by invalid partition spec.
+        PartitionSpec invalidPartitionSpec = newPartitionSpec("pt1", "2025");
+        assertThatThrownBy(
+                        () ->
+                                admin.listPartitionInfos(partitionedTablePath, invalidPartitionSpec)
+                                        .get())
+                .hasMessageContaining(
+                        "Fail to list partitions for table: test_db.test_partitioned_table, partitionSpec: pt1=2025.");
     }
 
     @Test

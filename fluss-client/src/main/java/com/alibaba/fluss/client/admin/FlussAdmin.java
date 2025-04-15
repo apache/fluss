@@ -60,6 +60,8 @@ import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesResponse;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
+import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -273,6 +275,21 @@ public class FlussAdmin implements Admin {
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
+        return gateway.listPartitionInfos(request)
+                .thenApply(ClientRpcMessageUtils::toPartitionInfos);
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, PartitionSpec partitionSpec) {
+        ListPartitionInfosRequest request = new ListPartitionInfosRequest();
+        PbPartitionSpec pbPartitionSpec = ClientRpcMessageUtils.makePbPartitionSpec(partitionSpec);
+        request.setTablePath(
+                        new PbTablePath()
+                                .setDatabaseName(tablePath.getDatabaseName())
+                                .setTableName(tablePath.getTableName()))
+                .setPartitionSpec(pbPartitionSpec);
+
         return gateway.listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
     }

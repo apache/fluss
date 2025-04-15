@@ -22,6 +22,7 @@ import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
@@ -167,6 +168,28 @@ public class MetadataManager {
         return uncheck(
                 () -> zookeeperClient.getPartitionNameAndIds(tablePath),
                 "Fail to list partitions for table: " + tablePath);
+    }
+
+    /**
+     * List the partitions of the given table and partitionSpec.
+     *
+     * <p>Return a map from partition name to partition id.
+     */
+    public Map<String, Long> listPartitions(
+            TablePath tablePath, ResolvedPartitionSpec partitionSpecFromRequest)
+            throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
+        TableInfo tableInfo = getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
+            throw new TableNotPartitionedException(
+                    "Table '" + tablePath + "' is not a partitioned table.");
+        }
+        return uncheck(
+                () ->
+                        zookeeperClient.getPartitionNameAndIdsBySpec(
+                                tablePath, tableInfo.getPartitionKeys(), partitionSpecFromRequest),
+                String.format(
+                        "Fail to list partitions for table: %s, partitionSpec: %s.",
+                        tablePath, partitionSpecFromRequest));
     }
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)
