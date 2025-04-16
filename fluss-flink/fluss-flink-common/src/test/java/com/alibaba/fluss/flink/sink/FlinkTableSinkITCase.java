@@ -48,6 +48,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -60,6 +62,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
@@ -79,6 +82,14 @@ abstract class FlinkTableSinkITCase {
     static StreamExecutionEnvironment env;
     static StreamTableEnvironment tEnv;
     static TableEnvironment tBatchEnv;
+
+    static Stream<Arguments> writePartitionedTableParams() {
+        return Stream.of(
+                Arguments.of(false, false),
+                Arguments.of(true, false),
+                Arguments.of(false, true),
+                Arguments.of(true, true));
+    }
 
     @BeforeAll
     static void beforeAll() {
@@ -156,18 +167,9 @@ abstract class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
-    // TODO change these two tests to ParameterizedTest: https://github.com/alibaba/fluss/issues/659
-    @Test
-    void testAppendLogWithBucketKeyWithSinkBucketShuffle() throws Exception {
-        testAppendLogWithBucketKey(true);
-    }
-
-    @Test
-    void testAppendLogWithBucketKeyWithoutSinkBucketShuffle() throws Exception {
-        testAppendLogWithBucketKey(false);
-    }
-
-    private void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
         tEnv.executeSql(
                 String.format(
                         "create table sink_test (a int not null, b bigint, c string) "
@@ -309,18 +311,9 @@ abstract class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
-    // TODO change these two tests to ParameterizedTest: https://github.com/alibaba/fluss/issues/659
-    @Test
-    void testPutWithSinkBucketShuffle() throws Exception {
-        testPut(true);
-    }
-
-    @Test
-    void testPutWithoutSinkBucketShuffle() throws Exception {
-        testPut(false);
-    }
-
-    private void testPut(boolean sinkBucketShuffle) throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPut(boolean sinkBucketShuffle) throws Exception {
         tEnv.executeSql(
                 String.format(
                         "create table sink_test (a int not null primary key not enforced, b bigint, c string)"
@@ -522,28 +515,9 @@ abstract class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
-    // TODO change these tests to ParameterizedTest: https://github.com/alibaba/fluss/issues/659
-    @Test
-    void testWritePartitionedLogTable() throws Exception {
-        testWritePartitionedTable(false, false);
-    }
-
-    @Test
-    void testWritePartitionedPrimaryKeyTable() throws Exception {
-        testWritePartitionedTable(true, false);
-    }
-
-    @Test
-    void testWriteAutoPartitionedLogTable() throws Exception {
-        testWritePartitionedTable(false, true);
-    }
-
-    @Test
-    void testWriteAutoPartitionedPrimaryKeyTable() throws Exception {
-        testWritePartitionedTable(true, true);
-    }
-
-    private void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition)
+    @ParameterizedTest
+    @MethodSource("writePartitionedTableParams")
+    void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition)
             throws Exception {
         String tableName =
                 String.format(
