@@ -78,7 +78,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /** It case to test authorization of admin operation、read and write operation. */
-public class FlussAuthorizeTCase {
+public class FlussAuthorizationITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
@@ -143,18 +143,71 @@ public class FlussAuthorizeTCase {
     }
 
     @Test
+    void testNoAuthorizer() throws Exception {
+        Configuration configuration = initConfig();
+        configuration.removeConfig(ConfigOptions.AUTHORIZER_PLUGIN_TYPE);
+
+        FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                        .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                        .setClusterConf(configuration)
+                        .build();
+
+        try {
+            flussClusterExtension.start();
+            Configuration conf = new Configuration(flussClusterExtension.getClientConfig("CLIENT"));
+            conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
+            conf.setString("client.security.username_password.username", "root");
+            conf.setString("client.security.username_password.password", "password");
+            try (Connection connection = ConnectionFactory.createConnection(conf);
+                    Admin admin = connection.getAdmin()) {
+                assertThatThrownBy(
+                                () -> {
+                                    admin.listAcls(AclBindingFilter.ANY).get();
+                                })
+                        .hasMessageContaining("No Authorizer is configured.");
+                assertThatThrownBy(
+                                () -> {
+                                    admin.createAcls(
+                                                    Collections.singletonList(
+                                                            new AclBinding(
+                                                                    Resource.cluster(),
+                                                                    new AccessControlEntry(
+                                                                            WILD_CARD_PRINCIPAL,
+                                                                            WILD_CARD_HOST,
+                                                                            OperationType.CREATE,
+                                                                            PermissionType.ALLOW))))
+                                            .all()
+                                            .get();
+                                })
+                        .hasMessageContaining("No Authorizer is configured.");
+                assertThatThrownBy(
+                                () -> {
+                                    admin.dropAcls(Collections.singletonList(AclBindingFilter.ANY))
+                                            .all()
+                                            .get();
+                                })
+                        .hasMessageContaining("No Authorizer is configured.");
+            }
+
+        } finally {
+            flussClusterExtension.close();
+        }
+    }
+
+    @Test
     void testAclOperation() throws Exception {
-        // test whether have authorization to operate list acls.
-        assertThatThrownBy(() -> guestAdmin.listAcls(AclBindingFilter.ANY).get())
-                .hasMessageContaining(
-                        "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}");
+        // Test whether the user has authorization to perform the "list ACLs" operation.
+        assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).isEmpty();
         rootAdmin
                 .createAcls(
                         Collections.singletonList(
                                 new AclBinding(
                                         Resource.cluster(),
                                         new AccessControlEntry(
-                                                WILD_CARD_PRINCIPAL,
+                                                new FlussPrincipal("guest", "USER"),
                                                 WILD_CARD_HOST,
                                                 OperationType.DESCRIBE,
                                                 PermissionType.ALLOW))))
@@ -162,11 +215,11 @@ public class FlussAuthorizeTCase {
                 .get();
         assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).hasSize(1);
 
-        // test whether have authorization to operate create and drop acls.
-        FlussPrincipal user1 = new FlussPrincipal("USER", "test_ufu");
+        // test whether the user have authorization to operate create and drop acls.
+        FlussPrincipal user1 = new FlussPrincipal("user1", "USER");
         AclBinding user1AclBinding =
                 new AclBinding(
-                        Resource.table("test_db", "person"),
+                        Resource.table("test_db", "test_table"),
                         new AccessControlEntry(
                                 user1, "*", OperationType.CREATE, PermissionType.ALLOW));
         List<AclBinding> aclBindings =
@@ -188,7 +241,8 @@ public class FlussAuthorizeTCase {
                                         PermissionType.ALLOW)));
         assertThatThrownBy(() -> guestAdmin.createAcls(aclBindings).all().get())
                 .hasMessageContaining(
-                        "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}");
+                        "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate ALTER on resource");
+
         rootAdmin
                 .createAcls(
                         Collections.singletonList(

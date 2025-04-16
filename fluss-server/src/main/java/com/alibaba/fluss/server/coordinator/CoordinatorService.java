@@ -19,7 +19,6 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
@@ -59,7 +58,6 @@ import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.rpc.messages.PbCreateAclRespInfo;
-import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.security.acl.AclBinding;
@@ -149,7 +147,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<CreateDatabaseResponse> createDatabase(CreateDatabaseRequest request) {
-        doAuthorize(OperationType.CREATE, Resource.cluster());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.CREATE, Resource.cluster());
+        }
 
         CreateDatabaseResponse response = new CreateDatabaseResponse();
         try {
@@ -171,7 +171,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
-        doAuthorize(OperationType.DROP, Resource.database(request.getDatabaseName()));
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.DROP,
+                    Resource.database(request.getDatabaseName()));
+        }
 
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
@@ -184,7 +189,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
-        doAuthorize(OperationType.CREATE, Resource.database(tablePath.getDatabaseName()));
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.CREATE,
+                    Resource.database(tablePath.getDatabaseName()));
+        }
 
         TableDescriptor tableDescriptor;
         try {
@@ -262,9 +272,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropTableResponse> dropTable(DropTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        doAuthorize(
-                OperationType.DROP,
-                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.DROP,
+                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+        }
 
         DropTableResponse response = new DropTableResponse();
         metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
@@ -275,27 +288,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CreatePartitionResponse> createPartition(
             CreatePartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        doAuthorize(
-                OperationType.CREATE,
-                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.CREATE,
+                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+        }
 
         CreatePartitionResponse response = new CreatePartitionResponse();
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Only partitioned table support create partition.");
-        }
-
-        Session session = currentSession();
-        if (!authorizer.authorize(
-                session,
-                OperationType.CREATE,
-                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()))) {
-            // todo: 统一一下
-            throw new AuthenticationException(
-                    String.format(
-                            "Principal %s have no authorization to operate %s on resource %s ",
-                            session.getPrincipal(), OperationType.CREATE, Resource.cluster()));
         }
 
         // first, validate the partition spec, and get resolved partition spec.
@@ -327,9 +331,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        doAuthorize(
-                OperationType.CREATE,
-                Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.CREATE,
+                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
+        }
 
         DropPartitionResponse response = new DropPartitionResponse();
         TableInfo tableInfo = metadataManager.getTable(tablePath);
@@ -388,10 +395,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<CreateAclsResponse> createAcls(CreateAclsRequest request) {
-        doAuthorize(OperationType.ALTER, Resource.cluster());
 
         List<AclBinding> aclBindings = toAclBindings(request.getAclsList());
-        List<AclCreateResult> aclCreateResults = authorizer.addAcls(aclBindings);
+        if (authorizer == null) {
+            throw new IllegalStateException("No Authorizer is configured.");
+        }
+        List<AclCreateResult> aclCreateResults = authorizer.addAcls(currentSession(), aclBindings);
         List<PbCreateAclRespInfo> pbAclRespInfos = new ArrayList<>();
 
         for (AclCreateResult result : aclCreateResults) {
@@ -413,10 +422,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request) {
-        doAuthorize(OperationType.ALTER, Resource.cluster());
 
         List<AclBindingFilter> filters = toAclBindingFilters(request.getAclFiltersList());
-        List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(filters);
+        if (authorizer == null) {
+            throw new IllegalStateException("No Authorizer is configured.");
+        }
+        List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(currentSession(), filters);
         List<DropAclsFilterResult> dropAclsFilterResults = new ArrayList<>();
 
         for (AclDeleteResult result : aclDeleteResults) {

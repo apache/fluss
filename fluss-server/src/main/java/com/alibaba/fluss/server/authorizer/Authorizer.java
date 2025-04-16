@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.authorizer;
 
+import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
@@ -24,26 +25,78 @@ import com.alibaba.fluss.security.acl.Resource;
 
 import java.io.Closeable;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 
-/** authorizer. */
+/**
+ * The {@code Authorizer} interface defines the contract for managing and enforcing access control
+ * in a system. It provides methods for authorization, adding or removing ACLs (Access Control
+ * Lists), and listing existing ACL bindings.
+ */
 public interface Authorizer extends Closeable {
 
+    /**
+     * Initializes the authorizer. This method should be called before any other methods are used.
+     *
+     * @throws Exception if an error occurs during initialization
+     */
     void startup() throws Exception;
 
+    /** Closes the authorizer and releases any associated resources. */
     void close();
 
-    default Boolean authorize(Session session, OperationType operationType, Resource resource) {
-        return authorize(session, Collections.singletonList(new Action(resource, operationType)))
-                .get(0);
-    }
+    /**
+     * Checks if a given session is authorized to perform a specific operation on a resource.
+     *
+     * @param session
+     * @param operationType
+     * @param resource
+     * @return
+     */
+    boolean isAuthorized(Session session, OperationType operationType, Resource resource);
 
-    List<Boolean> authorize(Session session, List<Action> actions);
+    /**
+     * Checks if a given session is authorized to perform a specific operation on a resource.
+     *
+     * @throws AuthenticationException if the session is not authorized to perform the operation
+     */
+    void authorize(Session session, OperationType operationType, Resource resource)
+            throws AuthenticationException;
 
-    List<AclCreateResult> addAcls(List<AclBinding> aclBindings);
+    /**
+     * Filters a collection of resource names based on the provided session, operation, resources.
+     *
+     * @return
+     */
+    Collection<Resource> filterByAuthorized(
+            Session session, OperationType operation, List<Resource> resources);
 
-    List<AclDeleteResult> dropAcls(List<AclBindingFilter> filters);
+    /**
+     * Adds multiple ACL bindings to the system after verifying that the session has the required
+     * 'alter' permission on the associated resources.
+     *
+     * @param session the session associated with the request
+     * @param aclBindings a list of ACL bindings to add
+     * @return a list of results indicating the outcome of each ACL creation attempt
+     * @throws SecurityException if the session does not have the required 'alter' permission
+     */
+    List<AclCreateResult> addAcls(Session session, List<AclBinding> aclBindings);
 
-    Collection<AclBinding> listAcls(AclBindingFilter filter);
+    /**
+     * Removes ACL bindings from the system based on the provided filters, after verifying that the
+     * session has the required 'alter' permission on the associated resources.
+     *
+     * @param session the session associated with the request
+     * @param filters a list of filters specifying which ACL bindings to remove
+     * @return a list of results indicating the outcome of each ACL deletion attempt
+     * @throws SecurityException if the session does not have the required 'alter' permission
+     */
+    List<AclDeleteResult> dropAcls(Session session, List<AclBindingFilter> filters);
+
+    /**
+     * Lists all ACL bindings that match the specified filter.
+     *
+     * @param filter the filter to apply when listing ACL bindings
+     * @return a collection of matching ACL bindings
+     */
+    Collection<AclBinding> listAcls(Session session, AclBindingFilter filter);
 }

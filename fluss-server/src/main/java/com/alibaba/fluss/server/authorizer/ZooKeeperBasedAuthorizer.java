@@ -64,7 +64,7 @@ import static com.alibaba.fluss.security.acl.Resource.TABLE_SPLITTER;
 import static com.alibaba.fluss.server.zk.ZooKeeperClient.UNKNOWN_VERSION;
 
 /** An authorization manager that leverages ZooKeeper to store access control lists (ACLs). */
-public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
+public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements FatalErrorHandler {
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperBasedAuthorizer.class);
 
     /**
@@ -161,14 +161,18 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
     }
 
     @Override
-    public List<Boolean> authorize(Session session, List<Action> actions) {
-        return actions.stream()
-                .map(action -> authorizeAction(session, action))
-                .collect(Collectors.toList());
+    public boolean authorizeAction(Session session, Action action) {
+        FlussPrincipal principal = session.getPrincipal();
+        return superUsers.contains(principal)
+                || aclsAllowAccess(
+                        action.getResource(),
+                        principal,
+                        action.getOperation(),
+                        session.getInetAddress().getHostAddress());
     }
 
     @Override
-    public List<AclCreateResult> addAcls(List<AclBinding> aclBindings) {
+    public List<AclCreateResult> addAcls(Session session, List<AclBinding> aclBindings) {
         if (aclBindings.isEmpty()) {
             return Collections.emptyList();
         }
@@ -177,6 +181,8 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
         Map<Resource, Map<AccessControlEntry, Integer>> aclsToCreate =
                 groupAclsByResource(aclBindings);
         synchronized (lock) {
+            authorizeAclOperation(session, aclsToCreate.keySet());
+
             aclsToCreate.forEach(
                     (resource, entries) -> {
                         try {
@@ -270,7 +276,8 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
     }
 
     @Override
-    public List<AclDeleteResult> dropAcls(List<AclBindingFilter> aclBindingFilters) {
+    public List<AclDeleteResult> dropAcls(
+            Session session, List<AclBindingFilter> aclBindingFilters) {
         Map<AclBinding, Integer> deletedBindings = new HashMap<>();
         Map<AclBinding, ApiException> deleteExceptions = new HashMap<>();
         List<Tuple2<AclBindingFilter, Integer>> filters =
@@ -294,6 +301,7 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                 }
             }
 
+            authorizeAclOperation(session, resourcesToUpdate.keySet());
             for (Map.Entry<Resource, List<Tuple2<AclBindingFilter, Integer>>> entry :
                     resourcesToUpdate.entrySet()) {
                 Resource resource = entry.getKey();
@@ -348,18 +356,20 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
     }
 
     @Override
-    public Collection<AclBinding> listAcls(AclBindingFilter aclBindingFilter) {
+    public Collection<AclBinding> listAcls(Session session, AclBindingFilter aclBindingFilter) {
         Set<AclBinding> aclBindings = new HashSet<>();
 
         aclCache.forEach(
                 (resource, aclSet) -> {
-                    aclSet.acls.forEach(
-                            acl -> {
-                                AclBinding aclBinding = new AclBinding(resource, acl);
-                                if (aclBindingFilter.matches(aclBinding)) {
-                                    aclBindings.add(aclBinding);
-                                }
-                            });
+                    if (isAuthorized(session, OperationType.DESCRIBE, resource)) {
+                        aclSet.acls.forEach(
+                                acl -> {
+                                    AclBinding aclBinding = new AclBinding(resource, acl);
+                                    if (aclBindingFilter.matches(aclBinding)) {
+                                        aclBindings.add(aclBinding);
+                                    }
+                                });
+                    }
                 });
 
         return aclBindings;
@@ -402,7 +412,6 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
             Resource resource,
             Function<Set<AccessControlEntry>, Set<AccessControlEntry>> newAclSupplier)
             throws Exception {
-
         boolean writeComplete = false;
         int retries = 0;
         Throwable lastException = null;
@@ -508,16 +517,6 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
             throw new IllegalStateException(
                     String.format("Failed to update acl change flag for %s", resource), e);
         }
-    }
-
-    private boolean authorizeAction(Session session, Action action) {
-        FlussPrincipal principal = session.getPrincipal();
-        return superUsers.contains(principal)
-                || aclsAllowAccess(
-                        action.getResource(),
-                        principal,
-                        action.getOperation(),
-                        session.getInetAddress().getHostAddress());
     }
 
     boolean aclsAllowAccess(
@@ -645,6 +644,20 @@ public class ZooKeeperBasedAuthorizer implements Authorizer, FatalErrorHandler {
                                                 })
                                         .collect(Collectors.toSet()))
                 .orElse(Collections.emptySet());
+    }
+
+    private void authorizeAclOperation(Session session, Collection<Resource> resources) {
+        resources.forEach(
+                resource -> {
+                    // The minimum granularity of ACL operation permissions is Database.
+                    authorize(
+                            session,
+                            OperationType.ALTER,
+                            resource.getType() != ResourceType.TABLE
+                                    ? resource
+                                    : Resource.database(
+                                            resource.getName().split(TABLE_SPLITTER)[0]));
+                });
     }
 
     private int backoffTime() {

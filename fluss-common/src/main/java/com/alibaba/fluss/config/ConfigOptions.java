@@ -140,7 +140,7 @@ public class ConfigOptions {
     public static final ConfigOption<String> AUTHORIZER_PLUGIN_TYPE =
             key("authorizer.type")
                     .stringType()
-                    .defaultValue("zookeeper")
+                    .noDefaultValue()
                     .withDescription("The class name of the authorizer plugin. ");
 
     public static final ConfigOption<String> SUPER_USERS =

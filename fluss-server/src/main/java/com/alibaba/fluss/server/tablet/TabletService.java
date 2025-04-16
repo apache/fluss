@@ -264,7 +264,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
-        doAuthorize(OperationType.IDEMPOTENT_WRITE, Resource.cluster());
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(), OperationType.IDEMPOTENT_WRITE, Resource.cluster());
+        }
         CompletableFuture<InitWriterResponse> response = new CompletableFuture<>();
         response.complete(makeInitWriterResponse(metadataManager.initWriterId()));
         return response;
@@ -302,6 +305,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             throw new NotLeaderOrFollowerException(
                     String.format("Leader bucket of %s is not ready.", tableId));
         }
-        doAuthorize(operationType, Resource.table(path.getDatabaseName(), path.getTableName()));
+
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    operationType,
+                    Resource.table(path.getDatabaseName(), path.getTableName()));
+        }
     }
 }

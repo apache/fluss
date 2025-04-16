@@ -71,6 +71,8 @@ public class ZooKeeperBasedAuthorizerTest {
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
+    private static final String ROOT_USER = "root";
+
     private ZooKeeperBasedAuthorizer authorizer;
     private ZooKeeperBasedAuthorizer authorizer2;
     private ZooKeeperClient zooKeeperClient;
@@ -81,7 +83,7 @@ public class ZooKeeperBasedAuthorizerTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
-        configuration.setString(ConfigOptions.SUPER_USERS, "USER:root");
+        configuration.setString(ConfigOptions.SUPER_USERS, "USER:" + ROOT_USER);
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
         authorizer = new ZooKeeperBasedAuthorizer(configuration);
         authorizer2 = new ZooKeeperBasedAuthorizer(configuration);
@@ -90,16 +92,17 @@ public class ZooKeeperBasedAuthorizerTest {
     }
 
     @AfterEach
-    void tearDown() {
-        authorizer.dropAcls(Collections.singletonList(AclBindingFilter.ANY));
+    void tearDown() throws Exception {
+        authorizer.dropAcls(
+                createRootUserSession(), Collections.singletonList(AclBindingFilter.ANY));
         authorizer.close();
         authorizer2.close();
         zooKeeperClient.close();
     }
 
     @Test
-    void testSimpleAclOperation() {
-        assertThat(authorizer.listAcls(AclBindingFilter.ANY)).isEmpty();
+    void testSimpleAclOperation() throws Exception {
+        assertThat(authorizer.listAcls(createRootUserSession(), AclBindingFilter.ANY)).isEmpty();
         List<AclBinding> database1Acls =
                 Arrays.asList(
                         createAclBinding(Resource.database("database1"), "user1", "host-1", CREATE),
@@ -110,11 +113,12 @@ public class ZooKeeperBasedAuthorizerTest {
                         createAclBinding(Resource.database("database2"), "user1", "host-1", CREATE),
                         createAclBinding(Resource.database("database2"), "user2", "host-1", DROP));
 
-        authorizer.addAcls(database1Acls);
-        authorizer.addAcls(database2Acls);
+        authorizer.addAcls(createRootUserSession(), database1Acls);
+        authorizer.addAcls(createRootUserSession(), database2Acls);
         // list by database
         assertThat(
                         authorizer.listAcls(
+                                createRootUserSession(),
                                 new AclBindingFilter(
                                         new ResourceFilter(DATABASE, "database2"),
                                         AccessControlEntryFilter.ANY)))
@@ -122,6 +126,7 @@ public class ZooKeeperBasedAuthorizerTest {
         // list by user
         assertThat(
                         authorizer.listAcls(
+                                createRootUserSession(),
                                 createAclBindingFilter(
                                         ResourceFilter.ANY,
                                         new FlussPrincipal("user1", "USER"),
@@ -132,6 +137,7 @@ public class ZooKeeperBasedAuthorizerTest {
         // list by operation
         assertThat(
                         authorizer.listAcls(
+                                createRootUserSession(),
                                 createAclBindingFilter(
                                         ResourceFilter.ANY,
                                         FlussPrincipal.ANY,
@@ -141,11 +147,12 @@ public class ZooKeeperBasedAuthorizerTest {
                         Arrays.asList(database1Acls.get(0), database2Acls.get(0)));
 
         authorizer.dropAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBindingFilter(
                                 new ResourceFilter(DATABASE, "database2"),
                                 AccessControlEntryFilter.ANY)));
-        assertThat(authorizer.listAcls(AclBindingFilter.ANY))
+        assertThat(authorizer.listAcls(createRootUserSession(), AclBindingFilter.ANY))
                 .containsExactlyInAnyOrderElementsOf(database1Acls);
     }
 
@@ -156,8 +163,9 @@ public class ZooKeeperBasedAuthorizerTest {
                 Arrays.asList(
                         new Action(Resource.table("database1", "foo"), READ),
                         new Action(Resource.database("database2"), WRITE));
-        assertThat(authorizer.authorize(session, actions)).containsExactly(false, false);
+        assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, false);
         authorizer.addAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBinding(
                                 Resource.database("database2"),
@@ -166,49 +174,44 @@ public class ZooKeeperBasedAuthorizerTest {
                                         "192.168.1.1",
                                         WRITE,
                                         PermissionType.ALLOW))));
-        assertThat(authorizer.authorize(session, actions)).containsExactly(false, true);
+        assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, true);
         authorizer.addAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBinding(
                                 Resource.table("database1", "foo"),
                                 new AccessControlEntry(
                                         session.getPrincipal(), "*", READ, PermissionType.ALLOW))));
-        assertThat(authorizer.authorize(session, actions)).containsExactly(true, true);
+        assertThat(authorizer.authorizeActions(session, actions)).containsExactly(true, true);
         authorizer.dropAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBindingFilter(
                                 new ResourceFilter(ResourceType.TABLE, "database1.foo"),
                                 new AccessControlEntryFilter(
                                         null, null, READ, PermissionType.ANY))));
-        assertThat(authorizer.authorize(session, actions)).containsExactly(false, true);
+        assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, true);
     }
 
     @Test
     void testAuthorizerNoZkConfig() {
         Configuration configuration = new Configuration();
-        ZooKeeperBasedAuthorizer zooKeeperBasedAuthorizer =
-                new ZooKeeperBasedAuthorizer(configuration);
-        assertThatThrownBy(zooKeeperBasedAuthorizer::startup)
-                .hasMessageContaining(
-                        "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
+        try (ZooKeeperBasedAuthorizer zooKeeperBasedAuthorizer =
+                new ZooKeeperBasedAuthorizer(configuration)) {
+            assertThatThrownBy(zooKeeperBasedAuthorizer::startup)
+                    .hasMessageContaining(
+                            "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
+        }
     }
 
     @Test
     void testSuperUserHasAccess() throws Exception {
         Session normalUserSession = createSession("user1", "192.168.1.1");
         Session superUserSession = createSession("root", "192.168.1.1");
-        assertThat(
-                        authorizer.authorize(
-                                normalUserSession,
-                                Collections.singletonList(
-                                        new Action(Resource.database("database1"), READ))))
-                .containsExactly(false);
-        assertThat(
-                        authorizer.authorize(
-                                superUserSession,
-                                Collections.singletonList(
-                                        new Action(Resource.database("database1"), READ))))
-                .containsExactly(true);
+        assertThat(authorizer.isAuthorized(normalUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
+                .isTrue();
     }
 
     @Test
@@ -218,8 +221,9 @@ public class ZooKeeperBasedAuthorizerTest {
                 Arrays.asList(
                         new Action(Resource.database("database1"), READ),
                         new Action(Resource.database("database1"), WRITE));
-        assertThat(authorizer.authorize(session, actions)).containsExactly(false, false);
+        assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, false);
         authorizer.addAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBinding(
                                 Resource.database("database1"),
@@ -228,7 +232,7 @@ public class ZooKeeperBasedAuthorizerTest {
                                         "192.168.1.1",
                                         OperationType.ALL,
                                         PermissionType.ALLOW))));
-        assertThat(authorizer.authorize(session, actions)).containsExactly(true, true);
+        assertThat(authorizer.authorizeActions(session, actions)).containsExactly(true, true);
     }
 
     @Test
@@ -238,9 +242,10 @@ public class ZooKeeperBasedAuthorizerTest {
         Session session2 = createSession("user1", "192.168.1.2");
         List<Action> actions =
                 Collections.singletonList(new Action(Resource.database("database1"), READ));
-        assertThat(authorizer.authorize(session1, actions)).containsExactly(false);
-        assertThat(authorizer.authorize(session2, actions)).containsExactly(false);
+        assertThat(authorizer.authorizeActions(session1, actions)).containsExactly(false);
+        assertThat(authorizer.authorizeActions(session2, actions)).containsExactly(false);
         authorizer.addAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBinding(
                                 Resource.database("database1"),
@@ -249,16 +254,17 @@ public class ZooKeeperBasedAuthorizerTest {
                                         session1.getInetAddress().getHostAddress(),
                                         READ,
                                         PermissionType.ALLOW))));
-        assertThat(authorizer.authorize(session1, actions)).containsExactly(true);
-        assertThat(authorizer.authorize(session2, actions)).containsExactly(false);
+        assertThat(authorizer.authorizeActions(session1, actions)).containsExactly(true);
+        assertThat(authorizer.authorizeActions(session2, actions)).containsExactly(false);
         authorizer.addAcls(
+                createRootUserSession(),
                 Collections.singletonList(
                         new AclBinding(
                                 Resource.database("database1"),
                                 new AccessControlEntry(
                                         principal, "*", READ, PermissionType.ALLOW))));
-        assertThat(authorizer.authorize(session1, actions)).containsExactly(true);
-        assertThat(authorizer.authorize(session2, actions)).containsExactly(true);
+        assertThat(authorizer.authorizeActions(session1, actions)).containsExactly(true);
+        assertThat(authorizer.authorizeActions(session2, actions)).containsExactly(true);
     }
 
     /** Test ACL inheritance, as described in {@link OperationType}. */
@@ -315,45 +321,38 @@ public class ZooKeeperBasedAuthorizerTest {
         Session session = createSession("user1", "192.168.1.1");
         AccessControlEntry accessControlEntry =
                 new AccessControlEntry(session.getPrincipal(), "*", parentOp, PermissionType.ALLOW);
-        authorizer.addAcls(Collections.singletonList(new AclBinding(resource, accessControlEntry)));
+        addAcls(authorizer, resource, Collections.singleton(accessControlEntry));
         Arrays.asList(OperationType.values())
                 .forEach(
                         op -> {
                             if (allowedOps.contains(op) || op == parentOp) {
-                                assertThat(authorizer.authorize(session, op, resource)).isTrue();
+                                assertThat(authorizer.isAuthorized(session, op, resource)).isTrue();
                             } else if (op != OperationType.ANY) {
-                                assertThat(authorizer.authorize(session, op, resource)).isFalse();
+                                assertThat(authorizer.isAuthorized(session, op, resource))
+                                        .isFalse();
                             }
                         });
-        authorizer.dropAcls(
-                Collections.singletonList(
-                        new AclBindingFilter(
-                                new ResourceFilter(resource.getType(), resource.getName()),
-                                new AccessControlEntryFilter(
-                                        session.getPrincipal(),
-                                        "*",
-                                        parentOp,
-                                        PermissionType.ALLOW))));
-        authorizer.dropAcls(
-                Collections.singletonList(
-                        new AclBindingFilter(
-                                new ResourceFilter(
-                                        Resource.cluster().getType(), Resource.cluster().getName()),
-                                new AccessControlEntryFilter(
-                                        session.getPrincipal(),
-                                        "*",
-                                        OperationType.IDEMPOTENT_WRITE,
-                                        PermissionType.ALLOW))));
-        authorizer.dropAcls(
-                Collections.singletonList(
-                        new AclBindingFilter(
-                                new ResourceFilter(
-                                        Resource.cluster().getType(), Resource.cluster().getName()),
-                                new AccessControlEntryFilter(
-                                        session.getPrincipal(),
-                                        "*",
-                                        OperationType.FILESYSTEM_TOKEN,
-                                        PermissionType.ALLOW))));
+        dropAcls(
+                authorizer,
+                resource,
+                Collections.singleton(
+                        createAclEntry(session.getPrincipal().getName(), "*", parentOp)));
+        dropAcls(
+                authorizer,
+                Resource.cluster(),
+                Collections.singleton(
+                        createAclEntry(
+                                session.getPrincipal().getName(),
+                                "*",
+                                OperationType.IDEMPOTENT_WRITE)));
+        dropAcls(
+                authorizer,
+                Resource.cluster(),
+                Collections.singleton(
+                        createAclEntry(
+                                session.getPrincipal().getName(),
+                                "*",
+                                OperationType.FILESYSTEM_TOKEN)));
     }
 
     @Test
@@ -369,32 +368,23 @@ public class ZooKeeperBasedAuthorizerTest {
         Session session = createSession("user1", "192.168.1.1");
         AccessControlEntry accessControlEntry =
                 new AccessControlEntry(user, "*", READ, PermissionType.ALLOW);
-        authorizer.addAcls(
-                Collections.singletonList(
-                        new AclBinding(mockResource(parentType), accessControlEntry)));
+        addAcls(authorizer, mockResource(parentType), Collections.singleton(accessControlEntry));
         Arrays.asList(ResourceType.values())
                 .forEach(
                         resourceType -> {
                             if (allowedTypes.contains(resourceType) || resourceType == parentType) {
                                 assertThat(
-                                                authorizer.authorize(
+                                                authorizer.isAuthorized(
                                                         session, READ, mockResource(resourceType)))
                                         .isTrue();
                             } else if (resourceType != ResourceType.ANY) {
                                 assertThat(
-                                                authorizer.authorize(
+                                                authorizer.isAuthorized(
                                                         session, READ, mockResource(resourceType)))
                                         .isFalse();
                             }
                         });
-        authorizer.dropAcls(
-                Collections.singletonList(
-                        new AclBindingFilter(
-                                new ResourceFilter(
-                                        mockResource(parentType).getType(),
-                                        mockResource(parentType).getName()),
-                                new AccessControlEntryFilter(
-                                        user, "*", READ, PermissionType.ALLOW))));
+        dropAcls(authorizer, mockResource(parentType), Collections.singleton(accessControlEntry));
     }
 
     private Resource mockResource(ResourceType resourceType) {
@@ -480,7 +470,7 @@ public class ZooKeeperBasedAuthorizerTest {
     }
 
     @Test
-    void testLocalConcurrentModificationOfResourceAcls() {
+    void testLocalConcurrentModificationOfResourceAcls() throws Exception {
         Resource commonResource = Resource.database("foo-" + UUID.randomUUID());
         FlussPrincipal user1 = new FlussPrincipal("user1", "User");
         AccessControlEntry acl1 = new AccessControlEntry(user1, "host-1", READ, PermissionType.ANY);
@@ -497,7 +487,7 @@ public class ZooKeeperBasedAuthorizerTest {
     }
 
     @Test
-    void testDistributedConcurrentModificationOfResourceAcls() {
+    void testDistributedConcurrentModificationOfResourceAcls() throws Exception {
         Resource commonResource = Resource.database("test");
         FlussPrincipal user1 = new FlussPrincipal("user1", "User");
         AccessControlEntry acl1 = new AccessControlEntry(user1, "host-1", READ, PermissionType.ANY);
@@ -512,7 +502,7 @@ public class ZooKeeperBasedAuthorizerTest {
 
         // Add on one instance and delete on another
         addAcls(authorizer, commonResource, Collections.singleton(acl3));
-        removeAcls(authorizer2, commonResource, Collections.singleton(acl3));
+        dropAcls(authorizer2, commonResource, Collections.singleton(acl3));
 
         retry(
                 Duration.ofMinutes(1),
@@ -570,7 +560,7 @@ public class ZooKeeperBasedAuthorizerTest {
                                                                                     .getName())
                                                                     % 10
                                                             == 0) {
-                                                        removeAcls(
+                                                        dropAcls(
                                                                 authorizer2,
                                                                 commonResource,
                                                                 Collections.singleton(acl));
@@ -609,7 +599,7 @@ public class ZooKeeperBasedAuthorizerTest {
                                                             authorizer,
                                                             commonResource,
                                                             Collections.singleton(acl));
-                                                    removeAcls(
+                                                    dropAcls(
                                                             authorizer2,
                                                             commonResource,
                                                             Collections.singleton(acl));
@@ -631,15 +621,13 @@ public class ZooKeeperBasedAuthorizerTest {
                 });
     }
 
-    // todo : add acl作为base测试类
-
     void addAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
         List<AclBinding> aclBindings =
                 entries.stream()
                         .map(entry -> new AclBinding(resource, entry))
                         .collect(Collectors.toList());
         authorizer
-                .addAcls(aclBindings)
+                .addAcls(createRootUserSession(), aclBindings)
                 .forEach(
                         result -> {
                             if (result.exception().isPresent()) {
@@ -653,13 +641,14 @@ public class ZooKeeperBasedAuthorizerTest {
                 new AclBindingFilter(
                         new ResourceFilter(resource.getType(), resource.getName()),
                         AccessControlEntryFilter.ANY);
-        Collection<AclBinding> aclBindings = authorizer.listAcls(aclBindingFilter);
+        Collection<AclBinding> aclBindings =
+                authorizer.listAcls(createRootUserSession(), aclBindingFilter);
         return aclBindings.stream()
                 .map(AclBinding::getAccessControlEntry)
                 .collect(Collectors.toSet());
     }
 
-    void removeAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
+    void dropAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
         List<AclBindingFilter> aclBindings =
                 entries.stream()
                         .map(
@@ -674,7 +663,7 @@ public class ZooKeeperBasedAuthorizerTest {
                                                         entry.getPermissionType())))
                         .collect(Collectors.toList());
         authorizer
-                .dropAcls(aclBindings)
+                .dropAcls(createRootUserSession(), aclBindings)
                 .forEach(
                         result -> {
                             if (result.exception().isPresent()) {
@@ -705,6 +694,14 @@ public class ZooKeeperBasedAuthorizerTest {
                     "Should support many concurrent calls"
                             + " - Exception during concurrent execution",
                     e);
+        }
+    }
+
+    private Session createRootUserSession() {
+        try {
+            return createSession(ROOT_USER, "127.0.0.1");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
