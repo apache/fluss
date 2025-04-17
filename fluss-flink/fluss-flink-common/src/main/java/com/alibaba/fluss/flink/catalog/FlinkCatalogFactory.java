@@ -23,11 +23,11 @@ import org.apache.flink.table.factories.CatalogFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
 import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_SECURITY_PREFIX;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** Factory for {@link FlinkCatalog}. */
 public class FlinkCatalogFactory implements CatalogFactory {
@@ -55,13 +55,7 @@ public class FlinkCatalogFactory implements CatalogFactory {
                 FactoryUtil.createCatalogFactoryHelper(this, context);
         helper.validateExcept(CLIENT_SECURITY_PREFIX);
         Map<String, String> options = context.getOptions();
-        Map<String, String> securityConfigs = new HashMap<>();
-        options.forEach(
-                (key, value) -> {
-                    if (key.startsWith(CLIENT_SECURITY_PREFIX)) {
-                        securityConfigs.put(key, value);
-                    }
-                });
+        Map<String, String> securityConfigs = extractPrefix(options, CLIENT_SECURITY_PREFIX);
 
         return new FlinkCatalog(
                 context.getName(),

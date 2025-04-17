@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.kafka;
 
+import com.alibaba.fluss.rpc.TestingTabletGatewayService;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;

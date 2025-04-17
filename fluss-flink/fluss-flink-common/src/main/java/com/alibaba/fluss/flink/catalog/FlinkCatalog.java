@@ -92,10 +92,10 @@ public class FlinkCatalog implements Catalog {
     protected final String catalogName;
     protected final @Nullable String defaultDatabase;
     protected final String bootstrapServers;
+    private final Map<String, String> securityConfigs;
     protected Connection connection;
     protected Admin admin;
     private volatile @Nullable LakeCatalog lakeCatalog;
-    private final Map<String, String> securityConfigs;
 
     public FlinkCatalog(
             String name,

@@ -33,11 +33,17 @@ import static com.alibaba.fluss.config.ConfigBuilder.key;
 public class UsernamePasswordAuthenticationPlugin
         implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
 
-    private static final ConfigOption<String> USERNAME =
-            key("username").stringType().noDefaultValue();
+    private static final ConfigOption<String> CLIENT_USERNAME =
+            key("client.security.username_password.username").stringType().noDefaultValue();
 
-    private static final ConfigOption<String> PASSWORD =
-            key("password").stringType().noDefaultValue();
+    private static final ConfigOption<String> CLIENT_PASSWORD =
+            key("client.security.username_password.password").stringType().noDefaultValue();
+
+    private static final ConfigOption<String> SERVER_USERNAME =
+            key("security.username_password.username").stringType().noDefaultValue();
+
+    private static final ConfigOption<String> SERVER_PASSWORD =
+            key("security.username_password.password").stringType().noDefaultValue();
 
     private static final String AUTH_PROTOCOL = "username_password";
 
@@ -48,8 +54,8 @@ public class UsernamePasswordAuthenticationPlugin
 
     @Override
     public ClientAuthenticator createClientAuthenticator(Configuration configuration) {
-        String username = configuration.getString(USERNAME);
-        String password = configuration.getString(PASSWORD);
+        String username = configuration.getString(CLIENT_USERNAME);
+        String password = configuration.getString(CLIENT_PASSWORD);
         if (username == null || password == null) {
             throw new AuthenticationException("username and password shouldn't be null.");
         }
@@ -62,13 +68,13 @@ public class UsernamePasswordAuthenticationPlugin
             }
 
             @Override
-            public byte[] authenticate(byte[] data) {
+            public byte[] authenticate(byte[] data) throws AuthenticationException {
                 isComplete = true;
                 return serializeToken(username, password);
             }
 
             @Override
-            public boolean isComplete() {
+            public boolean isCompleted() {
                 return isComplete;
             }
         };
@@ -76,8 +82,8 @@ public class UsernamePasswordAuthenticationPlugin
 
     @Override
     public ServerAuthenticator createServerAuthenticator(Configuration configuration) {
-        String expectedUsername = configuration.getString(USERNAME);
-        String expectedPassword = configuration.getString(PASSWORD);
+        String expectedUsername = configuration.getString(SERVER_USERNAME);
+        String expectedPassword = configuration.getString(SERVER_PASSWORD);
         if (expectedPassword == null || expectedUsername == null) {
             throw new AuthenticationException("username and password shouldn't be null.");
         }
@@ -90,7 +96,7 @@ public class UsernamePasswordAuthenticationPlugin
             }
 
             @Override
-            public byte[] evaluateResponse(byte[] token) {
+            public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
                 byte[] expectedToken = serializeToken(expectedUsername, expectedPassword);
                 if (!Arrays.equals(token, expectedToken)) {
                     throw new AuthenticationException("username or password is incorrect.");
@@ -102,7 +108,7 @@ public class UsernamePasswordAuthenticationPlugin
             }
 
             @Override
-            public boolean isComplete() {
+            public boolean isCompleted() {
                 return isComplete;
             }
         };

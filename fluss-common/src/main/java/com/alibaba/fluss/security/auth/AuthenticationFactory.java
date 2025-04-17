@@ -22,6 +22,8 @@ import com.alibaba.fluss.metadata.ValidationException;
 import com.alibaba.fluss.plugin.PluginManager;
 import com.alibaba.fluss.plugin.PluginUtils;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -52,7 +54,6 @@ import java.util.stream.Collectors;
  * @since 0.7
  */
 public class AuthenticationFactory {
-    private static final String CLIENT_AUTHENTICATOR_PREFIX = "client.security.";
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.";
 
     /**
@@ -70,22 +71,9 @@ public class AuthenticationFactory {
                 discoverPlugin(
                         configuration,
                         clientAuthenticateProtocol,
-                        ClientAuthenticationPlugin.class);
-
-        Map<String, String> allConfig = configuration.toMap();
-        Map<String, String> authConfig = new HashMap<>();
-        String prefix = CLIENT_AUTHENTICATOR_PREFIX + clientAuthenticateProtocol + ".";
-        allConfig
-                .keySet()
-                .forEach(
-                        key -> {
-                            if (key.startsWith(prefix)) {
-                                authConfig.put(key.substring(prefix.length()), allConfig.get(key));
-                            }
-                        });
-
-        return () ->
-                authenticatorPlugin.createClientAuthenticator(Configuration.fromMap(authConfig));
+                        ClientAuthenticationPlugin.class,
+                        null);
+        return () -> authenticatorPlugin.createClientAuthenticator(configuration);
     }
 
     /**
@@ -100,11 +88,10 @@ public class AuthenticationFactory {
     public static Map<String, Supplier<ServerAuthenticator>> loadServerAuthenticatorSuppliers(
             Configuration configuration) {
 
+        PluginManager pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
         Map<String, Supplier<ServerAuthenticator>> serverAuthenticators = new HashMap<>();
         Map<String, String> protocolMap =
                 configuration.getMap(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
-        Map<String, String> allConfigMap = configuration.toMap();
-
         for (Map.Entry<String, String> protocolEntry : protocolMap.entrySet()) {
 
             String serverAuthenticateProtocol = protocolEntry.getValue();
@@ -112,24 +99,12 @@ public class AuthenticationFactory {
                     discoverPlugin(
                             configuration,
                             serverAuthenticateProtocol,
-                            ServerAuthenticationPlugin.class);
+                            ServerAuthenticationPlugin.class,
+                            pluginManager);
 
-            // get the protocol config.
-            Map<String, String> authConfigMap = new HashMap<>();
-            String prefix = SERVER_AUTHENTICATOR_PREFIX + serverAuthenticateProtocol + ".";
-            allConfigMap
-                    .keySet()
-                    .forEach(
-                            key -> {
-                                if (key.startsWith(prefix)) {
-                                    authConfigMap.put(
-                                            key.substring(prefix.length()), allConfigMap.get(key));
-                                }
-                            });
-            Configuration authConfig = Configuration.fromMap(authConfigMap);
             serverAuthenticators.put(
                     protocolEntry.getKey(),
-                    () -> serverAuthenticatorPlugin.createServerAuthenticator(authConfig));
+                    () -> serverAuthenticatorPlugin.createServerAuthenticator(configuration));
         }
         return serverAuthenticators;
     }
@@ -147,11 +122,16 @@ public class AuthenticationFactory {
      */
     @SuppressWarnings("unchecked")
     private static <T extends AuthenticationPlugin> T discoverPlugin(
-            Configuration configuration, String protocol, Class<T> pluginInterface) {
-        PluginManager pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
+            Configuration configuration,
+            String protocol,
+            Class<T> pluginInterface,
+            @Nullable PluginManager pluginManager) {
+
         Collection<Supplier<Iterator<AuthenticationPlugin>>> pluginSuppliers = new ArrayList<>(2);
         pluginSuppliers.add(() -> ServiceLoader.load(AuthenticationPlugin.class).iterator());
-        pluginSuppliers.add(() -> pluginManager.load(AuthenticationPlugin.class));
+        if (pluginManager != null) {
+            pluginSuppliers.add(() -> pluginManager.load(AuthenticationPlugin.class));
+        }
 
         List<T> matchingPlugins = new ArrayList<>();
         for (Supplier<Iterator<AuthenticationPlugin>> pluginIteratorsSupplier : pluginSuppliers) {
@@ -164,11 +144,18 @@ public class AuthenticationFactory {
                 }
             }
         }
-        if (matchingPlugins.size() != 1) {
+        if (matchingPlugins.isEmpty()) {
             throw new ValidationException(
                     String.format(
-                            "Could not find same authenticator plugin for protocol '%s' in the classpath.\n\n"
-                                    + "Available factory protocols are:\n\n"
+                            "No plugin for the protocol '%s' is found in the classpath.",
+                            protocol));
+        }
+
+        if (matchingPlugins.size() > 1) {
+            throw new ValidationException(
+                    String.format(
+                            "Multiple plugins for the same protocol '%s' are found in the classpath.\n\n"
+                                    + "Available plugins are:\n\n"
                                     + "%s",
                             protocol,
                             matchingPlugins.stream()

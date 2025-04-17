@@ -18,7 +18,6 @@ package com.alibaba.fluss.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.FlussConfigUtils;
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
 import com.alibaba.fluss.flink.lakehouse.LakeTableFactory;
 import com.alibaba.fluss.flink.sink.FlinkTableSink;
@@ -54,7 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_SECURITY_PREFIX;
+import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static com.alibaba.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
 import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
 import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
@@ -214,8 +213,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         // forward all client configs
         tableOptions.forEach(
                 (key, value) -> {
-                    if (FlussConfigUtils.CLIENT_OPTIONS.containsKey(key)
-                            || key.startsWith(CLIENT_SECURITY_PREFIX)) {
+                    if (key.startsWith(CLIENT_PREFIX)) {
                         flussConfig.setString(key, value);
                     }
                 });

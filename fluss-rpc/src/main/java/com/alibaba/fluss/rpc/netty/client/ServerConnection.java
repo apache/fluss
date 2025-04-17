@@ -366,21 +366,39 @@ final class ServerConnection {
         synchronized (lock) {
             serverApiVersions =
                     new ServerApiVersions(((ApiVersionsResponse) response).getApiVersionsList());
-            LOG.info("Begin to authenticate with protocol {}", authenticator.protocol());
+            LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
+            // send initial token
             sendAuthenticate(new byte[0]);
         }
     }
 
     private void sendAuthenticate(byte[] challenge) {
-        byte[] token;
-        if (authenticator.isComplete() || (token = authenticator.authenticate(challenge)) == null) {
+        try {
+            if (!authenticator.isCompleted()) {
+                byte[] token = authenticator.authenticate(challenge);
+                if (token != null) {
+                    switchState(ConnectionState.AUTHENTICATING);
+                    AuthenticateRequest request =
+                            new AuthenticateRequest()
+                                    .setToken(token)
+                                    .setProtocol(authenticator.protocol());
+                    doSend(ApiKeys.AUTHENTICATE, request, new CompletableFuture<>(), true)
+                            .whenComplete(this::handleAuthenticateResponse);
+                    return;
+                }
+            }
+
+            assert authenticator.isCompleted();
             switchState(ConnectionState.READY);
-        } else {
-            switchState(ConnectionState.AUTHENTICATING);
-            AuthenticateRequest request =
-                    new AuthenticateRequest().setToken(token).setProtocol(authenticator.protocol());
-            doSend(ApiKeys.AUTHENTICATE, request, new CompletableFuture<>(), true)
-                    .whenComplete(this::handleAuthenticateResponse);
+
+        } catch (Exception e) {
+            LOG.error(
+                    "Authentication failed when authenticating challenge: {}",
+                    new String(challenge),
+                    e);
+            close(
+                    new FlussRuntimeException(
+                            "Authentication failed when authenticating challenge", e));
         }
     }
 
@@ -395,12 +413,21 @@ final class ServerConnection {
         }
 
         synchronized (lock) {
-            sendAuthenticate(((AuthenticateResponse) response).getChallenge());
+            AuthenticateResponse authenticateResponse = (AuthenticateResponse) response;
+            if (authenticateResponse.hasChallenge()) {
+                sendAuthenticate(((AuthenticateResponse) response).getChallenge());
+            } else if (authenticator.isCompleted()) {
+                switchState(ConnectionState.READY);
+            } else {
+                close(
+                        new IllegalStateException(
+                                "client authenticator is not completed while server generate no challenge."));
+            }
         }
     }
 
     private void switchState(ConnectionState targetState) {
-        LOG.info("switch state form {} to {}", state, targetState);
+        LOG.debug("switch state form {} to {}", state, targetState);
         state = targetState;
         if (targetState == ConnectionState.READY) {
             // process pending requests

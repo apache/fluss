@@ -51,6 +51,6 @@ public interface RpcGateway {
      */
     @RPC(api = ApiKeys.AUTHENTICATE)
     default CompletableFuture<AuthenticateResponse> authenticate(AuthenticateRequest request) {
-        return CompletableFuture.completedFuture(new AuthenticateResponse());
+        throw new UnsupportedOperationException("This method should not be called directly.");
     }
 }

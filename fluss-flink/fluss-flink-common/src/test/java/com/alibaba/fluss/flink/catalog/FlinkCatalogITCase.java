@@ -462,7 +462,8 @@ abstract class FlinkCatalogITCase {
             Catalog finalAuthenticateCatalog = authenticateCatalog;
             assertThatThrownBy(finalAuthenticateCatalog::open)
                     .cause()
-                    .hasMessageContaining("The connection has not completed authentication yet.");
+                    .hasMessageContaining(
+                            "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side.");
 
             Map<String, String> clientConfig = new HashMap<>();
             clientConfig.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "username_password");

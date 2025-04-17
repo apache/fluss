@@ -81,7 +81,7 @@ final class ServerChannelInitializer extends ChannelInitializer<SocketChannel> {
                         new LengthFieldBasedFrameDecoder(Integer.MAX_VALUE, 0, 4, 0, 0));
         ch.pipeline().addLast("idle", new IdleStateHandler(0, 0, maxIdleTimeSeconds));
         ServerAuthenticator serverAuthenticator = authenticatorSupplier.get();
-        LOG.info(
+        LOG.debug(
                 "initial a channel for listener {} with protocol {}",
                 endpointListenerName,
                 serverAuthenticator.protocol());

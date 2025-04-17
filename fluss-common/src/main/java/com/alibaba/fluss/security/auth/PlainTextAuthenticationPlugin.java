@@ -17,6 +17,7 @@
 package com.alibaba.fluss.security.auth;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.AuthenticationException;
 
 /** Authentication Plugin for PLAINTEXT which not need to do authentication. */
 public class PlainTextAuthenticationPlugin
@@ -46,12 +47,12 @@ public class PlainTextAuthenticationPlugin
         }
 
         @Override
-        public byte[] authenticate(byte[] data) {
+        public byte[] authenticate(byte[] data) throws AuthenticationException {
             return null;
         }
 
         @Override
-        public boolean isComplete() {
+        public boolean isCompleted() {
             return true;
         }
     }
@@ -70,7 +71,7 @@ public class PlainTextAuthenticationPlugin
         }
 
         @Override
-        public boolean isComplete() {
+        public boolean isCompleted() {
             return true;
         }
     }

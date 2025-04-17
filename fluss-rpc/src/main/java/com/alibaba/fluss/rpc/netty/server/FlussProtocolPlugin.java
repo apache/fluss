@@ -47,8 +47,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
             ServerType serverType,
             List<String> listeners,
             RequestsMetrics requestsMetrics) {
-        authenticatorSuppliers = AuthenticationFactory.loadServerAuthenticatorSuppliers(conf);
-        apiManager = new ApiManager(serverType);
+        this.authenticatorSuppliers = AuthenticationFactory.loadServerAuthenticatorSuppliers(conf);
+        this.apiManager = new ApiManager(serverType);
         maxIdleTimeSeconds = conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         this.listeners = listeners;
         this.requestsMetrics = requestsMetrics;

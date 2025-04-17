@@ -21,6 +21,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
+import com.alibaba.fluss.rpc.TestingTabletGatewayService;
 import com.alibaba.fluss.rpc.netty.server.NettyServer;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 

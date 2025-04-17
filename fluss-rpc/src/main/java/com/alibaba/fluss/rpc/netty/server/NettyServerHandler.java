@@ -134,7 +134,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                     inflightResponseMap.computeIfAbsent(apiKey, k -> new ArrayDeque<>());
             inflightResponses.addLast(request);
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, apiKey), ctx.executor());
-            if (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id) {
+            if (apiKey == ApiKeys.AUTHENTICATE.id
+                    || state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id) {
                 handleAuthenticateRequest(apiKey, requestMessage, future);
             } else {
                 requestChannel.putRequest(request);
@@ -162,7 +163,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         this.ctx = ctx;
         this.remoteAddress = ctx.channel().remoteAddress();
         switchState(
-                authenticator.isComplete()
+                authenticator.isCompleted()
                         ? ConnectionState.READY
                         : ConnectionState.AUTHENTICATING);
 
@@ -317,7 +318,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                     apiKey);
             future.completeExceptionally(
                     new AuthenticationException(
-                            "The connection has not completed authentication yet."));
+                            "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side."));
             return;
         }
 
@@ -332,23 +333,23 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
 
         AuthenticateResponse authenticateResponse = new AuthenticateResponse();
-        if (!authenticator.isComplete()) {
+        if (!authenticator.isCompleted()) {
             byte[] token = authenticateRequest.getToken();
-            byte[] response =
-                    !authenticator.isComplete()
-                            ? authenticator.evaluateResponse(token)
-                            : new byte[0];
-            authenticateResponse.setChallenge(response);
+            byte[] challenge;
+            if (!authenticator.isCompleted()
+                    && (challenge = authenticator.evaluateResponse(token)) != null) {
+                authenticateResponse.setChallenge(challenge);
+            }
         }
         future.complete(authenticateResponse);
 
-        if (authenticator.isComplete()) {
+        if (authenticator.isCompleted()) {
             switchState(ConnectionState.READY);
         }
     }
 
     private void switchState(ConnectionState targetState) {
-        LOG.info("switch state form {} to {}", state, targetState);
+        LOG.debug("switch state form {} to {}", state, targetState);
         state = targetState;
     }
 
