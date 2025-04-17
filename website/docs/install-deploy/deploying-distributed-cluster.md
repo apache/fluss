@@ -47,7 +47,7 @@ Flink requires the `JAVA_HOME` environment variable to be set on all nodes and p
 ## Fluss Setup
 
 This part will describe how to set up Fluss cluster consisting of one coordinator server and multiple tablet servers
-across three machines. Suppose you have three nodes have ip address:
+across three machines. Suppose you have three nodes in a `192.168.10/24` subnet with the following IP address assignment:
 - Node1: `192.168.10.1`
 - Node2: `192.168.10.2`
 - Node3: `192.168.10.3`
@@ -56,7 +56,7 @@ Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 wi
 
 ### Preparation
 
-1. Make sure ZooKeeper has been deployed, and assuming the ZooKeeper address is `192.168.10.99:2181`. see [Running zookeeper cluster](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper) to deploy a distributed ZooKeeper.
+1. Make sure ZooKeeper has been deployed, and assuming ZooKeeper is also part of the subnet and listens on `192.168.10.99:2181`. See [Running zookeeper cluster](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper) how to deploy a distributed ZooKeeper.
 
 2. Download Fluss
 
@@ -70,58 +70,81 @@ cd fluss-$FLUSS_VERSION$/
 
 ### Configuring Fluss
 
-After having extracted the archived files, you need to configure Fluss for the cluster by editing `conf/server.yaml`
+After having extracted the archived files, you need to configure Fluss for the cluster.
 
-For **Node1**, the config is as follows:
-```yaml
-coordinator.host: 192.168.10.1
-coordinator.port: 9123
-zookeeper.address: 192.168.10.99:2181
-zookeeper.path.root: /fluss
+On **each node**, we will use the _default config file_ (`conf/server.yaml`) to configure the _TabletServer_.
+Additionally, we will use a separate _custom config file_ (`conf/coordinator-server.yaml`) to configure the _CoordinatorServer_ on **Node1**.
+The custom config file on **Node1** is necessary to avoid a port collision for the `bind.listeners` config option with between the CoordianatorServer and the TabletServer instance running on the same node.
 
-tablet-server.host: 192.168.10.1
+Adapt the files on each node as follows.
+
+**Node1**
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.1:9124 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 1
-```
 
-For **Node2**, the config is as follows:
-```yaml
 zookeeper.address: 192.168.10.99:2181
 zookeeper.path.root: /fluss
 
-tablet-server.host: 192.168.10.2
+remote.data.dir: /tmp/fluss-remote-data
+```
+
+Additionally, create a file named `coordinator-server.yaml` in `conf` and add the following content.
+
+```yaml title="coordinator-server.yaml"
+# coordinator server
+bind.listeners: FLUSS://192.168.10.1:9123
+
+zookeeper.address: 192.168.10.99:2181
+zookeeper.path.root: /fluss
+
+remote.data.dir: /tmp/fluss-remote-data
+```
+
+**Node2**
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.2:9124 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 2
-```
 
-For **Node3**, the config is as follows:
-```yaml
 zookeeper.address: 192.168.10.99:2181
 zookeeper.path.root: /fluss
 
-tablet-server.host: 192.168.10.3
+remote.data.dir: /tmp/fluss-remote-data
+```
+
+**Node3**
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.3:9124 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 3
+zookeeper.address: 192.168.10.99:2181
+zookeeper.path.root: /fluss
 ```
 
 :::note
-- `tablet-server.id` is the unique id of the TabletServer, if you have multiple TabletServers, you should set different id for each TabletServer.
-- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](maintenance/configuration.md) for more details.
+- `tablet-server.id` is the unique id of the TabletServer. If you have multiple TabletServers, you should set a different id for each TabletServer.
+- In this example, we only set the mandatory properties. For additional properties, you can refer to [Configuration](maintenance/configuration.md) for more details.
   :::
 
 ### Starting Fluss
 
-To start Fluss, you should first to start a CoordinatorServer in **node1** and
-then start each TabletServer in **node1**, **node2**, **node3**. The command is as follows:
+To start Fluss, you should first start a CoordinatorServer instance on **Node1**. 
+Then, start a TabletServer instance on **Node1**, **Node2**, and **Node3**, respectively.
 
 #### Starting CoordinatorServer
 
-In **node1**, starting a CoordinatorServer:
+On **Node1**, start a CoordinatorServer instance with the custom config file as follows.
 ```shell
-./bin/coordinator-server.sh start
+./bin/coordinator-server.sh start -D configFile=conf/coordinator-server.yaml
 ```
 
 #### Starting TabletServer
 
-In **node1**, **node2**, **node3**, starting a TabletServer is as follows:
+On **Node1**, **Node2** and **Node3**, start a TabletServer as follows.
 ```shell
+# uses conf/server.yaml
 ./bin/tablet-server.sh start
 ```
 
