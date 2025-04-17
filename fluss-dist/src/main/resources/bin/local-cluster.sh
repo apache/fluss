@@ -39,14 +39,15 @@ case $STARTSTOP in
     (start)
         echo "Starting cluster."
 
-        # start zookeeper
+        # Start zookeeper
         "$FLUSS_BIN_DIR"/fluss-daemon.sh start zookeeper "${FLUSS_CONF_DIR}"/zookeeper.properties
 
         # Start single Coordinator Server on this machine
         "$FLUSS_BIN_DIR"/coordinator-server.sh start
 
-        # Start single Tablet Server on this machine
-        "${FLUSS_BIN_DIR}"/tablet-server.sh start
+        # Start single Tablet Server on this machine.
+        # Set bind.listeners as config option to avoid port binding conflict with coordinator server
+        "${FLUSS_BIN_DIR}"/tablet-server.sh start -D bind.listeners=FLUSS://localhost:0
     ;;
 
     (stop)
