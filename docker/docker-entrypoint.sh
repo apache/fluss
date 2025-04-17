@@ -18,6 +18,8 @@
 CONF_FILE="${FLUSS_HOME}/conf/server.yaml"
 
 prepare_configuration() {
+    # backward compatability: allow to use old [coordinator|tablet-server].host option in FLUSS_PROPERTIES
+    sed -i '/bind.listeners:/d' "${CONF_FILE}"
     if [ -n "${FLUSS_PROPERTIES}" ]; then
         echo "${FLUSS_PROPERTIES}" >> "${CONF_FILE}"
     fi
