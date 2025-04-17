@@ -16,14 +16,9 @@
 #
 
 
-USAGE="Usage: $0 (start [args])|stop"
+USAGE="Usage: $0 start|stop"
 
 STARTSTOP=$1
-
-if [ -z $2 ] || [[ $2 == -D* ]]; then
-    # start [-D...]
-    args=("${@:2}")
-fi
 
 if [[ $STARTSTOP != "start" ]] && [[ $STARTSTOP != "stop" ]]; then
   echo $USAGE
@@ -47,7 +42,7 @@ case $STARTSTOP in
 
         # Start single Tablet Server on this machine.
         # Set bind.listeners as config option to avoid port binding conflict with coordinator server
-        "${FLUSS_BIN_DIR}"/tablet-server.sh start -D bind.listeners=FLUSS://localhost:0
+        "${FLUSS_BIN_DIR}"/tablet-server.sh start -Dbind.listeners=FLUSS://localhost:0
     ;;
 
     (stop)
