@@ -68,11 +68,7 @@ public class AuthenticationFactory {
         String clientAuthenticateProtocol =
                 configuration.getString(ConfigOptions.CLIENT_SECURITY_PROTOCOL);
         ClientAuthenticationPlugin authenticatorPlugin =
-                discoverPlugin(
-                        configuration,
-                        clientAuthenticateProtocol,
-                        ClientAuthenticationPlugin.class,
-                        null);
+                discoverPlugin(clientAuthenticateProtocol, ClientAuthenticationPlugin.class, null);
         return () -> authenticatorPlugin.createClientAuthenticator(configuration);
     }
 
@@ -87,17 +83,14 @@ public class AuthenticationFactory {
      */
     public static Map<String, Supplier<ServerAuthenticator>> loadServerAuthenticatorSuppliers(
             Configuration configuration) {
-
         PluginManager pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
         Map<String, Supplier<ServerAuthenticator>> serverAuthenticators = new HashMap<>();
         Map<String, String> protocolMap =
                 configuration.getMap(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
         for (Map.Entry<String, String> protocolEntry : protocolMap.entrySet()) {
-
             String serverAuthenticateProtocol = protocolEntry.getValue();
             ServerAuthenticationPlugin serverAuthenticatorPlugin =
                     discoverPlugin(
-                            configuration,
                             serverAuthenticateProtocol,
                             ServerAuthenticationPlugin.class,
                             pluginManager);
@@ -113,7 +106,6 @@ public class AuthenticationFactory {
      * Discovers an authentication plugin of the specified type and protocol from the classpath and
      * configured plugins.
      *
-     * @param configuration The configuration used to initialize the plugin manager.
      * @param protocol The protocol name (e.g., "PLAINTEXT", "SASL_PLAIN") to match the plugin's
      *     {@link AuthenticationPlugin#authProtocol()}.
      * @return The discovered plugin instance.
@@ -122,10 +114,7 @@ public class AuthenticationFactory {
      */
     @SuppressWarnings("unchecked")
     private static <T extends AuthenticationPlugin> T discoverPlugin(
-            Configuration configuration,
-            String protocol,
-            Class<T> pluginInterface,
-            @Nullable PluginManager pluginManager) {
+            String protocol, Class<T> pluginInterface, @Nullable PluginManager pluginManager) {
 
         Collection<Supplier<Iterator<AuthenticationPlugin>>> pluginSuppliers = new ArrayList<>(2);
         pluginSuppliers.add(() -> ServiceLoader.load(AuthenticationPlugin.class).iterator());
@@ -138,7 +127,7 @@ public class AuthenticationFactory {
             final Iterator<AuthenticationPlugin> foundPlugins = pluginIteratorsSupplier.get();
             while (foundPlugins.hasNext()) {
                 AuthenticationPlugin plugin = foundPlugins.next();
-                if (plugin.authProtocol().equals(protocol)
+                if (plugin.authProtocol().equalsIgnoreCase(protocol)
                         && pluginInterface.isAssignableFrom(plugin.getClass())) {
                     matchingPlugins.add((T) plugin);
                 }

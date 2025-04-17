@@ -23,11 +23,7 @@ import javax.annotation.Nullable;
 /** Authenticator for client side. */
 public interface ClientAuthenticator {
 
-    /**
-     * The protocol name of the authenticator, which will send in the AuthenticateRequest.
-     *
-     * @return
-     */
+    /** The protocol name of the authenticator, which will send in the AuthenticateRequest. */
     String protocol();
 
     /**

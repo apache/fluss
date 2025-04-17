@@ -147,7 +147,7 @@ public class AuthenticationTest {
                     .cause()
                     .isExactlyInstanceOf(AuthenticationException.class)
                     .hasMessageContaining(
-                            "Authenticate protocol not match: protocol of server is username_password while protocol of client is mutual");
+                            "Authenticate protocol not match: protocol of server is 'username_password' while protocol of client is 'mutual'");
         }
     }
 

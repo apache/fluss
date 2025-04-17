@@ -135,7 +135,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             inflightResponses.addLast(request);
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, apiKey), ctx.executor());
             if (apiKey == ApiKeys.AUTHENTICATE.id
-                    || state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id) {
+                    || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
+                // handle to authentication for 3 cases:
+                // 1. the channel is in authing state, and the request is auth request, normal case
+                // 2. the channel is in authentication state, but receive non-auth request, error
+                // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
             } else {
                 requestChannel.putRequest(request);
@@ -327,7 +331,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             future.completeExceptionally(
                     new AuthenticationException(
                             String.format(
-                                    "Authenticate protocol not match: protocol of server is %s while protocol of client is %s",
+                                    "Authenticate protocol not match: protocol of server is '%s' while protocol of client is '%s'",
                                     authenticator.protocol(), authenticateRequest.getProtocol())));
             return;
         }
@@ -335,9 +339,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         AuthenticateResponse authenticateResponse = new AuthenticateResponse();
         if (!authenticator.isCompleted()) {
             byte[] token = authenticateRequest.getToken();
-            byte[] challenge;
-            if (!authenticator.isCompleted()
-                    && (challenge = authenticator.evaluateResponse(token)) != null) {
+            byte[] challenge = authenticator.evaluateResponse(token);
+            if (!authenticator.isCompleted() && challenge != null) {
                 authenticateResponse.setChallenge(challenge);
             }
         }

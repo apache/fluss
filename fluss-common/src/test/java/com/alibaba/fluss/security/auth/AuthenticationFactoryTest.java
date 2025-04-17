@@ -18,9 +18,12 @@ package com.alibaba.fluss.security.auth;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.ValidationException;
+import com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierClientAuthenticator;
+import com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierServerAuthenticator;
 
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link AuthenticationFactory}. */
@@ -61,5 +64,34 @@ public class AuthenticationFactoryTest {
                         () -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
+    }
+
+    @Test
+    void testIdentifierCaseInsensitive() {
+        Configuration configuration = new Configuration();
+        configuration.setString("client.security.protocol", "SSL_TEST");
+        configuration.setString("security.protocol.map", "FLUSS:SSL_TEST");
+        assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration).get())
+                .isInstanceOf(TestIdentifierClientAuthenticator.class);
+        assertThat(
+                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
+                                .values().stream()
+                                .findAny()
+                                .get()
+                                .get())
+                .isInstanceOf(TestIdentifierServerAuthenticator.class);
+
+        Configuration configuration2 = new Configuration();
+        configuration2.setString("client.security.protocol", "ssl_test");
+        configuration2.setString("security.protocol.map", "FLUSS:ssl_test");
+        assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration2).get())
+                .isInstanceOf(TestIdentifierClientAuthenticator.class);
+        assertThat(
+                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
+                                .values().stream()
+                                .findAny()
+                                .get()
+                                .get())
+                .isInstanceOf(TestIdentifierServerAuthenticator.class);
     }
 }

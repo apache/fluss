@@ -14,3 +14,4 @@
 
 com.alibaba.fluss.security.auth.TestConflictingAuthenticationPlugin1
 com.alibaba.fluss.security.auth.TestConflictingAuthenticationPlugin2
+com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin
