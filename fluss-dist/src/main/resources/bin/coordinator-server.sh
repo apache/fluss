@@ -22,8 +22,8 @@ USAGE="Usage: $0 ((start|start-foreground) [args])|stop|stop-all"
 
 STARTSTOP=$1
 
-if [ -z $2 ] || [[ $2 == "-D" ]]; then
-    # start [-D ...]
+if [ -z $2 ] || [[ $2 == -D* ]]; then
+    # start|start-foreground [-D...]
     args=("${@:2}")
 fi
 
