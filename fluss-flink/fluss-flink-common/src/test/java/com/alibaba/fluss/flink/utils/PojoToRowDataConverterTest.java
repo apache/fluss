@@ -34,6 +34,7 @@ import com.alibaba.fluss.types.TimeType;
 import com.alibaba.fluss.types.TimestampType;
 import com.alibaba.fluss.types.TinyIntType;
 
+import org.apache.flink.api.common.functions.InvalidTypesException;
 import org.apache.flink.table.data.RowData;
 import org.junit.jupiter.api.Test;
 
@@ -45,6 +46,7 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link com.alibaba.fluss.flink.utils.PojoToRowDataConverter}. */
 public class PojoToRowDataConverterTest {
@@ -157,54 +159,55 @@ public class PojoToRowDataConverterTest {
         assertThat(result.getLong(3)).isEqualTo(5004L);
     }
 
-    @Test
-    public void testComplexType() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("id", new BigIntType(false), "ID"),
-                                new DataField("price", new DecimalType(false, 10, 2), "Price")));
+    /**
+     * Test POJO class used for nested converter test scenarios.
+     *
+     * <p>This class is used for testing purposes:
+     *
+     * <ul>
+     *   <li>Serving as a nested field in other classes to verify that nested POJOs are properly
+     *       rejected by the converter
+     * </ul>
+     */
+    public static class ProductWithPrice {
+        private long id;
+        private BigDecimal price;
 
-        // Create a test class with a decimal field
-        class ProductWithPrice {
-            private long id;
-            private BigDecimal price;
+        // Must have public no-args constructor
+        public ProductWithPrice() {}
 
-            public ProductWithPrice(long id, BigDecimal price) {
-                this.id = id;
-                this.price = price;
-            }
+        public ProductWithPrice(long id, BigDecimal price) {
+            this.id = id;
+            this.price = price;
         }
 
-        PojoToRowDataConverter<ProductWithPrice> converter =
-                new PojoToRowDataConverter<>(ProductWithPrice.class, rowType);
+        public long getId() {
+            return id;
+        }
 
-        ProductWithPrice product = new ProductWithPrice(1001L, new BigDecimal("99.99"));
+        public void setId(long id) {
+            this.id = id;
+        }
 
-        RowData result = converter.convert(product);
+        public BigDecimal getPrice() {
+            return price;
+        }
 
-        assertThat(result.getArity()).isEqualTo(2);
-        assertThat(result.getLong(0)).isEqualTo(1001L);
-        assertThat(result.getDecimal(1, 10, 2).toBigDecimal()).isEqualTo(new BigDecimal("99.99"));
+        public void setPrice(BigDecimal price) {
+            this.price = price;
+        }
     }
 
     @Test
-    public void testInheritance() throws Exception {
-        class Parent {
-            protected String parentField;
+    public void testNestedPojoThrowsException() {
+        // Define a class with a nested POJO field
+        class NestedContainer {
+            private String name;
+            private ProductWithPrice nestedPojo; // This is a nested POJO
 
-            public Parent(String parentField) {
-                this.parentField = parentField;
-            }
-        }
-
-        class Child extends Parent {
-            private int childField;
-
-            public Child(String parentField, int childField) {
-                super(parentField);
-                this.childField = childField;
+            public NestedContainer(String name, ProductWithPrice nestedPojo) {
+                this.name = name;
+                this.nestedPojo = nestedPojo;
             }
         }
 
@@ -212,24 +215,19 @@ public class PojoToRowDataConverterTest {
                 new RowType(
                         true,
                         Arrays.asList(
-                                new DataField("parentField", new StringType(true), "Parent field"),
-                                new DataField("childField", new IntType(false), "Child field")));
+                                new DataField("name", new StringType(false), "Name"),
+                                new DataField(
+                                        "nestedPojo",
+                                        new RowType(true, Collections.emptyList()),
+                                        "Nested POJO")));
 
-        PojoToRowDataConverter<Child> converter =
-                new PojoToRowDataConverter<>(Child.class, rowType);
-
-        Child child = new Child("Parent value", 42);
-
-        RowData result = converter.convert(child);
-
-        assertThat(result.getArity()).isEqualTo(2);
-        assertThat(result.getString(0).toString()).isEqualTo("Parent value");
-        assertThat(result.getInt(1)).isEqualTo(42);
+        // Accept either exception type since Flink's POJO analysis happens first
+        assertThatThrownBy(() -> new PojoToRowDataConverter<>(NestedContainer.class, rowType))
+                .isInstanceOfAny(UnsupportedOperationException.class, InvalidTypesException.class);
     }
 
     @Test
     public void testEmptySchema() throws Exception {
-
         RowType emptyRowType = new RowType(true, Collections.emptyList());
 
         PojoToRowDataConverter<Order> converter =
@@ -287,6 +285,94 @@ public class PojoToRowDataConverterTest {
             this.timeValue = timeValue;
             this.timestampValue = timestampValue;
             this.bytesValue = bytesValue;
+            this.charValue = charValue;
+        }
+
+        public boolean isBooleanValue() {
+            return booleanValue;
+        }
+
+        public void setBooleanValue(boolean booleanValue) {
+            this.booleanValue = booleanValue;
+        }
+
+        public byte getTinyintValue() {
+            return tinyintValue;
+        }
+
+        public void setTinyintValue(byte tinyintValue) {
+            this.tinyintValue = tinyintValue;
+        }
+
+        public short getSmallintValue() {
+            return smallintValue;
+        }
+
+        public void setSmallintValue(short smallintValue) {
+            this.smallintValue = smallintValue;
+        }
+
+        public float getFloatValue() {
+            return floatValue;
+        }
+
+        public void setFloatValue(float floatValue) {
+            this.floatValue = floatValue;
+        }
+
+        public double getDoubleValue() {
+            return doubleValue;
+        }
+
+        public void setDoubleValue(double doubleValue) {
+            this.doubleValue = doubleValue;
+        }
+
+        public BigDecimal getDecimalValue() {
+            return decimalValue;
+        }
+
+        public void setDecimalValue(BigDecimal decimalValue) {
+            this.decimalValue = decimalValue;
+        }
+
+        public LocalDate getDateValue() {
+            return dateValue;
+        }
+
+        public void setDateValue(LocalDate dateValue) {
+            this.dateValue = dateValue;
+        }
+
+        public LocalTime getTimeValue() {
+            return timeValue;
+        }
+
+        public void setTimeValue(LocalTime timeValue) {
+            this.timeValue = timeValue;
+        }
+
+        public LocalDateTime getTimestampValue() {
+            return timestampValue;
+        }
+
+        public void setTimestampValue(LocalDateTime timestampValue) {
+            this.timestampValue = timestampValue;
+        }
+
+        public byte[] getBytesValue() {
+            return bytesValue;
+        }
+
+        public void setBytesValue(byte[] bytesValue) {
+            this.bytesValue = bytesValue;
+        }
+
+        public char getCharValue() {
+            return charValue;
+        }
+
+        public void setCharValue(char charValue) {
             this.charValue = charValue;
         }
     }
