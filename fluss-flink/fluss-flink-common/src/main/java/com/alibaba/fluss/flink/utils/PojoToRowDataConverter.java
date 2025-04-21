@@ -335,21 +335,6 @@ public class PojoToRowDataConverter<T> {
                         return null;
                     }
                 };
-            case ROW:
-                LOG.warn(
-                        "Complex type {} for field {} is not fully supported yet.",
-                        fieldType.getTypeRoot(),
-                        field.getName());
-                return obj -> {
-                    try {
-                        // For complex types, we still try to return the Java object as-is
-                        // It might work for some cases, but generally won't be properly converted
-                        return field.get(obj);
-                    } catch (IllegalAccessException e) {
-                        LOG.error("Failed to access complex field: {}", field.getName(), e);
-                        return null;
-                    }
-                };
             default:
                 LOG.warn(
                         "Unsupported type {} for field {}. Will try to return as-is.",
