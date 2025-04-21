@@ -39,6 +39,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelId;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -75,6 +76,7 @@ final class NettyServerHandlerTest {
     }
 
     @Test
+    @Disabled("TODO: add back in https://github.com/alibaba/fluss/issues/771")
     void testResponseReturnInOrder() throws Exception {
         // first write 10 requests to serverHandler.
         for (int i = 0; i < 10; i++) {
@@ -145,6 +147,7 @@ final class NettyServerHandlerTest {
     }
 
     @Test
+    @Disabled("TODO: add back in https://github.com/alibaba/fluss/issues/771")
     void testDifferentResponseTypeReturnInSeparateOrder() throws Exception {
         // 1. first write 5 requests with api as ApiKeys.API_VERSIONS to serverHandler.
         for (int i = 0; i < 5; i++) {

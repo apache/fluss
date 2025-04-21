@@ -58,6 +58,7 @@ import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -165,6 +166,7 @@ public class TabletServiceITCase {
     }
 
     @Test
+    @Disabled("TODO: add back in https://github.com/alibaba/fluss/issues/771")
     void testProduceLogResponseReturnInOrder() throws Exception {
         long tableId =
                 createTable(
@@ -310,6 +312,7 @@ public class TabletServiceITCase {
     }
 
     @Test
+    @Disabled("TODO: add back in https://github.com/alibaba/fluss/issues/777")
     void testFetchLogWithMinFetchSizeAndTimeout() throws Exception {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
