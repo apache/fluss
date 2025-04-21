@@ -28,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.EOFException;
 import java.io.File;
@@ -37,6 +38,8 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
@@ -126,17 +129,23 @@ class FileLogProjectionTest {
 
     static Stream<Arguments> projectedFieldsArgs() {
         return Stream.of(
-                Arguments.of((Object) new int[] {0}),
-                Arguments.arguments((Object) new int[] {1}),
-                Arguments.arguments((Object) new int[] {0, 1}));
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0),
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1));
     }
 
     @ParameterizedTest
     @MethodSource("projectedFieldsArgs")
-    void testProject(int[] projectedFields) throws Exception {
+    void testProject(int[] projectedFields, byte recordBatchMagic) throws Exception {
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
-                        TestData.DATA1_ROW_TYPE, TestData.DATA1, TestData.ANOTHER_DATA1);
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
         List<Object[]> results =
                 doProjection(
                         new FileLogProjection(),
@@ -159,14 +168,18 @@ class FileLogProjectionTest {
         assertEquals(results, expected);
     }
 
-    @Test
-    void testIllegalByteOrder() throws Exception {
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    void testIllegalByteOrder(byte recordBatchMagic) throws Exception {
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
-                        TestData.DATA1_ROW_TYPE, TestData.DATA1, TestData.ANOTHER_DATA1);
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
         FileLogProjection projection = new FileLogProjection();
         // overwrite the wrong decoding byte order endian
-        projection.getLogHeaderBuffer().order(ByteOrder.BIG_ENDIAN);
+        projection.getLogHeaderBuffer(recordBatchMagic).order(ByteOrder.BIG_ENDIAN);
         // should throw exception.
         assertThatThrownBy(
                         () ->
@@ -180,14 +193,18 @@ class FileLogProjectionTest {
                 .hasMessageContaining("Failed to read `arrow header` from file channel");
     }
 
-    @Test
-    void testProjectSizeLimited() throws Exception {
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    void testProjectSizeLimited(byte recordBatchMagic) throws Exception {
         List<Object[]> allData = new ArrayList<>();
         allData.addAll(TestData.DATA1);
         allData.addAll(TestData.ANOTHER_DATA1);
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
-                        TestData.DATA1_ROW_TYPE, TestData.DATA1, TestData.ANOTHER_DATA1);
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
         int totalSize = fileLogRecords.sizeInBytes();
         boolean hasEmpty = false;
         boolean hasHalf = false;
@@ -219,8 +236,8 @@ class FileLogProjectionTest {
     }
 
     @SafeVarargs
-    private final FileLogRecords createFileLogRecords(RowType rowType, List<Object[]>... inputs)
-            throws Exception {
+    private final FileLogRecords createFileLogRecords(
+            byte recordBatchMagic, RowType rowType, List<Object[]>... inputs) throws Exception {
         FileLogRecords fileLogRecords = FileLogRecords.open(new File(tempDir, "test.tmp"));
         long offsetBase = 0L;
         for (List<Object[]> input : inputs) {
@@ -230,6 +247,7 @@ class FileLogProjectionTest {
                             DEFAULT_SCHEMA_ID,
                             offsetBase,
                             System.currentTimeMillis(),
+                            recordBatchMagic,
                             input,
                             LogFormat.ARROW));
             offsetBase += input.size();
