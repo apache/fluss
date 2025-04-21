@@ -19,8 +19,8 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.memory.MemorySegment;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 
 /**
  * A byte buffer backed log input stream. This class avoids the need to copy records by returning

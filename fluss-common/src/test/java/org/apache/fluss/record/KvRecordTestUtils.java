@@ -33,8 +33,8 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 
 /** Test utils for kv record. */

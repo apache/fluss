@@ -44,7 +44,8 @@ import java.util.List;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
-import static org.apache.fluss.record.DefaultLogRecordBatch.ARROW_CHANGETYPE_OFFSET;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -147,12 +148,14 @@ class ArrowReaderWriterTest {
                     new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024));
 
             // skip arrow batch header.
-            int size = writer.serializeToOutputView(pagedOutputView, ARROW_CHANGETYPE_OFFSET);
+            int size =
+                    writer.serializeToOutputView(
+                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
             MemorySegment segment = MemorySegment.allocateHeapMemory(writer.estimatedSizeInBytes());
 
             assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
-            firstSegment.copyTo(ARROW_CHANGETYPE_OFFSET, segment, 0, size);
+            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
 
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
