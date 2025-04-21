@@ -17,7 +17,7 @@
 package com.alibaba.fluss.server.tablet;
 
 import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
+import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -65,10 +65,12 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import javax.annotation.Nullable;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
@@ -129,7 +131,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
-
         doAuthorizeTable(request.getTableId(), OperationType.WRITE);
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
@@ -145,9 +146,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
         Map<TableBucket, FetchData> fetchLogData = getFetchLogData(request);
-        for (TableBucket tableBucket : fetchLogData.keySet()) {
-            doAuthorizeTable(tableBucket.getTableId(), OperationType.READ);
-        }
+        doAuthorizeTable(fetchLogData.keySet(), OperationType.READ);
 
         FetchParams fetchParams;
         if (request.hasMinBytes()) {
@@ -173,9 +172,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
         Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
-        for (TableBucket tableBucket : putKvData.keySet()) {
-            doAuthorizeTable(tableBucket.getTableId(), OperationType.WRITE);
-        }
+        doAuthorizeTable(putKvData.keySet(), OperationType.WRITE);
         replicaManager.putRecordsToKv(
                 request.getTimeoutMs(),
                 request.getAcks(),
@@ -189,9 +186,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
-        for (TableBucket tableBucket : lookupData.keySet()) {
-            doAuthorizeTable(tableBucket.getTableId(), OperationType.READ);
-        }
+        doAuthorizeTable(lookupData.keySet(), OperationType.READ);
         replicaManager.lookups(lookupData, value -> response.complete(makeLookupResponse(value)));
         return response;
     }
@@ -199,9 +194,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
-        for (TableBucket tableBucket : prefixLookupData.keySet()) {
-            doAuthorizeTable(tableBucket.getTableId(), OperationType.READ);
-        }
+        doAuthorizeTable(prefixLookupData.keySet(), OperationType.READ);
 
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
         replicaManager.prefixLookups(
@@ -264,10 +257,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(), OperationType.IDEMPOTENT_WRITE, Resource.cluster());
-        }
+        // todo: add authorization for table acl until https://github.com/alibaba/fluss/issues/756.
         CompletableFuture<InitWriterResponse> response = new CompletableFuture<>();
         response.complete(makeInitWriterResponse(metadataManager.initWriterId()));
         return response;
@@ -299,10 +289,19 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
+    private void doAuthorizeTable(
+            Collection<TableBucket> tableBuckets, OperationType operationType) {
+        Set<Long> tableIds =
+                tableBuckets.stream().map(TableBucket::getTableId).collect(Collectors.toSet());
+        for (Long tableId : tableIds) {
+            doAuthorizeTable(tableId, operationType);
+        }
+    }
+
     private void doAuthorizeTable(long tableId, OperationType operationType) {
         PhysicalTablePath path = metadataCache.getTablePath(tableId);
         if (path == null) {
-            throw new NotLeaderOrFollowerException(
+            throw new UnknownTableOrBucketException(
                     String.format("Leader bucket of %s is not ready.", tableId));
         }
 

@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.util.Objects;
 
 /**
@@ -31,7 +33,10 @@ import java.util.Objects;
  * <p>- Host: Source host restriction (can be "*" for any host)
  *
  * <p>- Operation: Specific operation type (e.g., read/write)
+ *
+ * @since 0.7
  */
+@PublicEvolving
 public class AccessControlEntry {
     public static final String WILD_CARD_HOST = "*";
 
@@ -45,9 +50,13 @@ public class AccessControlEntry {
             String host,
             OperationType operationType,
             PermissionType permissionType) {
+        Objects.requireNonNull(principal);
+        Objects.requireNonNull(host);
+        Objects.requireNonNull(operationType);
+        Objects.requireNonNull(permissionType);
         this.principal = principal;
-        this.permissionType = permissionType;
         this.host = host;
+        this.permissionType = permissionType;
         this.operationType = operationType;
     }
 

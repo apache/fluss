@@ -16,10 +16,10 @@
 
 package com.alibaba.fluss.server.authorizer;
 
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.ValidationException;
 import com.alibaba.fluss.plugin.PluginManager;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import javax.annotation.Nullable;
 
@@ -27,21 +27,24 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.config.ConfigOptions.AUTHORIZER_ENABLED;
+import static com.alibaba.fluss.config.ConfigOptions.AUTHORIZER_TYPE;
 
 /** authorizer loader. */
 public class AuthorizerLoader {
 
     /** Load authorizer. */
     public static @Nullable Authorizer createAuthorizer(
-            Configuration configuration, @Nullable PluginManager pluginManager) {
-        String authorizerType = configuration.get(ConfigOptions.AUTHORIZER_PLUGIN_TYPE);
-        if (authorizerType == null) {
+            Configuration configuration, ZooKeeperClient zooKeeperClient, @Nullable PluginManager pluginManager) {
+        if (!configuration.get(AUTHORIZER_ENABLED)) {
             return null;
         }
-
+        String authorizerType = configuration.get(AUTHORIZER_TYPE);
         Collection<Supplier<Iterator<AuthorizationPlugin>>> pluginSuppliers = new ArrayList<>(2);
         pluginSuppliers.add(() -> ServiceLoader.load(AuthorizationPlugin.class).iterator());
 
@@ -74,6 +77,27 @@ public class AuthorizerLoader {
                                     .collect(Collectors.joining("\n"))));
         }
 
-        return matchingPlugins.get(0).createAuthorizer(configuration);
+        return matchingPlugins.get(0).createAuthorizer(new DefaultContext(configuration, zooKeeperClient));
+    }
+
+    /** Default implementation of {@link AuthorizationPlugin.Context}. */
+    public static class DefaultContext implements AuthorizationPlugin.Context {
+        private final Configuration configuration;
+        private final ZooKeeperClient zooKeeperClient;
+
+        public DefaultContext(Configuration configuration, @Nullable ZooKeeperClient zooKeeperClient) {
+            this.configuration = configuration;
+            this.zooKeeperClient = zooKeeperClient;
+        }
+
+        @Override
+        public Configuration getConfiguration() {
+            return configuration;
+        }
+
+        @Override
+        public Optional<ZooKeeperClient> getZooKeeperClient() {
+            return Optional.ofNullable(zooKeeperClient);
+        }
     }
 }

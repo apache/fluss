@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.config.Configuration;
 
 /**
@@ -26,6 +27,7 @@ import com.alibaba.fluss.config.Configuration;
  * com.alibaba.fluss.config.ConfigOptions#CLIENT_SECURITY_PROTOCOL}, and configuration parameters
  * must be prefixed with {@code client.security.${protocol}}.
  */
+@PublicEvolving
 public interface ClientAuthenticationPlugin extends AuthenticationPlugin {
     /**
      * Creates a client-side authenticator instance for this authentication protocol.

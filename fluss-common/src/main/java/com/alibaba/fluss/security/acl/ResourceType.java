@@ -32,6 +32,8 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 /**
  * Enumeration representing resource types used in ACL management. Permission hierarchies are
  * defined as follows:
@@ -43,7 +45,10 @@ package com.alibaba.fluss.security.acl;
  *
  * <p>This hierarchy ensures that higher-level permissions automatically grant access to lower-level
  * resources within the same operation.
+ *
+ * @since 0.7
  */
+@PublicEvolving
 public enum ResourceType {
     /** In a filter, matches any ResourceType. */
     ANY((byte) 1),

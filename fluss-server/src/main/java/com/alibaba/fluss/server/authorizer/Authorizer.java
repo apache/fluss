@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.authorizer;
 
 import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
@@ -45,27 +46,34 @@ public interface Authorizer extends Closeable {
     void close();
 
     /**
-     * Checks if a given session is authorized to perform a specific operation on a resource.
+     * Checks if a given session is authorized to perform a specific operation on a resource. This
+     * method is used for authorization checks and returns a boolean result indicating whether the
+     * session has the required permissions. It does not throw an exception if the session is
+     * unauthorized.
      *
-     * @param session
-     * @param operationType
-     * @param resource
-     * @return
+     * @param session the session associated with the request
+     * @param operationType the type of operation being checked
+     * @param resource the resource on which the operation is being performed
+     * @return true if the session is authorized, false otherwise
      */
     boolean isAuthorized(Session session, OperationType operationType, Resource resource);
 
     /**
-     * Checks if a given session is authorized to perform a specific operation on a resource.
+     * Checks if a given session is authorized to perform a specific operation on a resource. Unlike
+     * {@link #isAuthorized(Session, OperationType, Resource)}, this method enforces authorization
+     * by throwing an {@link AuthenticationException} if the session is not authorized to perform
+     * the operation. It is intended for scenarios where access control must be strictly enforced.
      *
-     * @throws AuthenticationException if the session is not authorized to perform the operation
+     * @param session the session associated with the request
+     * @param operationType the type of operation being checked
+     * @param resource the resource on which the operation is being performed
+     * @throws AuthorizationException if the session is not authorized to perform the operation
      */
     void authorize(Session session, OperationType operationType, Resource resource)
-            throws AuthenticationException;
+            throws AuthorizationException;
 
     /**
      * Filters a collection of resource names based on the provided session, operation, resources.
-     *
-     * @return
      */
     Collection<Resource> filterByAuthorized(
             Session session, OperationType operation, List<Resource> resources);

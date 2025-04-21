@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.authorizer;
 
-import com.alibaba.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
@@ -38,17 +37,19 @@ import static com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.rec
 /** A watcher to watch the change notification (create/delete/alter) in zookeeper. */
 public class ZkNodeChangeNotificationWatcher {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TabletServerChangeWatcher.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(ZkNodeChangeNotificationWatcher.class);
     private final CuratorCache curatorCache;
     private final NotificationHandler notificationHandler;
     private volatile boolean running;
-    private volatile long lastExecutedChange = -1L;
     private final ZooKeeperClient zooKeeperClient;
     private final String seqNodeRoot;
     private final String seqNodePrefix;
     private final long changeExpirationMs;
     private final Clock clock;
     private final Object lock = new Object();
+
+    private volatile long lastExecutedChange = -1L;
 
     public ZkNodeChangeNotificationWatcher(
             ZooKeeperClient zooKeeperClient,
@@ -72,7 +73,7 @@ public class ZkNodeChangeNotificationWatcher {
                                 .forPathChildrenCache(
                                         seqNodeRoot,
                                         zooKeeperClient.getCuratorClient(),
-                                        new ZkNodeChangeNotifactionListener())
+                                        new ZkNodeChangeNotificationListener())
                                 .build());
     }
 
@@ -81,7 +82,6 @@ public class ZkNodeChangeNotificationWatcher {
         // Initialize notifications by reading existing notification entries from ZooKeeper.
         // This ensures that any pending notifications are processed when the watcher starts
         processNotifications();
-
         curatorCache.start();
     }
 
@@ -139,7 +139,7 @@ public class ZkNodeChangeNotificationWatcher {
         for (String notification : sortedNotifications) {
             String notificationNode = seqNodeRoot + "/" + notification;
             try {
-                Optional<Stat> state = zooKeeperClient.getState(notificationNode);
+                Optional<Stat> state = zooKeeperClient.getStat(notificationNode);
                 if (state.isPresent() && now - state.get().getCtime() >= changeExpirationMs) {
                     LOG.debug("Purging change notification {}", notificationNode);
                     zooKeeperClient.deletePath(notificationNode);
@@ -157,7 +157,7 @@ public class ZkNodeChangeNotificationWatcher {
         return Long.parseLong(name.substring(seqNodePrefix.length()));
     }
 
-    private final class ZkNodeChangeNotifactionListener implements PathChildrenCacheListener {
+    private final class ZkNodeChangeNotificationListener implements PathChildrenCacheListener {
 
         @Override
         public void childEvent(CuratorFramework client, PathChildrenCacheEvent event) {

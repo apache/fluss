@@ -19,7 +19,11 @@ package com.alibaba.fluss.security.auth;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 
-/** Authenticator for server side. */
+/**
+ * Authenticator for server side.
+ *
+ * @since 0.7
+ */
 public interface ServerAuthenticator {
 
     String protocol();

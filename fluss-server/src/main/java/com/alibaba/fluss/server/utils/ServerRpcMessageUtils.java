@@ -48,6 +48,8 @@ import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
+import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
+import com.alibaba.fluss.rpc.messages.DropAclsResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -72,6 +74,9 @@ import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForTable;
+import com.alibaba.fluss.rpc.messages.PbCreateAclRespInfo;
+import com.alibaba.fluss.rpc.messages.PbDropAclsFilterResult;
+import com.alibaba.fluss.rpc.messages.PbDropAclsMatchingAcl;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
@@ -114,7 +119,10 @@ import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.server.authorizer.AclCreateResult;
+import com.alibaba.fluss.server.authorizer.AclDeleteResult;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.entity.CommitLakeTableSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
@@ -150,6 +158,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -1283,5 +1292,57 @@ public class ServerRpcMessageUtils {
                             aclBinding.getAccessControlEntry().getPermissionType().getCode());
         }
         return listAclsResponse;
+    }
+
+    public static CreateAclsResponse makeCreateAclsResponse(
+            List<AclCreateResult> aclCreateResults) {
+        List<PbCreateAclRespInfo> pbAclRespInfos = new ArrayList<>();
+
+        for (AclCreateResult result : aclCreateResults) {
+            PbCreateAclRespInfo pbAclRespInfo = new PbCreateAclRespInfo();
+            pbAclRespInfo.setAcl(toPbAclInfo(result.getAclBinding()));
+            if (result.exception().isPresent()) {
+                ApiError apiError = ApiError.fromThrowable(result.exception().get());
+                pbAclRespInfos.add(
+                        pbAclRespInfo
+                                .setErrorCode(apiError.error().code())
+                                .setErrorMessage(apiError.message()));
+            } else {
+                pbAclRespInfos.add(pbAclRespInfo.setErrorCode(Errors.NONE.code()));
+            }
+        }
+        return new CreateAclsResponse().addAllAclRes(pbAclRespInfos);
+    }
+
+    public static DropAclsResponse makeDropAclsResponse(List<AclDeleteResult> aclDeleteResults) {
+        List<PbDropAclsFilterResult> dropAclsFilterResults = new ArrayList<>();
+
+        for (AclDeleteResult result : aclDeleteResults) {
+            if (result.error().isPresent()) {
+                ApiError apiError = result.error().get();
+                dropAclsFilterResults.add(
+                        new PbDropAclsFilterResult()
+                                .setErrorCode(apiError.error().code())
+                                .setErrorMessage(apiError.message()));
+                continue;
+            }
+
+            Collection<AclDeleteResult.AclBindingDeleteResult> aclBindingDeleteResults =
+                    result.aclBindingDeleteResults();
+            List<PbDropAclsMatchingAcl> dropAclsMatchingAcls = new ArrayList<>();
+            for (AclDeleteResult.AclBindingDeleteResult aclBindingDeleteResult :
+                    aclBindingDeleteResults) {
+                PbDropAclsMatchingAcl dropAclsMatchingAcl = new PbDropAclsMatchingAcl();
+                dropAclsMatchingAcl.setAcl(toPbAclInfo(aclBindingDeleteResult.aclBinding()));
+                if (result.error().isPresent()) {
+                    ApiError apiError = result.error().get();
+                    dropAclsMatchingAcl.setError(apiError.error().code(), apiError.message());
+                }
+                dropAclsMatchingAcls.add(dropAclsMatchingAcl);
+            }
+            dropAclsFilterResults.add(
+                    new PbDropAclsFilterResult().addAllMatchingAcls(dropAclsMatchingAcls));
+        }
+        return new DropAclsResponse().addAllFilterResults(dropAclsFilterResults);
     }
 }

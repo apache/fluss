@@ -14,4 +14,4 @@
 # limitations under the License.
 #
 
-com.alibaba.fluss.server.authorizer.ZooKeeperBasedAuthorizationPlugin
+com.alibaba.fluss.server.authorizer.DefaultAuthorizationPlugin

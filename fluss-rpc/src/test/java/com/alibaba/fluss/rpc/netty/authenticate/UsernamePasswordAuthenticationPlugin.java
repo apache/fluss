@@ -42,7 +42,9 @@ public class UsernamePasswordAuthenticationPlugin
             key("client.security.username_password.password").stringType().noDefaultValue();
 
     private static final ConfigOption<Map<String, String>> CREDENTIALS =
-            key("security.credentials").mapType().defaultValue(Collections.emptyMap());
+            key("security.username_password.credentials")
+                    .mapType()
+                    .defaultValue(Collections.emptyMap());
 
     private static final String AUTH_PROTOCOL = "username_password";
 

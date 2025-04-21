@@ -189,6 +189,12 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
             GetLatestLakeSnapshotRequest request);
 
+    /**
+     * List acls for a table.
+     *
+     * @param request the request that specifies the table path.
+     * @return a future returns the list of acls.
+     */
     @RPC(api = ApiKeys.LIST_ACLS)
     CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request);
 }

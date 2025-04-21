@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.ValidationException;
@@ -53,6 +54,7 @@ import java.util.stream.Collectors;
  *
  * @since 0.7
  */
+@PublicEvolving
 public class AuthenticationFactory {
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.";
 

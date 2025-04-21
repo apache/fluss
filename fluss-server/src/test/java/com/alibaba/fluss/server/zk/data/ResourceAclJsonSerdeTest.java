@@ -42,7 +42,7 @@ public class ResourceAclJsonSerdeTest extends JsonSerdeTestBase<ResourceAcl> {
                                     new FlussPrincipal("Mike", "USER"),
                                     "*",
                                     OperationType.ALL,
-                                    PermissionType.ANY))),
+                                    PermissionType.ALLOW))),
             new ResourceAcl(
                     new HashSet<>(
                             Arrays.asList(
@@ -50,21 +50,21 @@ public class ResourceAclJsonSerdeTest extends JsonSerdeTestBase<ResourceAcl> {
                                             new FlussPrincipal("John", "ROLE"),
                                             "127.0.0.1",
                                             OperationType.ALTER,
-                                            PermissionType.ANY),
+                                            PermissionType.ALLOW),
                                     new AccessControlEntry(
                                             new FlussPrincipal("Mike1233", "ROLE"),
                                             "1*",
-                                            OperationType.FILESYSTEM_TOKEN,
-                                            PermissionType.ANY)))),
+                                            OperationType.READ,
+                                            PermissionType.ALLOW)))),
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"acls\":[{\"principalType\":\"USER\",\"principalName\":\"Mike\",\"permissionType\":\"ALLOW\",\"host\":\"*\",\"host\":\"*\",\"operation\":\"ALL\"}]}",
-            "{\"version\":1,\"acls\":[{\"principalType\":\"ROLE\",\"principalName\":\"John\",\"permissionType\":\"ALLOW\",\"host\":\"127.0.0.1\",\"host\":\"127.0.0.1\",\"operation\":\"ALTER\"}"
-                    + ",{\"principalType\":\"ROLE\",\"principalName\":\"Mike1233\",\"permissionType\":\"ALLOW\",\"host\":\"1*\",\"host\":\"1*\",\"operation\":\"FILESYSTEM_TOKEN\"}]}"
+            "{\"version\":1,\"acls\":[{\"principal_type\":\"USER\",\"principal_name\":\"Mike\",\"permission_type\":\"ALLOW\",\"host\":\"*\",\"host\":\"*\",\"operation\":\"ALL\"}]}",
+            "{\"version\":1,\"acls\":[{\"principal_type\":\"ROLE\",\"principal_name\":\"John\",\"permission_type\":\"ALLOW\",\"host\":\"127.0.0.1\",\"host\":\"127.0.0.1\",\"operation\":\"ALTER\"}"
+                    + ",{\"principal_type\":\"ROLE\",\"principal_name\":\"Mike1233\",\"permission_type\":\"ALLOW\",\"host\":\"1*\",\"host\":\"1*\",\"operation\":\"READ\"}]}"
         };
     }
 }

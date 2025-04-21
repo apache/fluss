@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.security.Principal;
 import java.util.Objects;
 
@@ -36,6 +38,7 @@ import java.util.Objects;
  *
  * @since 0.7
  */
+@PublicEvolving
 public class FlussPrincipal implements Principal {
     public static final FlussPrincipal ANONYMOUS = new FlussPrincipal("ANONYMOUS", "User");
     /** The wildcard principal, which represents all principals. */

@@ -16,6 +16,10 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
@@ -23,65 +27,99 @@ import java.util.Objects;
  *
  * <p>The API for this class is still evolving and we may break compatibility in minor releases, if
  * necessary.
+ *
+ * @since 0.7
  */
+@PublicEvolving
 public class AccessControlEntryFilter {
-    private final AccessControlEntry data;
+    @Nullable private final FlussPrincipal principal;
+    private final PermissionType permissionType;
+    @Nullable private final String host;
+    private final OperationType operationType;
 
     public static final AccessControlEntryFilter ANY =
             new AccessControlEntryFilter(
                     FlussPrincipal.ANY, null, OperationType.ANY, PermissionType.ANY);
 
     public AccessControlEntryFilter(
-            FlussPrincipal principal,
-            String host,
+            @Nullable FlussPrincipal principal,
+            @Nullable String host,
             OperationType operation,
             PermissionType permissionType) {
+        this.principal = principal;
+        this.host = host;
         Objects.requireNonNull(operation);
         Objects.requireNonNull(permissionType);
-        this.data = new AccessControlEntry(principal, host, operation, permissionType);
+        this.operationType = operation;
+        this.permissionType = permissionType;
     }
 
     /** Returns true if this filter matches the given AccessControlEntry. */
     public boolean matches(AccessControlEntry other) {
-        if ((data.getPrincipal() != null)
-                && data.getPrincipal() != FlussPrincipal.ANY
-                && (!data.getPrincipal().equals(other.getPrincipal()))) {
+        if ((principal != null)
+                && principal != FlussPrincipal.ANY
+                && (!principal.equals(other.getPrincipal()))) {
             return false;
         }
-        if ((data.getHost() != null) && (!data.getHost().equals(other.getHost()))) {
+        if ((host != null) && (!host.equals(other.getHost()))) {
             return false;
         }
-        if ((data.getOperationType() != OperationType.ANY)
-                && (!data.getOperationType().equals(other.getOperationType()))) {
+        if ((operationType != OperationType.ANY)
+                && (!operationType.equals(other.getOperationType()))) {
             return false;
         }
-        if ((data.getPermissionType() != PermissionType.ANY)
-                && (!data.getPermissionType().equals(other.getPermissionType()))) {
+        if ((permissionType != PermissionType.ANY)
+                && (!permissionType.equals(other.getPermissionType()))) {
             return false;
         }
         return true;
     }
 
-    public AccessControlEntry getData() {
-        return data;
+    public @Nullable FlussPrincipal getPrincipal() {
+        return principal;
+    }
+
+    public @Nullable String getHost() {
+        return host;
+    }
+
+    public PermissionType getPermissionType() {
+        return permissionType;
+    }
+
+    public OperationType getOperationType() {
+        return operationType;
     }
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof AccessControlEntryFilter)) {
+        if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        AccessControlEntryFilter other = (AccessControlEntryFilter) o;
-        return data.equals(other.data);
+        AccessControlEntryFilter that = (AccessControlEntryFilter) o;
+        return Objects.equals(principal, that.principal)
+                && permissionType == that.permissionType
+                && Objects.equals(host, that.host)
+                && operationType == that.operationType;
     }
 
     @Override
     public int hashCode() {
-        return data.hashCode();
+        return Objects.hash(principal, permissionType, host, operationType);
     }
 
     @Override
     public String toString() {
-        return "AccessControlEntryFilter{" + "data=" + data + '}';
+        return "AccessControlEntryFilter{"
+                + "principal="
+                + principal
+                + ", permissionType="
+                + permissionType
+                + ", host='"
+                + host
+                + '\''
+                + ", operationType="
+                + operationType
+                + '}';
     }
 }

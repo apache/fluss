@@ -70,7 +70,6 @@ public class ResourceAclJsonSerde
             generator.writeStringField(PRINCIPAL_NAME, entry.getPrincipal().getName());
             generator.writeStringField(PERMISSION_TYPE, entry.getPermissionType().name());
             generator.writeStringField(HOST, entry.getHost());
-            generator.writeStringField(HOST, entry.getHost());
             generator.writeStringField(OPERATION_TYPE, entry.getOperationType().name());
             generator.writeEndObject();
         }

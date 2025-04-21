@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.authorizer;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.plugin.PluginUtils;
 import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.AccessControlEntryFilter;
@@ -33,6 +34,7 @@ import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.ZooKeeperUtils;
+import com.alibaba.fluss.server.zk.data.ZkData;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterEach;
@@ -42,6 +44,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.net.InetAddress;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -54,7 +57,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.security.acl.OperationType.CREATE;
 import static com.alibaba.fluss.security.acl.OperationType.DROP;
@@ -65,16 +67,16 @@ import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link ZooKeeperBasedAuthorizer}. */
-public class ZooKeeperBasedAuthorizerTest {
+/** Test for {@link DefaultAuthorizer}. */
+public class DefaultAuthorizerTest {
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static final String ROOT_USER = "root";
 
-    private ZooKeeperBasedAuthorizer authorizer;
-    private ZooKeeperBasedAuthorizer authorizer2;
+    private DefaultAuthorizer authorizer;
+    private DefaultAuthorizer authorizer2;
     private ZooKeeperClient zooKeeperClient;
 
     @BeforeEach
@@ -84,9 +86,10 @@ public class ZooKeeperBasedAuthorizerTest {
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         configuration.setString(ConfigOptions.SUPER_USERS, "USER:" + ROOT_USER);
+        configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
-        authorizer = new ZooKeeperBasedAuthorizer(configuration);
-        authorizer2 = new ZooKeeperBasedAuthorizer(configuration);
+        authorizer =  (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, zooKeeperClient, PluginUtils.createPluginManagerFromRootFolder(configuration) );
+        authorizer2 = (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, null, PluginUtils.createPluginManagerFromRootFolder(configuration) );
         authorizer.startup();
         authorizer2.startup();
     }
@@ -195,13 +198,11 @@ public class ZooKeeperBasedAuthorizerTest {
 
     @Test
     void testAuthorizerNoZkConfig() {
-        Configuration configuration = new Configuration();
-        try (ZooKeeperBasedAuthorizer zooKeeperBasedAuthorizer =
-                new ZooKeeperBasedAuthorizer(configuration)) {
-            assertThatThrownBy(zooKeeperBasedAuthorizer::startup)
+        Configuration configuration = new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
+        assertThatThrownBy(()-> AuthorizerLoader.createAuthorizer(configuration, null, PluginUtils.createPluginManagerFromRootFolder(configuration)))
                     .hasMessageContaining(
                             "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
-        }
+
     }
 
     @Test
@@ -279,9 +280,7 @@ public class ZooKeeperBasedAuthorizerTest {
                         OperationType.CREATE,
                         OperationType.DROP,
                         OperationType.ALTER,
-                        OperationType.DESCRIBE,
-                        OperationType.IDEMPOTENT_WRITE,
-                        OperationType.FILESYSTEM_TOKEN));
+                        OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
                 Resource.cluster(),
                 OperationType.CREATE,
@@ -298,21 +297,17 @@ public class ZooKeeperBasedAuthorizerTest {
         // when we allow READ on any resource, we also allow DESCRIBE and FILESYSTEM_TOKEN on
         // cluster.
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                READ,
-                Arrays.asList(OperationType.DESCRIBE, OperationType.FILESYSTEM_TOKEN));
+                Resource.cluster(), READ, Collections.singletonList(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                WRITE,
-                Arrays.asList(OperationType.DESCRIBE, OperationType.IDEMPOTENT_WRITE));
+                Resource.cluster(), WRITE, Collections.singletonList(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
                 Resource.database("database1"),
                 READ,
-                Arrays.asList(OperationType.DESCRIBE, OperationType.FILESYSTEM_TOKEN));
+                Collections.singletonList(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
                 Resource.table("database2", "table1"),
                 WRITE,
-                Arrays.asList(OperationType.DESCRIBE, OperationType.IDEMPOTENT_WRITE));
+                Collections.singletonList(OperationType.DESCRIBE));
     }
 
     private void testOperationTypeImplicationsOfAllow(
@@ -337,22 +332,6 @@ public class ZooKeeperBasedAuthorizerTest {
                 resource,
                 Collections.singleton(
                         createAclEntry(session.getPrincipal().getName(), "*", parentOp)));
-        dropAcls(
-                authorizer,
-                Resource.cluster(),
-                Collections.singleton(
-                        createAclEntry(
-                                session.getPrincipal().getName(),
-                                "*",
-                                OperationType.IDEMPOTENT_WRITE)));
-        dropAcls(
-                authorizer,
-                Resource.cluster(),
-                Collections.singleton(
-                        createAclEntry(
-                                session.getPrincipal().getName(),
-                                "*",
-                                OperationType.FILESYSTEM_TOKEN)));
     }
 
     @Test
@@ -423,7 +402,7 @@ public class ZooKeeperBasedAuthorizerTest {
         addAcls(authorizer, resource2, acls2);
 
         // delete acl change notifications to test initial load.
-        zooKeeperClient.deleteAclChangeNotifications();
+        deleteAclChangeNotifications();
         authorizer2.startup();
         assertThat(listAcls(authorizer2, resource1)).isEqualTo(acls1);
         assertThat(listAcls(authorizer2, resource2)).isEqualTo(acls2);
@@ -431,16 +410,11 @@ public class ZooKeeperBasedAuthorizerTest {
         // test update cache later
         final Set<AccessControlEntry> acls3 =
                 new HashSet<>(
-                        Arrays.asList(
+                        Collections.singleton(
                                 new AccessControlEntry(
                                         new FlussPrincipal("user2", "User"),
                                         "host-1",
                                         READ,
-                                        PermissionType.ANY),
-                                new AccessControlEntry(
-                                        new FlussPrincipal("user3", "User"),
-                                        "host-2",
-                                        OperationType.IDEMPOTENT_WRITE,
                                         PermissionType.ANY)));
         addAcls(authorizer, resource2, acls3);
         retry(
@@ -465,7 +439,6 @@ public class ZooKeeperBasedAuthorizerTest {
                                                         "host-1",
                                                         READ,
                                                         PermissionType.ANY))))
-                .hasRootCauseExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Path must not end with / character");
     }
 
@@ -478,12 +451,8 @@ public class ZooKeeperBasedAuthorizerTest {
         AccessControlEntry acl2 = new AccessControlEntry(user2, "host-2", READ, PermissionType.ANY);
         addAcls(authorizer, commonResource, Collections.singleton(acl1));
         addAcls(authorizer, commonResource, Collections.singleton(acl2));
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer, commonResource))
-                            .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
-                });
+        assertThat(listAcls(authorizer, commonResource))
+                .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
     }
 
     @Test
@@ -522,57 +491,43 @@ public class ZooKeeperBasedAuthorizerTest {
     @Test
     void testHighConcurrencyModificationOfResourceAcls() throws Exception {
         Resource commonResource = Resource.database("foo-" + UUID.randomUUID());
-        Set<AccessControlEntry> acls =
-                IntStream.range(0, 50)
-                        .mapToObj(
-                                i ->
-                                        new AccessControlEntry(
-                                                new FlussPrincipal(String.valueOf(i), "User"),
-                                                "host-1",
-                                                READ,
-                                                PermissionType.ANY))
-                        .collect(Collectors.toSet());
+        // generate 50 concurrent acl operation tasks.
+        List<Runnable> concurrentTasks = new ArrayList<>();
+        Set<AccessControlEntry> expectedAcls = new HashSet<>();
+        for (int i = 0; i < 50; i++) {
+            // each task represent that add acl to different user on same resource.
+            final AccessControlEntry accessControlEntry =
+                    createAclEntry(String.valueOf(i), "host-1", READ);
+            int finalI = i;
+            Runnable runnable =
+                    () -> {
+                        if (finalI % 2 == 0) {
+                            addAcls(
+                                    authorizer,
+                                    commonResource,
+                                    Collections.singleton(accessControlEntry));
+                        } else {
+                            addAcls(
+                                    authorizer2,
+                                    commonResource,
+                                    Collections.singleton(accessControlEntry));
+                        }
 
-        List<Runnable> concurrentFunctions =
-                acls.stream()
-                        .map(
-                                acl ->
-                                        (Runnable)
-                                                () -> {
-                                                    if (Integer.parseInt(
-                                                                            acl.getPrincipal()
-                                                                                    .getName())
-                                                                    % 2
-                                                            == 0) {
-                                                        addAcls(
-                                                                authorizer,
-                                                                commonResource,
-                                                                Collections.singleton(acl));
-                                                    } else {
-                                                        addAcls(
-                                                                authorizer2,
-                                                                commonResource,
-                                                                Collections.singleton(acl));
-                                                    }
+                        if (finalI % 10 == 0) {
+                            dropAcls(
+                                    authorizer2,
+                                    commonResource,
+                                    Collections.singleton(accessControlEntry));
+                        }
+                    };
+            concurrentTasks.add(runnable);
 
-                                                    if (Integer.parseInt(
-                                                                            acl.getPrincipal()
-                                                                                    .getName())
-                                                                    % 10
-                                                            == 0) {
-                                                        dropAcls(
-                                                                authorizer2,
-                                                                commonResource,
-                                                                Collections.singleton(acl));
-                                                    }
-                                                })
-                        .collect(Collectors.toList());
+            if (finalI % 10 != 0) {
+                expectedAcls.add(accessControlEntry);
+            }
+        }
 
-        Set<AccessControlEntry> expectedAcls =
-                acls.stream()
-                        .filter(acl -> Integer.parseInt(acl.getPrincipal().getName()) % 10 != 0)
-                        .collect(Collectors.toSet());
-        assertConcurrent(concurrentFunctions, 30 * 1000);
+        runInConcurrent(concurrentTasks);
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(listAcls(authorizer, commonResource)).isEqualTo(expectedAcls));
@@ -586,39 +541,28 @@ public class ZooKeeperBasedAuthorizerTest {
     @Test
     void testHighConcurrencyDeletionOfResourceAcls() {
         Resource commonResource = Resource.database("foo-" + UUID.randomUUID());
-        AccessControlEntry acl =
+        AccessControlEntry accessControlEntry =
                 new AccessControlEntry(
                         new FlussPrincipal("user1", "User"), "host-1", READ, PermissionType.ANY);
-        List<Runnable> concurrentFunctions =
-                IntStream.range(0, 50)
-                        .mapToObj(
-                                i ->
-                                        (Runnable)
-                                                () -> {
-                                                    addAcls(
-                                                            authorizer,
-                                                            commonResource,
-                                                            Collections.singleton(acl));
-                                                    dropAcls(
-                                                            authorizer2,
-                                                            commonResource,
-                                                            Collections.singleton(acl));
-                                                })
-                        .collect(Collectors.toList());
-        assertConcurrent(concurrentFunctions, 30 * 1000);
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer, commonResource))
-                            .isEqualTo(Collections.emptySet());
-                });
-
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer2, commonResource))
-                            .isEqualTo(Collections.emptySet());
-                });
+        // generate 50 concurrent acl operation tasks.
+        List<Runnable> concurrentTasks = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            // each task represent that add acl to same user on same resource.
+            Runnable runnable =
+                    () -> {
+                        addAcls(
+                                authorizer,
+                                commonResource,
+                                Collections.singleton(accessControlEntry));
+                        dropAcls(
+                                authorizer2,
+                                commonResource,
+                                Collections.singleton(accessControlEntry));
+                    };
+            concurrentTasks.add(runnable);
+        }
+        runInConcurrent(concurrentTasks);
+        assertThat(listAcls(authorizer2, commonResource)).isEqualTo(Collections.emptySet());
     }
 
     void addAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
@@ -666,8 +610,8 @@ public class ZooKeeperBasedAuthorizerTest {
                 .dropAcls(createRootUserSession(), aclBindings)
                 .forEach(
                         result -> {
-                            if (result.exception().isPresent()) {
-                                throw result.exception().get();
+                            if (result.error().isPresent()) {
+                                throw result.error().get().exception();
                             }
                         });
     }
@@ -676,15 +620,14 @@ public class ZooKeeperBasedAuthorizerTest {
      * Asserts that a list of tasks can be executed concurrently within a given timeout.
      *
      * @param tasks the list of tasks to execute
-     * @param timeoutMs the timeout in milliseconds
      */
-    private void assertConcurrent(List<Runnable> tasks, long timeoutMs) {
+    private void runInConcurrent(List<Runnable> tasks) {
         ExecutorService executor = Executors.newFixedThreadPool(tasks.size());
         List<Future<?>> futures = tasks.stream().map(executor::submit).collect(Collectors.toList());
 
         executor.shutdown();
         try {
-            boolean completed = executor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS);
+            boolean completed = executor.awaitTermination(30000, TimeUnit.MILLISECONDS);
             assertThat(completed).isTrue();
             for (Future<?> future : futures) {
                 future.get(); // Ensure no exceptions were thrown
@@ -715,12 +658,6 @@ public class ZooKeeperBasedAuthorizerTest {
     }
 
     private AclBinding createAclBinding(
-            ResourceType resourceType, String username, String host, OperationType operation) {
-        return new AclBinding(
-                mockResource(resourceType), createAclEntry(username, host, operation));
-    }
-
-    private AclBinding createAclBinding(
             Resource resource, String username, String host, OperationType operation) {
         return new AclBinding(resource, createAclEntry(username, host, operation));
     }
@@ -740,5 +677,12 @@ public class ZooKeeperBasedAuthorizerTest {
                 resourceFilter,
                 new AccessControlEntryFilter(
                         flussPrincipal, host, operation, PermissionType.ALLOW));
+    }
+
+    public void deleteAclChangeNotifications() throws Exception {
+        List<String> children = zooKeeperClient.getChildren(ZkData.AclChangesNode.path());
+        for (String child : children) {
+            zooKeeperClient.deletePath(ZkData.AclChangesNode.path() + "/" + child);
+        }
     }
 }

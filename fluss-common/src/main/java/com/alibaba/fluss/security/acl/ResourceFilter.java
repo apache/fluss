@@ -16,16 +16,25 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
-/** A filter which matches Resource objects. */
+/**
+ * A filter which matches Resource objects.
+ *
+ * @since 0.7
+ */
+@PublicEvolving
 public class ResourceFilter {
     private final ResourceType type;
-    private final String name;
+    @Nullable private final String name;
 
     public static final ResourceFilter ANY = new ResourceFilter(ResourceType.ANY, null);
 
-    public ResourceFilter(ResourceType type, String name) {
+    public ResourceFilter(ResourceType type, @Nullable String name) {
         Objects.requireNonNull(type);
         this.type = type;
         this.name = name;
@@ -35,7 +44,7 @@ public class ResourceFilter {
         return type;
     }
 
-    public String getName() {
+    public @Nullable String getName() {
         return name;
     }
 

@@ -20,6 +20,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.ApiException;
 import com.alibaba.fluss.rpc.netty.server.Session;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
@@ -63,9 +64,11 @@ import java.util.stream.Stream;
 import static com.alibaba.fluss.security.acl.Resource.TABLE_SPLITTER;
 import static com.alibaba.fluss.server.zk.ZooKeeperClient.UNKNOWN_VERSION;
 
-/** An authorization manager that leverages ZooKeeper to store access control lists (ACLs). */
-public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements FatalErrorHandler {
-    private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperBasedAuthorizer.class);
+/**
+ * A default authorization manager that leverages ZooKeeper to store access control lists (ACLs).
+ */
+public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorHandler {
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultAuthorizer.class);
 
     /**
      * Static mapping of ResourceType to the set of resources it contains. This defines the
@@ -78,6 +81,14 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
      * inheritance relationship between operation types.
      */
     private static final Map<OperationType, Set<OperationType>> OPS_MAPPING;
+
+    // The maximum number of times we should try to update the resource acls in zookeeper before
+    // failing;
+    // This should never occur, but is a safeguard just in case.
+    private static final int MAX_UPDATE_RETRIES = 10;
+    private static final int INIT_RETRY_BACKOFF_MS = 100;
+    private static final int RETRY_BACKOFF_JITTER_MS = 50;
+    private static final boolean SHOULD_ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND = false;
 
     static {
         Map<ResourceType, Function<Resource, Set<Resource>>> mapping =
@@ -107,17 +118,10 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
 
     private final Configuration configuration;
     private final Set<FlussPrincipal> superUsers;
-    private final boolean shouldAllowEveryoneIfNoAclIsFound = false;
 
-    private ZooKeeperClient zooKeeperClient;
-    private ZkNodeChangeNotificationWatcher aclChangeNotificationWatcher;
+    private final ZooKeeperClient zooKeeperClient;
+    private final ZkNodeChangeNotificationWatcher aclChangeNotificationWatcher;
     private final Object lock = new Object();
-    // The maximum number of times we should try to update the resource acls in zookeeper before
-    // failing;
-    // This should never occur, but is a safeguard just in case.
-    private final int maxUpdateRetries = 10;
-    private int retryBackoffMs = 100;
-    private final int retryBackoffJitterMs = 50;
 
     // Main cache: Stores the mapping between resources and access control entries, sorted by
     // resource.
@@ -126,15 +130,15 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
     // Reverse index cache: Maps access control entry types to resources for quick lookups.
     private final HashMap<ResourceTypeKey, Set<String>> resourceCache = new HashMap<>();
 
-    public ZooKeeperBasedAuthorizer(Configuration configuration) {
-        this.configuration = configuration;
+    public DefaultAuthorizer(AuthorizationPlugin.Context context) {
+        this.configuration = context.getConfiguration();
         this.superUsers = parseSuperUsers(configuration);
-    }
-
-    @Override
-    public void startup() throws Exception {
-        zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, this);
-        aclChangeNotificationWatcher =
+        if(context.getZooKeeperClient().isPresent()){
+            this.zooKeeperClient = context.getZooKeeperClient().get();
+        } else {
+            this.zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, this);
+        }
+        this.aclChangeNotificationWatcher =
                 new ZkNodeChangeNotificationWatcher(
                         zooKeeperClient,
                         AclChangesNode.path(),
@@ -145,13 +149,18 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                         new ZkNotificationHandler(),
                         SystemClock.getInstance());
 
+
+    }
+
+    @Override
+    public void startup() throws Exception {
         aclChangeNotificationWatcher.start();
         loadCache();
     }
 
     @Override
     public void close() {
-        if (zooKeeperClient != null) {
+        if(zooKeeperClient != null){
             zooKeeperClient.close();
         }
 
@@ -203,14 +212,21 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                                             });
 
                         } catch (Throwable e) {
+                            ApiException exception = ApiError.fromThrowable(e).exception();
                             entries.values()
                                     .forEach(
                                             idx -> {
                                                 results[idx] =
                                                         new AclCreateResult(
-                                                                aclBindings.get(idx),
-                                                                new ApiException(e));
+                                                                aclBindings.get(idx), exception);
                                             });
+                            entries.values()
+                                    .forEach(
+                                            idx ->
+                                                    results[idx] =
+                                                            new AclCreateResult(
+                                                                    aclBindings.get(idx),
+                                                                    exception));
                         }
                     });
 
@@ -228,49 +244,6 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                     writeIndices.put(aclBindings.get(i).getAccessControlEntry().getPrincipal(), i);
                 }
             }
-
-            if (!readIndices.isEmpty() || !writeIndices.isEmpty()) {
-                try {
-                    updateResourceAcl(
-                            Resource.cluster(),
-                            (currentAcls) -> {
-                                Set<AccessControlEntry> newAcls = new HashSet<>(currentAcls);
-                                newAcls.addAll(
-                                        readIndices.keySet().stream()
-                                                .map(
-                                                        principal ->
-                                                                new AccessControlEntry(
-                                                                        principal,
-                                                                        AccessControlEntry
-                                                                                .WILD_CARD_HOST,
-                                                                        OperationType
-                                                                                .FILESYSTEM_TOKEN,
-                                                                        PermissionType.ALLOW))
-                                                .collect(Collectors.toSet()));
-                                newAcls.addAll(
-                                        writeIndices.keySet().stream()
-                                                .map(
-                                                        principal ->
-                                                                new AccessControlEntry(
-                                                                        principal,
-                                                                        AccessControlEntry
-                                                                                .WILD_CARD_HOST,
-                                                                        OperationType
-                                                                                .IDEMPOTENT_WRITE,
-                                                                        PermissionType.ALLOW))
-                                                .collect(Collectors.toSet()));
-                                return newAcls;
-                            });
-                } catch (Exception e) {
-                    Map<FlussPrincipal, Integer> allIndices = new HashMap<>(readIndices);
-                    allIndices.putAll(writeIndices);
-                    allIndices.forEach(
-                            (p, idx) ->
-                                    results[idx] =
-                                            new AclCreateResult(
-                                                    aclBindings.get(idx), new ApiException(e)));
-                }
-            }
         }
         return Arrays.asList(results);
     }
@@ -279,7 +252,7 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
     public List<AclDeleteResult> dropAcls(
             Session session, List<AclBindingFilter> aclBindingFilters) {
         Map<AclBinding, Integer> deletedBindings = new HashMap<>();
-        Map<AclBinding, ApiException> deleteExceptions = new HashMap<>();
+        Map<AclBinding, ApiError> deleteExceptions = new HashMap<>();
         List<Tuple2<AclBindingFilter, Integer>> filters =
                 IntStream.range(0, aclBindingFilters.size())
                         .mapToObj(i -> Tuple2.of(aclBindingFilters.get(i), i))
@@ -329,7 +302,8 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                             });
                 } catch (Exception e) {
                     for (AclBinding binding : resourceBindingsBeingDeleted.keySet()) {
-                        deleteExceptions.putIfAbsent(binding, new ApiException(e));
+                        ApiError apiError = ApiError.fromThrowable(e);
+                        deleteExceptions.putIfAbsent(binding, apiError);
                     }
                 }
             }
@@ -422,7 +396,8 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                         : getAclsFromZk(resource);
         VersionedAcls newVersionedAcls = null;
         Set<AccessControlEntry> newAces;
-        while (!writeComplete && retries <= maxUpdateRetries) {
+        long backoffMs = INIT_RETRY_BACKOFF_MS;
+        while (!writeComplete && retries <= MAX_UPDATE_RETRIES) {
             newAces = newAclSupplier.apply(currentVersionedAcls.acls);
             try {
                 int updateVersion = 0;
@@ -448,7 +423,8 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                         resource,
                         retries,
                         e);
-                Thread.sleep(backoffTime());
+                Thread.sleep(backoffMs);
+                backoffMs = backoffTime(backoffMs);
                 currentVersionedAcls = getAclsFromZk(resource);
                 retries++;
                 lastException = e;
@@ -459,10 +435,11 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
             throw new IllegalArgumentException(
                     String.format(
                             "Failed to update ACLs for %s after trying a maximum of %s times, last exception is ",
-                            resource, maxUpdateRetries),
+                            resource, MAX_UPDATE_RETRIES),
                     lastException);
         }
 
+        assert newVersionedAcls != null;
         if (!newVersionedAcls.acls.equals(currentVersionedAcls.acls)) {
             updateCache(resource, newVersionedAcls);
             updateAclChangedFlag(resource);
@@ -484,22 +461,20 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
         acesToAdd.forEach(
                 ace -> {
                     ResourceTypeKey resourceTypeKey = new ResourceTypeKey(ace, resource.getType());
-                    if (!resourceCache.containsKey(resourceTypeKey)) {
-                        resourceCache.put(resourceTypeKey, new HashSet<>());
-                    }
-                    resourceCache.get(resourceTypeKey).add(resource.getName());
+                    resourceCache
+                            .computeIfAbsent(resourceTypeKey, k -> new HashSet<>())
+                            .add(resource.getName());
                 });
 
         acesToRemove.forEach(
                 ace -> {
                     ResourceTypeKey resourceTypeKey = new ResourceTypeKey(ace, resource.getType());
-                    if (resourceCache.containsKey(resourceTypeKey)) {
-                        Set<String> newResource = resourceCache.get(resourceTypeKey);
-                        newResource.remove(resource.getName());
-                        if (newResource.isEmpty()) {
-                            resourceCache.remove(resourceTypeKey);
-                        }
-                    }
+                    resourceCache.computeIfPresent(
+                            resourceTypeKey,
+                            (k, v) -> {
+                                v.remove(resource.getName());
+                                return v.isEmpty() ? null : v;
+                            });
                 });
 
         if (versionedAcls.acls.isEmpty()) {
@@ -531,8 +506,8 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
             LOG.debug(
                     "No acl found for resource {}, authorized = {}",
                     resource,
-                    shouldAllowEveryoneIfNoAclIsFound);
-            return shouldAllowEveryoneIfNoAclIsFound;
+                    SHOULD_ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND);
+            return SHOULD_ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND;
         }
         return false;
     }
@@ -571,9 +546,8 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                                                         .equals(FlussPrincipal.WILD_CARD_PRINCIPAL))
                                         && (operation == acl.getOperationType()
                                                 || acl.getOperationType() == OperationType.ALL)
-                                        && (acl.getHost().equals(host)
-                                                || acl.getHost()
-                                                        .equals(AccessControlEntry.WILD_CARD_HOST)))
+                                        && (acl.getHost().equals(AccessControlEntry.WILD_CARD_HOST)
+                                                || acl.getHost().equals(host)))
                 .findFirst()
                 .map(
                         acl -> {
@@ -622,7 +596,7 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
         }
 
         throw new IllegalArgumentException(
-                String.format("ACLs do not exist in the cache for resource $resource", resource));
+                String.format("ACLs do not exist in the cache for resource %s", resource));
     }
 
     private VersionedAcls getAclsFromZk(Resource resource) throws Exception {
@@ -634,7 +608,7 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                 .getOptional(ConfigOptions.SUPER_USERS)
                 .map(
                         config ->
-                                Arrays.stream(config.split(","))
+                                Arrays.stream(config.split(";"))
                                         .map(String::trim)
                                         .map(
                                                 user -> {
@@ -660,8 +634,8 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
                 });
     }
 
-    private int backoffTime() {
-        return (int) (retryBackoffMs + (retryBackoffJitterMs * Math.random()));
+    private int backoffTime(long backoffMs) {
+        return (int) (backoffMs + (RETRY_BACKOFF_JITTER_MS * Math.random()));
     }
 
     /**
@@ -690,7 +664,7 @@ public class ZooKeeperBasedAuthorizer extends AbstractAuthorizer implements Fata
         @Override
         public int compare(Resource a, Resource b) {
             int rt = a.getType().compareTo(b.getType());
-            return rt != 0 ? rt : a.getName().compareTo(b.getName());
+            return rt != 0 ? rt : (-1) * a.getName().compareTo(b.getName());
         }
     }
 

@@ -17,9 +17,11 @@
 package com.alibaba.fluss.client.admin;
 
 import com.alibaba.fluss.rpc.messages.PbCreateAclRespInfo;
-import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.utils.MapUtils;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -39,7 +41,9 @@ import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBinding;
 public class CreateAclsResult {
     private final Map<AclBinding, CompletableFuture<Void>> futures;
 
-    public CreateAclsResult(Map<AclBinding, CompletableFuture<Void>> futures) {
+    public CreateAclsResult(Collection<AclBinding> aclBindings) {
+        Map<AclBinding, CompletableFuture<Void>> futures = MapUtils.newConcurrentHashMap();
+        aclBindings.forEach(aclBinding -> futures.put(aclBinding, new CompletableFuture<>()));
         this.futures = futures;
     }
 
@@ -70,11 +74,9 @@ public class CreateAclsResult {
                 pbAclRespInfo -> {
                     AclBinding aclBinding = toAclBinding(pbAclRespInfo.getAcl());
                     CompletableFuture<Void> future = futures.get(aclBinding);
-                    if (pbAclRespInfo.hasErrorCode()
-                            && pbAclRespInfo.getErrorCode() != Errors.NONE.code()) {
-                        future.completeExceptionally(
-                                Errors.forCode(pbAclRespInfo.getErrorCode())
-                                        .exception(pbAclRespInfo.getErrorMessage()));
+                    ApiError error = ApiError.fromErrorMessage(pbAclRespInfo);
+                    if (error.isFailure()) {
+                        future.completeExceptionally(error.exception());
                     } else {
                         future.complete(null);
                     }

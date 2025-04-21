@@ -16,10 +16,14 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.metadata.TablePath;
+
 import java.util.Objects;
 
 /**
  * Represents a resource object with type and name, used for ACL (Access Control List) management.
+ *
+ * @since 0.7
  */
 public class Resource {
     public static final String WILDCARD_RESOURCE = "*";
@@ -79,5 +83,10 @@ public class Resource {
 
     public static Resource table(String databaseName, String tableName) {
         return new Resource(ResourceType.TABLE, databaseName + "." + tableName);
+    }
+
+    public static Resource table(TablePath tablePath) {
+        return new Resource(
+                ResourceType.TABLE, tablePath.getDatabaseName() + "." + tablePath.getTableName());
     }
 }

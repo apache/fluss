@@ -423,5 +423,5 @@ public interface Admin extends AutoCloseable {
      * @param filters List of ACL entries to remove.
      * @return A CompletableFuture indicating completion of the operation.
      */
-    DeleteAclsResult dropAcls(Collection<AclBindingFilter> filters);
+    DropAclsResult dropAcls(Collection<AclBindingFilter> filters);
 }

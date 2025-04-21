@@ -53,6 +53,7 @@ import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RecordTooLargeException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
+import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.SecurityTokenException;
 import com.alibaba.fluss.exception.StorageException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
@@ -192,7 +193,8 @@ public enum Errors {
             LeaderNotAvailableException::new),
     PARTITION_MAX_NUM_EXCEPTION(
             45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
-    AUTHENTICATE_EXCEPTION(46, "The authentication failed.", AuthenticationException::new);
+    AUTHENTICATE_EXCEPTION(46, "The authentication failed.", AuthenticationException::new),
+    SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

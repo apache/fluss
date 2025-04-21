@@ -130,6 +130,7 @@ public class TabletServer extends ServerBase {
     private ZooKeeperClient zkClient;
 
     @GuardedBy("lock")
+    @Nullable
     private Authorizer authorizer;
 
     public TabletServer(Configuration conf) {
@@ -176,7 +177,7 @@ public class TabletServer extends ServerBase {
             this.kvManager = KvManager.create(conf, zkClient, logManager);
             kvManager.startup();
 
-            this.authorizer = AuthorizerLoader.createAuthorizer(conf, pluginManager);
+            this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
                 authorizer.startup();
             }

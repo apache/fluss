@@ -31,6 +31,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
@@ -102,7 +104,7 @@ public class ZkNodeChangeNotificationWatcherTest {
         for (String node : nodesBeforeStart) {
             maxCtimeBeforeStart =
                     Math.max(
-                            zookeeperClient.getState(seqNodeRoot + "/" + node).get().getCtime(),
+                            zookeeperClient.getStat(seqNodeRoot + "/" + node).get().getCtime(),
                             maxCtimeBeforeStart);
         }
         // Advance the clock to make the initial notifications obsolete
@@ -118,7 +120,7 @@ public class ZkNodeChangeNotificationWatcherTest {
 
     private static class TestingNotificationHandler
             implements ZkNodeChangeNotificationWatcher.NotificationHandler {
-        public List<Resource> resourceNotifications = new ArrayList<>();
+        public BlockingQueue<Resource> resourceNotifications = new LinkedBlockingQueue<>();
 
         @Override
         public void processNotification(byte[] notification) {

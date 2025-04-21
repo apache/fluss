@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.authorizer;
 
-import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.security.acl.OperationType;
 import com.alibaba.fluss.security.acl.Resource;
@@ -43,7 +43,7 @@ public abstract class AbstractAuthorizer implements Authorizer {
 
     @Override
     public void authorize(Session session, OperationType operationType, Resource resource)
-            throws AuthenticationException {
+            throws AuthorizationException {
         // internal request will not be authorized
         if (!isAuthorized(session, operationType, resource)) {
             LOG.warn(
@@ -51,7 +51,7 @@ public abstract class AbstractAuthorizer implements Authorizer {
                     session.getPrincipal(),
                     operationType,
                     resource);
-            throw new AuthenticationException(
+            throw new AuthorizationException(
                     String.format(
                             "Principal %s have no authorization to operate %s on resource %s ",
                             session.getPrincipal(), operationType, resource));
@@ -81,7 +81,7 @@ public abstract class AbstractAuthorizer implements Authorizer {
      *
      * @param session the session associated with the request
      * @param action a action to be authorized
-     * @return a list of boolean results indicating whether each action is authorized
+     * @return boolean results a boolean indicating whether the action is authorized
      */
     abstract boolean authorizeAction(Session session, Action action);
 

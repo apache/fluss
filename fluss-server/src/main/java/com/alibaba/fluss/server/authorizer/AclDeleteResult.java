@@ -16,8 +16,10 @@
 
 package com.alibaba.fluss.server.authorizer;
 
-import com.alibaba.fluss.exception.ApiException;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AclBinding;
+
+import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.Optional;
@@ -29,8 +31,8 @@ import java.util.Optional;
  */
 public class AclDeleteResult {
 
-    /** The exception encountered while attempting to match ACL filters for deletion, if any. */
-    private final ApiException exception;
+    /** The error encountered while attempting to match ACL filters for deletion, if any. */
+    @Nullable private final ApiError error;
 
     /** The collection of delete results for each matching ACL binding. */
     private final Collection<AclBindingDeleteResult> aclBindingDeleteResults;
@@ -40,13 +42,13 @@ public class AclDeleteResult {
     }
 
     public AclDeleteResult(
-            Collection<AclBindingDeleteResult> deleteResults, ApiException exception) {
+            Collection<AclBindingDeleteResult> deleteResults, @Nullable ApiError error) {
         this.aclBindingDeleteResults = deleteResults;
-        this.exception = exception;
+        this.error = error;
     }
 
-    public Optional<ApiException> exception() {
-        return exception == null ? Optional.empty() : Optional.of(exception);
+    public Optional<ApiError> error() {
+        return error == null ? Optional.empty() : Optional.of(error);
     }
 
     public Collection<AclBindingDeleteResult> aclBindingDeleteResults() {
@@ -63,19 +65,19 @@ public class AclDeleteResult {
         private final AclBinding aclBinding;
 
         /** The exception encountered while attempting to delete the ACL binding, if any. */
-        private final ApiException exception;
+        @Nullable private final ApiError error;
 
-        public AclBindingDeleteResult(AclBinding aclBinding, ApiException exception) {
+        public AclBindingDeleteResult(AclBinding aclBinding, ApiError apiError) {
             this.aclBinding = aclBinding;
-            this.exception = exception;
+            this.error = apiError;
         }
 
         public AclBinding aclBinding() {
             return aclBinding;
         }
 
-        public Optional<ApiException> exception() {
-            return exception == null ? Optional.empty() : Optional.of(exception);
+        public Optional<ApiError> error() {
+            return error == null ? Optional.empty() : Optional.of(error);
         }
     }
 }

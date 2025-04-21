@@ -34,9 +34,6 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
-import com.alibaba.fluss.rpc.messages.InitWriterRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
@@ -92,6 +89,7 @@ public class FlussAuthorizationITCase {
     private Admin rootAdmin;
     private Connection guestConn;
     private Admin guestAdmin;
+    private FlussPrincipal guestPrincipal;
     private Configuration guestConf;
 
     @BeforeEach
@@ -109,6 +107,7 @@ public class FlussAuthorizationITCase {
         guestConf.setString("client.security.username_password.password", "password2");
         guestConn = ConnectionFactory.createConnection(guestConf);
         guestAdmin = guestConn.getAdmin();
+        guestPrincipal = new FlussPrincipal("guest", "USER");
 
         // prepare default database and table
         rootAdmin
@@ -145,7 +144,7 @@ public class FlussAuthorizationITCase {
     @Test
     void testNoAuthorizer() throws Exception {
         Configuration configuration = initConfig();
-        configuration.removeConfig(ConfigOptions.AUTHORIZER_PLUGIN_TYPE);
+        configuration.removeConfig(ConfigOptions.AUTHORIZER_ENABLED);
 
         FlussClusterExtension flussClusterExtension =
                 FlussClusterExtension.builder()
@@ -207,7 +206,7 @@ public class FlussAuthorizationITCase {
                                 new AclBinding(
                                         Resource.cluster(),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 WILD_CARD_HOST,
                                                 OperationType.DESCRIBE,
                                                 PermissionType.ALLOW))))
@@ -241,7 +240,8 @@ public class FlussAuthorizationITCase {
                                         PermissionType.ALLOW)));
         assertThatThrownBy(() -> guestAdmin.createAcls(aclBindings).all().get())
                 .hasMessageContaining(
-                        "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate ALTER on resource");
+                        "Principal %s have no authorization to operate ALTER on resource",
+                        guestPrincipal);
 
         rootAdmin
                 .createAcls(
@@ -285,14 +285,16 @@ public class FlussAuthorizationITCase {
                                                 "test-database1", DatabaseDescriptor.EMPTY, false)
                                         .get())
                 .hasMessageContaining(
-                        "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate CREATE on resource Resource{type=CLUSTER, name='fluss-cluster'}");
+                        String.format(
+                                "Principal %s have no authorization to operate CREATE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
         rootAdmin
                 .createAcls(
                         Collections.singletonList(
                                 new AclBinding(
                                         Resource.cluster(),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 "*",
                                                 OperationType.CREATE,
                                                 PermissionType.ALLOW))))
@@ -317,7 +319,7 @@ public class FlussAuthorizationITCase {
                                 new AclBinding(
                                         Resource.database("fluss"),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 "*",
                                                 OperationType.DESCRIBE,
                                                 PermissionType.ALLOW))))
@@ -331,7 +333,7 @@ public class FlussAuthorizationITCase {
                                 new AclBinding(
                                         Resource.cluster(),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 "*",
                                                 OperationType.ALL,
                                                 PermissionType.ALLOW))))
@@ -351,7 +353,9 @@ public class FlussAuthorizationITCase {
                                                 DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false)
                                         .get())
                 .hasMessageContaining(
-                        "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='test_db_1'}");
+                        String.format(
+                                "Principal %s have no authorization to operate CREATE on resource Resource{type=DATABASE, name='test_db_1'}",
+                                guestPrincipal));
         assertThat(rootAdmin.tableExists(DATA1_TABLE_PATH).get()).isFalse();
         rootAdmin
                 .createAcls(
@@ -359,7 +363,7 @@ public class FlussAuthorizationITCase {
                                 new AclBinding(
                                         Resource.database(DATA1_TABLE_PATH.getDatabaseName()),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 "*",
                                                 OperationType.CREATE,
                                                 PermissionType.ALLOW))))
@@ -379,7 +383,7 @@ public class FlussAuthorizationITCase {
                                 new AclBinding(
                                         Resource.database(DATA1_TABLE_PATH_PK.getDatabaseName()),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 "*",
                                                 OperationType.DESCRIBE,
                                                 PermissionType.ALLOW))))
@@ -403,20 +407,14 @@ public class FlussAuthorizationITCase {
                             rpcClient,
                             AdminGateway.class);
 
-            //
-            // assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
-            //                    .isEmpty();
-
             // if add acl to allow guest read any resource, it will allow to get metadata.
             rootAdmin
                     .createAcls(
                             Collections.singletonList(
                                     new AclBinding(
-                                            Resource.table(
-                                                    DATA1_TABLE_PATH_PK.getDatabaseName(),
-                                                    DATA1_TABLE_PATH_PK.getTableName()),
+                                            Resource.table(DATA1_TABLE_PATH_PK),
                                             new AccessControlEntry(
-                                                    new FlussPrincipal("guest", "USER"),
+                                                    guestPrincipal,
                                                     "*",
                                                     OperationType.DESCRIBE,
                                                     PermissionType.ALLOW))))
@@ -438,11 +436,9 @@ public class FlussAuthorizationITCase {
                 .createAcls(
                         Collections.singletonList(
                                 new AclBinding(
-                                        Resource.table(
-                                                DATA1_TABLE_PATH.getDatabaseName(),
-                                                DATA1_TABLE_PATH.getTableName()),
+                                        Resource.table(DATA1_TABLE_PATH),
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
+                                                guestPrincipal,
                                                 "*",
                                                 OperationType.WRITE,
                                                 PermissionType.ALLOW))))
@@ -459,17 +455,17 @@ public class FlussAuthorizationITCase {
                                     new TableBucket(table.getTableInfo().getTableId(), 0))) {
                 assertThatThrownBy(() -> batchScanner.pollBatch(Duration.ofMinutes(1)))
                         .hasMessageContaining(
-                                "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate READ on resource Resource{type=TABLE, name='test_db_1.test_non_pk_table_1'}");
+                                String.format(
+                                        "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='test_db_1.test_non_pk_table_1'}",
+                                        guestPrincipal));
             }
             rootAdmin
                     .createAcls(
                             Collections.singletonList(
                                     new AclBinding(
-                                            Resource.table(
-                                                    DATA1_TABLE_PATH.getDatabaseName(),
-                                                    DATA1_TABLE_PATH.getTableName()),
+                                            Resource.table(DATA1_TABLE_PATH),
                                             new AccessControlEntry(
-                                                    new FlussPrincipal("guest", "USER"),
+                                                    guestPrincipal,
                                                     "*",
                                                     OperationType.READ,
                                                     PermissionType.ALLOW))))
@@ -509,96 +505,6 @@ public class FlussAuthorizationITCase {
         }
     }
 
-    @Test
-    void testInitWriter() throws Exception {
-        try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
-            TabletServerGateway guestTabletServerGateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
-                            rpcClient,
-                            TabletServerGateway.class);
-            assertThatThrownBy(
-                            () ->
-                                    guestTabletServerGateway
-                                            .initWriter(new InitWriterRequest())
-                                            .get())
-                    .hasMessageContaining(
-                            "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate IDEMPOTENT_WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}");
-            // if add acl to allow guest write any resource, it will allow to INIT_WRITER.
-            rootAdmin
-                    .createAcls(
-                            Collections.singletonList(
-                                    new AclBinding(
-                                            Resource.database(DATA1_TABLE_PATH.getDatabaseName()),
-                                            new AccessControlEntry(
-                                                    new FlussPrincipal("guest", "USER"),
-                                                    "*",
-                                                    OperationType.WRITE,
-                                                    PermissionType.ALLOW))))
-                    .all()
-                    .get();
-
-            // wait for acl notify to tablet server.
-            retry(
-                    Duration.ofMinutes(1),
-                    () ->
-                            assertThat(
-                                            catchThrowable(
-                                                    (() ->
-                                                            assertThat(
-                                                                            guestTabletServerGateway
-                                                                                    .initWriter(
-                                                                                            new InitWriterRequest())
-                                                                                    .get()
-                                                                                    .hasWriterId())
-                                                                    .isTrue())))
-                                    .doesNotThrowAnyException());
-        }
-    }
-
-    @Test
-    void testGetFileSystemSecurityToken() throws Exception {
-        try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
-            AdminGateway guestGateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
-                            rpcClient,
-                            AdminGateway.class);
-            assertThatThrownBy(
-                            () ->
-                                    guestGateway
-                                            .getFileSystemSecurityToken(
-                                                    new GetFileSystemSecurityTokenRequest())
-                                            .get())
-                    .hasMessageContaining(
-                            "Principal FlussPrincipal{name='guest', type='USER'} have no authorization to operate FILESYSTEM_TOKEN on resource Resource{type=CLUSTER, name='fluss-cluster'}");
-            // if add acl to allow guest read any resource, it will allow to FILESYSTEM_TOKEN.
-            rootAdmin
-                    .createAcls(
-                            Collections.singletonList(
-                                    new AclBinding(
-                                            Resource.table(
-                                                    DATA1_TABLE_PATH.getDatabaseName(),
-                                                    DATA1_TABLE_PATH.getTableName()),
-                                            new AccessControlEntry(
-                                                    new FlussPrincipal("guest", "USER"),
-                                                    "*",
-                                                    OperationType.READ,
-                                                    PermissionType.ALLOW))))
-                    .all()
-                    .get();
-            assertThat(
-                            guestGateway
-                                    .getFileSystemSecurityToken(
-                                            new GetFileSystemSecurityTokenRequest())
-                                    .get()
-                                    .getToken())
-                    .isEmpty();
-        }
-    }
-
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -617,7 +523,7 @@ public class FlussAuthorizationITCase {
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
         conf.setString("security.username_password.credentials", "root:password,guest:password2");
         conf.set(ConfigOptions.SUPER_USERS, "USER:root");
-        conf.set(ConfigOptions.AUTHORIZER_PLUGIN_TYPE, "zookeeper");
+        conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }
 }

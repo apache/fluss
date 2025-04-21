@@ -16,13 +16,32 @@
 
 package com.alibaba.fluss.server.authorizer;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.plugin.Plugin;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
+
+import java.util.Optional;
 
 /** AuthorizePlugin. */
 public interface AuthorizationPlugin extends Plugin {
 
     String identifier();
 
-    Authorizer createAuthorizer(Configuration configuration);
+    Authorizer createAuthorizer(Context context);
+
+    /** Provides session information describing the authorizer to be accessed. */
+    @PublicEvolving
+    interface Context{
+
+        /**
+         * Get configuration of fluss server to authorize.
+         */
+        Configuration getConfiguration();
+
+        /**
+         * Get zookeeper client to store authorization information.
+         */
+        Optional<ZooKeeperClient> getZooKeeperClient();
+    }
 }

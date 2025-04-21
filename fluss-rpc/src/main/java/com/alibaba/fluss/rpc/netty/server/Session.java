@@ -26,8 +26,8 @@ public class Session implements Serializable {
     private final short apiVersion;
     private final String listenerName;
     private final boolean isInternal;
-    private InetAddress inetAddress;
-    private FlussPrincipal principal;
+    private final InetAddress inetAddress;
+    private final FlussPrincipal principal;
 
     public Session(
             short apiVersion,

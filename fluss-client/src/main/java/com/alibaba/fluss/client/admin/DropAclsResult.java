@@ -18,12 +18,14 @@ package com.alibaba.fluss.client.admin;
 
 import com.alibaba.fluss.exception.ApiException;
 import com.alibaba.fluss.exception.UnknownServerException;
-import com.alibaba.fluss.rpc.messages.DeleteAclsMatchingAcl;
-import com.alibaba.fluss.rpc.messages.DropAclsFilterResult;
+import com.alibaba.fluss.rpc.messages.PbDropAclsFilterResult;
+import com.alibaba.fluss.rpc.messages.PbDropAclsMatchingAcl;
 import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
+import com.alibaba.fluss.utils.MapUtils;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,15 +36,15 @@ import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBinding;
 
-/** Represents the result of a delete ACLs operation. */
-public class DeleteAclsResult {
+/** Represents the result of a drop ACLs operation. */
+public class DropAclsResult {
 
     /** A class containing either the deleted ACL binding or an exception if the delete failed. */
     public static class FilterResult {
         private final AclBinding binding;
-        private final ApiException exception;
+        @Nullable private final ApiException exception;
 
-        FilterResult(AclBinding binding, ApiException exception) {
+        FilterResult(AclBinding binding, @Nullable ApiException exception) {
             this.binding = binding;
             this.exception = exception;
         }
@@ -53,6 +55,7 @@ public class DeleteAclsResult {
         }
 
         /** Return an exception if the ACL delete was not successful or null if it was. */
+        @Nullable
         public ApiException exception() {
             return exception;
         }
@@ -74,7 +77,14 @@ public class DeleteAclsResult {
 
     private final Map<AclBindingFilter, CompletableFuture<FilterResults>> futures;
 
-    DeleteAclsResult(Map<AclBindingFilter, CompletableFuture<FilterResults>> futures) {
+    DropAclsResult(Collection<AclBindingFilter> filters) {
+        final Map<AclBindingFilter, CompletableFuture<DropAclsResult.FilterResults>> futures =
+                MapUtils.newConcurrentHashMap();
+        for (AclBindingFilter filter : filters) {
+            if (!futures.containsKey(filter)) {
+                futures.put(filter, new CompletableFuture<>());
+            }
+        }
         this.futures = futures;
     }
 
@@ -96,8 +106,8 @@ public class DeleteAclsResult {
             try {
                 results = value.get();
             } catch (Throwable e) {
-                // This should be unreachable, since the future returned by KafkaFuture#allOf should
-                // have failed if any Future failed.
+                // This should be unreachable, since the future returned by DeleteAclsResult#all ->
+                // CompletableFuture#allOf should have failed if any Future failed.
                 throw new IllegalStateException("DeleteAclsResult#all: internal error", e);
             }
             for (FilterResult result : results.values()) {
@@ -114,54 +124,45 @@ public class DeleteAclsResult {
         futures.values().forEach(future -> future.completeExceptionally(t));
     }
 
-    public void complete(List<DropAclsFilterResult> results) {
-        Iterator<DropAclsFilterResult> iter = results.iterator();
-        for (AclBindingFilter bindingFilter : futures.keySet()) {
-            CompletableFuture<FilterResults> future = futures.get(bindingFilter);
-            if (!iter.hasNext()) {
-                future.completeExceptionally(
-                        new UnknownServerException(
-                                "The broker reported no deletion result for the given filter."));
-            } else {
-                DropAclsFilterResult filterResult = iter.next();
-                if (filterResult.hasErrorCode()
-                        && filterResult.getErrorCode() != Errors.NONE.code()) {
-                    ApiError apiError =
-                            new ApiError(
-                                    Errors.forCode(filterResult.getErrorCode()),
-                                    filterResult.hasErrorMessage()
-                                            ? filterResult.getErrorMessage()
-                                            : null);
-                    future.completeExceptionally(apiError.exception());
-                } else {
-                    List<FilterResult> filterResults = new ArrayList<>();
-                    for (DeleteAclsMatchingAcl matchingAcl : filterResult.getMatchingAclsList()) {
-                        if (matchingAcl.hasErrorCode()
-                                && matchingAcl.getErrorCode() != Errors.NONE.code()) {
-                            ApiError aclError =
-                                    new ApiError(
-                                            Errors.forCode(filterResult.getErrorCode()),
-                                            filterResult.hasErrorMessage()
-                                                    ? filterResult.getErrorMessage()
-                                                    : null);
-                            AclBinding aclBinding = toAclBinding(matchingAcl.getAcl());
-                            filterResults.add(new FilterResult(aclBinding, aclError.exception()));
+    public void complete(List<PbDropAclsFilterResult> results) {
+        Iterator<PbDropAclsFilterResult> iter = results.iterator();
+        futures.forEach(
+                (bindingFilter, future) -> {
+                    if (!iter.hasNext()) {
+                        future.completeExceptionally(
+                                new UnknownServerException(
+                                        "The broker reported no deletion result for the given filter."));
+                    } else {
+                        PbDropAclsFilterResult filterResult = iter.next();
+                        ApiError error = ApiError.fromErrorMessage(filterResult);
+                        if (error.isFailure()) {
+                            future.completeExceptionally(error.exception());
                         } else {
-                            filterResults.add(
-                                    new FilterResult(toAclBinding(matchingAcl.getAcl()), null));
+                            List<FilterResult> filterResults = new ArrayList<>();
+                            for (PbDropAclsMatchingAcl matchingAcl :
+                                    filterResult.getMatchingAclsList()) {
+                                ApiError aclError = ApiError.fromErrorMessage(matchingAcl);
+                                AclBinding aclBinding = toAclBinding(matchingAcl.getAcl());
+                                if (aclError.isFailure()) {
+                                    filterResults.add(
+                                            new FilterResult(aclBinding, aclError.exception()));
+                                } else {
+                                    filterResults.add(
+                                            new FilterResult(
+                                                    toAclBinding(matchingAcl.getAcl()), null));
+                                }
+                            }
+                            future.complete(new FilterResults(filterResults));
                         }
                     }
-                    future.complete(new FilterResults(filterResults));
-                }
-            }
-        }
+                });
     }
 
     /**
      * Return a map from acl filters to futures which can be used to check the status of the
      * deletions by each filter.
      */
-    private Map<AclBindingFilter, CompletableFuture<FilterResults>> values() {
+    public Map<AclBindingFilter, CompletableFuture<FilterResults>> values() {
         return futures;
     }
 }

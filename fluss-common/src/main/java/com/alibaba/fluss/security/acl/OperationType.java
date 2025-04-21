@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 /**
  * Enumeration representing operation types used in ACL (Access Control List) systems.
  *
@@ -26,12 +28,9 @@ package com.alibaba.fluss.security.acl;
  * <p>2. {@link #READ}, {@link #WRITE}, {@link #CREATE}, {@link #DROP}, and {@link #ALTER}
  * implicitly include {@link #DESCRIBE}
  *
- * <p>3. When a user is granted {@link #WRITE} permission on any resource: - Automatically grants
- * {@link #IDEMPOTENT_WRITE} permission permissions on cluster.
- *
- * <p>4. When a user is granted {@link #READ} permission on any resource: - Automatically grants
- * {@link #FILESYSTEM_TOKEN} permission on cluster.
+ * @since 0.7
  */
+@PublicEvolving
 public enum OperationType {
     /** In a filter, matches any OperationType. */
     ANY((byte) 1),
@@ -41,9 +40,7 @@ public enum OperationType {
     CREATE((byte) 5),
     DROP((byte) 6),
     ALTER((byte) 7),
-    DESCRIBE((byte) 8),
-    IDEMPOTENT_WRITE((byte) 12),
-    FILESYSTEM_TOKEN((byte) 500);
+    DESCRIBE((byte) 8);
 
     private final byte code;
 

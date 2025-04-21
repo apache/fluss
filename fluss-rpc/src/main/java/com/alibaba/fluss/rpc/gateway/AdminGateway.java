@@ -91,18 +91,16 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      * create acls for a resource.
      *
      * @param request create acl request.
-     * @return
      */
-    @RPC(api = ApiKeys.CREATE_ACL)
+    @RPC(api = ApiKeys.CREATE_ACLS)
     CompletableFuture<CreateAclsResponse> createAcls(CreateAclsRequest request);
 
     /**
      * Drop acls for a resource.
      *
      * @param request drop acl request.
-     * @return
      */
-    @RPC(api = ApiKeys.DROP_ACL)
+    @RPC(api = ApiKeys.DROP_ACLS)
     CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request);
 
     // todo: rename table & alter table

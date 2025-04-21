@@ -25,7 +25,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceType;
-import com.alibaba.fluss.server.authorizer.ZooKeeperBasedAuthorizer.VersionedAcls;
+import com.alibaba.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
@@ -38,7 +38,6 @@ import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
 import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
-import com.alibaba.fluss.server.zk.data.ZkData.AclChangesNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
@@ -762,13 +761,6 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("add acl change notification for resource {}  ", resource);
     }
 
-    public void deleteAclChangeNotifications() throws Exception {
-        List<String> children = getChildren(AclChangesNode.path());
-        for (String child : children) {
-            zkClient.delete().forPath(AclChangesNode.path() + "/" + child);
-        }
-    }
-
     // --------------------------------------------------------------------------------------------
     // Utils
     // --------------------------------------------------------------------------------------------
@@ -788,7 +780,7 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Gets the data and stat of a given zk node path. */
-    public Optional<Stat> getState(String path) throws Exception {
+    public Optional<Stat> getStat(String path) throws Exception {
         try {
             Stat stat = zkClient.checkExists().forPath(path);
             LOG.info("stat of path {} is {}", path, stat);

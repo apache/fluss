@@ -713,11 +713,11 @@ public final class FlussClusterExtension
     }
 
     private List<AdminReadOnlyGateway> collectAllRpcGateways() {
+        String internalListenerName = clusterConf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
         List<AdminReadOnlyGateway> rpcServiceBases = new ArrayList<>();
-        rpcServiceBases.add(
-                newCoordinatorClient(clusterConf.get(ConfigOptions.INTERNAL_LISTENER_NAME)));
+        rpcServiceBases.add(newCoordinatorClient(internalListenerName));
         rpcServiceBases.addAll(
-                getTabletServerNodes(clusterConf.get(ConfigOptions.INTERNAL_LISTENER_NAME)).stream()
+                getTabletServerNodes(internalListenerName).stream()
                         .map(this::newTabletServerClientForNode)
                         .collect(Collectors.toList()));
         return rpcServiceBases;

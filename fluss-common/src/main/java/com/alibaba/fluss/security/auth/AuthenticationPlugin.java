@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.plugin.Plugin;
 
 /**
@@ -26,6 +27,7 @@ import com.alibaba.fluss.plugin.Plugin;
  *
  * @since 0.7
  */
+@PublicEvolving
 public interface AuthenticationPlugin extends Plugin {
     /**
      * Returns the authentication protocol identifier for this plugin (e.g., "PLAINTEXT", "AK-SK").

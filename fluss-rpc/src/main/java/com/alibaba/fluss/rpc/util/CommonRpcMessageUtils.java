@@ -90,30 +90,30 @@ public class CommonRpcMessageUtils {
     }
 
     public static PbAclFilter toPbAclFilter(AclBindingFilter aclBindingFilter) {
-        AccessControlEntry accessControlEntry = aclBindingFilter.getEntryFilter().getData();
+        AccessControlEntryFilter accessControlEntryFilter = aclBindingFilter.getEntryFilter();
         ResourceFilter resourceFilter = aclBindingFilter.getResourceFilter();
 
         PbAclFilter pbAclFilter = new PbAclFilter();
         pbAclFilter
                 .setResourceType(resourceFilter.getType().getCode())
-                .setOperationType(accessControlEntry.getOperationType().getCode())
-                .setPermissionType(accessControlEntry.getPermissionType().getCode());
+                .setOperationType(accessControlEntryFilter.getOperationType().getCode())
+                .setPermissionType(accessControlEntryFilter.getPermissionType().getCode());
         if (resourceFilter.getName() != null) {
             pbAclFilter.setResourceName(resourceFilter.getName());
         }
 
-        if (accessControlEntry.getPrincipal() != null
-                && accessControlEntry.getPrincipal().getName() != null) {
-            pbAclFilter.setPrincipalName(accessControlEntry.getPrincipal().getName());
+        if (accessControlEntryFilter.getPrincipal() != null
+                && accessControlEntryFilter.getPrincipal().getName() != null) {
+            pbAclFilter.setPrincipalName(accessControlEntryFilter.getPrincipal().getName());
         }
 
-        if (accessControlEntry.getPrincipal() != null
-                && accessControlEntry.getPrincipal().getType() != null) {
-            pbAclFilter.setPrincipalType(accessControlEntry.getPrincipal().getType());
+        if (accessControlEntryFilter.getPrincipal() != null
+                && accessControlEntryFilter.getPrincipal().getType() != null) {
+            pbAclFilter.setPrincipalType(accessControlEntryFilter.getPrincipal().getType());
         }
 
-        if (accessControlEntry.getHost() != null) {
-            pbAclFilter.setHost(accessControlEntry.getHost());
+        if (accessControlEntryFilter.getHost() != null) {
+            pbAclFilter.setHost(accessControlEntryFilter.getHost());
         }
         return pbAclFilter;
     }

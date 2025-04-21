@@ -24,6 +24,7 @@ import com.alibaba.fluss.exception.KvSnapshotNotExistException;
 import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
 import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.SecurityTokenException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
@@ -74,7 +75,6 @@ import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
-import com.alibaba.fluss.rpc.util.CommonRpcMessageUtils;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
 import com.alibaba.fluss.security.acl.OperationType;
@@ -111,6 +111,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static com.alibaba.fluss.security.acl.Resource.TABLE_SPLITTER;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestKvSnapshotsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestLakeSnapshotResponse;
@@ -441,11 +442,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetFileSystemSecurityTokenResponse> getFileSystemSecurityToken(
             GetFileSystemSecurityTokenRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(), OperationType.FILESYSTEM_TOKEN, Resource.cluster());
-        }
-
         try {
             // In order to avoid repeatedly obtaining security token, cache it for a while.
             long currentTimeMs = System.currentTimeMillis();
@@ -510,11 +506,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
         if (authorizer == null) {
-            throw new IllegalStateException("No Authorizer is configured.");
+            throw new SecurityDisabledException("No Authorizer is configured.");
         }
-
-        AclBindingFilter aclBindingFilter =
-                CommonRpcMessageUtils.toAclFilter(request.getAclFilter());
+        AclBindingFilter aclBindingFilter = toAclFilter(request.getAclFilter());
         try {
             Collection<AclBinding> acls = authorizer.listAcls(currentSession(), aclBindingFilter);
             return CompletableFuture.completedFuture(makeListAclsResponse(acls));

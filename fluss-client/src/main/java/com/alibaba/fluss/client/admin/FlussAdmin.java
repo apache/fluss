@@ -401,10 +401,7 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CreateAclsResult createAcls(Collection<AclBinding> aclBindings) {
-        Map<AclBinding, CompletableFuture<Void>> futures = MapUtils.newConcurrentHashMap();
-        aclBindings.forEach(aclBinding -> futures.put(aclBinding, new CompletableFuture<>()));
-        CreateAclsResult result = new CreateAclsResult(futures);
-
+        CreateAclsResult result = new CreateAclsResult(aclBindings);
         CreateAclsRequest createAclsRequest =
                 new CreateAclsRequest().addAllAcls(toPbAclInfos(aclBindings));
 
@@ -421,18 +418,11 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public DeleteAclsResult dropAcls(Collection<AclBindingFilter> filters) {
-        final Map<AclBindingFilter, CompletableFuture<DeleteAclsResult.FilterResults>> futures =
-                MapUtils.newConcurrentHashMap();
-        for (AclBindingFilter filter : filters) {
-            if (!futures.containsKey(filter)) {
-                futures.put(filter, new CompletableFuture<>());
-            }
-        }
-        DeleteAclsResult result = new DeleteAclsResult(futures);
-
+    public DropAclsResult dropAcls(Collection<AclBindingFilter> filters) {
+        DropAclsResult result = new DropAclsResult(filters);
         DropAclsRequest dropAclsRequest =
-                new DropAclsRequest().addAllAclFilters(toPbAclBindingFilters(futures.keySet()));
+                new DropAclsRequest()
+                        .addAllAclFilters(toPbAclBindingFilters(result.values().keySet()));
         gateway.dropAcls(dropAclsRequest)
                 .whenComplete(
                         (r, t) -> {

@@ -14,20 +14,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.authorizer;
+package com.alibaba.fluss.exception;
 
-import com.alibaba.fluss.config.Configuration;
+/**
+ * Exception for no security enabled.
+ *
+ * @since 0.7
+ */
+public class SecurityDisabledException extends ApiException {
 
-/** AuthorizerPlugin based on zookeeper. */
-public class ZooKeeperBasedAuthorizationPlugin implements AuthorizationPlugin {
+    private static final long serialVersionUID = 1L;
 
-    @Override
-    public String identifier() {
-        return "zookeeper";
-    }
-
-    @Override
-    public Authorizer createAuthorizer(Configuration configuration) {
-        return new ZooKeeperBasedAuthorizer(configuration);
+    public SecurityDisabledException(String message) {
+        super(message);
     }
 }

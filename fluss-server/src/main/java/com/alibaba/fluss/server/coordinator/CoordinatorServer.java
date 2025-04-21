@@ -47,6 +47,7 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
@@ -122,6 +123,7 @@ public class CoordinatorServer extends ServerBase {
     private ExecutorService ioExecutor;
 
     @GuardedBy("lock")
+    @Nullable
     private Authorizer authorizer;
 
     public CoordinatorServer(Configuration conf) {
@@ -157,7 +159,7 @@ public class CoordinatorServer extends ServerBase {
 
             this.metadataCache = new ServerMetadataCacheImpl();
 
-            this.authorizer = AuthorizerLoader.createAuthorizer(conf, pluginManager);
+            this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
                 authorizer.startup();
             }

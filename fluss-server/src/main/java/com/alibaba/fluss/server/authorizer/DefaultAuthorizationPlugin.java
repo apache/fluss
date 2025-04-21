@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.exception;
+package com.alibaba.fluss.server.authorizer;
 
-/**
- * This exception is thrown if no authorization.
- *
- * @since 0.7
- */
-public class AuthorizationException extends ApiException {
-    private static final long serialVersionUID = 1L;
+import com.alibaba.fluss.config.Configuration;
 
-    public AuthorizationException(String message) {
-        super(message);
+/** Default {@link AuthorizationPlugin} based on zookeeper. */
+public class DefaultAuthorizationPlugin implements AuthorizationPlugin {
+
+    @Override
+    public String identifier() {
+        return "default";
+    }
+
+    @Override
+    public Authorizer createAuthorizer(Context context) {
+        return new DefaultAuthorizer(context);
     }
 }

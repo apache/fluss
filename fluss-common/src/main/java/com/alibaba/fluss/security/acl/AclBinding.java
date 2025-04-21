@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.util.Objects;
 
 /**
@@ -25,8 +27,9 @@ import java.util.Objects;
  * <p>An {@code AclBinding} encapsulates the relationship between a {@link Resource} and an {@link
  * AccessControlEntry}, defining which principal (user/role) has what permissions on the resource.
  *
- * @since 0.6
+ * @since 0.7
  */
+@PublicEvolving
 public class AclBinding {
     private final Resource resource;
     private final AccessControlEntry accessControlEntry;

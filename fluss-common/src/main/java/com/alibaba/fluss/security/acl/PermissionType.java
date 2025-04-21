@@ -16,7 +16,11 @@
 
 package com.alibaba.fluss.security.acl;
 
-/** Enumeration representing permission types used in ACL. */
+/**
+ * Enumeration representing permission types used in ACL.
+ *
+ * @since 0.7
+ */
 public enum PermissionType {
     /** In a filter, matches any PermissionType. */
     ANY((byte) 1),
@@ -25,7 +29,9 @@ public enum PermissionType {
      * Permission type indicating allowed access. Grants explicit permission for specified
      * operations on resources.
      */
-    ALLOW((byte) 3);
+    ALLOW((byte) 2);
+
+    // todo: Will introduce DENY type in the future.
 
     private final byte code;
 

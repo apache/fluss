@@ -16,9 +16,16 @@
 
 package com.alibaba.fluss.security.acl;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
+
 import java.util.Objects;
 
-/** A filter which can match AclBinding objects. */
+/**
+ * A filter which can match AclBinding objects.
+ *
+ * @since 0.7
+ */
+@PublicEvolving
 public class AclBindingFilter {
     private final ResourceFilter resourceFilter;
     private final AccessControlEntryFilter entryFilter;
