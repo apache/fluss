@@ -78,18 +78,29 @@ public class DefaultAuthorizerTest {
     private DefaultAuthorizer authorizer;
     private DefaultAuthorizer authorizer2;
     private ZooKeeperClient zooKeeperClient;
+    private Configuration configuration;
 
     @BeforeEach
     void setUp() throws Exception {
-        Configuration configuration = new Configuration();
+        configuration = new Configuration();
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         configuration.setString(ConfigOptions.SUPER_USERS, "USER:" + ROOT_USER);
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
-        authorizer =  (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, zooKeeperClient, PluginUtils.createPluginManagerFromRootFolder(configuration) );
-        authorizer2 = (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, null, PluginUtils.createPluginManagerFromRootFolder(configuration) );
+        authorizer =
+                (DefaultAuthorizer)
+                        AuthorizerLoader.createAuthorizer(
+                                configuration,
+                                zooKeeperClient,
+                                PluginUtils.createPluginManagerFromRootFolder(configuration));
+        authorizer2 =
+                (DefaultAuthorizer)
+                        AuthorizerLoader.createAuthorizer(
+                                configuration,
+                                null,
+                                PluginUtils.createPluginManagerFromRootFolder(configuration));
         authorizer.startup();
         authorizer2.startup();
     }
@@ -198,11 +209,17 @@ public class DefaultAuthorizerTest {
 
     @Test
     void testAuthorizerNoZkConfig() {
-        Configuration configuration = new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
-        assertThatThrownBy(()-> AuthorizerLoader.createAuthorizer(configuration, null, PluginUtils.createPluginManagerFromRootFolder(configuration)))
-                    .hasMessageContaining(
-                            "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
-
+        Configuration configuration =
+                new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
+        assertThatThrownBy(
+                        () ->
+                                AuthorizerLoader.createAuthorizer(
+                                        configuration,
+                                        null,
+                                        PluginUtils.createPluginManagerFromRootFolder(
+                                                configuration)))
+                .hasMessageContaining(
+                        "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
     }
 
     @Test
@@ -403,25 +420,30 @@ public class DefaultAuthorizerTest {
 
         // delete acl change notifications to test initial load.
         deleteAclChangeNotifications();
-        authorizer2.startup();
-        assertThat(listAcls(authorizer2, resource1)).isEqualTo(acls1);
-        assertThat(listAcls(authorizer2, resource2)).isEqualTo(acls2);
 
-        // test update cache later
-        final Set<AccessControlEntry> acls3 =
-                new HashSet<>(
-                        Collections.singleton(
-                                new AccessControlEntry(
-                                        new FlussPrincipal("user2", "User"),
-                                        "host-1",
-                                        READ,
-                                        PermissionType.ANY)));
-        addAcls(authorizer, resource2, acls3);
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer2, resource2)).isEqualTo(acls3);
-                });
+        try (Authorizer newAuthorizer =
+                AuthorizerLoader.createAuthorizer(
+                        configuration,
+                        null,
+                        PluginUtils.createPluginManagerFromRootFolder(configuration))) {
+            newAuthorizer.startup();
+            assertThat(listAcls(newAuthorizer, resource1)).isEqualTo(acls1);
+            assertThat(listAcls(newAuthorizer, resource2)).isEqualTo(acls2);
+
+            // test update cache later
+            final Set<AccessControlEntry> acls3 =
+                    new HashSet<>(
+                            Collections.singleton(
+                                    new AccessControlEntry(
+                                            new FlussPrincipal("user2", "User"),
+                                            "host-1",
+                                            READ,
+                                            PermissionType.ANY)));
+            addAcls(authorizer, resource2, acls3);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(listAcls(newAuthorizer, resource2)).isEqualTo(acls3));
+        }
     }
 
     // Authorizing the empty resource is not supported because we create a znode with the resource

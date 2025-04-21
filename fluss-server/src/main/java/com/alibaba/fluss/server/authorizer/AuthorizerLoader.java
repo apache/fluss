@@ -40,7 +40,9 @@ public class AuthorizerLoader {
 
     /** Load authorizer. */
     public static @Nullable Authorizer createAuthorizer(
-            Configuration configuration, ZooKeeperClient zooKeeperClient, @Nullable PluginManager pluginManager) {
+            Configuration configuration,
+            ZooKeeperClient zooKeeperClient,
+            @Nullable PluginManager pluginManager) {
         if (!configuration.get(AUTHORIZER_ENABLED)) {
             return null;
         }
@@ -77,7 +79,9 @@ public class AuthorizerLoader {
                                     .collect(Collectors.joining("\n"))));
         }
 
-        return matchingPlugins.get(0).createAuthorizer(new DefaultContext(configuration, zooKeeperClient));
+        return matchingPlugins
+                .get(0)
+                .createAuthorizer(new DefaultContext(configuration, zooKeeperClient));
     }
 
     /** Default implementation of {@link AuthorizationPlugin.Context}. */
@@ -85,7 +89,8 @@ public class AuthorizerLoader {
         private final Configuration configuration;
         private final ZooKeeperClient zooKeeperClient;
 
-        public DefaultContext(Configuration configuration, @Nullable ZooKeeperClient zooKeeperClient) {
+        public DefaultContext(
+                Configuration configuration, @Nullable ZooKeeperClient zooKeeperClient) {
             this.configuration = configuration;
             this.zooKeeperClient = zooKeeperClient;
         }

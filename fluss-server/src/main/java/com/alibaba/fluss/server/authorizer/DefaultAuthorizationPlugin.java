@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.server.authorizer;
 
-import com.alibaba.fluss.config.Configuration;
-
 /** Default {@link AuthorizationPlugin} based on zookeeper. */
 public class DefaultAuthorizationPlugin implements AuthorizationPlugin {
 

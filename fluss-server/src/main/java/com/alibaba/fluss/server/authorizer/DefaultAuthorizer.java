@@ -133,7 +133,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     public DefaultAuthorizer(AuthorizationPlugin.Context context) {
         this.configuration = context.getConfiguration();
         this.superUsers = parseSuperUsers(configuration);
-        if(context.getZooKeeperClient().isPresent()){
+        if (context.getZooKeeperClient().isPresent()) {
             this.zooKeeperClient = context.getZooKeeperClient().get();
         } else {
             this.zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, this);
@@ -148,8 +148,6 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                                 .toMillis(),
                         new ZkNotificationHandler(),
                         SystemClock.getInstance());
-
-
     }
 
     @Override
@@ -160,7 +158,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public void close() {
-        if(zooKeeperClient != null){
+        if (zooKeeperClient != null) {
             zooKeeperClient.close();
         }
 

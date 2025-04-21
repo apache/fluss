@@ -32,16 +32,12 @@ public interface AuthorizationPlugin extends Plugin {
 
     /** Provides session information describing the authorizer to be accessed. */
     @PublicEvolving
-    interface Context{
+    interface Context {
 
-        /**
-         * Get configuration of fluss server to authorize.
-         */
+        /** Get configuration of fluss server to authorize. */
         Configuration getConfiguration();
 
-        /**
-         * Get zookeeper client to store authorization information.
-         */
+        /** Get zookeeper client to store authorization information. */
         Optional<ZooKeeperClient> getZooKeeperClient();
     }
 }
