@@ -16,10 +16,6 @@
 
 package com.alibaba.fluss.server.metadata;
 
-import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.cluster.ServerNode;
-
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
@@ -41,26 +37,19 @@ public class ServerMetadataCacheImpl extends AbstractServerMetadataCache {
                 bucketMetadataLock,
                 () -> {
                     // 1. update coordinator server.
-                    ServerNode coordinatorServer =
+                    ServerInfo coordinatorServer =
                             clusterMetadataInfo.getCoordinatorServer().orElse(null);
 
                     // 2. Update the alive table servers. We always use the new alive table servers
                     // to replace the old alive table servers.
-                    HashMap<Integer, ServerNode> newAliveTableServers = new HashMap<>();
-                    Set<ServerNode> aliveTabletServers =
+                    HashMap<Integer, ServerInfo> newAliveTableServers = new HashMap<>();
+                    Set<ServerInfo> aliveTabletServers =
                             clusterMetadataInfo.getAliveTabletServers();
-                    for (ServerNode tabletServer : aliveTabletServers) {
+                    for (ServerInfo tabletServer : aliveTabletServers) {
                         newAliveTableServers.put(tabletServer.id(), tabletServer);
                     }
 
-                    clusterMetadata =
-                            new Cluster(
-                                    newAliveTableServers,
-                                    coordinatorServer,
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap());
+                    clusterMetadata = new ServerCluster(coordinatorServer, newAliveTableServers);
                 });
     }
 }

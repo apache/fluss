@@ -157,6 +157,41 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPollOnce() throws Exception {
+        TableDescriptor desc = DATA1_TABLE_DESCRIPTOR;
+        createTable(DATA1_TABLE_PATH, desc, false);
+        Configuration config = new Configuration(clientConf);
+        int expectedSize = 20;
+        try (Connection conn = ConnectionFactory.createConnection(config)) {
+            Table table = conn.getTable(DATA1_TABLE_PATH);
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
+            // should exceed the buffer size, but append successfully
+            for (int i = 0; i < expectedSize; i++) {
+                appendWriter.append(row(1, value));
+            }
+            appendWriter.flush();
+
+            // assert the written data
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+            int count = 0;
+            while (count < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                assertThat(scanRecords.isEmpty()).isFalse();
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    InternalRow row = scanRecord.getRow();
+                    assertThat(row.getInt(0)).isEqualTo(1);
+                    assertThat(row.getString(1)).isEqualTo(value);
+                    count++;
+                }
+            }
+            logScanner.close();
+        }
+    }
+
+    @Test
     void testUpsertWithSmallBuffer() throws Exception {
         TableDescriptor desc =
                 TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();

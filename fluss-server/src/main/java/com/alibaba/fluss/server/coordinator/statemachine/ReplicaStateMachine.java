@@ -17,20 +17,28 @@
 package com.alibaba.fluss.server.coordinator.statemachine;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
+import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -46,12 +54,15 @@ public class ReplicaStateMachine {
     private final CoordinatorContext coordinatorContext;
 
     private final CoordinatorRequestBatch coordinatorRequestBatch;
+    private final ZooKeeperClient zooKeeperClient;
 
     public ReplicaStateMachine(
             CoordinatorContext coordinatorContext,
-            CoordinatorRequestBatch coordinatorRequestBatch) {
+            CoordinatorRequestBatch coordinatorRequestBatch,
+            ZooKeeperClient zooKeeperClient) {
         this.coordinatorContext = coordinatorContext;
         this.coordinatorRequestBatch = coordinatorRequestBatch;
+        this.zooKeeperClient = zooKeeperClient;
     }
 
     public void startup() {
@@ -206,19 +217,12 @@ public class ReplicaStateMachine {
                             if (currentState != ReplicaState.NewReplica) {
                                 TableBucket tableBucket = replica.getTableBucket();
                                 String partitionName;
-                                if (tableBucket.getPartitionId() != null) {
-                                    partitionName =
-                                            coordinatorContext.getPartitionName(
-                                                    tableBucket.getPartitionId());
-                                    if (partitionName == null) {
-                                        LOG.error(
-                                                "Can't find partition name for partition: {}.",
-                                                tableBucket.getPartitionId());
-                                        logFailedSateChange(replica, currentState, targetState);
-                                        return;
-                                    }
-                                } else {
-                                    partitionName = null;
+                                try {
+                                    partitionName = getPartitionName(tableBucket);
+                                } catch (PartitionNotExistException e) {
+                                    LOG.error(e.getMessage());
+                                    logFailedSateChange(replica, currentState, targetState);
+                                    return;
                                 }
 
                                 coordinatorContext
@@ -247,21 +251,62 @@ public class ReplicaStateMachine {
                         });
                 break;
             case OfflineReplica:
+                // first, send stop replica request to servers
                 validReplicas.forEach(
-                        replica -> {
-                            coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
-                                    Collections.singleton(replica.getReplica()),
-                                    replica.getTableBucket(),
-                                    false,
-                                    coordinatorContext.getBucketLeaderEpoch(
-                                            replica.getTableBucket()));
-                            coordinatorContext.putReplicaState(
-                                    replica, ReplicaState.OfflineReplica);
-                        });
-                // todo: handle the case that it's not for delete cause offline, like tablet server
-                // down; It's used to tell other replicas server the one replica is removed from
-                // isr.
-                // should revisit this after we introduce isr
+                        replica ->
+                                coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
+                                        Collections.singleton(replica.getReplica()),
+                                        replica.getTableBucket(),
+                                        false,
+                                        coordinatorContext.getBucketLeaderEpoch(
+                                                replica.getTableBucket())));
+
+                // then, may remove the offline replica from isr
+                Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr =
+                        doRemoveReplicaFromIsr(validReplicas);
+                // notify leader and isr changes
+                for (Map.Entry<TableBucketReplica, LeaderAndIsr> leaderAndIsrEntry :
+                        adjustedLeaderAndIsr.entrySet()) {
+                    TableBucketReplica tableBucketReplica = leaderAndIsrEntry.getKey();
+                    TableBucket tableBucket = tableBucketReplica.getTableBucket();
+                    LeaderAndIsr leaderAndIsr = leaderAndIsrEntry.getValue();
+                    if (!coordinatorContext.isToBeDeleted(tableBucket)) {
+                        Set<Integer> recipients =
+                                coordinatorContext.getAssignment(tableBucket).stream()
+                                        .filter(
+                                                replica ->
+                                                        replica != tableBucketReplica.getReplica())
+                                        .collect(Collectors.toSet());
+                        String partitionName;
+                        try {
+                            partitionName = getPartitionName(tableBucket);
+                        } catch (PartitionNotExistException e) {
+                            LOG.error(e.getMessage());
+                            logFailedSateChange(
+                                    tableBucketReplica,
+                                    coordinatorContext.getReplicaState(tableBucketReplica),
+                                    targetState);
+                            continue;
+                        }
+                        // send leader request to the replica server
+                        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                                recipients,
+                                PhysicalTablePath.of(
+                                        coordinatorContext.getTablePathById(
+                                                tableBucket.getTableId()),
+                                        partitionName),
+                                tableBucket,
+                                coordinatorContext.getAssignment(tableBucket),
+                                leaderAndIsr);
+                    }
+                }
+
+                // finally, set to offline
+                validReplicas.forEach(
+                        replica ->
+                                coordinatorContext.putReplicaState(
+                                        replica, ReplicaState.OfflineReplica));
+
                 break;
             case ReplicaDeletionStarted:
                 validReplicas.forEach(
@@ -339,10 +384,87 @@ public class ReplicaStateMachine {
     }
 
     private String stringifyReplica(TableBucketReplica replica) {
-        return String.format(
-                "TableBucketReplica{tableBucket=%s, replica=%d, tablePath=%s}",
-                replica.getTableBucket(),
-                replica.getReplica(),
-                coordinatorContext.getTablePathById(replica.getTableBucket().getTableId()));
+        TableBucket tableBucket = replica.getTableBucket();
+        if (tableBucket.getPartitionId() == null) {
+            return String.format(
+                    "TableBucketReplica{tableBucket=%s, replica=%d, tablePath=%s}",
+                    tableBucket,
+                    replica.getReplica(),
+                    coordinatorContext.getTablePathById(tableBucket.getTableId()));
+        } else {
+            return String.format(
+                    "TableBucketReplica{tableBucket=%s, replica=%d, tablePath=%s, partition=%s}",
+                    tableBucket,
+                    replica.getReplica(),
+                    coordinatorContext.getTablePathById(replica.getTableBucket().getTableId()),
+                    coordinatorContext.getPartitionName(tableBucket.getPartitionId()));
+        }
+    }
+
+    private Map<TableBucketReplica, LeaderAndIsr> doRemoveReplicaFromIsr(
+            Collection<TableBucketReplica> tableBucketReplicas) {
+        Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr = new HashMap<>();
+        for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
+            TableBucket tableBucket = tableBucketReplica.getTableBucket();
+            int replicaId = tableBucketReplica.getReplica();
+            Optional<LeaderAndIsr> optLeaderAndIsr =
+                    coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+            if (!optLeaderAndIsr.isPresent()) {
+                // no leader and isr for this table bucket, skip
+                continue;
+            }
+            LeaderAndIsr leaderAndIsr = optLeaderAndIsr.get();
+            if (!leaderAndIsr.isr().contains(replicaId)) {
+                // isr doesn't contain the replica, skip
+                continue;
+            }
+            int newLeader =
+                    replicaId == leaderAndIsr.leader()
+                            ?
+                            // the leader become offline, set it to no leader
+                            LeaderAndIsr.NO_LEADER
+                            // otherwise, keep the origin as leader
+                            : leaderAndIsr.leader();
+            List<Integer> newIsr =
+                    leaderAndIsr.isr().size() == 1
+                            // don't remove the replica id from isr when isr size is 1,
+                            // if isr is empty, we can't elect leader any more
+                            ? leaderAndIsr.isr()
+                            : leaderAndIsr.isr().stream()
+                                    .filter(id -> id != replicaId)
+                                    .collect(Collectors.toList());
+            LeaderAndIsr adjustLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(newLeader, newIsr);
+            try {
+                zooKeeperClient.updateLeaderAndIsr(tableBucket, adjustLeaderAndIsr);
+            } catch (Exception e) {
+                LOG.error(
+                        "Fail to update bucket LeaderAndIsr for table bucket {} of table {}.",
+                        tableBucket,
+                        coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                        e);
+                continue;
+            }
+            // update leader and isr
+            coordinatorContext.putBucketLeaderAndIsr(tableBucket, adjustLeaderAndIsr);
+            adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
+        }
+        return adjustedLeaderAndIsr;
+    }
+
+    @Nullable
+    private String getPartitionName(TableBucket tableBucket) throws PartitionNotExistException {
+        String partitionName;
+        if (tableBucket.getPartitionId() != null) {
+            partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
+            if (partitionName == null) {
+                throw new PartitionNotExistException(
+                        String.format(
+                                "Can't find partition name for partition id: %s.",
+                                tableBucket.getPartitionId()));
+            }
+        } else {
+            partitionName = null;
+        }
+        return partitionName;
     }
 }

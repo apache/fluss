@@ -72,6 +72,14 @@
         <!-- test dependency -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-flink-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
@@ -97,6 +105,14 @@
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-rpc</artifactId>
+            <scope>test</scope>
+            <type>test-jar</type>
+            <version>${project.version}</version>
         </dependency>
 
         <!-- for curator TestingServer  -->
@@ -152,6 +168,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes combine.children="append">
+                                    <include>com.alibaba.fluss:fluss-flink-common</include>
                                     <include>com.alibaba.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>

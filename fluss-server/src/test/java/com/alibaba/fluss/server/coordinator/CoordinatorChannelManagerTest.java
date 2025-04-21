@@ -22,14 +22,11 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -37,13 +34,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
 /** Test for {@link CoordinatorChannelManager} . */
 class CoordinatorChannelManagerTest {
-
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChannelManagerTest.class);
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -95,7 +91,7 @@ class CoordinatorChannelManagerTest {
         AtomicInteger sendFlag = new AtomicInteger(0);
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
-                RpcMessageUtils.makeUpdateMetadataRequest(Optional.empty(), Collections.emptySet());
+                makeUpdateMetadataRequest(Optional.empty(), Collections.emptySet());
         coordinatorChannelManager.sendRequest(
                 targetServerId,
                 updateMetadataRequest,

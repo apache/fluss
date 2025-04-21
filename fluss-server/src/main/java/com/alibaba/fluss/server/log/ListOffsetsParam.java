@@ -41,6 +41,9 @@ public class ListOffsetsParam {
      */
     public static final int TIMESTAMP_OFFSET_TYPE = 2;
 
+    /** The offset type indicate the end offset snapshot when become leader. */
+    public static final int LEADER_END_OFFSET_SNAPSHOT_TYPE = 3;
+
     private final int followerServerId;
     private final Integer offsetType;
     private @Nullable final Long startTimestamp;

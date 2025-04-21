@@ -16,18 +16,19 @@
 
 package com.alibaba.fluss.server.replica.fetcher;
 
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -36,12 +37,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeListOffsetsRequest;
+import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.getFetchLogResultForBucket;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
 final class RemoteLeaderEndpoint implements LeaderEndpoint {
     private final int followerServerId;
-    private final ServerNode remoteNode;
+    private final int remoteServerId;
     private final TabletServerGateway tabletServerGateway;
     /** The max size for the fetch response. */
     private final int maxFetchSize;
@@ -54,10 +56,10 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     RemoteLeaderEndpoint(
             Configuration conf,
             int followerServerId,
-            ServerNode remoteNode,
+            int remoteServerId,
             TabletServerGateway tabletServerGateway) {
         this.followerServerId = followerServerId;
-        this.remoteNode = remoteNode;
+        this.remoteServerId = remoteServerId;
         this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
         this.maxFetchSizeForBucket =
                 (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
@@ -68,8 +70,8 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     }
 
     @Override
-    public ServerNode leaderNode() {
-        return remoteNode;
+    public int leaderServerId() {
+        return remoteServerId;
     }
 
     @Override
@@ -83,17 +85,50 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     }
 
     @Override
-    public CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
-            FetchLogRequest fetchLogRequest) {
-        return tabletServerGateway
-                .fetchLog(fetchLogRequest)
-                .thenApply(RpcMessageUtils::getFetchLogResult);
+    public CompletableFuture<Long> fetchLeaderEndOffsetSnapshot(TableBucket tableBucket) {
+        return fetchLogOffset(tableBucket, ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE);
     }
 
     @Override
-    public Optional<FetchLogRequest> buildFetchLogRequest(
+    public CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
+            FetchLogContext fetchLogContext) {
+        FetchLogRequest fetchLogRequest = fetchLogContext.getFetchLogRequest();
+        return tabletServerGateway
+                .fetchLog(fetchLogRequest)
+                .thenApply(
+                        fetchLogResponse -> {
+                            Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap =
+                                    new HashMap<>();
+                            List<PbFetchLogRespForTable> tablesRespList =
+                                    fetchLogResponse.getTablesRespsList();
+                            for (PbFetchLogRespForTable tableResp : tablesRespList) {
+                                long tableId = tableResp.getTableId();
+                                List<PbFetchLogRespForBucket> bucketsRespList =
+                                        tableResp.getBucketsRespsList();
+                                for (PbFetchLogRespForBucket bucketResp : bucketsRespList) {
+                                    TableBucket tableBucket =
+                                            new TableBucket(
+                                                    tableId,
+                                                    bucketResp.hasPartitionId()
+                                                            ? bucketResp.getPartitionId()
+                                                            : null,
+                                                    bucketResp.getBucketId());
+                                    TablePath tablePath = fetchLogContext.getTablePath(tableId);
+                                    FetchLogResultForBucket fetchLogResultForBucket =
+                                            getFetchLogResultForBucket(
+                                                    tableBucket, tablePath, bucketResp);
+                                    fetchLogResultMap.put(tableBucket, fetchLogResultForBucket);
+                                }
+                            }
+
+                            return fetchLogResultMap;
+                        });
+    }
+
+    @Override
+    public Optional<FetchLogContext> buildFetchLogContext(
             Map<TableBucket, BucketFetchStatus> replicas) {
-        return buildFetchLogRequest(
+        return buildFetchLogContext(
                 replicas,
                 followerServerId,
                 maxFetchSize,
@@ -107,13 +142,14 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
         // nothing to do now.
     }
 
-    static Optional<FetchLogRequest> buildFetchLogRequest(
+    static Optional<FetchLogContext> buildFetchLogContext(
             Map<TableBucket, BucketFetchStatus> replicas,
             int followerServerId,
             int maxFetchSize,
             int maxFetchSizeForBucket,
             int minFetchBytes,
             int maxFetchWaitMs) {
+        Map<Long, TablePath> tableIdToTablePath = new HashMap<>();
         FetchLogRequest fetchRequest =
                 new FetchLogRequest()
                         .setFollowerServerId(followerServerId)
@@ -137,6 +173,8 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
                 fetchLogReqForBuckets
                         .computeIfAbsent(tb.getTableId(), key -> new ArrayList<>())
                         .add(fetchLogReqForBucket);
+
+                tableIdToTablePath.put(tb.getTableId(), bucketFetchStatus.tablePath());
                 readyForFetchCount++;
             }
         }
@@ -151,7 +189,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
                                     .setProjectionPushdownEnabled(false)
                                     .setTableId(tableId)
                                     .addAllBucketsReqs(buckets));
-            return Optional.of(fetchRequest);
+            return Optional.of(new FetchLogContext(tableIdToTablePath, fetchRequest));
         }
     }
 

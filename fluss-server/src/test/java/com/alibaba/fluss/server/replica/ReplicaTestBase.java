@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.replica;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -29,6 +29,7 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -45,6 +46,7 @@ import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.log.remote.TestingRemoteLogStorage;
 import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
@@ -191,7 +193,7 @@ public class ReplicaTestBase {
         initRemoteLogEnv();
 
         // init replica manager
-        replicaManager = buildReplicaManager();
+        replicaManager = buildReplicaManager(testCoordinatorGateway);
         replicaManager.startup();
 
         // We will register all tables in TestData in zk client previously.
@@ -201,18 +203,28 @@ public class ReplicaTestBase {
     private void initMetadataCache(ServerMetadataCache metadataCache) {
         metadataCache.updateMetadata(
                 new ClusterMetadataInfo(
-                        Optional.of(new ServerNode(0, "localhost", 1234, ServerType.COORDINATOR)),
+                        Optional.of(
+                                new ServerInfo(
+                                        0,
+                                        Endpoint.fromListenersString("CLIENT://localhost:1234"),
+                                        ServerType.COORDINATOR)),
                         new HashSet<>(
                                 Arrays.asList(
-                                        new ServerNode(
+                                        new ServerInfo(
                                                 TABLET_SERVER_ID,
-                                                "localhost",
-                                                90,
+                                                Endpoint.fromListenersString(
+                                                        "CLIENT://localhost:90"),
                                                 ServerType.TABLET_SERVER),
-                                        new ServerNode(
-                                                2, "localhost", 91, ServerType.TABLET_SERVER),
-                                        new ServerNode(
-                                                3, "localhost", 92, ServerType.TABLET_SERVER)))));
+                                        new ServerInfo(
+                                                2,
+                                                Endpoint.fromListenersString(
+                                                        "CLIENT://localhost:91"),
+                                                ServerType.TABLET_SERVER),
+                                        new ServerInfo(
+                                                3,
+                                                Endpoint.fromListenersString(
+                                                        "CLIENT://localhost:92"),
+                                                ServerType.TABLET_SERVER)))));
     }
 
     private void registerTableInZkClient() throws Exception {
@@ -253,7 +265,8 @@ public class ReplicaTestBase {
         return tableId;
     }
 
-    protected ReplicaManager buildReplicaManager() throws Exception {
+    protected ReplicaManager buildReplicaManager(CoordinatorGateway coordinatorGateway)
+            throws Exception {
         return new ReplicaManager(
                 conf,
                 scheduler,
@@ -263,7 +276,7 @@ public class ReplicaTestBase {
                 TABLET_SERVER_ID,
                 serverMetadataCache,
                 rpcClient,
-                new TestCoordinatorGateway(),
+                coordinatorGateway,
                 snapshotReporter,
                 NOPErrorHandler.INSTANCE,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
@@ -412,8 +425,7 @@ public class ReplicaTestBase {
             throws Exception {
         if (snapshotContext == null) {
             snapshotContext =
-                    new TestSnapshotContext(
-                            tableBucket, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+                    new TestSnapshotContext(conf.getString(ConfigOptions.REMOTE_DATA_DIR));
         }
         BucketMetricGroup metricGroup =
                 replicaManager
@@ -520,25 +532,44 @@ public class ReplicaTestBase {
     protected class TestSnapshotContext implements SnapshotContext {
 
         private final FsPath remoteKvTabletDir;
-        protected final ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
-                new ManuallyTriggeredScheduledExecutorService();
+        protected ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
         protected final TestingCompletedKvSnapshotCommitter testKvSnapshotStore;
         private final ExecutorService executorService;
 
         public TestSnapshotContext(
-                TableBucket tableBucket,
+                String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
+                throws Exception {
+            this(
+                    remoteKvTabletDir,
+                    testKvSnapshotStore,
+                    new ManuallyTriggeredScheduledExecutorService());
+        }
+
+        public TestSnapshotContext(String remoteKvTabletDir) throws Exception {
+            this(remoteKvTabletDir, new TestingCompletedKvSnapshotCommitter());
+        }
+
+        public TestSnapshotContext(
                 String remoteKvTabletDir,
-                TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
+                ManuallyTriggeredScheduledExecutorService manuallyTriggeredScheduledExecutorService)
+                throws Exception {
+            this(
+                    remoteKvTabletDir,
+                    new TestingCompletedKvSnapshotCommitter(),
+                    manuallyTriggeredScheduledExecutorService);
+        }
+
+        private TestSnapshotContext(
+                String remoteKvTabletDir,
+                TestingCompletedKvSnapshotCommitter testKvSnapshotStore,
+                ManuallyTriggeredScheduledExecutorService manuallyTriggeredScheduledExecutorService)
                 throws Exception {
             this.remoteKvTabletDir = new FsPath(remoteKvTabletDir);
             this.testKvSnapshotStore = testKvSnapshotStore;
             this.executorService = Executors.newFixedThreadPool(1);
-            closeableRegistry.registerCloseable(scheduledExecutorService::shutdownNow);
-        }
-
-        public TestSnapshotContext(TableBucket tableBucket, String remoteKvTabletDir)
-                throws Exception {
-            this(tableBucket, remoteKvTabletDir, new TestingCompletedKvSnapshotCommitter());
+            this.scheduledExecutorService = manuallyTriggeredScheduledExecutorService;
+            closeableRegistry.registerCloseable(
+                    manuallyTriggeredScheduledExecutorService::shutdownNow);
         }
 
         @Override

@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.CorruptRecordException;
+import com.alibaba.fluss.exception.DuplicateSequenceException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidTimestampException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
@@ -104,6 +105,9 @@ public final class LogTablet {
 
     @GuardedBy("lock")
     private volatile LogOffsetMetadata highWatermarkMetadata;
+
+    /** The leader end offset snapshot when become leader. */
+    private volatile long leaderEndOffsetSnapshot = -1L;
 
     // The minimum offset that should be retained in the local log. This is used to ensure that,
     // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
@@ -259,6 +263,10 @@ public final class LogTablet {
         return logFormat;
     }
 
+    public long getLeaderEndOffsetSnapshot() {
+        return leaderEndOffsetSnapshot;
+    }
+
     @VisibleForTesting
     public WriterStateManager writerStateManager() {
         return writerStateManager;
@@ -273,7 +281,8 @@ public final class LogTablet {
             LogFormat logFormat,
             int tieredLogLocalSegments,
             boolean isChangelog,
-            Clock clock)
+            Clock clock,
+            boolean isCleanShutdown)
             throws Exception {
         // create the log directory if it doesn't exist
         Files.createDirectories(tabletDir.toPath());
@@ -295,7 +304,8 @@ public final class LogTablet {
                                 segments,
                                 recoveryPoint,
                                 logFormat,
-                                writerStateManager)
+                                writerStateManager,
+                                isCleanShutdown)
                         .load();
 
         LocalLog log =
@@ -332,6 +342,16 @@ public final class LogTablet {
         metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
         metricGroup.histogram(
                 MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
+    }
+
+    public void updateLeaderEndOffsetSnapshot() {
+        synchronized (lock) {
+            LOG.info(
+                    "Update leaderEndOffsetSnapshot to {} for tb {} while become leader",
+                    localLogEndOffset(),
+                    localLog.getTableBucket());
+            leaderEndOffsetSnapshot = localLog.getLocalLogEndOffset();
+        }
     }
 
     /**
@@ -456,7 +476,7 @@ public final class LogTablet {
         if (remoteLogEndOffset > this.remoteLogEndOffset) {
             this.remoteLogEndOffset = remoteLogEndOffset;
 
-            // try to delete these segments already exits in remote storage.
+            // try to delete these segments already exist in remote storage.
             deleteSegmentsAlreadyExistsInRemote();
         }
     }
@@ -580,10 +600,10 @@ public final class LogTablet {
      * segment if necessary.
      *
      * <p>This method will generally be responsible for assigning offsets to the messages, however
-     * if the needAssignOffsetAndTimestamp=false flag is passed we will only check that the existing
-     * offsets are valid.
+     * if the appendAsLeader=false flag is passed we will only check that the existing offsets are
+     * valid.
      */
-    private LogAppendInfo append(MemoryLogRecords records, boolean needAssignOffsetAndTimestamp)
+    private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader)
             throws Exception {
         LogAppendInfo appendInfo = analyzeAndValidateRecords(records);
 
@@ -597,7 +617,7 @@ public final class LogTablet {
 
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
-            if (needAssignOffsetAndTimestamp) {
+            if (appendAsLeader) {
                 long offset = localLog.getLocalLogEndOffset();
                 // assign offsets to the message set.
                 appendInfo.setFirstOffset(offset);
@@ -628,11 +648,24 @@ public final class LogTablet {
                 // have duplicated batch metadata, skip the append and update append info.
                 WriterStateEntry.BatchMetadata duplicatedBatch = validateResult.left();
                 long startOffset = duplicatedBatch.firstOffset();
-                appendInfo.setFirstOffset(startOffset);
-                appendInfo.setLastOffset(duplicatedBatch.lastOffset);
-                appendInfo.setMaxTimestamp(duplicatedBatch.timestamp);
-                appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
-                appendInfo.setDuplicated(true);
+                if (appendAsLeader) {
+                    appendInfo.setFirstOffset(startOffset);
+                    appendInfo.setLastOffset(duplicatedBatch.lastOffset);
+                    appendInfo.setMaxTimestamp(duplicatedBatch.timestamp);
+                    appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
+                    appendInfo.setDuplicated(true);
+                } else {
+                    String errorMsg =
+                            String.format(
+                                    "Found duplicated batch for table bucket %s, duplicated offset is %s, "
+                                            + "writer id is %s and batch sequence is: %s",
+                                    getTableBucket(),
+                                    duplicatedBatch.lastOffset,
+                                    duplicatedBatch.writerId,
+                                    duplicatedBatch.batchSequence);
+                    LOG.error(errorMsg);
+                    throw new DuplicateSequenceException(errorMsg);
+                }
             } else {
                 // Append the records, and increment the local log end offset immediately after
                 // append because write to the transaction index below may fail, and we want to
@@ -780,16 +813,12 @@ public final class LogTablet {
             // current writer state end offset (which corresponds to the log end offset),
             // we manually override the state offset here prior to taking the snapshot.
             writerStateManager.updateMapEndOffset(segment.getBaseOffset());
-            // We avoid potentially-costly fsync call, since we acquire UnifiedLog#lock here which
-            // could block subsequent produces in the meantime.
-            // flush is done in the scheduler thread along with segment flushing below.
-            Optional<File> maybeSnapshot = writerStateManager.takeSnapshot(false);
+            writerStateManager.takeSnapshot();
             updateHighWatermarkWithLogEndOffset();
 
             scheduler.scheduleOnce(
                     "flush-log",
                     () -> {
-                        maybeSnapshot.ifPresent(f -> flushWriterStateSnapshot(f.toPath()));
                         flushUptoOffsetExclusive(segment.getBaseOffset());
                     });
         }
@@ -1014,12 +1043,16 @@ public final class LogTablet {
             throws IOException {
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
-            rebuildWriterState(
-                    writerStateManager,
-                    localLog.getSegments(),
-                    localLog.getLocalLogStartOffset(),
-                    lastOffset,
-                    false);
+            // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason
+            // is that the current implementation of logStartOffset in Fluss is not yet fully
+            // refined, and there may be cases where logStartOffset is not updated. As a result,
+            // logStartOffset is not yet reliable. Once the issue with correctly updating
+            // logStartOffset is resolved in issue https://github.com/alibaba/fluss/issues/744, we
+            // can use logStartOffset here.
+            // Additionally, using 0 versus using logStartOffset does not affect correctness—they
+            // both can restore the complete WriterState. The only difference is that using
+            // logStartOffset can potentially skip over more segments.
+            rebuildWriterState(writerStateManager, localLog.getSegments(), 0, lastOffset, false);
         }
     }
 
@@ -1158,7 +1191,7 @@ public final class LogTablet {
                                     logStartOffset);
                     writerStateManager.updateMapEndOffset(startOffset);
 
-                    if (offsetsToSnapshot.contains(Optional.of(startOffset))) {
+                    if (offsetsToSnapshot.contains(Optional.of(segment.getBaseOffset()))) {
                         writerStateManager.takeSnapshot();
                     }
 

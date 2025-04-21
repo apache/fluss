@@ -1,4 +1,5 @@
 ---
+sidebar_label: Partitioning
 sidebar_position: 2
 ---
 

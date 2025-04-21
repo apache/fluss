@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.flink.utils;
 
-import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.InternalRow;
@@ -43,7 +43,6 @@ import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
  * modify this class.
  */
 public class FlussRowToFlinkRowConverter {
-
     private final FlussDeserializationConverter[] toFlinkFieldConverters;
     private final InternalRow.FieldGetter[] flussFieldGetters;
 
@@ -56,8 +55,8 @@ public class FlussRowToFlinkRowConverter {
         }
     }
 
-    public RowData toFlinkRowData(ScanRecord scanRecord) {
-        return toFlinkRowData(scanRecord.getRow(), toFlinkRowKind(scanRecord.getChangeType()));
+    public RowData toFlinkRowData(LogRecord logRecord) {
+        return toFlinkRowData(logRecord.getRow(), toFlinkRowKind(logRecord.getChangeType()));
     }
 
     public RowData toFlinkRowData(InternalRow flussRow) {

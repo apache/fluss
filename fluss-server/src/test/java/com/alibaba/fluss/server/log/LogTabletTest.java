@@ -93,7 +93,8 @@ final class LogTabletTest extends LogTestBase {
                         LogFormat.ARROW,
                         1,
                         false,
-                        SystemClock.getInstance());
+                        SystemClock.getInstance(),
+                        true);
     }
 
     @AfterEach
@@ -340,7 +341,7 @@ final class LogTabletTest extends LogTestBase {
         log.truncateFullyAndStartAt(29);
         assertThat(log.logSegments().size()).isEqualTo(1);
         assertThat(latestWriterStateEndOffset(log)).isEqualTo(29);
-        assertThat(latestWriterSnapshotOffset(log)).isEmpty();
+        assertThat(latestWriterSnapshotOffset(log).get()).isEqualTo(29);
     }
 
     @Test
@@ -494,7 +495,8 @@ final class LogTabletTest extends LogTestBase {
                 LogFormat.ARROW,
                 1,
                 false,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                true);
     }
 
     private void assertFetchSizeAndOffsets(

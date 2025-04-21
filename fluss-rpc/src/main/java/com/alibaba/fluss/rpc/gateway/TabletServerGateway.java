@@ -48,7 +48,7 @@ import com.alibaba.fluss.rpc.protocol.RPC;
 
 import java.util.concurrent.CompletableFuture;
 
-/** The entry point of RPC gateway interface for coordinator server. */
+/** The entry point of RPC gateway interface for tablet server. */
 public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
 
     /**

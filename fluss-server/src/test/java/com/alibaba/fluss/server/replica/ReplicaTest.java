@@ -52,6 +52,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
@@ -101,7 +103,6 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(kvReplica.getLogTablet()).isNotNull();
         makeKvReplicaAsLeader(kvReplica);
         assertThat(kvReplica.getLogTablet()).isNotNull();
-        // TODO get kv is true.
         assertThat(kvReplica.getKvTablet()).isNotNull();
     }
 
@@ -311,7 +312,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // create test context
         TestSnapshotContext testKvSnapshotContext =
-                new TestSnapshotContext(tableBucket, snapshotKvTabletDir.getPath());
+                new TestSnapshotContext(snapshotKvTabletDir.getPath());
         ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
                 testKvSnapshotContext.scheduledExecutorService;
         TestingCompletedKvSnapshotCommitter kvSnapshotStore =
@@ -371,8 +372,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // make a new kv replica
         testKvSnapshotContext =
-                new TestSnapshotContext(
-                        tableBucket, snapshotKvTabletDir.getPath(), kvSnapshotStore);
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore);
         kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         scheduledExecutorService = testKvSnapshotContext.scheduledExecutorService;
         kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
@@ -406,10 +406,43 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testSnapshotUseLatestLeaderEpoch(@TempDir File snapshotKvTabletDir) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        // create test context
+        ImmediateTriggeredScheduledExecutorService immediateTriggeredScheduledExecutorService =
+                new ImmediateTriggeredScheduledExecutorService();
+        TestSnapshotContext testKvSnapshotContext =
+                new TestSnapshotContext(
+                        snapshotKvTabletDir.getPath(), immediateTriggeredScheduledExecutorService);
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
+                testKvSnapshotContext.testKvSnapshotStore;
+
+        // make a kv replica
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        // now, make the replica as leader
+        makeKvReplicaAsLeader(kvReplica, 0);
+        KvRecordBatch kvRecords =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "a"}),
+                        Tuple2.of("k2", new Object[] {2, "b"}));
+        putRecordsToLeader(kvReplica, kvRecords);
+
+        // make leader again with a new epoch, check the snapshot should use the new epoch
+        immediateTriggeredScheduledExecutorService.reset();
+        int latestLeaderEpoch = 1;
+        int snapshot = 0;
+        makeKvReplicaAsLeader(kvReplica, latestLeaderEpoch);
+        kvSnapshotStore.waitUtilSnapshotComplete(tableBucket, snapshot);
+        assertThat(kvSnapshotStore.getSnapshotLeaderEpoch(tableBucket, snapshot))
+                .isEqualTo(latestLeaderEpoch);
+    }
+
+    @Test
     void testRestore(@TempDir Path snapshotKvTabletDirPath) throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
         TestSnapshotContext testKvSnapshotContext =
-                new TestSnapshotContext(tableBucket, snapshotKvTabletDirPath.toString());
+                new TestSnapshotContext(snapshotKvTabletDirPath.toString());
         ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
                 testKvSnapshotContext.scheduledExecutorService;
         TestingCompletedKvSnapshotCommitter kvSnapshotStore =
@@ -568,5 +601,28 @@ final class ReplicaTest extends ReplicaTestBase {
             expectValues.add(expectedKeyValue.f1);
         }
         assertThat(kvTablet.multiGet(keys)).containsExactlyElementsOf(expectValues);
+    }
+
+    /** A scheduledExecutorService that will execute the scheduled task immediately. */
+    private static class ImmediateTriggeredScheduledExecutorService
+            extends ManuallyTriggeredScheduledExecutorService {
+        private boolean isScheduled = false;
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            // we only schedule task for once, if has scheduled, return null to skip schedule
+            // the task
+            if (isScheduled) {
+                return null;
+            }
+            isScheduled = true;
+            ScheduledFuture<?> scheduledFuture = super.schedule(command, delay, unit);
+            triggerNonPeriodicScheduledTask();
+            return scheduledFuture;
+        }
+
+        public void reset() {
+            isScheduled = false;
+        }
     }
 }

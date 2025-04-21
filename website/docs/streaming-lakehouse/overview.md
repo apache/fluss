@@ -1,4 +1,5 @@
 ---
+sidebar_label: "Lakehouse Overview"
 sidebar_position: 1
 ---
 

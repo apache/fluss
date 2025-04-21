@@ -272,8 +272,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>coordinator/tabletserver/client</strong></th>
-      <td rowspan="1">netty</td>
+      <th rowspan="4"><strong>coordinator/tabletserver/client</strong></th>
+      <td rowspan="4">netty</td>
       <td>usedDirectMemory</td>
       <td>The number of bytes of direct memory used by netty.</td>
       <td>Gauge</td>
@@ -354,7 +354,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   <tbody>
     <tr>
       <th rowspan="10"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
       <td>replicationBytesInPerSecond</td>
       <td>The bytes of data write into follower replica for data sync.</td>
       <td>Meter</td>

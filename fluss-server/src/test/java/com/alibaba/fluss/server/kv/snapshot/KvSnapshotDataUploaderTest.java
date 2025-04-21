@@ -95,8 +95,10 @@ class KvSnapshotDataUploaderTest {
                             .findFirst()
                             .get()
                             .getKvFileHandle();
-            FSDataInputStream inputStream =
-                    kvFileHandle.getFilePath().getFileSystem().open(kvFileHandle.getFilePath());
+            assertThat(kvFileHandle.getFilePath())
+                    .startsWith(LocalFileSystem.getLocalFsURI().getScheme());
+            FsPath fsPath = new FsPath(kvFileHandle.getFilePath());
+            FSDataInputStream inputStream = fsPath.getFileSystem().open(fsPath);
             assertContentEqual(path, inputStream);
         }
     }

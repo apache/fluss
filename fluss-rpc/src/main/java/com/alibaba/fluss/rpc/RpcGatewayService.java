@@ -17,6 +17,7 @@
 package com.alibaba.fluss.rpc;
 
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.rpc.netty.server.Session;
 
 // TODO: support MainThreadRpcGateway which ensures that all methods are executed on the main
 //   thread.
@@ -25,11 +26,14 @@ import com.alibaba.fluss.cluster.ServerType;
  */
 public abstract class RpcGatewayService implements RpcGateway {
 
-    private final ThreadLocal<Short> currentApiVersion = new ThreadLocal<>();
+    private final ThreadLocal<Session> currentSession = new ThreadLocal<>();
 
-    /** Returns the current API version of the RPC call. This method is thread-safe */
-    public void setCurrentApiVersion(short apiVersion) {
-        currentApiVersion.set(apiVersion);
+    /**
+     * Sets API version and listener name of the RPC call to the current session. This method is
+     * thread-safe
+     */
+    public void setCurrentSession(Session session) {
+        currentSession.set(session);
     }
 
     /**
@@ -37,12 +41,28 @@ public abstract class RpcGatewayService implements RpcGateway {
      * accessed in RPC methods.
      */
     public short currentApiVersion() {
-        Short version = currentApiVersion.get();
-        if (version == null) {
+        Session session = currentSession.get();
+        if (session == null) {
             throw new IllegalStateException(
                     "No API version set. This method should only be called from within an RPC call.");
         } else {
-            return version;
+            return session.getApiVersion();
+        }
+    }
+
+    /**
+     * Returns the current listener name of an RPC call. This method is thread-safe and can only be
+     * accessed in RPC methods.
+     *
+     * @return
+     */
+    public String currentListenerName() {
+        Session session = currentSession.get();
+        if (session == null || session.getListenerName() == null) {
+            throw new IllegalStateException(
+                    "No listener name set. This method should only be called from within an RPC call.");
+        } else {
+            return session.getListenerName();
         }
     }
 

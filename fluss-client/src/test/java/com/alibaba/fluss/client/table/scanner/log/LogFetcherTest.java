@@ -21,6 +21,8 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.metrics.TestingScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.cluster.Cluster;
+import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -119,6 +121,67 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         // after collect fetch, the fetcher is empty.
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
         assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(0);
+    }
+
+    @Test
+    void testFetchWhenDestinationIsNullInMetadata() throws Exception {
+        TableBucket tb0 = new TableBucket(tableId, bucketId0);
+        addRecordsToBucket(tb0, genMemoryLogRecordsByObject(DATA1), 0L);
+
+        RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
+        MetadataUpdater metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
+
+        int leaderNode = metadataUpdater.leaderFor(tb0);
+
+        // now, remove leader nodd ,so that fetch destination
+        // server node is null
+        Cluster oldCluster = metadataUpdater.getCluster();
+        Map<Integer, ServerNode> aliveTabletServersById =
+                new HashMap<>(oldCluster.getAliveTabletServers());
+        aliveTabletServersById.remove(leaderNode);
+        Cluster newCluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        oldCluster.getCoordinatorServer(),
+                        oldCluster.getBucketLocationsByPath(),
+                        oldCluster.getTableIdByPath(),
+                        oldCluster.getPartitionIdByPath(),
+                        oldCluster.getTableInfoByPath());
+        metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
+
+        LogScannerStatus logScannerStatus = new LogScannerStatus();
+        logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
+
+        LogFetcher logFetcher =
+                new LogFetcher(
+                        DATA1_TABLE_INFO,
+                        null,
+                        rpcClient,
+                        logScannerStatus,
+                        clientConf,
+                        metadataUpdater,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1));
+
+        // send fetches to fetch data, should have no available fetch.
+        logFetcher.sendFetches();
+        assertThat(logFetcher.hasAvailableFetches()).isFalse();
+
+        // then fetches again, should have available fetch.
+        // first send fetch is for update metadata
+        logFetcher.sendFetches();
+        // second send fetch will do real fetch data
+        logFetcher.sendFetches();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(logFetcher.hasAvailableFetches()).isTrue();
+                    assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
+                });
+        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
+        assertThat(records.size()).isEqualTo(1);
+        assertThat(records.get(tb0).size()).isEqualTo(10);
     }
 
     private void addRecordsToBucket(

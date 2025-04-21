@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -64,14 +65,16 @@ public class FileDownloadUtils {
         CloseableRegistry internalCloser = new CloseableRegistry();
         // Make sure we also react to external close signals.
         closeableRegistry.registerCloseable(internalCloser);
+        List<CompletableFuture<Long>> futures = new ArrayList<>();
         try {
-            List<CompletableFuture<Long>> futures =
+            futures =
                     transferDataToDirectoryAsync(fileDownloadSpecs, internalCloser, executorService)
                             .collect(Collectors.toList());
             // Wait until either all futures completed successfully or one failed exceptionally.
-            FutureUtils.completeAll(futures, new DownloadProgressAction(fileDownloadSpecs.size()))
+            FutureUtils.waitForAll(futures, new DownloadProgressAction(fileDownloadSpecs.size()))
                     .get();
         } catch (Exception e) {
+            futures.forEach(future -> future.cancel(true));
             fileDownloadSpecs.stream()
                     .map(FileDownloadSpec::getTargetDirectory)
                     .map(Path::toFile)

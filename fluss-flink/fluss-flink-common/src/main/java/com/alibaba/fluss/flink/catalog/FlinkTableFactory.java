@@ -49,9 +49,14 @@ import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static com.alibaba.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
+import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
+import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Factory to create table source and table sink for Fluss. */
@@ -94,8 +99,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 resolvedCatalogTable.getPartitionKeys().stream()
                         .mapToInt(tableOutputType::getFieldIndex)
                         .toArray();
-        int[] bucketKeyIndexes =
-                FlinkConnectorOptionsUtils.getBucketKeyIndexes(tableOptions, tableOutputType);
+        int[] bucketKeyIndexes = getBucketKeyIndexes(tableOptions, tableOutputType);
 
         // options for lookup
         LookupCache cache = null;
@@ -117,7 +121,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
-                toFlussClientConfig(tableOptions, context.getConfiguration()),
+                toFlussClientConfig(
+                        context.getCatalogTable().getOptions(), context.getConfiguration()),
                 tableOutputType,
                 primaryKeyIndexes,
                 bucketKeyIndexes,
@@ -141,17 +146,26 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
                         == RuntimeExecutionMode.STREAMING;
 
+        ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
+        List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
+
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
         final ReadableConfig tableOptions = helper.getOptions();
 
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
-                toFlussClientConfig(tableOptions, context.getConfiguration()),
+                toFlussClientConfig(
+                        context.getCatalogTable().getOptions(), context.getConfiguration()),
                 rowType,
                 context.getPrimaryKeyIndexes(),
+                partitionKeys,
                 isStreamingMode,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE));
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_FORMAT)),
+                tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
+                tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
+                getBucketKeys(tableOptions),
+                tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE));
     }
 
     @Override
@@ -176,6 +190,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
+                                FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,
@@ -189,17 +204,19 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     }
 
     private static Configuration toFlussClientConfig(
-            ReadableConfig tableOptions, ReadableConfig flinkConfig) {
+            Map<String, String> tableOptions, ReadableConfig flinkConfig) {
         Configuration flussConfig = new Configuration();
         flussConfig.setString(
                 ConfigOptions.BOOTSTRAP_SERVERS.key(),
-                tableOptions.get(FlinkConnectorOptions.BOOTSTRAP_SERVERS));
+                tableOptions.get(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key()));
+
         // forward all client configs
-        for (ConfigOption<?> option : FlinkConnectorOptions.CLIENT_OPTIONS) {
-            if (tableOptions.get(option) != null) {
-                flussConfig.setString(option.key(), tableOptions.get(option).toString());
-            }
-        }
+        tableOptions.forEach(
+                (key, value) -> {
+                    if (key.startsWith(CLIENT_PREFIX)) {
+                        flussConfig.setString(key, value);
+                    }
+                });
 
         // pass flink io tmp dir to fluss client.
         flussConfig.setString(

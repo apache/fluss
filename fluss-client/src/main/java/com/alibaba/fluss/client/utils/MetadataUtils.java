@@ -21,6 +21,7 @@ import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.StaleMetadataException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -103,11 +104,17 @@ public class MetadataUtils {
         return gateway.metadata(metadataRequest)
                 .thenApply(
                         response -> {
-                            ServerNode coordinatorServer = getCoordinatorServer(response);
-
                             // Update the alive table servers.
                             Map<Integer, ServerNode> newAliveTabletServers =
                                     getAliveTabletServers(response);
+                            // when talking to the startup tablet
+                            // server, it maybe receive empty metadata, we'll consider it as
+                            // stale metadata and throw StaleMetadataException which will cause
+                            // to retry later.
+                            if (newAliveTabletServers.isEmpty()) {
+                                throw new StaleMetadataException("Alive tablet server is empty.");
+                            }
+                            ServerNode coordinatorServer = getCoordinatorServer(response);
 
                             Map<TablePath, Long> newTablePathToTableId;
                             Map<TablePath, TableInfo> newTablePathToTableInfo;
@@ -264,9 +271,10 @@ public class MetadataUtils {
         return aliveTabletServers.get(offset);
     }
 
+    @Nullable
     private static ServerNode getCoordinatorServer(MetadataResponse response) {
         if (!response.hasCoordinatorServer()) {
-            throw new FlussRuntimeException("coordinator server is not found");
+            return null;
         } else {
             PbServerNode protoServerNode = response.getCoordinatorServer();
             return new ServerNode(

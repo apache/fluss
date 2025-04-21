@@ -1,4 +1,5 @@
 ---
+sidebar_label: "Deploying with Docker"
 sidebar_position: 4
 ---
 

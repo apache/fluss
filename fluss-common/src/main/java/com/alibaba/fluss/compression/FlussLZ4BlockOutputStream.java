@@ -237,6 +237,7 @@ public class FlussLZ4BlockOutputStream extends OutputStream {
         }
     }
 
+    /** A simple class to represent the Frame Descriptor (FD) flags. */
     public static class FLG {
 
         private static final int VERSION = 1;
@@ -332,6 +333,7 @@ public class FlussLZ4BlockOutputStream extends OutputStream {
         }
     }
 
+    /** A simple class to represent the Block Descriptor (BD) flags. */
     public static class BD {
 
         private final int reserved2;

@@ -61,7 +61,6 @@ import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
@@ -76,9 +75,11 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getCommitLakeTableSnapshotData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getPartitionSpec;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.utils.PartitionUtils.validatePartitionSpec;
 
 /** An RPC Gateway service for coordinator server. */
@@ -291,9 +292,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
-                .put(
-                        new AdjustIsrReceivedEvent(
-                                RpcMessageUtils.getAdjustIsrData(request), response));
+                .put(new AdjustIsrReceivedEvent(getAdjustIsrData(request), response));
         return response;
     }
 
@@ -322,7 +321,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 .get()
                 .put(
                         new CommitRemoteLogManifestEvent(
-                                RpcMessageUtils.getCommitRemoteLogManifestData(request), response));
+                                getCommitRemoteLogManifestData(request), response));
         return response;
     }
 

@@ -16,6 +16,9 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.cluster.Endpoint;
+
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -25,55 +28,37 @@ import java.util.Objects;
  */
 public class CoordinatorAddress {
     private final String id;
-    private final String host;
-    private final int port;
+    private final List<Endpoint> endpoints;
 
-    public CoordinatorAddress(String id, String host, int port) {
+    public CoordinatorAddress(String id, List<Endpoint> endpoints) {
         this.id = id;
-        this.host = host;
-        this.port = port;
+        this.endpoints = endpoints;
     }
 
     public String getId() {
         return id;
     }
 
-    public String getHost() {
-        return host;
-    }
-
-    public int getPort() {
-        return port;
+    public List<Endpoint> getEndpoints() {
+        return endpoints;
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         CoordinatorAddress that = (CoordinatorAddress) o;
-        return port == that.port && Objects.equals(id, that.id) && Objects.equals(host, that.host);
+        return Objects.equals(id, that.id) && Objects.equals(endpoints, that.endpoints);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, host, port);
+        return Objects.hash(id, endpoints);
     }
 
     @Override
     public String toString() {
-        return "CoordinatorAddress{"
-                + "id='"
-                + id
-                + '\''
-                + ", host='"
-                + host
-                + '\''
-                + ", port="
-                + port
-                + '}';
+        return "CoordinatorAddress{" + "id='" + id + '\'' + ", endpoints=" + endpoints + '}';
     }
 }

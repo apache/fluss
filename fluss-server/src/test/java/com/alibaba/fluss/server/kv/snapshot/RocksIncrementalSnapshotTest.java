@@ -128,6 +128,22 @@ class RocksIncrementalSnapshotTest {
                 assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
                 assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());
             }
+
+            // write some data again
+            rocksDB.put("key3".getBytes(), "val3_1".getBytes());
+            KvSnapshotHandle kvSnapshotHandle5 =
+                    snapshot(5L, incrementalSnapshot, snapshotLocation, closeableRegistry);
+            // discard the snapshot handle
+            kvSnapshotHandle5.discard();
+
+            // we can still restore from cp4
+            Path dest3 = snapshotDownDir.resolve("restore3");
+            try (RocksDBKv rocksDBKv =
+                    KvTestUtils.buildFromSnapshotHandle(kvSnapshotHandle4, dest3)) {
+                assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
+                assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
+                assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());
+            }
         }
     }
 

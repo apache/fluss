@@ -379,11 +379,21 @@ public class TableBucketStateMachine {
     }
 
     private String stringifyBucket(TableBucket tableBucket) {
-        return String.format(
-                "TableBucket{tableId=%d, bucket=%d, tablePath=%s}",
-                tableBucket.getTableId(),
-                tableBucket.getBucket(),
-                coordinatorContext.getTablePathById(tableBucket.getTableId()));
+        if (tableBucket.getPartitionId() == null) {
+            return String.format(
+                    "TableBucket{tableId=%d, bucket=%d, tablePath=%s}",
+                    tableBucket.getTableId(),
+                    tableBucket.getBucket(),
+                    coordinatorContext.getTablePathById(tableBucket.getTableId()));
+        } else {
+            return String.format(
+                    "TableBucket{tableId=%d, partitionId=%d, bucket=%d, tablePath=%s, partition=%s}",
+                    tableBucket.getTableId(),
+                    tableBucket.getPartitionId(),
+                    tableBucket.getBucket(),
+                    coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                    coordinatorContext.getPartitionName(tableBucket.getPartitionId()));
+        }
     }
 
     /**

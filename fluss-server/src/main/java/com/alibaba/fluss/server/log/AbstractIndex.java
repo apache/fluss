@@ -16,8 +16,8 @@
 
 package com.alibaba.fluss.server.log;
 
-import com.alibaba.fluss.exception.CorruptIndexException;
 import com.alibaba.fluss.exception.IndexOffsetOverflowException;
+import com.alibaba.fluss.server.exception.CorruptIndexException;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.IOUtils;
 import com.alibaba.fluss.utils.OperatingSystem;

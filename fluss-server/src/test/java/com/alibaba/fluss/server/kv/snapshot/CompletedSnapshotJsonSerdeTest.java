@@ -35,22 +35,18 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
         List<KvFileHandleAndLocalPath> sharedFileHandles =
                 Arrays.asList(
                         KvFileHandleAndLocalPath.of(
-                                new KvFileHandle(
-                                        new FsPath("oss://bucket/snapshot/shared/t1.sst"), 1),
+                                new KvFileHandle("oss://bucket/snapshot/shared/t1.sst", 1),
                                 "localPath1"),
                         KvFileHandleAndLocalPath.of(
-                                new KvFileHandle(
-                                        new FsPath("oss://bucket/snapshot/shared/t2.sst"), 2),
+                                new KvFileHandle("oss://bucket/snapshot/shared/t2.sst", 2),
                                 "localPath2"));
         List<KvFileHandleAndLocalPath> privateFileHandles =
                 Arrays.asList(
                         KvFileHandleAndLocalPath.of(
-                                new KvFileHandle(
-                                        new FsPath("oss://bucket/snapshot/snapshot1/t3"), 3),
+                                new KvFileHandle("oss://bucket/snapshot/snapshot1/t3", 3),
                                 "localPath3"),
                         KvFileHandleAndLocalPath.of(
-                                new KvFileHandle(
-                                        new FsPath("oss://bucket/snapshot/snapshot1/t4"), 4),
+                                new KvFileHandle("oss://bucket/snapshot/snapshot1/t4", 4),
                                 "localPath4"));
         CompletedSnapshot completedSnapshot1 =
                 new CompletedSnapshot(

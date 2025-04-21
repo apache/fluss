@@ -1,4 +1,5 @@
 ---
+sidebar_label: "Lakehouse Storage"
 sidebar_position: 3
 ---
 
@@ -56,7 +57,7 @@ You can use the following commands to start the datalake tiering service:
 cd $FLUSS_HOME
 
 # start the tiering service, assuming rest endpoint is localhost:8081
-./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 
+./bin/lakehouse.sh -Dflink.rest.address=localhost -Dflink.rest.port=8081 
 ```
 
 **Note:**
@@ -64,12 +65,12 @@ cd $FLUSS_HOME
 - The datalake tiering service is actual a flink job, you can set the Flink configuration in `-D` arguments while starting the datalake tiering service, There are some example commands for reference below.
 ```shell
 # If want to set the checkpoint interval to 10s, you can use the following command to start the datalake tiering service
-./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=10s
+./bin/lakehouse.sh -Dflink.rest.address=localhost -Dflink.rest.port=8081 -Dflink.execution.checkpointing.interval=10s
 
 # By default, datalake tiering service synchronizes all the tables with datalake enabled to Lakehouse Storage.
 # To distribute the workload of the datalake tiering service through multiple Flink jobs, 
 # you can specify the "database" parameter to synchronize only the datalake enabled tables in the specific database.
-./bin/lakehouse.sh -D flink.rest.address=localhost -D flink.rest.port=8081 -D database=fluss_\\w+
+./bin/lakehouse.sh -Dflink.rest.address=localhost -Dflink.rest.port=8081 -Ddatabase=fluss_\\w+
 ```
 
 ### Enable Lakehouse Storage Per Table

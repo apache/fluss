@@ -112,7 +112,8 @@ class FlinkCatalogTest {
                         CATALOG_NAME,
                         DEFAULT_DB,
                         String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
-                        Thread.currentThread().getContextClassLoader());
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
         catalog.open();
     }
 

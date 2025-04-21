@@ -42,7 +42,7 @@ public class SharedKvFileRegistryKey implements Serializable {
 
     /** Create a unique key based on physical id. */
     public static SharedKvFileRegistryKey fromKvFileHandle(KvFileHandle handle) {
-        String keyString = handle.getFilePath().getPath();
+        String keyString = handle.getFilePath();
         // key strings tend to be longer, so we use the MD5 of the key string to save memory
         return new SharedKvFileRegistryKey(
                 UUID.nameUUIDFromBytes(keyString.getBytes(StandardCharsets.UTF_8)).toString());

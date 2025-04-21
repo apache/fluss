@@ -31,6 +31,8 @@ import com.alibaba.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -43,6 +45,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
+import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -103,8 +106,9 @@ public class RemoteLogITCase {
         retry(Duration.ofMinutes(2), () -> assertThat(fileSystem.exists(fsPath)).isFalse());
     }
 
-    @Test
-    void testFollowerFetchAlreadyMoveToRemoteLog() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFollowerFetchAlreadyMoveToRemoteLog(boolean withWriterId) throws Exception {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
@@ -129,7 +133,13 @@ public class RemoteLogITCase {
                     leaderGateWay
                             .produceLog(
                                     newProduceLogRequest(
-                                            tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
+                                            tableId,
+                                            0,
+                                            1,
+                                            withWriterId
+                                                    ? genMemoryLogRecordsWithWriterId(
+                                                            DATA1, 100, i, 0L)
+                                                    : genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
                     i * 10L);

@@ -20,8 +20,8 @@ USAGE="Usage: $0 (start [args])|stop"
 
 STARTSTOP=$1
 
-if [ -z $2 ] || [[ $2 == "-D" ]]; then
-    # start [-D ...]
+if [ -z $2 ] || [[ $2 == -D* ]]; then
+    # start [-D...]
     args=("${@:2}")
 fi
 

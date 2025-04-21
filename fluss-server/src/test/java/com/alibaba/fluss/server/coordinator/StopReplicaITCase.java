@@ -156,9 +156,10 @@ public class StopReplicaITCase {
             assertThat(replica.getLogTablet().getLogDir()).exists();
             if (isKvTable) {
                 // wait the replica become leader, so that we can get the kv tablet
-                replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(replica.getTableBucket());
-                assertThat(replica.getKvTablet()).isNotNull();
-                assertThat(replica.getKvTablet().getKvTabletDir()).exists();
+                Replica kvReplica =
+                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(replica.getTableBucket());
+                assertThat(kvReplica.getKvTablet()).isNotNull();
+                assertThat(kvReplica.getKvTablet().getKvTabletDir()).exists();
             }
         }
 

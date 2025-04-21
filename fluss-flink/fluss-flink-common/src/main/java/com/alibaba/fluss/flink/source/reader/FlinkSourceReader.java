@@ -36,7 +36,6 @@ import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
-import org.apache.flink.table.data.RowData;
 
 import javax.annotation.Nullable;
 
@@ -45,9 +44,9 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 /** The source reader for Fluss. */
-public class FlinkSourceReader
+public class FlinkSourceReader<OUT>
         extends SingleThreadMultiplexSourceReaderBase<
-                RecordAndPos, RowData, SourceSplitBase, SourceSplitState> {
+                RecordAndPos, OUT, SourceSplitBase, SourceSplitState> {
 
     public FlinkSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
@@ -56,7 +55,8 @@ public class FlinkSourceReader
             RowType sourceOutputType,
             SourceReaderContext context,
             @Nullable int[] projectedFields,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
+            FlinkRecordEmitter<OUT> recordEmitter) {
         super(
                 elementsQueue,
                 new FlinkSourceFetcherManager(
@@ -69,7 +69,7 @@ public class FlinkSourceReader
                                         projectedFields,
                                         flinkSourceReaderMetrics),
                         (ignore) -> {}),
-                new FlinkRecordEmitter(sourceOutputType),
+                recordEmitter,
                 context.getConfiguration(),
                 context);
     }

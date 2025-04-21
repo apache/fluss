@@ -80,6 +80,10 @@ This file is based on the checkstyle file of Apache Beam.
             <property name="checkFormat" value="$1"/>
         </module>
 
+
+        <!-- Checks for missing Javadoc comments for class, enum, interface -->
+        <module name="MissingJavadocType"/>
+
         <!--
 
         FLUSS CUSTOM CHECKS
@@ -168,6 +172,12 @@ This file is based on the checkstyle file of Apache Beam.
             <property name="illegalPattern" value="true"/>
             <property name="message"
                       value="Use AssertJ assertions instead of JUnit5 assertions (easy convert using Assertions2Assertj IntelliJ plugin)."/>
+        </module>
+        <module name="Regexp">
+            <property name="format" value="org\.junit\.Assert\."/>
+            <property name="illegalPattern" value="true"/>
+            <property name="message"
+                      value="Use AssertJ assertions instead of JUnit assertions (easy convert using Assertions2Assertj IntelliJ plugin)."/>
         </module>
         <module name="Regexp">
             <property name="format" value="org\.junit\.jupiter\.api\.Timeout"/>

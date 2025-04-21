@@ -33,11 +33,6 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.LogRecords;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.remote.RemoteLogFetchInfo;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -48,7 +43,6 @@ import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosResponse;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
-import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbKeyValue;
 import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
@@ -58,18 +52,13 @@ import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
-import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
-import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 import javax.annotation.Nullable;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -77,7 +66,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkState;
@@ -87,21 +75,6 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
  * request/response for client.
  */
 public class ClientRpcMessageUtils {
-
-    public static ByteBuffer toByteBuffer(ByteBuf buf) {
-        if (buf.isDirect()) {
-            return buf.nioBuffer();
-        } else if (buf.hasArray()) {
-            int offset = buf.arrayOffset() + buf.readerIndex();
-            int length = buf.readableBytes();
-            return ByteBuffer.wrap(buf.array(), offset, length);
-        } else {
-            // fallback to deep copy
-            byte[] bytes = new byte[buf.readableBytes()];
-            buf.getBytes(buf.readerIndex(), bytes);
-            return ByteBuffer.wrap(bytes);
-        }
-    }
 
     public static ProduceLogRequest makeProduceLogRequest(
             long tableId, int acks, int maxRequestTimeoutMs, List<WriteBatch> batches) {
@@ -203,58 +176,6 @@ public class ClientRpcMessageUtils {
                     batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
                 });
         return request;
-    }
-
-    public static FetchLogResultForBucket getFetchLogResultForBucket(
-            TableBucket tb, TablePath tp, PbFetchLogRespForBucket respForBucket) {
-        FetchLogResultForBucket fetchLogResultForBucket;
-        if (respForBucket.hasErrorCode()) {
-            fetchLogResultForBucket =
-                    new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
-        } else {
-            if (respForBucket.hasRemoteLogFetchInfo()) {
-                PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
-                String partitionName =
-                        pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
-                PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
-                List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
-                for (PbRemoteLogSegment pbRemoteLogSegment : pbRlfInfo.getRemoteLogSegmentsList()) {
-                    RemoteLogSegment remoteLogSegment =
-                            RemoteLogSegment.Builder.builder()
-                                    .tableBucket(tb)
-                                    .physicalTablePath(physicalTablePath)
-                                    .remoteLogSegmentId(
-                                            UUID.fromString(
-                                                    pbRemoteLogSegment.getRemoteLogSegmentId()))
-                                    .remoteLogEndOffset(pbRemoteLogSegment.getRemoteLogEndOffset())
-                                    .remoteLogStartOffset(
-                                            pbRemoteLogSegment.getRemoteLogStartOffset())
-                                    .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
-                                    .maxTimestamp(-1L) // not use.
-                                    .build();
-                    remoteLogSegmentList.add(remoteLogSegment);
-                }
-                RemoteLogFetchInfo rlFetchInfo =
-                        new RemoteLogFetchInfo(
-                                pbRlfInfo.getRemoteLogTabletDir(),
-                                pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null,
-                                remoteLogSegmentList,
-                                pbRlfInfo.getFirstStartPos());
-                fetchLogResultForBucket =
-                        new FetchLogResultForBucket(
-                                tb, rlFetchInfo, respForBucket.getHighWatermark());
-            } else {
-                ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
-                LogRecords records =
-                        respForBucket.hasRecords()
-                                ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
-                                : MemoryLogRecords.EMPTY;
-                fetchLogResultForBucket =
-                        new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
-            }
-        }
-
-        return fetchLogResultForBucket;
     }
 
     public static KvSnapshots toKvSnapshots(GetLatestKvSnapshotsResponse response) {

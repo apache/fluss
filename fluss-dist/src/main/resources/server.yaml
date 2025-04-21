@@ -50,23 +50,18 @@ data.dir: /tmp/fluss-data
 remote.data.dir: /tmp/fluss-remote-data
 
 #==============================================================================
-# Coordinator Server
+# Listeners
 #==============================================================================
 
-# The external address of the host on which the Coordinator Server runs and
-# can be reached by the Tablet Servers and any clients which want to connect.
-coordinator.host: localhost
+# The network address and port to which the server binds for accepting connections.
+# The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas.
+bind.listeners: FLUSS://localhost:9123
 
-# The RPC port where the Coordinator Server is reachable.
-coordinator.port: 9123
 
 #==============================================================================
 # Tablet Server
 #==============================================================================
 
-# The external address of the host on which the Tablet Server runs and
-# can be reached by the Coordinator Server and any clients which want to connect.
-tablet-server.host: localhost
 
 # The id of the tablet server to be run, must be set and should be different
 # when running multiple tablet servers.

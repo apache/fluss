@@ -17,6 +17,7 @@
 package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.exception.ApiException;
+import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.CorruptMessageException;
 import com.alibaba.fluss.exception.CorruptRecordException;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
@@ -38,6 +39,7 @@ import com.alibaba.fluss.exception.InvalidUpdateVersionException;
 import com.alibaba.fluss.exception.KvSnapshotNotExistException;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LakeStorageNotConfiguredException;
+import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.exception.NetworkException;
@@ -57,6 +59,7 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.exception.TimeoutException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.exception.UnknownServerException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
@@ -182,7 +185,14 @@ public enum Errors {
     PARTITION_ALREADY_EXISTS(
             42, "The partition already exists.", PartitionAlreadyExistsException::new),
     PARTITION_SPEC_INVALID_EXCEPTION(
-            43, "The partition spec is invalid.", InvalidPartitionException::new);
+            43, "The partition spec is invalid.", InvalidPartitionException::new),
+    LEADER_NOT_AVAILABLE_EXCEPTION(
+            44,
+            "There is no currently available leader for the given partition.",
+            LeaderNotAvailableException::new),
+    PARTITION_MAX_NUM_EXCEPTION(
+            45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
+    AUTHENTICATE_EXCEPTION(46, "The authentication failed.", AuthenticationException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

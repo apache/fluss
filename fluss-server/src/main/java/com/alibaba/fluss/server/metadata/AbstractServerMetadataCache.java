@@ -16,14 +16,13 @@
 
 package com.alibaba.fluss.server.metadata;
 
-import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.tablet.TabletServer;
 
-import javax.annotation.Nullable;
-
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * The abstract server metadata cache to cache the cluster metadata info. This cache is updated
@@ -40,31 +39,36 @@ public abstract class AbstractServerMetadataCache implements ServerMetadataCache
      *
      * <p>multiple reads of this value risk getting different snapshots.
      */
-    protected volatile Cluster clusterMetadata;
+    protected volatile ServerCluster clusterMetadata;
 
     public AbstractServerMetadataCache() {
         // no coordinator server address while creating.
-        this.clusterMetadata = Cluster.empty();
+        this.clusterMetadata = ServerCluster.empty();
     }
 
     @Override
     public boolean isAliveTabletServer(int serverId) {
-        Map<Integer, ServerNode> aliveTabletServersById = clusterMetadata.getAliveTabletServers();
-        return aliveTabletServersById.containsKey(serverId);
+        Set<Integer> aliveTabletServersById = clusterMetadata.getAliveTabletServerIds();
+        return aliveTabletServersById.contains(serverId);
     }
 
     @Override
-    public @Nullable ServerNode getTabletServer(int serverId) {
-        return clusterMetadata.getAliveTabletServerById(serverId).orElse(null);
+    public Optional<ServerNode> getTabletServer(int serverId, String listenerName) {
+        return clusterMetadata.getAliveTabletServersById(serverId, listenerName);
     }
 
     @Override
-    public Map<Integer, ServerNode> getAllAliveTabletServers() {
-        return clusterMetadata.getAliveTabletServers();
+    public Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName) {
+        return clusterMetadata.getAliveTabletServers(listenerName);
     }
 
     @Override
-    public @Nullable ServerNode getCoordinatorServer() {
-        return clusterMetadata.getCoordinatorServer();
+    public Optional<ServerNode> getCoordinatorServer(String listenerName) {
+        return clusterMetadata.getCoordinatorServer(listenerName);
+    }
+
+    @Override
+    public Set<Integer> getAliveTabletServerIds() {
+        return clusterMetadata.getAliveTabletServerIds();
     }
 }

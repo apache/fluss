@@ -23,6 +23,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -37,8 +38,10 @@ import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -52,6 +55,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
@@ -84,6 +88,10 @@ public class AutoPartitionManager implements AutoCloseable {
     @GuardedBy("lock")
     private final Map<Long, TableInfo> autoPartitionTables = new HashMap<>();
 
+    // table id -> the minutes in day when auto partition will be triggered
+    // now, only consider day partition, todo: need to consider all partition unit
+    private final Map<Long, Integer> autoCreateDayPartitionDelayMinutes = new HashMap<>();
+
     @GuardedBy("lock")
     private final Map<Long, TreeSet<String>> partitionsByTable = new HashMap<>();
 
@@ -115,10 +123,10 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     public void initAutoPartitionTables(List<TableInfo> tableInfos) {
-        tableInfos.forEach(this::addAutoPartitionTable);
+        tableInfos.forEach(tableInfo -> addAutoPartitionTable(tableInfo, false));
     }
 
-    public void addAutoPartitionTable(TableInfo tableInfo) {
+    public void addAutoPartitionTable(TableInfo tableInfo, boolean forceDoAutoPartition) {
         checkNotClosed();
         long tableId = tableInfo.getTableId();
         Set<String> partitions = metadataManager.getPartitions(tableInfo.getTablePath());
@@ -131,10 +139,18 @@ public class AutoPartitionManager implements AutoCloseable {
                                     tableInfo.getTableId(), k -> new TreeSet<>());
                     checkNotNull(partitionSet, "Partition set is null.");
                     partitionSet.addAll(partitions);
+                    if (tableInfo.getTableConfig().getAutoPartitionStrategy().timeUnit()
+                            == AutoPartitionTimeUnit.DAY) {
+                        // get the delay minutes to create partition
+                        int delayMinutes = ThreadLocalRandom.current().nextInt(60 * 23);
+
+                        autoCreateDayPartitionDelayMinutes.put(tableId, delayMinutes);
+                    }
                 });
 
         // schedule auto partition for this table immediately
-        periodicExecutor.schedule(() -> doAutoPartition(tableId), 0, TimeUnit.MILLISECONDS);
+        periodicExecutor.schedule(
+                () -> doAutoPartition(tableId, forceDoAutoPartition), 0, TimeUnit.MILLISECONDS);
     }
 
     public void removeAutoPartitionTable(long tableId) {
@@ -144,6 +160,7 @@ public class AutoPartitionManager implements AutoCloseable {
                 () -> {
                     autoPartitionTables.remove(tableId);
                     partitionsByTable.remove(tableId);
+                    autoCreateDayPartitionDelayMinutes.remove(tableId);
                 });
     }
 
@@ -193,27 +210,38 @@ public class AutoPartitionManager implements AutoCloseable {
     private void doAutoPartition() {
         Instant now = clock.instant();
         LOG.info("Start auto partitioning for all tables at {}.", now);
-        inLock(lock, () -> doAutoPartition(now, autoPartitionTables.keySet()));
+        inLock(lock, () -> doAutoPartition(now, autoPartitionTables.keySet(), false));
     }
 
-    private void doAutoPartition(long tableId) {
+    private void doAutoPartition(long tableId, boolean forceDoAutoPartition) {
         Instant now = clock.instant();
         LOG.info("Start auto partitioning for table {} at {}.", tableId, now);
-        inLock(lock, () -> doAutoPartition(now, Collections.singleton(tableId)));
+        inLock(
+                lock,
+                () -> doAutoPartition(now, Collections.singleton(tableId), forceDoAutoPartition));
     }
 
-    private void doAutoPartition(Instant now, Set<Long> tableIds) {
+    private void doAutoPartition(Instant now, Set<Long> tableIds, boolean forceDoAutoPartition) {
         for (Long tableId : tableIds) {
+            Instant createPartitionInstant = now;
+            TableInfo tableInfo = autoPartitionTables.get(tableId);
+            if (!forceDoAutoPartition) {
+                // not to force do auto partition and delay exist,
+                // we use now - delayMinutes as current instant to mock the delay
+                Integer delayMinutes = autoCreateDayPartitionDelayMinutes.get(tableId);
+                if (delayMinutes != null) {
+                    createPartitionInstant = now.minus(Duration.ofMinutes(delayMinutes));
+                }
+            }
             TreeSet<String> currentPartitions =
                     partitionsByTable.computeIfAbsent(tableId, k -> new TreeSet<>());
-            TableInfo tableInfo = autoPartitionTables.get(tableId);
             dropPartitions(
                     tableInfo.getTablePath(),
                     tableInfo.getPartitionKeys(),
-                    now,
+                    createPartitionInstant,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
-            createPartitions(tableInfo, now, currentPartitions);
+            createPartitions(tableInfo, createPartitionInstant, currentPartitions);
         }
     }
 
@@ -245,16 +273,29 @@ public class AutoPartitionManager implements AutoCloseable {
             try {
                 metadataManager.createPartition(
                         tablePath, tableId, partitionAssignment, partition, false);
+                currentPartitions.add(partition.getPartitionName());
+                LOG.info(
+                        "Auto partitioning created partition {} for table [{}].",
+                        partition,
+                        tablePath);
             } catch (PartitionAlreadyExistsException e) {
                 LOG.info(
                         "Auto partitioning skip to create partition {} for table [{}] as the partition is exist.",
                         partition,
                         tablePath);
+            } catch (TooManyPartitionsException t) {
+                LOG.warn(
+                        "Auto partitioning skip to create partition {} for table [{}], "
+                                + "because exceed the maximum number of partitions.",
+                        partition,
+                        tablePath);
+            } catch (Exception e) {
+                LOG.error(
+                        "Auto partitioning failed to create partition {} for table [{}].",
+                        partition,
+                        tablePath,
+                        e);
             }
-
-            currentPartitions.add(partition.getPartitionName());
-            LOG.info(
-                    "Auto partitioning created partition {} for table [{}].", partition, tablePath);
         }
     }
 
@@ -331,6 +372,12 @@ public class AutoPartitionManager implements AutoCloseable {
                     partitionName,
                     tablePath);
         }
+    }
+
+    @VisibleForTesting
+    @Nullable
+    protected Integer getAutoCreateDayDelayMinutes(long tableId) {
+        return autoCreateDayPartitionDelayMinutes.get(tableId);
     }
 
     @Override

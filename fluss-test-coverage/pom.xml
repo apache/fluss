@@ -324,7 +324,7 @@
                                         <exlucde>
                                             com.alibaba.fluss.flink.source.reader.RecordAndPos
                                         </exlucde>
-                                        <exclude>com.alibaba.fluss.flink.sink.FlinkSink</exclude>
+                                        <exclude>com.alibaba.fluss.flink.sink.*</exclude>
                                         <exclude>
                                             com.alibaba.fluss.flink.metrics.*
                                         </exclude>

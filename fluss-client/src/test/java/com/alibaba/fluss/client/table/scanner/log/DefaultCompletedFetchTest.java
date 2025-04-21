@@ -47,7 +47,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.TestData.DATA2;
 import static com.alibaba.fluss.record.TestData.DATA2_ROW_TYPE;
@@ -55,6 +54,7 @@ import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
 

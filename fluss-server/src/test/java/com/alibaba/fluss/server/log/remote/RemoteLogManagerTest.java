@@ -23,6 +23,7 @@ import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.FetchData;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.LogTablet;
@@ -110,7 +111,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         // rebuild a remote log manager.
         replicaManager.shutdown();
-        replicaManager = buildReplicaManager();
+        replicaManager = buildReplicaManager(new TestCoordinatorGateway());
         makeLogTableAsLeader(tb, partitionTable);
         // trigger reload remote log metadata from remote snapshot.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();

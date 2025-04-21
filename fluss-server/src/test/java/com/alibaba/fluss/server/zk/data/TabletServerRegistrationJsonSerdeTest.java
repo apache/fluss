@@ -16,7 +16,15 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 /** Test for {@link com.alibaba.fluss.server.zk.data.TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
@@ -29,14 +37,33 @@ public class TabletServerRegistrationJsonSerdeTest
     @Override
     protected TabletServerRegistration[] createObjects() {
         TabletServerRegistration tabletServerRegistration =
-                new TabletServerRegistration("localhost", 2345, 10000);
+                new TabletServerRegistration(
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000);
         return new TabletServerRegistration[] {tabletServerRegistration};
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"host\":\"localhost\",\"port\":2345,\"register_timestamp\":10000}"
+            "{\"version\":2,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}"
         };
+    }
+
+    @Test
+    void testCompatibility() throws IOException {
+        JsonNode jsonInVersion1 =
+                new ObjectMapper()
+                        .readTree(
+                                "{\"version\":1,\"host\":\"localhost\",\"port\":1001,\"register_timestamp\":10000}"
+                                        .getBytes(StandardCharsets.UTF_8));
+
+        TabletServerRegistration tabletServerRegistration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion1);
+        TabletServerRegistration expectedTabletServerRegistration =
+                new TabletServerRegistration(
+                        Endpoint.fromListenersString("FLUSS://localhost:1001"), 10000);
+        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
     }
 }

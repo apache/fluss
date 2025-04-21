@@ -514,6 +514,19 @@ public class FlussPaths {
                 indexSuffix);
     }
 
+    public static FsPath remoteWriterSnapshotFile(
+            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, String indexSuffix) {
+        return remoteLogIndexFile(
+                remoteLogSegmentDir(
+                        remoteLogTabletDir(
+                                remoteLogDir,
+                                remoteLogSegment.physicalTablePath(),
+                                remoteLogSegment.tableBucket()),
+                        remoteLogSegment.remoteLogSegmentId()),
+                remoteLogSegment.remoteLogEndOffset(),
+                indexSuffix);
+    }
+
     /**
      * Returns the remote file path for storing the offset index file.
      *

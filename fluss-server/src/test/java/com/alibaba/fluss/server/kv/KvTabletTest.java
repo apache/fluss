@@ -148,7 +148,8 @@ class KvTabletTest {
                 LogFormat.ARROW,
                 1,
                 true,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                true);
     }
 
     private KvTablet createKvTablet(

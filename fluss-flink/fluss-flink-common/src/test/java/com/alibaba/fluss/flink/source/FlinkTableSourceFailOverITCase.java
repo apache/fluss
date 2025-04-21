@@ -61,9 +61,9 @@ import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.waitUntilPa
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 
 /** IT case for flink table source fail over. */
-class FlinkTableSourceFailOverITCase {
+abstract class FlinkTableSourceFailOverITCase {
 
-    private static final String CATALOG_NAME = "testcatalog";
+    static final String CATALOG_NAME = "testcatalog";
 
     @TempDir public static File checkpointDir;
     @TempDir public static File savepointDir;

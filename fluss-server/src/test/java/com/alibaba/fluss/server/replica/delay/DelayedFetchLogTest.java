@@ -92,6 +92,9 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
+        // check and complete manually
+        numComplete = delayedFetchLogManager.checkAndComplete(delayedTableBucketKey);
+        assertThat(numComplete).isEqualTo(1);
         assertThat(delayedFetchLogManager.numDelayed()).isEqualTo(0);
         assertThat(delayedFetchLogManager.watched()).isEqualTo(0);
 

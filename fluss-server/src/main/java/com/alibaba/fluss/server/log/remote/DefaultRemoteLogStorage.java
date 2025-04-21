@@ -105,9 +105,6 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             List<CompletableFuture<Void>> futures =
                     createUploadFutures(remoteLogSegment, logSegmentFiles);
             FutureUtils.waitForAll(futures).get();
-            for (CompletableFuture<Void> future : futures) {
-                future.get();
-            }
         } catch (ExecutionException e) {
             Throwable throwable = ExceptionUtils.stripExecutionException(e);
             throwable = ExceptionUtils.stripException(throwable, RuntimeException.class);
@@ -172,9 +169,17 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     @Override
     public InputStream fetchIndex(RemoteLogSegment remoteLogSegment, IndexType indexType)
             throws RemoteStorageException {
-        FsPath remoteLogSegmentIndexFile =
-                FlussPaths.remoteOffsetIndexFile(
-                        remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
+        FsPath remoteLogSegmentIndexFile;
+        if (indexType == IndexType.WRITER_ID_SNAPSHOT) {
+            remoteLogSegmentIndexFile =
+                    FlussPaths.remoteWriterSnapshotFile(
+                            remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
+        } else {
+            remoteLogSegmentIndexFile =
+                    FlussPaths.remoteOffsetIndexFile(
+                            remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
+        }
+
         try {
             return fileSystem.open(remoteLogSegmentIndexFile);
         } catch (IOException e) {

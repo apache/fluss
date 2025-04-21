@@ -16,9 +16,11 @@
 
 package com.alibaba.fluss.flink.sink.writer;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
 import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
@@ -30,6 +32,7 @@ import com.alibaba.fluss.metrics.Metric;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.row.InternalRow;
 
+import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
@@ -56,6 +59,7 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
     protected final RowType tableRowType;
     protected final @Nullable int[] targetColumnIndexes;
     private final boolean ignoreDelete;
+    private final MailboxExecutor mailboxExecutor;
 
     private transient FlinkAsFlussRow sinkRow;
     private transient Connection connection;
@@ -72,8 +76,9 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
-            boolean ignoreDelete) {
-        this(tablePath, flussConfig, tableRowType, null, ignoreDelete);
+            boolean ignoreDelete,
+            MailboxExecutor mailboxExecutor) {
+        this(tablePath, flussConfig, tableRowType, null, ignoreDelete, mailboxExecutor);
     }
 
     public FlinkSinkWriter(
@@ -81,12 +86,14 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
             Configuration flussConfig,
             RowType tableRowType,
             @Nullable int[] targetColumns,
-            boolean ignoreDelete) {
+            boolean ignoreDelete,
+            MailboxExecutor mailboxExecutor) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.targetColumnIndexes = targetColumns;
         this.tableRowType = tableRowType;
         this.ignoreDelete = ignoreDelete;
+        this.mailboxExecutor = mailboxExecutor;
     }
 
     public void initialize(SinkWriterMetricGroup metricGroup) {
@@ -123,12 +130,16 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
 
         InternalRow internalRow = sinkRow.replace(value);
         CompletableFuture<?> writeFuture = writeRow(value.getRowKind(), internalRow);
-        writeFuture.exceptionally(
-                exception -> {
-                    if (this.asyncWriterException == null) {
-                        this.asyncWriterException = exception;
+        writeFuture.whenComplete(
+                (ignored, throwable) -> {
+                    if (throwable != null) {
+                        if (this.asyncWriterException == null) {
+                            this.asyncWriterException = throwable;
+                        }
+
+                        // Checking for exceptions from previous writes
+                        mailboxExecutor.execute(this::checkAsyncException, "Update error metric");
                     }
-                    return null;
                 });
 
         numRecordsOutCounter.inc();
@@ -226,4 +237,7 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
                     "One or more Fluss Writer send requests have encountered exception", throwable);
         }
     }
+
+    @VisibleForTesting
+    abstract TableWriter getTableWriter();
 }
