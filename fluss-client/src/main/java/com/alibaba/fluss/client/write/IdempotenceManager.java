@@ -25,7 +25,6 @@ import com.alibaba.fluss.exception.UnknownWriterIdException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.InitWriterRequest;
 import com.alibaba.fluss.rpc.protocol.Errors;
@@ -40,7 +39,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -182,10 +182,10 @@ public class IdempotenceManager {
      */
     synchronized int firstInFlightBatchSequence(TableBucket tableBucket) {
         if (!hasInflightBatches(tableBucket)) {
-            return LogRecordBatch.NO_BATCH_SEQUENCE;
+            return NO_BATCH_SEQUENCE;
         }
         WriteBatch batch = nextBatchBySequence(tableBucket);
-        return batch == null ? LogRecordBatch.NO_BATCH_SEQUENCE : batch.batchSequence();
+        return batch == null ? NO_BATCH_SEQUENCE : batch.batchSequence();
     }
 
     synchronized void handleCompletedBatch(ReadyWriteBatch readyWriteBatch) {

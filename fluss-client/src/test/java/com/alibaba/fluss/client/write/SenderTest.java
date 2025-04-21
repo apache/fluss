@@ -26,7 +26,6 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.exception.TimeoutException;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
@@ -51,6 +50,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
@@ -797,7 +797,7 @@ final class SenderTest {
 
     private static boolean hasIdempotentRecords(TableBucket tb, ProduceLogRequest request) {
         MemoryLogRecords memoryLogRecords = getProduceLogData(request).get(tb);
-        return memoryLogRecords.batchIterator().next().writerId() != LogRecordBatch.NO_WRITER_ID;
+        return memoryLogRecords.batchIterator().next().writerId() != NO_WRITER_ID;
     }
 
     private static void assertBatchSequenceEquals(

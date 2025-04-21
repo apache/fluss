@@ -49,6 +49,7 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
+import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
@@ -95,7 +96,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch batch = iterator.next();
         assertThat(batch.getRecordCount()).isEqualTo(0);
-        assertThat(batch.sizeInBytes()).isEqualTo(48);
+        assertThat(batch.sizeInBytes()).isEqualTo(52);
         assertThat(iterator.hasNext()).isFalse();
     }
 
@@ -201,7 +202,7 @@ public class MemoryLogRecordsArrowBuilderTest {
                         })
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "The size of first segment of pagedOutputView is too small, need at least 48 bytes.");
+                        "The size of first segment of pagedOutputView is too small, need at least 52 bytes.");
     }
 
     @Test
@@ -254,7 +255,7 @@ public class MemoryLogRecordsArrowBuilderTest {
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024 * 10);
         MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         // only contains batch header.
-        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(48);
+        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(52);
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch logRecordBatch = iterator.next();
@@ -279,7 +280,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         builder = createMemoryLogRecordsArrowBuilder(100, writer2, 10, 1024 * 10);
         memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         // only contains batch header.
-        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(48);
+        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(52);
         iterator = memoryLogRecords.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         logRecordBatch = iterator.next();
@@ -353,6 +354,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(pageSizeInBytes));
         return MemoryLogRecordsArrowBuilder.builder(
                 baseOffset,
+                CURRENT_LOG_MAGIC_VALUE,
                 DEFAULT_SCHEMA_ID,
                 writer,
                 new ManagedPagedOutputView(new TestingMemorySegmentPool(pageSizeInBytes)));

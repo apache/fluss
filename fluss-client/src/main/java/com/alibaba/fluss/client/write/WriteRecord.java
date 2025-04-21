@@ -21,7 +21,6 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.record.DefaultKvRecord;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
-import com.alibaba.fluss.record.DefaultLogRecordBatch;
 import com.alibaba.fluss.record.IndexedLogRecord;
 import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.InternalRow;
@@ -29,6 +28,8 @@ import com.alibaba.fluss.row.indexed.IndexedRow;
 
 import javax.annotation.Nullable;
 
+import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -85,7 +86,7 @@ public final class WriteRecord {
             PhysicalTablePath tablePath, IndexedRow row, @Nullable byte[] bucketKey) {
         checkNotNull(row);
         int estimatedSizeInBytes =
-                IndexedLogRecord.sizeOf(row) + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+                IndexedLogRecord.sizeOf(row) + recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE);
         return new WriteRecord(
                 tablePath,
                 null,

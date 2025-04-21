@@ -21,7 +21,6 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.CorruptSnapshotException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import com.alibaba.fluss.utils.json.JsonDeserializer;
@@ -56,6 +55,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static com.alibaba.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
 import static com.alibaba.fluss.utils.FlussPaths.writerSnapshotFile;
 
@@ -232,7 +232,7 @@ public class WriterStateManager {
     /** Update the mapping with the given append information. */
     public void update(WriterAppendInfo appendInfo) {
         long writerId = appendInfo.writerId();
-        if (writerId == LogRecordBatch.NO_WRITER_ID) {
+        if (writerId == NO_WRITER_ID) {
             throw new IllegalArgumentException(
                     "Invalid writer id "
                             + writerId
