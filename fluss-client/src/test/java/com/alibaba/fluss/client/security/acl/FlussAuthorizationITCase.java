@@ -68,6 +68,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.security.acl.AccessControlEntry.WILD_CARD_HOST;
 import static com.alibaba.fluss.security.acl.FlussPrincipal.WILD_CARD_PRINCIPAL;
+import static com.alibaba.fluss.security.acl.OperationType.READ;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -456,8 +457,10 @@ public class FlussAuthorizationITCase {
                 assertThatThrownBy(() -> batchScanner.pollBatch(Duration.ofMinutes(1)))
                         .hasMessageContaining(
                                 String.format(
-                                        "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='test_db_1.test_non_pk_table_1'}",
-                                        guestPrincipal));
+                                        "No permission to %s table %s in database %s",
+                                        READ,
+                                        DATA1_TABLE_PATH.getTableName(),
+                                        DATA1_TABLE_PATH.getDatabaseName()));
             }
             rootAdmin
                     .createAcls(
@@ -467,7 +470,7 @@ public class FlussAuthorizationITCase {
                                             new AccessControlEntry(
                                                     guestPrincipal,
                                                     "*",
-                                                    OperationType.READ,
+                                                    READ,
                                                     PermissionType.ALLOW))))
                     .all()
                     .get();

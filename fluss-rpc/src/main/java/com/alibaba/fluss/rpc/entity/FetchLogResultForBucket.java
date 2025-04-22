@@ -23,6 +23,7 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.rpc.protocol.Errors;
 
 import javax.annotation.Nullable;
 
@@ -47,6 +48,10 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
         this(tableBucket, null, null, -1L, error);
+    }
+
+    public FetchLogResultForBucket(TableBucket tableBucket, Errors error) {
+        this(tableBucket, null, null, -1L, new ApiError(error, null));
     }
 
     public FetchLogResultForBucket(

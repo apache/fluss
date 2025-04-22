@@ -417,7 +417,7 @@ public class ServerRpcMessageUtils {
     }
 
     public static ProduceLogResponse makeProduceLogResponse(
-            List<ProduceLogResultForBucket> appendLogResultForBucketList) {
+            Collection<ProduceLogResultForBucket> appendLogResultForBucketList) {
         ProduceLogResponse produceResponse = new ProduceLogResponse();
         List<PbProduceLogRespForBucket> produceLogRespForBucketList = new ArrayList<>();
         for (ProduceLogResultForBucket bucketResult : appendLogResultForBucketList) {
@@ -633,7 +633,7 @@ public class ServerRpcMessageUtils {
         return targetColumns.length == 0 ? null : targetColumns;
     }
 
-    public static PutKvResponse makePutKvResponse(List<PutKvResultForBucket> kvPutResult) {
+    public static PutKvResponse makePutKvResponse(Collection<PutKvResultForBucket> kvPutResult) {
         PutKvResponse putKvResponse = new PutKvResponse();
         List<PbPutKvRespForBucket> putKvRespForBucketList = new ArrayList<>();
         for (PutKvResultForBucket bucketResult : kvPutResult) {

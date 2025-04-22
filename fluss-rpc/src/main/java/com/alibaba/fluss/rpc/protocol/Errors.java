@@ -18,6 +18,7 @@ package com.alibaba.fluss.rpc.protocol;
 
 import com.alibaba.fluss.exception.ApiException;
 import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.CorruptMessageException;
 import com.alibaba.fluss.exception.CorruptRecordException;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
@@ -193,8 +194,9 @@ public enum Errors {
             LeaderNotAvailableException::new),
     PARTITION_MAX_NUM_EXCEPTION(
             45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
-    AUTHENTICATE_EXCEPTION(46, "The authentication failed.", AuthenticationException::new),
-    SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new);
+    AUTHENTICATE_EXCEPTION(46, "Authentication failed.", AuthenticationException::new),
+    SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new),
+    AUTHORIZATION_EXCEPTION(48, "Authorization failed", AuthorizationException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
