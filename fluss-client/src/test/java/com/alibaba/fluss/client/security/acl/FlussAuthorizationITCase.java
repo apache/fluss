@@ -445,6 +445,8 @@ public class FlussAuthorizationITCase {
                                                 PermissionType.ALLOW))))
                 .all()
                 .get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId());
         try (Table table = guestConn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();

@@ -24,7 +24,7 @@ import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 
 /** Test for {@link ResourceAclJsonSerde}. */
 public class ResourceAclJsonSerdeTest extends JsonSerdeTestBase<ResourceAcl> {
@@ -44,7 +44,8 @@ public class ResourceAclJsonSerdeTest extends JsonSerdeTestBase<ResourceAcl> {
                                     OperationType.ALL,
                                     PermissionType.ALLOW))),
             new ResourceAcl(
-                    new HashSet<>(
+                    // use LinkedHashSet to ensure the order of the acls is preserved
+                    new LinkedHashSet<>(
                             Arrays.asList(
                                     new AccessControlEntry(
                                             new FlussPrincipal("John", "ROLE"),
@@ -62,9 +63,9 @@ public class ResourceAclJsonSerdeTest extends JsonSerdeTestBase<ResourceAcl> {
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"acls\":[{\"principal_type\":\"USER\",\"principal_name\":\"Mike\",\"permission_type\":\"ALLOW\",\"host\":\"*\",\"host\":\"*\",\"operation\":\"ALL\"}]}",
-            "{\"version\":1,\"acls\":[{\"principal_type\":\"ROLE\",\"principal_name\":\"John\",\"permission_type\":\"ALLOW\",\"host\":\"127.0.0.1\",\"host\":\"127.0.0.1\",\"operation\":\"ALTER\"}"
-                    + ",{\"principal_type\":\"ROLE\",\"principal_name\":\"Mike1233\",\"permission_type\":\"ALLOW\",\"host\":\"1*\",\"host\":\"1*\",\"operation\":\"READ\"}]}"
+            "{\"version\":1,\"acls\":[{\"principal_type\":\"USER\",\"principal_name\":\"Mike\",\"permission_type\":\"ALLOW\",\"host\":\"*\",\"operation\":\"ALL\"}]}",
+            "{\"version\":1,\"acls\":[{\"principal_type\":\"ROLE\",\"principal_name\":\"John\",\"permission_type\":\"ALLOW\",\"host\":\"127.0.0.1\",\"operation\":\"ALTER\"}"
+                    + ",{\"principal_type\":\"ROLE\",\"principal_name\":\"Mike1233\",\"permission_type\":\"ALLOW\",\"host\":\"1*\",\"operation\":\"READ\"}]}"
         };
     }
 }
