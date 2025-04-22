@@ -29,7 +29,7 @@ import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
 import org.apache.spark.sql.types.{StringType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-import java.util
+import java.{util => ju}
 
 import scala.collection.JavaConverters._
 
@@ -47,9 +47,16 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
     SparkTypeUtils.fromFlussRowType(table.getRowType)
   }
 
-  override def capabilities(): util.Set[TableCapability] = ???
+  override def capabilities(): ju.Set[TableCapability] = {
+    Set(
+      TableCapability.MICRO_BATCH_READ,
+      TableCapability.BATCH_READ,
+      TableCapability.BATCH_WRITE).asJava
+  }
 
-  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = ???
+  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
+    new SparkScanBuilder(table, flussConfig, options)
+  }
 
   override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder = ???
 
@@ -58,7 +65,7 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
       SparkTypeUtils.project(table.getRowType, table.getPartitionKeys))
   }
 
-  override def createPartition(ident: InternalRow, properties: util.Map[String, String]): Unit = {
+  override def createPartition(ident: InternalRow, properties: ju.Map[String, String]): Unit = {
     catalog.createPartitions(
       table.getTablePath,
       convertToFlussPartitionSpec(ident, partitionSchema()),
@@ -71,12 +78,12 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
 
   override def replacePartitionMetadata(
       ident: InternalRow,
-      properties: util.Map[String, String]): Unit = {
+      properties: ju.Map[String, String]): Unit = {
     throw new UnsupportedOperationException("Replace partition is not supported")
 
   }
 
-  override def loadPartitionMetadata(ident: InternalRow): util.Map[String, String] = {
+  override def loadPartitionMetadata(ident: InternalRow): ju.Map[String, String] = {
     throw new UnsupportedOperationException("Load partition is not supported")
 
   }
@@ -112,7 +119,7 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
   private def convertToFlussPartitionSpec(
       ident: InternalRow,
       partitionSchema: StructType): PartitionSpec = {
-    val partitionSpec: java.util.Map[String, String] = new util.HashMap()
+    val partitionSpec: ju.Map[String, String] = new ju.HashMap()
     partitionSchema.zipWithIndex.foreach {
       case (field, index) =>
         val value = Cast(BoundReference(index, field.dataType, nullable = false), StringType)
@@ -139,7 +146,7 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
   }
 
   def convertToPartIdent(
-      partitionSpec: util.Map[String, String],
+      partitionSpec: ju.Map[String, String],
       partitionSchema: StructType): InternalRow = {
     InternalRow.fromSeq(partitionSchema.map {
       field => Cast(Literal(partitionSpec.asScala(field.name)), field.dataType, None).eval()

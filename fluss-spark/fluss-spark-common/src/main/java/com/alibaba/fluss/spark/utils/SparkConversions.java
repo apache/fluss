@@ -22,6 +22,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.FlussConfigUtils;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.ValidationException;
 import com.alibaba.fluss.spark.SparkConnectorOptions;
 
 import org.apache.spark.sql.connector.expressions.Transform;
@@ -29,6 +30,9 @@ import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
 import java.io.File;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -43,6 +47,8 @@ import static com.alibaba.fluss.spark.SparkConnectorOptions.PRIMARY_KEY;
 
 /** Utils for conversion between Spark and Fluss. */
 public class SparkConversions {
+    private static final DateTimeFormatter DATE_TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** Convert Spark's table to Fluss's table. */
     public static TableDescriptor toFlussTable(
@@ -146,11 +152,60 @@ public class SparkConversions {
             }
         }
 
+        String tmpDir = flussConfig.get(SparkConnectorOptions.TMP_DIRS);
         // pass io tmp dir to fluss client.
         flussConfig.setString(
                 ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR,
-                new File(options.get(SparkConnectorOptions.TMP_DIRS.key()), "/fluss")
-                        .getAbsolutePath());
+                new File(tmpDir, "/fluss").getAbsolutePath());
         return flussConfig;
+    }
+
+    public static Configuration toFlussConfig(CaseInsensitiveStringMap options) {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                SparkConnectorOptions.BOOTSTRAP_SERVERS.key(),
+                options.get(SparkConnectorOptions.BOOTSTRAP_SERVERS.key()));
+        // forward all configs
+        options.forEach(flussConfig::setString);
+
+        String tmpDir = flussConfig.get(SparkConnectorOptions.TMP_DIRS);
+        // pass io tmp dir to fluss client.
+        flussConfig.setString(
+                ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR,
+                new File(tmpDir, "/fluss").getAbsolutePath());
+        return flussConfig;
+    }
+
+    /**
+     * Parses timestamp String to Long.
+     *
+     * <p>timestamp String format was given as following:
+     *
+     * <pre>
+     *     scan.startup.timestamp = 1678883047356
+     *     scan.startup.timestamp = 2023-12-09 23:09:12
+     * </pre>
+     *
+     * @return timestamp as long value
+     */
+    public static long parseTimestamp(String timestampStr, String optionKey, ZoneId timeZone) {
+        if (timestampStr.matches("\\d+")) {
+            return Long.parseLong(timestampStr);
+        }
+
+        try {
+            return LocalDateTime.parse(timestampStr, DATE_TIME_FORMATTER)
+                    .atZone(timeZone)
+                    .toInstant()
+                    .toEpochMilli();
+        } catch (Exception e) {
+            throw new ValidationException(
+                    String.format(
+                            "Invalid properties '%s' should follow the format "
+                                    + "'yyyy-MM-dd HH:mm:ss' or 'timestamp', but is '%s'. "
+                                    + "You can config like: '2023-12-09 23:09:12' or '1678883047356'.",
+                            optionKey, timestampStr),
+                    e);
+        }
     }
 }

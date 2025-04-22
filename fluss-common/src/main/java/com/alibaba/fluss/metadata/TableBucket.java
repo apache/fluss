@@ -61,6 +61,10 @@ public class TableBucket implements Serializable {
         this.partitionId = partitionId;
     }
 
+    public TableBucket() {
+        this(0L, null, 0);
+    }
+
     public int getBucket() {
         return bucket;
     }
