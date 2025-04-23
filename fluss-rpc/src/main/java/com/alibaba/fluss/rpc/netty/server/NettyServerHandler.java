@@ -45,8 +45,6 @@ import org.slf4j.LoggerFactory;
 import java.net.SocketAddress;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -58,12 +56,6 @@ import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeSuccessResponse;
 public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger LOG = LoggerFactory.getLogger(NettyServerHandler.class);
-
-    /**
-     * Map from API key to inflight responses. In here, we need to use a Queue to store the inflight
-     * responses of each API key, because fluss clients require the responses to be sent in order.
-     */
-    private final Map<Short, Deque<FlussRequest>> inflightResponseMap = new HashMap<>();
 
     private final RequestChannel requestChannel;
     private final ApiManager apiManager;
@@ -130,10 +122,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             listenerName,
                             future);
 
-            Deque<FlussRequest> inflightResponses =
-                    inflightResponseMap.computeIfAbsent(apiKey, k -> new ArrayDeque<>());
-            inflightResponses.addLast(request);
-            future.whenCompleteAsync((r, t) -> sendResponse(ctx, apiKey), ctx.executor());
+            future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
             if (apiKey == ApiKeys.AUTHENTICATE.id
                     || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
                 // handle to authentication for 3 cases:
@@ -210,42 +199,23 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private void close() {
         switchState(ConnectionState.CLOSE);
         ctx.close();
-        LOG.warn(
-                "Close channel {} with {} pending requests.",
-                remoteAddress,
-                inflightResponseMap.size());
-        inflightResponseMap.forEach((k, v) -> v.forEach(FlussRequest::cancel));
     }
 
-    private void sendResponse(ChannelHandlerContext ctx, short apiKey) {
-        FlussRequest request;
-        Deque<FlussRequest> inflightResponses = inflightResponseMap.get(apiKey);
-        while ((request = inflightResponses.peekFirst()) != null) {
-            CompletableFuture<ApiMessage> f = request.getResponseFuture();
-            boolean cancelled = request.cancelled();
+    private void sendResponse(ChannelHandlerContext ctx, FlussRequest request) {
+        boolean cancelled = request.cancelled();
+        if (cancelled) {
+            request.releaseBuffer();
+        }
 
-            if (cancelled) {
-                inflightResponses.pollFirst();
-                request.releaseBuffer();
-                continue;
+        if (state.isActive()) {
+            try {
+                CompletableFuture<ApiMessage> f = request.getResponseFuture();
+                sendSuccessResponse(ctx, request, f.get());
+            } catch (Throwable t) {
+                sendError(ctx, request, t);
             }
-
-            boolean isDone = f.isDone();
-            if (!isDone) {
-                break;
-            }
-
-            inflightResponses.pollFirst();
-            if (state.isActive()) {
-                try {
-                    ApiMessage response = f.join();
-                    sendSuccessResponse(ctx, request, response);
-                } catch (Throwable t) {
-                    sendError(ctx, request, t);
-                }
-            } else {
-                request.releaseBuffer();
-            }
+        } else {
+            request.releaseBuffer();
         }
     }
 
@@ -311,7 +281,9 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     @VisibleForTesting
     Deque<FlussRequest> inflightResponses(short apiKey) {
-        return inflightResponseMap.get(apiKey);
+        // TODO: implement this if we introduce inflight response in
+        // https://github.com/alibaba/fluss/issues/771
+        return new ArrayDeque<>();
     }
 
     private void handleAuthenticateRequest(
