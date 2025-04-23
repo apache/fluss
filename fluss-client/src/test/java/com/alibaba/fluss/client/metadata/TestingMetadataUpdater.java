@@ -72,6 +72,10 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         }
     }
 
+    public void updateCluster(Cluster cluster) {
+        this.cluster = cluster;
+    }
+
     @Override
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =

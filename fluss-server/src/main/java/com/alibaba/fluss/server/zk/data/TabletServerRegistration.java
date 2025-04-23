@@ -16,6 +16,9 @@
 
 package com.alibaba.fluss.server.zk.data;
 
+import com.alibaba.fluss.cluster.Endpoint;
+
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -24,22 +27,16 @@ import java.util.Objects;
  * @see TabletServerRegistrationJsonSerde for json serialization and deserialization.
  */
 public class TabletServerRegistration {
-    private final String host;
-    private final int port;
+    private final List<Endpoint> endpoints;
     private final long registerTimestamp;
 
-    public TabletServerRegistration(String host, int port, long registerTimestamp) {
-        this.host = host;
-        this.port = port;
+    public TabletServerRegistration(List<Endpoint> endpoints, long registerTimestamp) {
+        this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
     }
 
-    public String getHost() {
-        return host;
-    }
-
-    public int getPort() {
-        return port;
+    public List<Endpoint> getEndpoints() {
+        return endpoints;
     }
 
     public long getRegisterTimestamp() {
@@ -55,24 +52,20 @@ public class TabletServerRegistration {
             return false;
         }
         TabletServerRegistration that = (TabletServerRegistration) o;
-        return port == that.port
-                && registerTimestamp == that.registerTimestamp
-                && Objects.equals(host, that.host);
+        return registerTimestamp == that.registerTimestamp
+                && Objects.equals(endpoints, that.endpoints);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(host, port, registerTimestamp);
+        return Objects.hash(endpoints, registerTimestamp);
     }
 
     @Override
     public String toString() {
         return "TabletServerRegistration{"
-                + "host='"
-                + host
-                + '\''
-                + ", port="
-                + port
+                + "endpoints="
+                + endpoints
                 + ", registerTimestamp="
                 + registerTimestamp
                 + '}';

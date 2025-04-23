@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.utils;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.fs.FsPath;
@@ -126,15 +127,16 @@ import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -144,28 +146,14 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Utils for making rpc request/response from inner object or convert inner class to rpc
  * request/response.
  */
-public class RpcMessageUtils {
-
-    public static ByteBuffer toByteBuffer(ByteBuf buf) {
-        if (buf.isDirect()) {
-            return buf.nioBuffer();
-        } else if (buf.hasArray()) {
-            int offset = buf.arrayOffset() + buf.readerIndex();
-            int length = buf.readableBytes();
-            return ByteBuffer.wrap(buf.array(), offset, length);
-        } else {
-            // fallback to deep copy
-            byte[] bytes = new byte[buf.readableBytes()];
-            buf.getBytes(buf.readerIndex(), bytes);
-            return ByteBuffer.wrap(bytes);
-        }
-    }
+public class ServerRpcMessageUtils {
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -206,15 +194,18 @@ public class RpcMessageUtils {
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public static UpdateMetadataRequest makeUpdateMetadataRequest(
-            Optional<ServerNode> coordinatorServer, Set<ServerNode> aliveTableServers) {
+            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTableServers) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
-        for (ServerNode serverNode : aliveTableServers) {
+        for (ServerInfo serverInfo : aliveTableServers) {
+            List<Endpoint> endpoints = serverInfo.endpoints();
             aliveTableServerNodes.add(
                     new PbServerNode()
-                            .setNodeId(serverNode.id())
-                            .setHost(serverNode.host())
-                            .setPort(serverNode.port()));
+                            .setNodeId(serverInfo.id())
+                            .setListeners(Endpoint.toListenersString(endpoints))
+                            // for backward compatibility for versions <= 0.6
+                            .setHost(endpoints.get(0).getHost())
+                            .setPort(endpoints.get(0).getPort()));
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         coordinatorServer.map(
@@ -222,9 +213,18 @@ public class RpcMessageUtils {
                         updateMetadataRequest
                                 .setCoordinatorServer()
                                 .setNodeId(node.id())
-                                .setHost(node.host())
-                                .setPort(node.port()));
+                                .setListeners(Endpoint.toListenersString(node.endpoints()))
+                                // for backward compatibility for versions <= 0.6
+                                .setHost(node.endpoints().get(0).getHost())
+                                .setPort(node.endpoints().get(0).getPort()));
         return updateMetadataRequest;
+    }
+
+    public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
+            int coordinatorEpoch, Collection<PbNotifyLeaderAndIsrReqForBucket> notifyLeaders) {
+        return new NotifyLeaderAndIsrRequest()
+                .setCoordinatorEpoch(coordinatorEpoch)
+                .addAllNotifyBucketsLeaderReqs(notifyLeaders);
     }
 
     public static PbNotifyLeaderAndIsrReqForBucket makeNotifyBucketLeaderAndIsr(
@@ -254,7 +254,7 @@ public class RpcMessageUtils {
         return reqForBucket;
     }
 
-    public static List<NotifyLeaderAndIsrData> getNotifyLeaderAndIsrData(
+    public static List<NotifyLeaderAndIsrData> getNotifyLeaderAndIsrRequestData(
             NotifyLeaderAndIsrRequest request) {
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList = new ArrayList<>();
         for (PbNotifyLeaderAndIsrReqForBucket reqForBucket :
@@ -308,6 +308,26 @@ public class RpcMessageUtils {
         }
         notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(respForBuckets);
         return notifyLeaderAndIsrResponse;
+    }
+
+    public static List<NotifyLeaderAndIsrResultForBucket> getNotifyLeaderAndIsrResponseData(
+            NotifyLeaderAndIsrResponse response) {
+        List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
+                new ArrayList<>();
+        for (PbNotifyLeaderAndIsrRespForBucket protoNotifyLeaderRespForBucket :
+                response.getNotifyBucketsLeaderRespsList()) {
+            TableBucket tableBucket =
+                    toTableBucket(protoNotifyLeaderRespForBucket.getTableBucket());
+            // construct the result for notify bucket leader and isr
+            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket =
+                    protoNotifyLeaderRespForBucket.hasErrorCode()
+                            ? new NotifyLeaderAndIsrResultForBucket(
+                                    tableBucket,
+                                    ApiError.fromErrorMessage(protoNotifyLeaderRespForBucket))
+                            : new NotifyLeaderAndIsrResultForBucket(tableBucket);
+            notifyLeaderAndIsrResultForBuckets.add(notifyLeaderAndIsrResultForBucket);
+        }
+        return notifyLeaderAndIsrResultForBuckets;
     }
 
     public static PbStopReplicaReqForBucket makeStopBucketReplica(
@@ -534,38 +554,6 @@ public class RpcMessageUtils {
         FetchLogResponse fetchLogResponse = new FetchLogResponse();
         fetchLogResponse.addAllTablesResps(fetchLogRespForTables);
         return fetchLogResponse;
-    }
-
-    public static Map<TableBucket, FetchLogResultForBucket> getFetchLogResult(
-            FetchLogResponse fetchLogResponse) {
-        Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap = new HashMap<>();
-        List<PbFetchLogRespForTable> tablesRespList = fetchLogResponse.getTablesRespsList();
-        for (PbFetchLogRespForTable tableResp : tablesRespList) {
-            long tableId = tableResp.getTableId();
-            List<PbFetchLogRespForBucket> bucketsRespList = tableResp.getBucketsRespsList();
-            for (PbFetchLogRespForBucket bucketResp : bucketsRespList) {
-                TableBucket tableBucket =
-                        new TableBucket(
-                                tableId,
-                                bucketResp.hasPartitionId() ? bucketResp.getPartitionId() : null,
-                                bucketResp.getBucketId());
-                if (bucketResp.hasErrorCode()) {
-                    fetchLogResultMap.put(
-                            tableBucket,
-                            new FetchLogResultForBucket(
-                                    tableBucket, ApiError.fromErrorMessage(bucketResp)));
-                } else {
-                    ByteBuffer recordsBuffer = toByteBuffer(bucketResp.getRecordsSlice());
-                    MemoryLogRecords logRecords = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
-                    fetchLogResultMap.put(
-                            tableBucket,
-                            new FetchLogResultForBucket(
-                                    tableBucket, logRecords, bucketResp.getHighWatermark()));
-                }
-            }
-        }
-
-        return fetchLogResultMap;
     }
 
     public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {
@@ -1027,10 +1015,7 @@ public class RpcMessageUtils {
                         kvFileHandleAndLocalPath -> {
                             // get the remote file path
                             String filePath =
-                                    kvFileHandleAndLocalPath
-                                            .getKvFileHandle()
-                                            .getFilePath()
-                                            .toString();
+                                    kvFileHandleAndLocalPath.getKvFileHandle().getFilePath();
                             // get the local name for the file
                             String localPath = kvFileHandleAndLocalPath.getLocalPath();
                             return new PbRemotePathAndLocalFile()

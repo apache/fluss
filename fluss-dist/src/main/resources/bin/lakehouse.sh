@@ -15,8 +15,8 @@
 # limitations under the License.
 #
 
-if [ -z $1 ] || [[ $1 == "-D" ]]; then
-    # [-D ...]
+if [ -z $1 ] || [[ $1 == -D* ]]; then
+    # [-D...]
     args=("${@:1}")
 fi
 

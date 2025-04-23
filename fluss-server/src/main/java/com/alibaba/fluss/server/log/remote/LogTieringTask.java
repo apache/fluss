@@ -42,7 +42,7 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.UUID;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeCommitRemoteLogManifestRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeCommitRemoteLogManifestRequest;
 
 /**
  * A task to copy log segments to remote storage and delete expired remote log segments from remote.

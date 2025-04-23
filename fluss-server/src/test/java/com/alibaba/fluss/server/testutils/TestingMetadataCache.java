@@ -19,10 +19,10 @@ package com.alibaba.fluss.server.testutils;
 import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.cluster.ServerNode;
 
-import javax.annotation.Nullable;
-
 import java.util.Collections;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 /** An implement of {@link MetadataCache} for testing purpose. */
@@ -34,10 +34,9 @@ public class TestingMetadataCache implements MetadataCache {
         this.serverIds = IntStream.range(0, serverNums).toArray();
     }
 
-    @Nullable
     @Override
-    public ServerNode getCoordinatorServer() {
-        return null;
+    public Optional<ServerNode> getCoordinatorServer(String listenerName) {
+        return Optional.empty();
     }
 
     @Override
@@ -45,15 +44,19 @@ public class TestingMetadataCache implements MetadataCache {
         return false;
     }
 
-    @Nullable
     @Override
-    public ServerNode getTabletServer(int serverId) {
-        return null;
+    public Optional<ServerNode> getTabletServer(int serverId, String listenerName) {
+        return Optional.empty();
     }
 
     @Override
-    public Map<Integer, ServerNode> getAllAliveTabletServers() {
+    public Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName) {
         return Collections.emptyMap();
+    }
+
+    @Override
+    public Set<Integer> getAliveTabletServerIds() {
+        return Collections.emptySet();
     }
 
     public int[] getLiveServerIds() {

@@ -190,6 +190,11 @@ CREATE CATALOG fluss_catalog WITH (
 USE CATALOG fluss_catalog;
 ```
 
+:::info
+By default, catalog configurations are not persisted across Flink SQL client sessions.
+For further information how to store catalog configurations, see [Flink's Catalog Store](https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/table/catalogs/#catalog-store).
+:::
+
 ### Create Tables
 Running the following SQL to create Fluss tables to be used in this guide:
 ```sql  title="Flink SQL"
@@ -358,7 +363,7 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
 Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
 ```shell
-docker compose exec coordinator-server ./bin/lakehouse.sh -D flink.rest.address=jobmanager -D flink.rest.port=8081 -D flink.execution.checkpointing.interval=30s
+docker compose exec coordinator-server ./bin/lakehouse.sh -Dflink.rest.address=jobmanager -Dflink.rest.port=8081 -Dflink.execution.checkpointing.interval=30s
 ```
 You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
 

@@ -152,6 +152,7 @@ const config: Config = {
     prism: {
       theme: prismThemes.vsDark,
       darkTheme: prismThemes.dracula,
+      additionalLanguages: ['java']
     },
     algolia: {
       appId: "D8RXQUTC99",

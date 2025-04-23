@@ -16,21 +16,21 @@
 
 package com.alibaba.fluss.server.coordinator.event;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 
 import java.util.Objects;
 
 /** An event for new tablet server. */
 public class NewTabletServerEvent implements CoordinatorEvent {
 
-    private final ServerNode serverNode;
+    private final ServerInfo serverInfo;
 
-    public NewTabletServerEvent(ServerNode serverNode) {
-        this.serverNode = serverNode;
+    public NewTabletServerEvent(ServerInfo serverInfo) {
+        this.serverInfo = serverInfo;
     }
 
-    public ServerNode getServerNode() {
-        return serverNode;
+    public ServerInfo getServerInfo() {
+        return serverInfo;
     }
 
     @Override
@@ -42,16 +42,16 @@ public class NewTabletServerEvent implements CoordinatorEvent {
             return false;
         }
         NewTabletServerEvent that = (NewTabletServerEvent) o;
-        return Objects.equals(serverNode, that.serverNode);
+        return Objects.equals(serverInfo, that.serverInfo);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(serverNode);
+        return Objects.hash(serverInfo);
     }
 
     @Override
     public String toString() {
-        return "NewTabletServerEvent{" + "serverNode=" + serverNode + '}';
+        return "NewTabletServerEvent{" + "serverInfo=" + serverInfo + '}';
     }
 }

@@ -43,6 +43,7 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -72,6 +73,16 @@ public final class LogManager extends TabletManagerBase {
     @VisibleForTesting
     static final String RECOVERY_POINT_CHECKPOINT_FILE = "recovery-point-offset-checkpoint";
 
+    /**
+     * Clean shutdown file that indicates the tabletServer was cleanly shutdown in v0.7 and higher.
+     * This is used to avoid unnecessary recovery operations after a clean shutdown like recovery
+     * writer snapshot by scan all logs during loadLogs.
+     *
+     * <p>Note: for the previous cluster deploy by v0.6 and lower, there's no this file, we default
+     * think its unclean shutdown.
+     */
+    static final String CLEAN_SHUTDOWN_FILE = ".fluss_cleanshutdown";
+
     private final ZooKeeperClient zkClient;
     private final Scheduler scheduler;
     private final Clock clock;
@@ -80,6 +91,7 @@ public final class LogManager extends TabletManagerBase {
     private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
 
     private volatile OffsetCheckpointFile recoveryPointCheckpoint;
+    private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
             File dataDir,
@@ -133,12 +145,23 @@ public final class LogManager extends TabletManagerBase {
 
         String dataDirAbsolutePath = dataDir.getAbsolutePath();
         try {
+            boolean isCleanShutdown = false;
+            File cleanShutdownFile = new File(dataDir, CLEAN_SHUTDOWN_FILE);
+            if (cleanShutdownFile.exists()) {
+                // Cache the clean shutdown status marker and use that for rest of log loading
+                // workflow. Delete the CleanShutdownFile so that if tabletServer crashes while
+                // loading the log, it is considered hard shutdown during the next boot up.
+                Files.deleteIfExists(cleanShutdownFile.toPath());
+                isCleanShutdown = true;
+            }
+
             Map<TableBucket, Long> recoveryPoints = new HashMap<>();
             try {
                 recoveryPoints = recoveryPointCheckpoint.read();
             } catch (Exception e) {
                 LOG.warn(
-                        "Error occurred while reading recovery-point-offset-checkpoint file of directory {}, resetting the recovery checkpoint to 0",
+                        "Error occurred while reading recovery-point-offset-checkpoint file of directory {}, "
+                                + "resetting the recovery checkpoint to 0",
                         dataDirAbsolutePath,
                         e);
             }
@@ -146,9 +169,14 @@ public final class LogManager extends TabletManagerBase {
             List<File> tabletsToLoad = listTabletsToLoad();
             if (tabletsToLoad.isEmpty()) {
                 LOG.info("No logs found to be loaded in {}", dataDirAbsolutePath);
+            } else if (isCleanShutdown) {
+                LOG.info("Skipping some recovery log process since clean shutdown file was found");
+            } else {
+                LOG.info("Recovering all local logs since no clean shutdown file was not found");
             }
 
             final Map<TableBucket, Long> finalRecoveryPoints = recoveryPoints;
+            final boolean cleanShutdown = isCleanShutdown;
             // set runnable job.
             Runnable[] jobsForDir =
                     tabletsToLoad.stream()
@@ -160,6 +188,7 @@ public final class LogManager extends TabletManagerBase {
                                                         try {
                                                             loadLog(
                                                                     tabletDir,
+                                                                    cleanShutdown,
                                                                     finalRecoveryPoints,
                                                                     conf,
                                                                     clock);
@@ -174,6 +203,7 @@ public final class LogManager extends TabletManagerBase {
             int successLoadCount =
                     runInThreadPool(jobsForDir, "log-recovery-" + dataDirAbsolutePath);
 
+            loadLogsCompletedFlag = true;
             LOG.info(
                     "log loader complete. Total success loaded log count is {}, Take {} ms",
                     successLoadCount,
@@ -220,7 +250,8 @@ public final class LogManager extends TabletManagerBase {
                                     logFormat,
                                     tieredLogLocalSegments,
                                     isChangelog,
-                                    clock);
+                                    clock,
+                                    true);
                     currentLogs.put(tableBucket, logTablet);
 
                     LOG.info(
@@ -298,7 +329,11 @@ public final class LogManager extends TabletManagerBase {
     }
 
     private LogTablet loadLog(
-            File tabletDir, Map<TableBucket, Long> recoveryPoints, Configuration conf, Clock clock)
+            File tabletDir,
+            boolean isCleanShutdown,
+            Map<TableBucket, Long> recoveryPoints,
+            Configuration conf,
+            Clock clock)
             throws Exception {
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         TableBucket tableBucket = pathAndBucket.f1;
@@ -317,7 +352,8 @@ public final class LogManager extends TabletManagerBase {
                         tableInfo.getTableConfig().getLogFormat(),
                         tableInfo.getTableConfig().getTieredLogLocalSegments(),
                         tableInfo.hasPrimaryKey(),
-                        clock);
+                        clock,
+                        isCleanShutdown);
 
         if (currentLogs.containsKey(tableBucket)) {
             throw new IllegalStateException(
@@ -372,7 +408,8 @@ public final class LogManager extends TabletManagerBase {
     public void shutdown() {
         LOG.info("Shutting down LogManager.");
 
-        ExecutorService pool = createThreadPool("log-tablet-closing-" + dataDir.getAbsolutePath());
+        String dataDirAbsolutePath = dataDir.getAbsolutePath();
+        ExecutorService pool = createThreadPool("log-tablet-closing-" + dataDirAbsolutePath);
 
         List<LogTablet> logs = new ArrayList<>(currentLogs.values());
         List<Future<?>> jobsForTabletDir = new ArrayList<>();
@@ -405,7 +442,16 @@ public final class LogManager extends TabletManagerBase {
             // update the last flush point.
             checkpointRecoveryOffsets();
 
-            // TODO add clean shutdown logic.
+            // mark that the shutdown was clean by creating marker file for log dirs that all logs
+            // have been recovered at startup time.
+            if (loadLogsCompletedFlag) {
+                LOG.debug("Writing clean shutdown marker.");
+                try {
+                    Files.createFile(new File(dataDir, CLEAN_SHUTDOWN_FILE).toPath());
+                } catch (IOException e) {
+                    LOG.warn("Failed to write clean shutdown marker.", e);
+                }
+            }
         } finally {
             pool.shutdown();
         }

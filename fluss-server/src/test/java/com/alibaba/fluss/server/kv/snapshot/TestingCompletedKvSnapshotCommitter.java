@@ -21,6 +21,7 @@ import com.alibaba.fluss.utils.MapUtils;
 
 import java.time.Duration;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.LinkedBlockingDeque;
@@ -35,6 +36,8 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
 
     protected final Map<TableBucket, Deque<CompletedSnapshot>> snapshots =
             MapUtils.newConcurrentHashMap();
+    protected final Map<TableBucket, Map<Long, Integer>> bucketSnapshotLeaderEpoch =
+            new HashMap<>();
 
     @Override
     public void commitKvSnapshot(
@@ -42,6 +45,9 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
         snapshots
                 .computeIfAbsent(snapshot.getTableBucket(), k -> new LinkedBlockingDeque<>())
                 .add(snapshot);
+        bucketSnapshotLeaderEpoch
+                .computeIfAbsent(snapshot.getTableBucket(), k -> new HashMap<>())
+                .put(snapshot.getSnapshotID(), bucketLeaderEpoch);
     }
 
     public CompletedSnapshot waitUtilSnapshotComplete(
@@ -65,5 +71,17 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
             return bucketSnapshots.peekLast();
         }
         return null;
+    }
+
+    public int getSnapshotLeaderEpoch(TableBucket tableBucket, long snapshotId) {
+        Map<Long, Integer> bucketSnapshotLeaderEpochMap =
+                bucketSnapshotLeaderEpoch.get(tableBucket);
+        if (bucketSnapshotLeaderEpochMap != null) {
+            Integer leaderEpoch = bucketSnapshotLeaderEpochMap.get(snapshotId);
+            if (leaderEpoch != null) {
+                return leaderEpoch;
+            }
+        }
+        return -1;
     }
 }

@@ -111,6 +111,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -165,7 +166,6 @@ public final class Replica {
     /** The manger to manger the isr expand and shrink. */
     private final AdjustIsrManager adjustIsrManager;
 
-    private final List<String> partitionKeys;
     private final Schema schema;
     private final TableConfig tableConfig;
     // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
@@ -234,7 +234,6 @@ public final class Replica {
         this.tableConfig = tableInfo.getTableConfig();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
-        this.partitionKeys = tableInfo.getPartitionKeys();
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
@@ -368,8 +367,8 @@ public final class Replica {
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
-                                onBecomeNewLeader();
                                 leaderEpoch = requestLeaderEpoch;
+                                onBecomeNewLeader();
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 LOG.info(
                                         "TabletServer {} becomes leader for bucket {}",
@@ -507,6 +506,8 @@ public final class Replica {
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader() {
+        updateLeaderEndOffsetSnapshot();
+
         if (isKvTable()) {
             // if it's become new leader, we must
             // first destroy the old kv tablet
@@ -522,6 +523,11 @@ public final class Replica {
             // it should be from leader to follower, we need to destroy the kv tablet
             dropKv();
         }
+    }
+
+    @VisibleForTesting
+    public void updateLeaderEndOffsetSnapshot() {
+        logTablet.updateLeaderEndOffsetSnapshot();
     }
 
     private void createKv() {
@@ -793,6 +799,10 @@ public final class Replica {
         }
     }
 
+    public long getLeaderEndOffsetSnapshot() {
+        return logTablet.getLeaderEndOffsetSnapshot();
+    }
+
     public LogAppendInfo appendRecordsToLeader(MemoryLogRecords memoryLogRecords, int requiredAcks)
             throws Exception {
         return inReadLock(
@@ -808,15 +818,16 @@ public final class Replica {
                     validateInSyncReplicaSize(requiredAcks);
 
                     // TODO WRITE a leader epoch.
-                    LogAppendInfo appendInfo = logTablet.appendAsLeader(memoryLogRecords);
-
-                    // we may need to increment high watermark if isr could be down to 1 or the
-                    // replica count is 1.
-                    boolean hwIncreased = maybeIncrementLeaderHW(logTablet, clock.milliseconds());
-
-                    if (hwIncreased) {
-                        tryCompleteDelayedOperations();
+                    LogAppendInfo appendInfo;
+                    try {
+                        appendInfo = logTablet.appendAsLeader(memoryLogRecords);
+                    } catch (IOException e) {
+                        LOG.error("Error while appending records to {}", tableBucket, e);
+                        fatalErrorHandler.onFatalError(e);
+                        throw new LogStorageException(
+                                "Error while appending records to " + tableBucket, e);
                     }
+                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
 
                     return appendInfo;
                 });
@@ -844,7 +855,15 @@ public final class Replica {
                     KvTablet kv = this.kvTablet;
                     checkNotNull(
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
-                    LogAppendInfo logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
+                    LogAppendInfo logAppendInfo;
+                    try {
+                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
+                    } catch (IOException e) {
+                        LOG.error("Error while putting records to {}", tableBucket, e);
+                        fatalErrorHandler.onFatalError(e);
+                        throw new KvStorageException(
+                                "Error while putting records to " + tableBucket, e);
+                    }
                     // we may need to increment high watermark.
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
                     return logAppendInfo;
@@ -1220,6 +1239,8 @@ public final class Replica {
                         }
                     } else if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
                         return getLatestOffset(listOffsetsParam.getFollowerServerId());
+                    } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
+                        return logTablet.getLeaderEndOffsetSnapshot();
                     } else {
                         throw new IllegalArgumentException(
                                 "Invalid list offset type: " + offsetType);
@@ -1441,7 +1462,8 @@ public final class Replica {
         return updatedState;
     }
 
-    private IsrState.PendingShrinkIsrState prepareIsrShrink(
+    @VisibleForTesting
+    IsrState.PendingShrinkIsrState prepareIsrShrink(
             IsrState.CommittedIsrState currentState,
             List<Integer> isrToSend,
             List<Integer> outOfSyncFollowerReplicas) {
@@ -1461,52 +1483,65 @@ public final class Replica {
         return updatedState;
     }
 
+    @VisibleForTesting
+    CompletableFuture<LeaderAndIsr> submitAdjustIsr(IsrState.PendingIsrState proposedIsrState) {
+        return submitAdjustIsr(proposedIsrState, new CompletableFuture<>());
+    }
+
     private CompletableFuture<LeaderAndIsr> submitAdjustIsr(
-            IsrState.PendingIsrState proposedIsrState) {
+            IsrState.PendingIsrState proposedIsrState, CompletableFuture<LeaderAndIsr> result) {
         LOG.debug("Submitting ISR state change {}.", proposedIsrState);
-        CompletableFuture<LeaderAndIsr> future =
-                adjustIsrManager.submit(tableBucket, proposedIsrState.sentLeaderAndIsr());
+        adjustIsrManager
+                .submit(tableBucket, proposedIsrState.sentLeaderAndIsr())
+                .whenComplete(
+                        (leaderAndIsr, exception) -> {
+                            AtomicBoolean hwIncremented = new AtomicBoolean(false);
+                            AtomicBoolean shouldRetry = new AtomicBoolean(false);
 
-        return future.whenComplete(
-                (leaderAndIsr, exception) -> {
-                    AtomicBoolean hwIncremented = new AtomicBoolean(false);
-                    AtomicBoolean shouldRetry = new AtomicBoolean(false);
-
-                    inWriteLock(
-                            leaderIsrUpdateLock,
-                            () -> {
-                                if (isrState != proposedIsrState) {
-                                    // This means replicaState was updated through leader election
-                                    // or some other mechanism before we got the AdjustIsr response.
-                                    // We don't know what happened on the coordinator server
-                                    // exactly, but we do know this response is out of date, so we
-                                    // ignore it.
-                                    LOG.debug(
-                                            "Ignoring failed ISR update to {} since we have already updated state to {}",
-                                            proposedIsrState,
-                                            isrState);
-                                } else if (leaderAndIsr != null) {
-                                    hwIncremented.set(
-                                            handleAdjustIsrUpdate(proposedIsrState, leaderAndIsr));
-                                } else {
-                                    shouldRetry.set(
-                                            handleAdjustIsrError(
+                            inWriteLock(
+                                    leaderIsrUpdateLock,
+                                    () -> {
+                                        if (!Objects.equals(isrState, proposedIsrState)) {
+                                            // This means replicaState was updated through leader
+                                            // election or some other mechanism before we got the
+                                            // AdjustIsr response.
+                                            // We don't know what happened on the coordinator server
+                                            // exactly, but we do know this response is out of date,
+                                            // so we ignore it.
+                                            LOG.debug(
+                                                    "Ignoring failed ISR update to {} since we have already updated state to {}",
                                                     proposedIsrState,
-                                                    Errors.forException(exception)));
+                                                    isrState);
+                                        } else if (leaderAndIsr != null) {
+                                            hwIncremented.set(
+                                                    handleAdjustIsrUpdate(
+                                                            proposedIsrState, leaderAndIsr));
+                                        } else {
+                                            shouldRetry.set(
+                                                    handleAdjustIsrError(
+                                                            proposedIsrState,
+                                                            Errors.forException(exception)));
+                                        }
+                                    });
+
+                            if (hwIncremented.get()) {
+                                tryCompleteDelayedOperations();
+                            }
+
+                            // Send the AdjustIsr request outside the leaderIsrUpdateLock since the
+                            // completion logic may increment the high watermark (and consequently
+                            // complete delayed operations).
+                            if (shouldRetry.get()) {
+                                submitAdjustIsr(proposedIsrState, result);
+                            } else {
+                                if (exception != null) {
+                                    result.completeExceptionally(exception);
+                                } else {
+                                    result.complete(leaderAndIsr);
                                 }
-                            });
-
-                    if (hwIncremented.get()) {
-                        tryCompleteDelayedOperations();
-                    }
-
-                    // Send the AdjustIsr request outside the leaderIsrUpdateLock since the
-                    // completion logic may increment the high watermark (and consequently complete
-                    // delayed operations).
-                    if (shouldRetry.get()) {
-                        submitAdjustIsr(proposedIsrState);
-                    }
-                });
+                            }
+                        });
+        return result;
     }
 
     /**
@@ -1592,6 +1627,12 @@ public final class Replica {
                 LOG.debug(
                         "Failed to adjust isr to {} because the request is invalid. Replica state may be out of sync, "
                                 + "awaiting new the latest metadata.",
+                        proposedIsrState);
+                return false;
+            case FENCED_LEADER_EPOCH_EXCEPTION:
+                LOG.debug(
+                        "Failed to adjust isr to {} because the leader epoch is fenced which indicate this replica "
+                                + "maybe no long leader. Replica state may be out of sync, awaiting new the latest metadata.",
                         proposedIsrState);
                 return false;
             default:

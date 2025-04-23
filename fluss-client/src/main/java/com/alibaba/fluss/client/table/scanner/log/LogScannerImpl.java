@@ -141,7 +141,9 @@ public class LogScannerImpl implements LogScanner {
             do {
                 Map<TableBucket, List<ScanRecord>> fetchRecords = pollForFetches();
                 if (fetchRecords.isEmpty()) {
-                    if (logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
+                    if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
+                        // logFetcher waits for the timeout and no data in buffer,
+                        // so we return empty
                         return new ScanRecords(fetchRecords);
                     }
                 } else {

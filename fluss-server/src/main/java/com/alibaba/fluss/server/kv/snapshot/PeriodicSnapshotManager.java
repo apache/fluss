@@ -236,11 +236,11 @@ public class PeriodicSnapshotManager implements Closeable {
                                             "TableBucket {} snapshot finished successfully, cost {} ms.",
                                             tableBucket,
                                             System.currentTimeMillis() - triggerTime);
-                                } catch (Exception e) {
+                                } catch (Throwable t) {
                                     LOG.warn(
                                             "Fail to handle snapshot result during snapshot of TableBucket {}",
                                             tableBucket,
-                                            e);
+                                            t);
                                 }
                                 scheduleNextSnapshot();
                             } else {
@@ -339,7 +339,7 @@ public class PeriodicSnapshotManager implements Closeable {
                 int bucketLeaderEpoch,
                 SnapshotLocation snapshotLocation,
                 SnapshotResult snapshotResult)
-                throws Exception;
+                throws Throwable;
 
         /** Called when the snapshot is fail. */
         void handleSnapshotFailure(

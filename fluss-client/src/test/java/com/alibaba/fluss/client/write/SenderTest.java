@@ -18,6 +18,8 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.client.metadata.TestingMetadataUpdater;
 import com.alibaba.fluss.client.metrics.TestingWriterMetricGroup;
+import com.alibaba.fluss.cluster.Cluster;
+import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -38,18 +40,24 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.getProduceLogData;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeProduceLogResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** ITCase for {@link Sender}. */
@@ -252,6 +260,79 @@ final class SenderTest {
     }
 
     @Test
+    void testIdempotenceWithInflightBatchesExceedMaxInflightBatch() throws Exception {
+        // When more than 5 batches (MAX_INFLIGHT_REQUEST_PER_BUCKET) of data are incorrectly
+        // returned with retriable error, we can still continue to send requests, but only for the
+        // one with the smallest batchSequence (first batchSequence) among the failed requests.
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender = setupWithIdempotenceState(idempotenceManager);
+        sender.runOnce();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
+
+        // 1. send five batches first to full MAX_INFLIGHT_REQUEST_PER_BUCKET.
+        for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
+            CompletableFuture<Exception> future = new CompletableFuture<>();
+            appendToAccumulator(tb1, row(1, "a"), future::complete);
+            assertThat(idempotenceManager.canSendMoreRequests(tb1)).isTrue();
+            sender.runOnce(); // runOnce to send request.
+        }
+        assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(5);
+        assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
+
+        // 2. try to append more data into accumulator, it will not be drained from accumulator.
+        for (int i = 0; i < 1000; i++) {
+            CompletableFuture<Exception> future = new CompletableFuture<>();
+            appendToAccumulator(tb1, row(1, "a"), future::complete);
+        }
+        // No batches can be drained from accumulator as the inflight request size is max in
+        // IdempotenceManager.
+        Set<ServerNode> readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
+        assertThat(readyNodes.isEmpty()).isFalse();
+        Map<Integer, List<WriteBatch>> drained =
+                accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
+        assertThat(drained.isEmpty()).isTrue();
+
+        // try to send, no request will send.
+        assertThat(pendingRequestSize(tb1)).isEqualTo(5);
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isEqualTo(5);
+
+        // 3. try to finish already send requests with retriable error.
+        for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
+            finishIdempotentProduceLogRequest(
+                    i, tb1, 0, createProduceLogResponse(tb1, Errors.STORAGE_EXCEPTION));
+        }
+        assertThat(pendingRequestSize(tb1)).isEqualTo(0);
+
+        // 4. try to re-send many iterators.
+        for (int i = 0; i < 20; i++) {
+            // add more data into accumulator to make sure accumulator.ready() not return
+            // empty.
+            for (int j = 0; j < 50; j++) {
+                CompletableFuture<Exception> future = new CompletableFuture<>();
+                appendToAccumulator(tb1, row(1, "a"), future::complete);
+            }
+
+            // already have five batches in idempotenceManager inflight batches.
+            assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
+            readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
+            assertThat(readyNodes.isEmpty()).isFalse();
+            drained =
+                    accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
+            if (i == 0) {
+                // for first batch (retried first batch), we can send.
+                assertThat(drained.isEmpty()).isFalse();
+                List<WriteBatch> writeBatches = new ArrayList<>(drained.values()).get(0);
+                assertThat(writeBatches.size()).isEqualTo(1);
+                assertThat(writeBatches.get(0).batchSequence()).isEqualTo(0);
+            } else {
+                // for other batches, we will wait the result of the first batch and cannot be send.
+                assertThat(drained.isEmpty()).isTrue();
+            }
+        }
+    }
+
+    @Test
     void testIdempotenceWithMultipleInflightBatchesRetriedInOrder() throws Exception {
         // Send multiple in flight requests, retry them all one at a time, in the correct order.
         IdempotenceManager idempotenceManager = createIdempotenceManager(true);
@@ -336,6 +417,52 @@ final class SenderTest {
         assertThat(future4.isDone()).isTrue();
         assertThat(future4.get()).isNull();
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+    }
+
+    @Test
+    void testRetryAfterResettingInFlightBatchSequence() throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
+
+        // Send the first ProduceLogRequest.
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        sender1.runOnce();
+        // Send the second ProduceLogRequest.
+        CompletableFuture<Exception> future2 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        sender1.runOnce();
+
+        // response 0 with retrievable error which will reEnqueue the batch.
+        finishIdempotentProduceLogRequest(
+                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        // response 1 with UnknownWriterIdException which will reset writer
+        finishIdempotentProduceLogRequest(
+                1, tb1, 0, createProduceLogResponse(tb1, Errors.UNKNOWN_WRITER_ID_EXCEPTION));
+        retry(
+                Duration.ofMinutes(1),
+                () -> { // after response 1 is received, the writer will be reset
+                    assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
+                    assertThat(accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1)).hasSize(1);
+                    assertThat(
+                                    accumulator
+                                            .getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1)
+                                            .peek()
+                                            .batchSequence())
+                            .isEqualTo(0);
+                });
+        assertThat(future1.isDone()).isFalse();
+        assertThat(future2.isDone()).isTrue();
+
+        // resend the first ProduceLogRequest.
+        sender1.runOnce();
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        sender1.runOnce();
+        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+        assertThat(future1.isDone()).isTrue();
     }
 
     @Test
@@ -518,6 +645,53 @@ final class SenderTest {
         assertThat(future1.get()).isNull();
     }
 
+    @Test
+    void testSendWhenDestinationIsNullInMetadata() throws Exception {
+        long offset = 0;
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), future::complete);
+
+        int leaderNode = metadataUpdater.leaderFor(tb1);
+        // now, remove leader node ,so that send destination
+        // server node is null
+        Cluster oldCluster = metadataUpdater.getCluster();
+        Map<Integer, ServerNode> aliveTabletServersById =
+                new HashMap<>(oldCluster.getAliveTabletServers());
+        aliveTabletServersById.remove(leaderNode);
+        Cluster newCluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        oldCluster.getCoordinatorServer(),
+                        oldCluster.getBucketLocationsByPath(),
+                        oldCluster.getTableIdByPath(),
+                        oldCluster.getPartitionIdByPath(),
+                        oldCluster.getTableInfoByPath());
+
+        metadataUpdater.updateCluster(newCluster);
+
+        sender.runOnce();
+        // should be no inflight batches
+        assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(0);
+
+        // the bucket location should be empty for the bucket since we'll invalid it
+        // when send to a null destination
+        assertThat(metadataUpdater.getCluster().getBucketLocation(tb1)).isEmpty();
+
+        // update with old cluster to mock a metadata update
+        metadataUpdater.updateCluster(oldCluster);
+
+        // send again, should send successfully
+        sender.runOnce();
+        assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(1);
+
+        finishProduceLogRequest(tb1, 0, createProduceLogResponse(tb1, offset, 1));
+
+        // send again, should send nothing since no batch in queue
+        sender.runOnce();
+        assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(0);
+        assertThat(future.get()).isNull();
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         return new TestingMetadataUpdater(
                 Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
@@ -545,6 +719,13 @@ final class SenderTest {
                 (TestTabletServerGateway)
                         metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
         gateway.response(index, response);
+    }
+
+    private int pendingRequestSize(TableBucket tb) {
+        TestTabletServerGateway gateway =
+                (TestTabletServerGateway)
+                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+        return gateway.pendingRequestSize();
     }
 
     private void finishIdempotentProduceLogRequest(

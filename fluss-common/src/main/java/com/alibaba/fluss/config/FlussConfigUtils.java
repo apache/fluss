@@ -28,6 +28,8 @@ public class FlussConfigUtils {
 
     public static final Map<String, ConfigOption<?>> TABLE_OPTIONS;
     public static final Map<String, ConfigOption<?>> CLIENT_OPTIONS;
+    public static final String CLIENT_PREFIX = "client.";
+    public static final String CLIENT_SECURITY_PREFIX = "client.security.";
 
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");

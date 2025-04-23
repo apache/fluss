@@ -16,12 +16,14 @@
 
 package com.alibaba.fluss.flink.sink.writer;
 
+import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 
+import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
@@ -41,8 +43,15 @@ public class UpsertSinkWriter extends FlinkSinkWriter {
             Configuration flussConfig,
             RowType tableRowType,
             @Nullable int[] targetColumnIndexes,
-            boolean ignoreDelete) {
-        super(tablePath, flussConfig, tableRowType, targetColumnIndexes, ignoreDelete);
+            boolean ignoreDelete,
+            MailboxExecutor mailboxExecutor) {
+        super(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                targetColumnIndexes,
+                ignoreDelete,
+                mailboxExecutor);
     }
 
     @Override
@@ -71,5 +80,10 @@ public class UpsertSinkWriter extends FlinkSinkWriter {
     public void flush(boolean endOfInput) throws IOException, InterruptedException {
         upsertWriter.flush();
         checkAsyncException();
+    }
+
+    @Override
+    TableWriter getTableWriter() {
+        return upsertWriter;
     }
 }

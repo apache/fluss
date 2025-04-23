@@ -17,6 +17,10 @@
 package com.alibaba.fluss.server.coordinator.event;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
+import com.alibaba.fluss.metrics.Histogram;
+import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -40,14 +44,32 @@ public final class CoordinatorEventManager implements EventManager {
     private static final String COORDINATOR_EVENT_THREAD_NAME = "coordinator-event-thread";
 
     private final EventProcessor eventProcessor;
+    private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     private final LinkedBlockingQueue<CoordinatorEvent> queue = new LinkedBlockingQueue<>();
     private final CoordinatorEventThread thread =
             new CoordinatorEventThread(COORDINATOR_EVENT_THREAD_NAME);
     private final Lock putLock = new ReentrantLock();
 
-    public CoordinatorEventManager(EventProcessor eventProcessor) {
+    // metrics
+    private Histogram eventProcessTime;
+
+    private static final int WINDOW_SIZE = 1024;
+
+    public CoordinatorEventManager(
+            EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
         this.eventProcessor = eventProcessor;
+        this.coordinatorMetricGroup = coordinatorMetricGroup;
+        registerMetrics();
+    }
+
+    private void registerMetrics() {
+        coordinatorMetricGroup.gauge(MetricNames.EVENT_QUEUE_SIZE, queue::size);
+
+        eventProcessTime =
+                coordinatorMetricGroup.histogram(
+                        MetricNames.EVENT_PROCESS_TIME_MS,
+                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
     }
 
     public void start() {
@@ -94,12 +116,18 @@ public final class CoordinatorEventManager implements EventManager {
         @Override
         public void doWork() throws Exception {
             CoordinatorEvent event = queue.take();
+
+            long eventStartTimeMs = System.currentTimeMillis();
+
             try {
                 if (!(event instanceof ShutdownEventThreadEvent)) {
                     eventProcessor.process(event);
                 }
             } catch (Throwable e) {
                 log.error("Uncaught error processing event {}.", event, e);
+            } finally {
+                long eventFinishTimeMs = System.currentTimeMillis();
+                eventProcessTime.update(eventFinishTimeMs - eventStartTimeMs);
             }
         }
     }

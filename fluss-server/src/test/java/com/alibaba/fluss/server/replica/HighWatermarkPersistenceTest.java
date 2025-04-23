@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.replica;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -169,7 +170,7 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         assertThat(highWatermarkFor(tb2)).isEqualTo(10L);
 
         // 1. replicaManager shutdown after tb1/tb2 become leader.
-        replicaManager = buildReplicaManager();
+        replicaManager = buildReplicaManager(new TestCoordinatorGateway());
         replicaManager.startup();
         assertThat(highWatermarkFor(tb1)).isEqualTo(10L);
         assertThat(highWatermarkFor(tb2)).isEqualTo(10L);
@@ -182,7 +183,7 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         assertThat(highWatermarkFor(tb2)).isEqualTo(10L);
 
         // 2. replicaManager shutdown before tb1/tb2 become leader.
-        replicaManager = buildReplicaManager();
+        replicaManager = buildReplicaManager(new TestCoordinatorGateway());
         replicaManager.startup();
         replicaManager.shutdown();
         assertThat(highWatermarkFor(tb1)).isEqualTo(20L);

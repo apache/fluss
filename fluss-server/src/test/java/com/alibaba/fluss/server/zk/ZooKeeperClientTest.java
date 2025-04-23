@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.zk;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -81,7 +82,9 @@ class ZooKeeperClientTest {
         // try to get leader address, should return empty since node leader address stored in
         // zk
         assertThat(zookeeperClient.getCoordinatorAddress()).isEmpty();
-        CoordinatorAddress coordinatorAddress = new CoordinatorAddress("2", "localhost1", 10012);
+        CoordinatorAddress coordinatorAddress =
+                new CoordinatorAddress(
+                        "2", Endpoint.fromListenersString("CLIENT://localhost1:10012"));
         // register leader address
         zookeeperClient.registerCoordinatorLeader(coordinatorAddress);
         // check get leader address
@@ -96,9 +99,13 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getSortedTabletServerList()).isEmpty();
         // register two table servers
         TabletServerRegistration registration1 =
-                new TabletServerRegistration("host1", 3456, System.currentTimeMillis());
+                new TabletServerRegistration(
+                        Endpoint.fromListenersString("CLIENT://host1:3456"),
+                        System.currentTimeMillis());
         TabletServerRegistration registration2 =
-                new TabletServerRegistration("host2", 3454, System.currentTimeMillis());
+                new TabletServerRegistration(
+                        Endpoint.fromListenersString("CLIENT://host2:3454"),
+                        System.currentTimeMillis());
         zookeeperClient.registerTabletServer(2, registration2);
         zookeeperClient.registerTabletServer(1, registration1);
         // now get the tablet servers

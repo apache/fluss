@@ -122,9 +122,14 @@ public class TestingDatabaseSyncSink implements Sink<MultiplexCdcRecord> {
                                 flussConfig,
                                 FlinkConversions.toFlinkRowType(tableInfo.getRowType()),
                                 tableInfo.getSchema().getPrimaryKeyIndexes(),
+                                tableInfo.getPartitionKeys(),
                                 true,
                                 null,
-                                false);
+                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null),
+                                false,
+                                tableInfo.getNumBuckets(),
+                                tableInfo.getBucketKeys(),
+                                true);
 
                 Sink<RowData> sink =
                         ((SinkV2Provider)

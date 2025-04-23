@@ -23,22 +23,21 @@ import com.alibaba.fluss.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
 
 import org.apache.flink.api.connector.source.SourceOutput;
-import org.apache.flink.table.data.RowData;
 
 import java.util.function.BiConsumer;
 
 /** The emitter to emit record from lake split. */
-public class LakeRecordRecordEmitter {
+public class LakeRecordRecordEmitter<OUT> {
 
-    private final BiConsumer<ScanRecord, SourceOutput<RowData>> sourceOutputFunc;
+    private final BiConsumer<ScanRecord, SourceOutput<OUT>> sourceOutputFunc;
 
-    public LakeRecordRecordEmitter(BiConsumer<ScanRecord, SourceOutput<RowData>> sourceOutputFunc) {
+    public LakeRecordRecordEmitter(BiConsumer<ScanRecord, SourceOutput<OUT>> sourceOutputFunc) {
         this.sourceOutputFunc = sourceOutputFunc;
     }
 
     public void emitRecord(
             SourceSplitState splitState,
-            SourceOutput<RowData> sourceOutput,
+            SourceOutput<OUT> sourceOutput,
             RecordAndPos recordAndPos) {
         if (splitState instanceof PaimonSnapshotSplitState) {
             ((PaimonSnapshotSplitState) splitState)

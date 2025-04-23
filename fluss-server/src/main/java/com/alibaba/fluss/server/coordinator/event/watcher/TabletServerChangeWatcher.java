@@ -16,12 +16,12 @@
 
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.server.coordinator.event.DeadTabletServerEvent;
 import com.alibaba.fluss.server.coordinator.event.EventManager;
 import com.alibaba.fluss.server.coordinator.event.NewTabletServerEvent;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
 import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
@@ -85,10 +85,9 @@ public class TabletServerChangeWatcher {
                             LOG.info("Received CHILD_ADDED event for server {}.", serverId);
                             eventManager.put(
                                     new NewTabletServerEvent(
-                                            new ServerNode(
+                                            new ServerInfo(
                                                     serverId,
-                                                    registration.getHost(),
-                                                    registration.getPort(),
+                                                    registration.getEndpoints(),
                                                     ServerType.TABLET_SERVER)));
                         }
                         break;

@@ -288,7 +288,7 @@ public class SnapshotLocation {
 
                         outStream.close();
 
-                        return new KvFileHandle(kvFilePath, size);
+                        return new KvFileHandle(kvFilePath.toString(), size);
                     } catch (Exception exception) {
                         try {
                             if (kvFilePath != null) {

@@ -22,6 +22,7 @@ import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.InvalidMetadataException;
+import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
@@ -329,25 +330,34 @@ public class Sender implements Runnable {
                             .add(batch);
                 });
 
-        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
-        writeBatchByTable.forEach(
-                (tableId, writeBatches) -> {
-                    TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
-                    if (tableInfo.hasPrimaryKey()) {
-                        sendPutKvRequestAndHandleResponse(
-                                gateway,
-                                makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                tableId,
-                                recordsByBucket);
-                    } else {
-                        sendProduceLogRequestAndHandleResponse(
-                                gateway,
-                                makeProduceLogRequest(
-                                        tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                tableId,
-                                recordsByBucket);
-                    }
-                });
+        ServerNode destinationNode = metadataUpdater.getTabletServer(destination);
+        if (destinationNode == null) {
+            handleWriteRequestException(
+                    new LeaderNotAvailableException(
+                            "Server " + destination + " is not found in metadata cache."),
+                    recordsByBucket);
+        } else {
+            TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+            writeBatchByTable.forEach(
+                    (tableId, writeBatches) -> {
+                        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
+                        if (tableInfo.hasPrimaryKey()) {
+                            sendPutKvRequestAndHandleResponse(
+                                    gateway,
+                                    makePutKvRequest(
+                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
+                                    tableId,
+                                    recordsByBucket);
+                        } else {
+                            sendProduceLogRequestAndHandleResponse(
+                                    gateway,
+                                    makeProduceLogRequest(
+                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
+                                    tableId,
+                                    recordsByBucket);
+                        }
+                    });
+        }
     }
 
     private void sendProduceLogRequestAndHandleResponse(

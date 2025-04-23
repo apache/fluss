@@ -64,7 +64,8 @@ public enum ApiKeys {
     PREFIX_LOOKUP(1034, 0, 0, PUBLIC),
     GET_DATABASE_INFO(1035, 0, 0, PUBLIC),
     CREATE_PARTITION(1036, 0, 0, PUBLIC),
-    DROP_PARTITION(1037, 0, 0, PUBLIC);
+    DROP_PARTITION(1037, 0, 0, PUBLIC),
+    AUTHENTICATE(1038, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

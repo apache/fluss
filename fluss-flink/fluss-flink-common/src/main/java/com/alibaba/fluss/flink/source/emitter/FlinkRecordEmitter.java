@@ -18,16 +18,14 @@ package com.alibaba.fluss.flink.source.emitter;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.flink.lakehouse.LakeRecordRecordEmitter;
+import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import com.alibaba.fluss.flink.source.reader.FlinkSourceReader;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
-import com.alibaba.fluss.flink.utils.FlussRowToFlinkRowConverter;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;
-import org.apache.flink.table.data.RowData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,21 +39,20 @@ import org.slf4j.LoggerFactory;
  *
  * <p>when the record is from log data, it'll update the offset
  */
-public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, SourceSplitState> {
+public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT, SourceSplitState> {
     private static final Logger LOG = LoggerFactory.getLogger(FlinkRecordEmitter.class);
 
-    private final FlussRowToFlinkRowConverter converter;
+    private final FlussDeserializationSchema<OUT> deserializationSchema;
+    private LakeRecordRecordEmitter<OUT> lakeRecordRecordEmitter;
 
-    private LakeRecordRecordEmitter lakeRecordRecordEmitter;
-
-    public FlinkRecordEmitter(RowType rowType) {
-        this.converter = new FlussRowToFlinkRowConverter(rowType);
+    public FlinkRecordEmitter(FlussDeserializationSchema<OUT> deserializationSchema) {
+        this.deserializationSchema = deserializationSchema;
     }
 
     @Override
     public void emitRecord(
             RecordAndPos recordAndPosition,
-            SourceOutput<RowData> sourceOutput,
+            SourceOutput<OUT> sourceOutput,
             SourceSplitState splitState) {
         if (splitState.isHybridSnapshotLogSplitState()) {
             // if it's hybrid split, we need to update the records number to skip(if in snapshot
@@ -73,13 +70,13 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
                 // update the records number to skip
                 hybridSnapshotLogSplitState.setRecordsToSkip(recordAndPosition.readRecordsCount());
             }
-            emitRecord(scanRecord, sourceOutput);
+            processAndEmitRecord(scanRecord, sourceOutput);
         } else if (splitState.isLogSplitState()) {
             splitState.asLogSplitState().setNextOffset(recordAndPosition.record().logOffset() + 1);
-            emitRecord(recordAndPosition.record(), sourceOutput);
+            processAndEmitRecord(recordAndPosition.record(), sourceOutput);
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {
-                lakeRecordRecordEmitter = new LakeRecordRecordEmitter(this::emitRecord);
+                lakeRecordRecordEmitter = new LakeRecordRecordEmitter<>(this::processAndEmitRecord);
             }
             lakeRecordRecordEmitter.emitRecord(splitState, sourceOutput, recordAndPosition);
         } else {
@@ -87,12 +84,23 @@ public class FlinkRecordEmitter implements RecordEmitter<RecordAndPos, RowData, 
         }
     }
 
-    private void emitRecord(ScanRecord scanRecord, SourceOutput<RowData> sourceOutput) {
-        long timestamp = scanRecord.timestamp();
-        if (timestamp > 0) {
-            sourceOutput.collect(converter.toFlinkRowData(scanRecord), timestamp);
-        } else {
-            sourceOutput.collect(converter.toFlinkRowData(scanRecord));
+    private void processAndEmitRecord(ScanRecord scanRecord, SourceOutput<OUT> sourceOutput) {
+        OUT record;
+        try {
+            record = deserializationSchema.deserialize(scanRecord);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to deserialize record: " + scanRecord + ". Cause: " + e.getMessage(),
+                    e);
+        }
+
+        if (record != null) {
+            long timestamp = scanRecord.timestamp();
+            if (timestamp > 0) {
+                sourceOutput.collect(record, timestamp);
+            } else {
+                sourceOutput.collect(record);
+            }
         }
     }
 }

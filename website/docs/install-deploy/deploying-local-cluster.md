@@ -1,4 +1,5 @@
 ---
+sidebar_label: "Deploying Local Cluster"
 sidebar_position: 2
 ---
 

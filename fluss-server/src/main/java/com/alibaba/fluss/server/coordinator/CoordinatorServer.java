@@ -17,6 +17,8 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
@@ -36,6 +38,8 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperUtils;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.ExecutorUtils;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -48,6 +52,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -109,6 +116,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private AutoPartitionManager autoPartitionManager;
 
+    @GuardedBy("lock")
+    private ExecutorService ioExecutor;
+
     public CoordinatorServer(Configuration conf) {
         super(conf);
         validateConfigs(conf);
@@ -126,7 +136,7 @@ public class CoordinatorServer extends ServerBase {
     protected void startServices() throws Exception {
         synchronized (lock) {
             LOG.info("Initializing Coordinator services.");
-
+            List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
             this.serverId = UUID.randomUUID().toString();
 
             // for metrics
@@ -135,7 +145,7 @@ public class CoordinatorServer extends ServerBase {
                     ServerMetricUtils.createCoordinatorGroup(
                             metricRegistry,
                             ServerMetricUtils.validateAndGetClusterId(conf),
-                            conf.getString(ConfigOptions.COORDINATOR_HOST),
+                            endpoints.get(0).getHost(),
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
@@ -155,8 +165,7 @@ public class CoordinatorServer extends ServerBase {
             this.rpcServer =
                     RpcServer.create(
                             conf,
-                            conf.getString(ConfigOptions.COORDINATOR_HOST),
-                            conf.getString(ConfigOptions.COORDINATOR_PORT),
+                            endpoints,
                             coordinatorService,
                             serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
@@ -174,6 +183,11 @@ public class CoordinatorServer extends ServerBase {
                     new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
+            int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
+
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
             // up.
@@ -186,7 +200,8 @@ public class CoordinatorServer extends ServerBase {
                             coordinatorChannelManager,
                             autoPartitionManager,
                             serverMetricGroup,
-                            conf);
+                            conf,
+                            ioExecutor);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
@@ -213,8 +228,10 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void registerCoordinatorLeader() throws Exception {
+        List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress(this.serverId, rpcServer.getHostname(), rpcServer.getPort());
+                new CoordinatorAddress(
+                        this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
         zkClient.registerCoordinatorLeader(coordinatorAddress);
     }
 
@@ -222,9 +239,16 @@ public class CoordinatorServer extends ServerBase {
         MetadataManager metadataManager = new MetadataManager(zkClient, conf);
         List<String> databases = metadataManager.listDatabases();
         if (databases.isEmpty()) {
-            metadataManager.createDatabase(
-                    DEFAULT_DATABASE, DatabaseDescriptor.builder().build(), true);
+            metadataManager.createDatabase(DEFAULT_DATABASE, DatabaseDescriptor.EMPTY, true);
             LOG.info("Created default database '{}' because no database exists.", DEFAULT_DATABASE);
+        }
+        // create Kafka default database if Kafka is enabled.
+        if (conf.get(ConfigOptions.KAFKA_ENABLED)) {
+            String kafkaDB = conf.get(ConfigOptions.KAFKA_DATABASE);
+            if (!databases.contains(kafkaDB)) {
+                metadataManager.createDatabase(kafkaDB, DatabaseDescriptor.EMPTY, true);
+                LOG.info("Created default database '{}' for Kafka protocol.", kafkaDB);
+            }
         }
     }
 
@@ -260,6 +284,15 @@ public class CoordinatorServer extends ServerBase {
             try {
                 if (autoPartitionManager != null) {
                     autoPartitionManager.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (ioExecutor != null) {
+                    // shutdown io executor
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
@@ -340,7 +373,7 @@ public class CoordinatorServer extends ServerBase {
     }
 
     @VisibleForTesting
-    RpcServer getRpcServer() {
+    public RpcServer getRpcServer() {
         return rpcServer;
     }
 

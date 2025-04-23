@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.kv.snapshot;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.exception.FlussException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -198,7 +197,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             int coordinatorEpoch,
             int bucketLeaderEpoch,
             SnapshotLocation snapshotLocation,
-            SnapshotResult snapshotResult) {
+            SnapshotResult snapshotResult)
+            throws Throwable {
         CompletedSnapshot completedSnapshot =
                 new CompletedSnapshot(
                         tableBucket,
@@ -219,14 +219,9 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             snapshotsCleaner.cleanSnapshot(completedSnapshot, () -> {}, ioExecutor);
-            handleSnapshotFailure(
-                    snapshotId,
-                    snapshotLocation,
-                    new FlussException(
-                            String.format(
-                                    "Fail to add the snapshot %s to completed snapshot store.",
-                                    completedSnapshot),
-                            t));
+            handleSnapshotFailure(snapshotId, snapshotLocation, t);
+            // throw the exception to make PeriodicSnapshotManager can catch the exception
+            throw t;
         }
     }
 

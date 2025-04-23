@@ -23,12 +23,15 @@ import com.alibaba.fluss.exception.NetworkException;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
+import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
+import com.alibaba.fluss.rpc.messages.AuthenticateResponse;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.metrics.ConnectionMetricGroup;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.MessageCodec;
+import com.alibaba.fluss.security.auth.ClientAuthenticator;
 import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
@@ -62,6 +65,7 @@ final class ServerConnection {
     private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
+    private final ClientAuthenticator authenticator;
 
     private final Object lock = new Object();
 
@@ -83,13 +87,18 @@ final class ServerConnection {
     @GuardedBy("lock")
     private ServerApiVersions serverApiVersions;
 
-    ServerConnection(Bootstrap bootstrap, ServerNode node, ClientMetricGroup clientMetricGroup) {
+    ServerConnection(
+            Bootstrap bootstrap,
+            ServerNode node,
+            ClientMetricGroup clientMetricGroup,
+            ClientAuthenticator authenticator) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
-        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         bootstrap
                 .connect(node.host(), node.port())
                 .addListener((ChannelFutureListener) this::establishConnection);
+        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.authenticator = authenticator;
     }
 
     public ServerNode getServerNode() {
@@ -123,7 +132,8 @@ final class ServerConnection {
                 // the connection has been closed/closing.
                 return closeFuture;
             }
-            state = ConnectionState.DISCONNECTED;
+
+            switchState(ConnectionState.DISCONNECTED);
 
             // when the remote server shutdowns, the exception may be
             // AnnotatedConnectException/ClosedChannelException/
@@ -245,7 +255,7 @@ final class ServerConnection {
                 channel.pipeline()
                         .addLast("handler", new NettyClientHandler(new ResponseCallback()));
                 // start checking api versions
-                state = ConnectionState.CHECKING_API_VERSIONS;
+                switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server
                 ApiVersionsRequest request =
                         new ApiVersionsRequest()
@@ -356,7 +366,70 @@ final class ServerConnection {
         synchronized (lock) {
             serverApiVersions =
                     new ServerApiVersions(((ApiVersionsResponse) response).getApiVersionsList());
-            state = ConnectionState.READY;
+            LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
+            // send initial token
+            sendAuthenticate(new byte[0]);
+        }
+    }
+
+    private void sendAuthenticate(byte[] challenge) {
+        try {
+            if (!authenticator.isCompleted()) {
+                byte[] token = authenticator.authenticate(challenge);
+                if (token != null) {
+                    switchState(ConnectionState.AUTHENTICATING);
+                    AuthenticateRequest request =
+                            new AuthenticateRequest()
+                                    .setToken(token)
+                                    .setProtocol(authenticator.protocol());
+                    doSend(ApiKeys.AUTHENTICATE, request, new CompletableFuture<>(), true)
+                            .whenComplete(this::handleAuthenticateResponse);
+                    return;
+                }
+            }
+
+            assert authenticator.isCompleted();
+            switchState(ConnectionState.READY);
+
+        } catch (Exception e) {
+            LOG.error(
+                    "Authentication failed when authenticating challenge: {}",
+                    new String(challenge),
+                    e);
+            close(
+                    new FlussRuntimeException(
+                            "Authentication failed when authenticating challenge", e));
+        }
+    }
+
+    private void handleAuthenticateResponse(ApiMessage response, Throwable cause) {
+        if (cause != null) {
+            close(cause);
+            return;
+        }
+        if (!(response instanceof AuthenticateResponse)) {
+            close(new IllegalStateException("Unexpected response type " + response.getClass()));
+            return;
+        }
+
+        synchronized (lock) {
+            AuthenticateResponse authenticateResponse = (AuthenticateResponse) response;
+            if (authenticateResponse.hasChallenge()) {
+                sendAuthenticate(((AuthenticateResponse) response).getChallenge());
+            } else if (authenticator.isCompleted()) {
+                switchState(ConnectionState.READY);
+            } else {
+                close(
+                        new IllegalStateException(
+                                "client authenticator is not completed while server generate no challenge."));
+            }
+        }
+    }
+
+    private void switchState(ConnectionState targetState) {
+        LOG.debug("switch state form {} to {}", state, targetState);
+        state = targetState;
+        if (targetState == ConnectionState.READY) {
             // process pending requests
             PendingRequest pending;
             while ((pending = pendingRequests.pollFirst()) != null) {
@@ -384,6 +457,7 @@ final class ServerConnection {
     private enum ConnectionState {
         CONNECTING,
         CHECKING_API_VERSIONS,
+        AUTHENTICATING,
         READY,
         DISCONNECTED;
 
@@ -392,7 +466,7 @@ final class ServerConnection {
         }
 
         public boolean isEstablished() {
-            return this == CHECKING_API_VERSIONS || this == READY;
+            return this == CHECKING_API_VERSIONS || this == AUTHENTICATING || this == READY;
         }
 
         public boolean isReady() {

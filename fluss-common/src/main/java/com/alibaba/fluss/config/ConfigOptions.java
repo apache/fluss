@@ -28,7 +28,9 @@ import com.alibaba.fluss.utils.ArrayUtils;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static com.alibaba.fluss.config.ConfigBuilder.key;
 import static com.alibaba.fluss.config.ConfigOptions.CompactionStyle.FIFO;
@@ -46,6 +48,7 @@ import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
  */
 @PublicEvolving
 public class ConfigOptions {
+    public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
     @Internal
     public static final String[] PARENT_FIRST_LOGGING_PATTERNS =
@@ -118,6 +121,14 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> MAX_PARTITION_NUM =
+            key("max.partition.num")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "Limits the maximum number of partitions that can be created for a partitioned table "
+                                    + "to avoid creating too many partitions.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------
@@ -127,7 +138,11 @@ public class ConfigOptions {
      *
      * <p>If the coordinator server is used as a bootstrap server (discover all the servers in the
      * cluster), the value of this config option should be a static hostname or address.
+     *
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#BIND_LISTENERS}
+     *     instead, which provides a more flexible configuration for multiple ports.
      */
+    @Deprecated
     public static final ConfigOption<String> COORDINATOR_HOST =
             key("coordinator.host")
                     .stringType()
@@ -137,7 +152,8 @@ public class ConfigOptions {
                                     + " for communication with the coordinator server."
                                     + " If the coordinator server is used as a bootstrap server"
                                     + " (discover all the servers in the cluster), the value of"
-                                    + " this config option should be a static hostname or address.");
+                                    + " this config option should be a static hostname or address."
+                                    + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
 
     /**
      * The config parameter defining the network port to connect to for communication with the
@@ -148,7 +164,11 @@ public class ConfigOptions {
      * should be a static port. Otherwise, the value can be set to "0" for a dynamic service name
      * resolution. The value accepts a list of ports (“50100,50101”), ranges (“50100-50200”) or a
      * combination of both.
+     *
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#BIND_LISTENERS}
+     *     instead, which provides a more flexible configuration for multiple ports.
      */
+    @Deprecated
     public static final ConfigOption<String> COORDINATOR_PORT =
             key("coordinator.port")
                     .stringType()
@@ -163,23 +183,76 @@ public class ConfigOptions {
                                     + " this config option should be a static port. Otherwise,"
                                     + " the value can be set to \"0\" for a dynamic service name"
                                     + " resolution. The value accepts a list of ports"
-                                    + " (“50100,50101”), ranges (“50100-50200”) or a combination"
-                                    + " of both.");
+                                    + " (“50100,50101”), ranges (“50100-50200”) or a combination of both."
+                                    + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
+
+    /**
+     * The network address and port the server binds to for accepting connections.
+     *
+     * <p>This specifies the interface and port where the server will listen for incoming requests.
+     * The format is {@code listener_name://host:port}, supporting multiple addresses separated by
+     * commas.
+     *
+     * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
+     */
+    public static final ConfigOption<String> BIND_LISTENERS =
+            key("bind.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The network address and port to which the server binds for accepting connections. "
+                                    + "This defines the interface and port where the server will listen for incoming requests. "
+                                    + "The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas. "
+                                    + "Use '0.0.0.0' for the 'host' to bind to all available interfaces which is dangerous on production and not suggested for production usage. "
+                                    + "The 'listener_name' serves as an identifier for the address in the configuration. For example, "
+                                    + "'internal.listener.name' specifies the address used for internal server communication. "
+                                    + "If multiple addresses are configured, ensure that the 'listener_name' values are unique.");
+
+    /**
+     * The externally advertised address and port for client connections.
+     *
+     * <p>This specifies the address other nodes/clients should use to connect to this server. It is
+     * required when the bind address ({@link #BIND_LISTENERS}) is not publicly reachable (e.g.,
+     * when using {@code localhost} in {@code bind.listeners}). <b>Must be configured in distributed
+     * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
+     * {@code bind.listeners} will be used as fallback.
+     */
+    public static final ConfigOption<String> ADVERTISED_LISTENERS =
+            key("advertised.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The externally advertised address and port for client connections. "
+                                    + "Required in distributed environments when the bind address is not publicly reachable. "
+                                    + "Format matches 'bind.listeners' ({listener_name}://{host}:{port}). "
+                                    + "Defaults to the value of 'bind.listeners' if not explicitly configured.");
+
+    public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
+            key("internal.listener.name")
+                    .stringType()
+                    .defaultValue(DEFAULT_LISTENER_NAME)
+                    .withDescription("The listener for server internal communication.");
 
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()
-                    .defaultValue(1)
+                    .defaultValue(10)
                     .withDescription(
                             "The size of the IO thread pool to run blocking operations for coordinator server. "
                                     + "This includes discard unnecessary snapshot files. "
                                     + "Increase this value if you experience slow unnecessary snapshot files clean. "
-                                    + "The default value is 1.");
+                                    + "The default value is 10.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
     // ------------------------------------------------------------------------
-    /** The external address of the network interface where the tablet server is exposed. */
+    /**
+     * The external address of the network interface where the tablet server is exposed.
+     *
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#BIND_LISTENERS}
+     *     instead, which provides a more flexible configuration for multiple ports.
+     */
+    @Deprecated
     public static final ConfigOption<String> TABLET_SERVER_HOST =
             key("tablet-server.host")
                     .stringType()
@@ -187,17 +260,34 @@ public class ConfigOptions {
                     .withDescription(
                             "The external address of the network interface where the TabletServer is exposed."
                                     + " Because different TabletServer need different values for this option, usually it is specified in an"
-                                    + " additional non-shared TabletServer-specific config file.");
+                                    + " additional non-shared TabletServer-specific config file."
+                                    + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
 
     /**
      * The default network port the tablet server expects incoming IPC connections. The {@code "0"}
      * means that the TabletServer searches for a free port.
+     *
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#BIND_LISTENERS}
+     *     instead, which provides a more flexible configuration for multiple ports.
      */
+    @Deprecated
     public static final ConfigOption<String> TABLET_SERVER_PORT =
             key("tablet-server.port")
                     .stringType()
                     .defaultValue("0")
-                    .withDescription("The external RPC port where the TabletServer is exposed.");
+                    .withDescription(
+                            "The external RPC port where the TabletServer is exposed."
+                                    + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
+
+    public static final ConfigOption<Map<String, String>> SERVER_SECURITY_PROTOCOL_MAP =
+            key("security.protocol.map")
+                    .mapType()
+                    .defaultValue(Collections.emptyMap())
+                    .withDescription(
+                            "A map defining the authentication protocol for each listener. "
+                                    + "The format is 'listenerName1:protocol1,listenerName2:protocol2', e.g., 'INTERNAL:PLAINTEXT,CLIENT:GSSAPI'. "
+                                    + "Each listener can be associated with a specific authentication protocol. "
+                                    + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
@@ -791,6 +881,13 @@ public class ConfigOptions {
                                     + "The Scanner will cache the records from each fetch request and returns "
                                     + "them incrementally from each poll.");
 
+    public static final ConfigOption<String> CLIENT_SECURITY_PROTOCOL =
+            key("client.security.protocol")
+                    .stringType()
+                    .defaultValue("PLAINTEXT")
+                    .withDescription(
+                            "The authentication protocol used to authenticate the client.");
+
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
                     .memoryType()
@@ -898,7 +995,7 @@ public class ConfigOptions {
     public static final ConfigOption<Boolean> CLIENT_METRICS_ENABLED =
             key("client.metrics.enabled")
                     .booleanType()
-                    .defaultValue(true)
+                    .defaultValue(false)
                     .withDescription(
                             "Enable metrics for client. When metrics is enabled, the client "
                                     + "will collect metrics and report by the JMX metrics reporter.");
@@ -1383,17 +1480,21 @@ public class ConfigOptions {
                     .withDescription(
                             "Whether enable fluss kafka. Disabled by default. "
                                     + "When this option is set to true, the fluss kafka will be enabled.");
-    public static final ConfigOption<Integer> KAFKA_PORT =
-            key("kafka.port")
-                    .intType()
-                    .defaultValue(9092)
-                    .withDescription("The port for fluss kafka. The default port is 9092.");
+
+    public static final ConfigOption<List<String>> KAFKA_LISTENER_NAMES =
+            key("kafka.listener.names")
+                    .stringType()
+                    .asList()
+                    .defaultValues("KAFKA")
+                    .withDescription(
+                            "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
+
     public static final ConfigOption<String> KAFKA_DATABASE =
             key("kafka.database")
                     .stringType()
-                    .defaultValue("_kafka")
+                    .defaultValue("kafka")
                     .withDescription(
-                            "The database for fluss kafka. The default database is '_kafka'.");
+                            "The database for fluss kafka. The default database is 'kafka'.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

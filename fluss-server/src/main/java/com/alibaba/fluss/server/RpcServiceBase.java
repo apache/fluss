@@ -80,7 +80,6 @@ import com.alibaba.fluss.server.metadata.PartitionMetadataInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TableMetadataInfo;
 import com.alibaba.fluss.server.tablet.TabletService;
-import com.alibaba.fluss.server.utils.RpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
@@ -103,9 +102,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeGetLatestKvSnapshotsResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.makeKvSnapshotMetadataResponse;
-import static com.alibaba.fluss.server.utils.RpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestKvSnapshotsResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestLakeSnapshotResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapshotMetadataResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toPhysicalTablePath;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
@@ -236,7 +239,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
-        Set<ServerNode> aliveTableServers = getAllTabletServerNodes();
+        String listenerName = currentListenerName();
+
+        Set<ServerNode> aliveTableServers = getAllTabletServerNodes(listenerName);
         List<PbTablePath> pbTablePaths = request.getTablePathsList();
         List<TablePath> tablePaths = new ArrayList<>(pbTablePaths.size());
 
@@ -249,26 +254,23 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         for (PbTablePath pbTablePath : pbTablePaths) {
             TablePath tablePath = toTablePath(pbTablePath);
             tablePaths.add(tablePath);
-            tableMetadataInfos.add(getTableMetadata(tablePath));
+            tableMetadataInfos.add(getTableMetadata(tablePath, listenerName));
         }
 
         for (PbPhysicalTablePath partitionPath : partitions) {
             partitionMetadataInfos.add(
-                    getPartitionMetadata(RpcMessageUtils.toPhysicalTablePath(partitionPath)));
+                    getPartitionMetadata(toPhysicalTablePath(partitionPath), listenerName));
         }
 
         // get partition info from partition ids
-        partitionMetadataInfos.addAll(getPartitionMetadata(tablePaths, partitionIds));
+        partitionMetadataInfos.addAll(getPartitionMetadata(tablePaths, partitionIds, listenerName));
 
         return CompletableFuture.completedFuture(
-                new ClusterMetadataInfo(
-                                metadataCache.getCoordinatorServer() == null
-                                        ? Optional.empty()
-                                        : Optional.of(metadataCache.getCoordinatorServer()),
-                                aliveTableServers,
-                                tableMetadataInfos,
-                                partitionMetadataInfos)
-                        .toMetadataResponse());
+                ClusterMetadataInfo.toMetadataResponse(
+                        metadataCache.getCoordinatorServer(listenerName),
+                        aliveTableServers,
+                        tableMetadataInfos,
+                        partitionMetadataInfos));
     }
 
     @Override
@@ -379,7 +381,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             }
 
             return CompletableFuture.completedFuture(
-                    RpcMessageUtils.toGetFileSystemSecurityTokenResponse(
+                    toGetFileSystemSecurityTokenResponse(
                             remoteFileSystem.getUri().getScheme(), securityToken));
         } catch (Exception e) {
             throw new SecurityTokenException(
@@ -395,7 +397,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
     }
 
     @Override
@@ -427,18 +429,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
         LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
         return CompletableFuture.completedFuture(
-                RpcMessageUtils.makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+                makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
     }
 
-    private Set<ServerNode> getAllTabletServerNodes() {
-        return new HashSet<>(metadataCache.getAllAliveTabletServers().values());
+    private Set<ServerNode> getAllTabletServerNodes(String listenerName) {
+        return new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
     }
 
     /**
      * Returned a {@link TableMetadataInfo} contains the table info for {@code tablePath} and the
      * bucket locations for {@code physicalTablePaths}.
      */
-    private TableMetadataInfo getTableMetadata(TablePath tablePath) {
+    private TableMetadataInfo getTableMetadata(TablePath tablePath, String listenerName) {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         long tableId = tableInfo.getTableId();
         try {
@@ -449,7 +451,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 TableAssignment tableAssignment = assignmentInfo.tableAssignment;
                 bucketLocations =
                         toBucketLocations(
-                                PhysicalTablePath.of(tablePath), tableId, null, tableAssignment);
+                                PhysicalTablePath.of(tablePath),
+                                tableId,
+                                null,
+                                tableAssignment,
+                                listenerName);
             } else {
                 if (!tableInfo.isPartitioned()) {
                     LOG.warn("No table assignment node found for table {}", tableId);
@@ -462,7 +468,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
     }
 
-    private PartitionMetadataInfo getPartitionMetadata(PhysicalTablePath partitionPath) {
+    private PartitionMetadataInfo getPartitionMetadata(
+            PhysicalTablePath partitionPath, String listenerName) {
         try {
             checkNotNull(
                     partitionPath.getPartitionName(),
@@ -479,7 +486,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                 partitionPath,
                                 assignmentInfo.tableId,
                                 assignmentInfo.partitionId,
-                                tableAssignment);
+                                tableAssignment,
+                                listenerName);
             } else {
                 LOG.warn("No partition assignment node found for partition {}", partitionPath);
             }
@@ -497,7 +505,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private List<PartitionMetadataInfo> getPartitionMetadata(
-            Collection<TablePath> tablePaths, long[] partitionIds) {
+            Collection<TablePath> tablePaths, long[] partitionIds, String listenerName) {
         // todo: hack logic; currently, we can't get partition metadata by partition ids directly,
         // in here, we always assume the partition ids must belong to the first argument tablePaths;
         // at least, in current client metadata request design, the assumption is true.
@@ -523,7 +531,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     if (partitionName != null) {
                         partitionMetadataInfos.add(
                                 getPartitionMetadata(
-                                        PhysicalTablePath.of(tablePath, partitionName)));
+                                        PhysicalTablePath.of(tablePath, partitionName),
+                                        listenerName));
                         hitPartitionIds.add(partitionId);
                     }
                 }
@@ -545,7 +554,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             PhysicalTablePath physicalTablePath,
             long tableId,
             @Nullable Long partitionId,
-            TableAssignment tableAssignment)
+            TableAssignment tableAssignment,
+            String listenerName)
             throws Exception {
         List<BucketLocation> bucketLocations = new ArrayList<>();
         // iterate each bucket assignment
@@ -556,7 +566,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
             List<Integer> replicas = assignment.getValue().getReplicas();
             ServerNode[] replicaNode = new ServerNode[replicas.size()];
-            Map<Integer, ServerNode> nodes = metadataCache.getAllAliveTabletServers();
+            Map<Integer, ServerNode> nodes = metadataCache.getAllAliveTabletServers(listenerName);
             for (int i = 0; i < replicas.size(); i++) {
                 replicaNode[i] =
                         nodes.getOrDefault(
@@ -576,7 +586,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             .map(
                                     leaderAndIsr ->
                                             metadataCache
-                                                    .getAllAliveTabletServers()
+                                                    .getAllAliveTabletServers(listenerName)
                                                     .get(leaderAndIsr.leader()))
                             .orElse(null);
             bucketLocations.add(

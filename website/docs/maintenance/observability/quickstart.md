@@ -146,7 +146,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION}
+    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -159,7 +159,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:${FLUSS_QUICKSTART_FLINK_VERSION}
+    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
     depends_on:
       - jobmanager
     command: taskmanager

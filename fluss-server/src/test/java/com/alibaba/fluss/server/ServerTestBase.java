@@ -16,11 +16,11 @@
 
 package com.alibaba.fluss.server;
 
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussException;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
-import com.alibaba.fluss.server.tablet.TabletServer;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -29,6 +29,8 @@ import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -86,22 +88,29 @@ public abstract class ServerTestBase {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
-        configuration.setString(ConfigOptions.COORDINATOR_HOST, "127.0.0.1");
-        // randomize the coordinator port
-        configuration.setString(ConfigOptions.COORDINATOR_PORT, "0");
+        configuration.setString(
+                ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:0,FLUSS://localhost:0");
+        configuration.setString(ConfigOptions.ADVERTISED_LISTENERS, "CLIENT://198.168.0.1:100");
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return configuration;
+    }
+
+    protected void verifyEndpoint(
+            List<Endpoint> registeredEndpoints, List<Endpoint> bindEndpoints) {
+        Endpoint internal =
+                bindEndpoints.stream()
+                        .filter(e -> e.getListenerName().equals("FLUSS"))
+                        .findFirst()
+                        .get();
+        List<Endpoint> expectedEndpoints =
+                Endpoint.fromListenersString(
+                        internal.listenerString() + ", CLIENT://198.168.0.1:100");
+        assertThat(registeredEndpoints).containsExactlyInAnyOrderElementsOf(expectedEndpoints);
     }
 
     public static CoordinatorServer startCoordinatorServer(Configuration conf) throws Exception {
         CoordinatorServer coordinatorServer = new CoordinatorServer(conf);
         coordinatorServer.start();
         return coordinatorServer;
-    }
-
-    public static TabletServer startTabletServer(Configuration conf) throws Exception {
-        TabletServer tabletServer = new TabletServer(conf);
-        tabletServer.start();
-        return tabletServer;
     }
 }

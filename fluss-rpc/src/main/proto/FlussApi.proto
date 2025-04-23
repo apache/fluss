@@ -472,6 +472,15 @@ message PbNotifyLakeTableOffsetReqForBucket {
 message NotifyLakeTableOffsetResponse {
 }
 
+message AuthenticateRequest {
+  required string protocol = 1;
+  required bytes token = 2;
+}
+
+message AuthenticateResponse {
+  optional bytes challenge = 1;
+}
+
 // --------------- Inner classes ----------------
 message PbApiVersion {
   required int32 api_key = 1;
@@ -490,10 +499,15 @@ message PbPhysicalTablePath {
   optional string partition_name = 3;
 }
 
+// For MetadataResponse, host and port are still used for all versions.
+// For UpdateMetadataRequest,
+//   * versions <= 0.6: host and port are used.
+//   * versions >= 0.7: listeners is used to replace host and port.
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
+  optional string listeners = 4;
 }
 
 message PbTableMetadata {
@@ -738,3 +752,6 @@ message PbPartitionInfo {
 message PbPartitionSpec {
   repeated PbKeyValue partition_key_values = 1;
 }
+
+
+

@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.replica;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.server.entity.FetchData;
@@ -30,12 +31,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT test for adjust isr for tablet server. */
 public class AdjustIsrTest extends ReplicaTestBase {
@@ -111,5 +114,33 @@ public class AdjustIsrTest extends ReplicaTestBase {
         retry(
                 Duration.ofSeconds(20),
                 () -> assertThat(replica.getIsr()).containsExactlyInAnyOrder(1));
+    }
+
+    @Test
+    void testSubmitShrinkIsrAsLeaderFenced() throws Exception {
+        // replica set is 1,2,3 , isr set is 1,2,3.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb, Arrays.asList(1, 2, 3), Arrays.asList(1, 2, 3), false);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
+
+        // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
+        IsrState.PendingShrinkIsrState pendingShrinkIsrState =
+                replica.prepareIsrShrink(
+                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        Arrays.asList(1, 2),
+                        Collections.singletonList(3));
+
+        // Set leader epoch of this bucket in coordinatorServer gateway to 1 to mock leader epoch is
+        // fenced.
+        testCoordinatorGateway.setCurrentLeaderEpoch(tb, 1);
+        assertThatThrownBy(
+                        () ->
+                                replica.submitAdjustIsr(pendingShrinkIsrState)
+                                        .get(1, TimeUnit.MINUTES))
+                .rootCause()
+                .isInstanceOf(FencedLeaderEpochException.class)
+                .hasMessageContaining("request leader epoch is fenced.");
     }
 }

@@ -17,10 +17,10 @@
 package com.alibaba.fluss.server.log.remote;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.exception.CorruptIndexException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.RemoteStorageException;
 import com.alibaba.fluss.remote.RemoteLogSegment;
+import com.alibaba.fluss.server.exception.CorruptIndexException;
 import com.alibaba.fluss.server.log.OffsetIndex;
 import com.alibaba.fluss.server.log.OffsetPosition;
 import com.alibaba.fluss.server.log.StorageAction;
@@ -406,16 +406,27 @@ public class RemoteLogIndexCache implements Closeable {
                     if (Files.exists(offsetIndexFile.toPath())
                             && Files.exists(timestampIndexFile.toPath())) {
                         long offset = offsetFromRemoteIndexCacheFileName(indexFileName);
-                        OffsetIndex offsetIndex =
-                                new OffsetIndex(offsetIndexFile, offset, Integer.MAX_VALUE, false);
-                        offsetIndex.sanityCheck();
+                        try {
+                            OffsetIndex offsetIndex =
+                                    new OffsetIndex(
+                                            offsetIndexFile, offset, Integer.MAX_VALUE, false);
+                            offsetIndex.sanityCheck();
 
-                        TimeIndex timeIndex =
-                                new TimeIndex(timestampIndexFile, offset, Integer.MAX_VALUE, false);
-                        timeIndex.sanityCheck();
+                            TimeIndex timeIndex =
+                                    new TimeIndex(
+                                            timestampIndexFile, offset, Integer.MAX_VALUE, false);
+                            timeIndex.sanityCheck();
 
-                        Entry entry = new Entry(offsetIndex, timeIndex);
-                        internalCache.put(remoteSegmentId, entry);
+                            Entry entry = new Entry(offsetIndex, timeIndex);
+                            internalCache.put(remoteSegmentId, entry);
+                        } catch (CorruptIndexException e) {
+                            LOG.debug(
+                                    "Remote offset/time log index is corrupt, delete corrupt index.",
+                                    e);
+                            // let's delete offset index & time index
+                            Files.deleteIfExists(offsetIndexFile.toPath());
+                            Files.deleteIfExists(timestampIndexFile.toPath());
+                        }
                     } else {
                         // Delete all of them if any one of those indexes is not available for a
                         // specific segment id.

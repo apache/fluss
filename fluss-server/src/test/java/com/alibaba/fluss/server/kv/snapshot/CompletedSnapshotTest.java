@@ -109,7 +109,7 @@ class CompletedSnapshotTest {
         // private should be deleted, but the local file should still remain
         for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath :
                 kvSnapshotHandle.getPrivateFileHandles()) {
-            assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath().getPath()))
+            assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                     .doesNotExist();
             assertThat(new File(kvFileHandleAndLocalPath.getLocalPath())).exists();
         }
@@ -119,20 +119,10 @@ class CompletedSnapshotTest {
                 kvSnapshotHandle.getSharedKvFileHandles()) {
             // share files should also be deleted, but the local file should still remain
             if (isShareFileShouldDelete) {
-                assertThat(
-                                new File(
-                                        kvFileHandleAndLocalPath
-                                                .getKvFileHandle()
-                                                .getFilePath()
-                                                .getPath()))
+                assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                         .doesNotExist();
             } else {
-                assertThat(
-                                new File(
-                                        kvFileHandleAndLocalPath
-                                                .getKvFileHandle()
-                                                .getFilePath()
-                                                .getPath()))
+                assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                         .exists();
             }
             assertThat(new File(kvFileHandleAndLocalPath.getLocalPath())).exists();
@@ -158,7 +148,7 @@ class CompletedSnapshotTest {
             writeRandomDataToFile(shareFile, perFileSize);
             sharedFileHandles.add(
                     KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(FsPath.fromLocalFile(shareFile), shareFile.length()),
+                            new KvFileHandle(shareFile.getPath(), shareFile.length()),
                             localFile.getPath()));
         }
 
@@ -174,8 +164,7 @@ class CompletedSnapshotTest {
             writeRandomDataToFile(privateFile, perFileSize);
             privateFileHandles.add(
                     KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(
-                                    FsPath.fromLocalFile(privateFile), privateFile.length()),
+                            new KvFileHandle(privateFile.getPath(), privateFile.length()),
                             localFile.getPath()));
         }
         return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 10);

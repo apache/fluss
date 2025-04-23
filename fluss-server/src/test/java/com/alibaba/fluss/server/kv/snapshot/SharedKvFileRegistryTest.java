@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
-import com.alibaba.fluss.fs.FsPath;
-
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -85,7 +83,7 @@ class SharedKvFileRegistryTest {
         private boolean discarded;
 
         public TestKvHandle(String path) {
-            super(new FsPath(path), 0);
+            super(path, 0);
         }
 
         @Override

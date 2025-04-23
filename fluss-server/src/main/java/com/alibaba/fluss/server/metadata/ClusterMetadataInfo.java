@@ -17,8 +17,10 @@
 package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.BucketLocation;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
@@ -42,15 +44,15 @@ import java.util.Set;
  */
 public class ClusterMetadataInfo {
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    private final Optional<ServerNode> coordinatorServer;
+    private final Optional<ServerInfo> coordinatorServer;
 
-    private final Set<ServerNode> aliveTabletServers;
+    private final Set<ServerInfo> aliveTabletServers;
     private final List<TableMetadataInfo> tableMetadataInfos;
     private final List<PartitionMetadataInfo> partitionMetadataInfos;
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public ClusterMetadataInfo(
-            Optional<ServerNode> coordinatorServer, Set<ServerNode> aliveTabletServers) {
+            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTabletServers) {
         this(
                 coordinatorServer,
                 aliveTabletServers,
@@ -60,8 +62,8 @@ public class ClusterMetadataInfo {
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public ClusterMetadataInfo(
-            Optional<ServerNode> coordinatorServer,
-            Set<ServerNode> aliveTabletServers,
+            Optional<ServerInfo> coordinatorServer,
+            Set<ServerInfo> aliveTabletServers,
             List<TableMetadataInfo> tableMetadataInfos,
             List<PartitionMetadataInfo> partitionMetadataInfos) {
         this.coordinatorServer = coordinatorServer;
@@ -70,15 +72,19 @@ public class ClusterMetadataInfo {
         this.partitionMetadataInfos = partitionMetadataInfos;
     }
 
-    public Optional<ServerNode> getCoordinatorServer() {
+    public Optional<ServerInfo> getCoordinatorServer() {
         return coordinatorServer;
     }
 
-    public Set<ServerNode> getAliveTabletServers() {
+    public Set<ServerInfo> getAliveTabletServers() {
         return aliveTabletServers;
     }
 
-    public MetadataResponse toMetadataResponse() {
+    public static MetadataResponse toMetadataResponse(
+            Optional<ServerNode> coordinatorServer,
+            Set<ServerNode> aliveTabletServers,
+            List<TableMetadataInfo> tableMetadataInfos,
+            List<PartitionMetadataInfo> partitionMetadataInfos) {
         MetadataResponse metadataResponse = new MetadataResponse();
 
         if (coordinatorServer.isPresent()) {
@@ -138,7 +144,8 @@ public class ClusterMetadataInfo {
         return metadataResponse;
     }
 
-    private List<PbBucketMetadata> toPbTableBucketMetadata(List<BucketLocation> bucketLocations) {
+    private static List<PbBucketMetadata> toPbTableBucketMetadata(
+            List<BucketLocation> bucketLocations) {
         List<PbBucketMetadata> bucketMetadata = new ArrayList<>();
         for (BucketLocation bucketLocation : bucketLocations) {
             PbBucketMetadata tableBucketMetadata =
@@ -157,26 +164,41 @@ public class ClusterMetadataInfo {
     }
 
     public static ClusterMetadataInfo fromUpdateMetadataRequest(UpdateMetadataRequest request) {
-        Optional<ServerNode> coordinatorServer = Optional.empty();
+        Optional<ServerInfo> coordinatorServer = Optional.empty();
         if (request.hasCoordinatorServer()) {
             PbServerNode pbCoordinatorServer = request.getCoordinatorServer();
+            List<Endpoint> endpoints =
+                    pbCoordinatorServer.hasListeners()
+                            ? Endpoint.fromListenersString(pbCoordinatorServer.getListeners())
+                            // backward compatible with old version that doesn't have listeners
+                            : Collections.singletonList(
+                                    new Endpoint(
+                                            pbCoordinatorServer.getHost(),
+                                            pbCoordinatorServer.getPort(),
+                                            // TODO: maybe use internal listener name from conf
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
             coordinatorServer =
                     Optional.of(
-                            new ServerNode(
+                            new ServerInfo(
                                     pbCoordinatorServer.getNodeId(),
-                                    pbCoordinatorServer.getHost(),
-                                    pbCoordinatorServer.getPort(),
+                                    endpoints,
                                     ServerType.COORDINATOR));
         }
 
-        Set<ServerNode> aliveTabletServers = new HashSet<>();
+        Set<ServerInfo> aliveTabletServers = new HashSet<>();
         for (PbServerNode tabletServer : request.getTabletServersList()) {
+            List<Endpoint> endpoints =
+                    tabletServer.hasListeners()
+                            ? Endpoint.fromListenersString(tabletServer.getListeners())
+                            // backward compatible with old version that doesn't have listeners
+                            : Collections.singletonList(
+                                    new Endpoint(
+                                            tabletServer.getHost(),
+                                            tabletServer.getPort(),
+                                            // TODO: maybe use internal listener name from conf
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
             aliveTabletServers.add(
-                    new ServerNode(
-                            tabletServer.getNodeId(),
-                            tabletServer.getHost(),
-                            tabletServer.getPort(),
-                            ServerType.TABLET_SERVER));
+                    new ServerInfo(tabletServer.getNodeId(), endpoints, ServerType.TABLET_SERVER));
         }
         return new ClusterMetadataInfo(coordinatorServer, aliveTabletServers);
     }

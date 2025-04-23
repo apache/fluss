@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.flink.catalog;
 
+import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TablePath;
@@ -45,7 +46,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
@@ -54,14 +57,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link com.alibaba.fluss.flink.catalog.FlinkCatalog}. */
-class FlinkCatalogITCase {
+abstract class FlinkCatalogITCase {
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
-    private static final String CATALOG_NAME = "testcatalog";
-    private static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
+    static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static Catalog catalog;
     static TableEnvironment tEnv;
 
@@ -75,7 +78,8 @@ class FlinkCatalogITCase {
                         CATALOG_NAME,
                         DEFAULT_DB,
                         bootstrapServers,
-                        Thread.currentThread().getContextClassLoader());
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
         catalog.open();
         // create table environment
         tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
@@ -349,8 +353,10 @@ class FlinkCatalogITCase {
         tEnv.executeSql("create database test_db");
         List<Row> databases =
                 CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
-        assertThat(databases.toString())
-                .isEqualTo(String.format("[+I[%s], +I[test_db]]", DEFAULT_DB));
+
+        assertThat(databases.stream().map(Row::toString).collect(Collectors.toList()))
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.asList(String.format("+I[%s]", DEFAULT_DB), "+I[test_db]"));
         tEnv.executeSql("drop database test_db");
         databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
         assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
@@ -419,6 +425,70 @@ class FlinkCatalogITCase {
                 .cause()
                 .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("Unsupported options found for 'fluss'");
+    }
+
+    @Test
+    void testAuthentication() throws Exception {
+        String clientListenerName = "CLIENT";
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
+        serverConfig.setString("security.username_password.username", "root");
+        serverConfig.setString("security.username_password.password", "password");
+        FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder()
+                        .setCoordinatorServerListeners(
+                                String.format(
+                                        "%s://localhost:0, %s://localhost:0",
+                                        DEFAULT_LISTENER_NAME, clientListenerName))
+                        .setTabletServerListeners(
+                                String.format(
+                                        "%s://localhost:0, %s://localhost:0",
+                                        DEFAULT_LISTENER_NAME, clientListenerName))
+                        .setClusterConf(serverConfig)
+                        .build();
+        Catalog authenticateCatalog = null;
+        try {
+            flussClusterExtension.start();
+            ServerNode coordinatorServerNode =
+                    flussClusterExtension.getCoordinatorServerNode(clientListenerName);
+            String bootstrapServers =
+                    String.format(
+                            "%s:%d", coordinatorServerNode.host(), coordinatorServerNode.port());
+            authenticateCatalog =
+                    new FlinkCatalog(
+                            CATALOG_NAME,
+                            DEFAULT_DB,
+                            bootstrapServers,
+                            Thread.currentThread().getContextClassLoader(),
+                            Collections.emptyMap());
+            Catalog finalAuthenticateCatalog = authenticateCatalog;
+            assertThatThrownBy(finalAuthenticateCatalog::open)
+                    .cause()
+                    .hasMessageContaining(
+                            "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side.");
+
+            Map<String, String> clientConfig = new HashMap<>();
+            clientConfig.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "username_password");
+            clientConfig.put("client.security.username_password.username", "root");
+            clientConfig.put("client.security.username_password.password", "password");
+            authenticateCatalog =
+                    new FlinkCatalog(
+                            CATALOG_NAME,
+                            DEFAULT_DB,
+                            bootstrapServers,
+                            Thread.currentThread().getContextClassLoader(),
+                            clientConfig);
+            authenticateCatalog.open();
+            assertThat(authenticateCatalog.listDatabases())
+                    .containsExactlyInAnyOrderElementsOf(Collections.singletonList(DEFAULT_DB));
+
+        } finally {
+            if (authenticateCatalog != null) {
+                authenticateCatalog.close();
+            }
+            flussClusterExtension.close();
+        }
     }
 
     private static void assertOptionsEqual(

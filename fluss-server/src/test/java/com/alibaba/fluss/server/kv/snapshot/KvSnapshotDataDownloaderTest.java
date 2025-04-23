@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
-import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.utils.CloseableRegistry;
 
 import org.junit.jupiter.api.AfterAll;
@@ -104,7 +103,7 @@ class KvSnapshotDataDownloaderTest {
                         KvFileHandleAndLocalPath.of(
                                 new KvFileHandle(
                                         // a file that doesn't exist should then throw IOException
-                                        new FsPath("file-non-exist"), 0),
+                                        "file-non-exist", 0),
                                 "error-handle"));
 
         CloseableRegistry closeableRegistry = new CloseableRegistry();
@@ -148,7 +147,7 @@ class KvSnapshotDataDownloaderTest {
         for (int i = 0; i < numSubHandles; ++i) {
             Path path = srcPath.resolve(String.format("state-%d-%d", remoteHandleId, i));
             Files.write(path, content[i]);
-            handles.add(new KvFileHandle(FsPath.fromLocalFile(path.toFile()), content.length));
+            handles.add(new KvFileHandle(path.toString(), content.length));
         }
 
         List<KvFileHandleAndLocalPath> sharedStates = new ArrayList<>(numSubHandles);

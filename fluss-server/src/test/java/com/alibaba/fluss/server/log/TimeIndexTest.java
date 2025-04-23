@@ -16,8 +16,8 @@
 
 package com.alibaba.fluss.server.log;
 
-import com.alibaba.fluss.exception.CorruptIndexException;
 import com.alibaba.fluss.exception.InvalidOffsetException;
+import com.alibaba.fluss.server.exception.CorruptIndexException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

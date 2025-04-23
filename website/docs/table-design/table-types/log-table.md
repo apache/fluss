@@ -1,4 +1,5 @@
 ---
+sidebar_label: "Log Table"
 sidebar_position: 1
 ---
 

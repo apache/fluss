@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
@@ -27,6 +28,7 @@ import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
@@ -65,6 +67,7 @@ public class MetadataManager {
 
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> defaultTableLakeOptions;
+    private final int maxPartitionNum;
 
     /**
      * Creates a new metadata manager.
@@ -75,6 +78,7 @@ public class MetadataManager {
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
+        maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
     }
 
     public void createDatabase(
@@ -344,6 +348,24 @@ public class MetadataManager {
         }
 
         try {
+            int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
+            if (partitionNumber + 1 > maxPartitionNum) {
+                throw new TooManyPartitionsException(
+                        String.format(
+                                "Exceed the maximum number of partitions for table %s, only allow %s partitions.",
+                                tablePath, maxPartitionNum));
+            }
+        } catch (TooManyPartitionsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Get the number of partition from zookeeper failed for table %s",
+                            tablePath),
+                    e);
+        }
+
+        try {
             long partitionId = zookeeperClient.getPartitionIdAndIncrement();
             // register partition assignments to zk first
             zookeeperClient.registerPartitionAssignment(partitionId, partitionAssignment);
@@ -352,10 +374,10 @@ public class MetadataManager {
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (Exception e) {
-            LOG.error(
-                    "Register partition to zookeeper failed to create partition {} for table [{}]",
-                    partitionName,
-                    tablePath,
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Register partition to zookeeper failed to create partition %s for table [%s]",
+                            partitionName, tablePath),
                     e);
         }
     }

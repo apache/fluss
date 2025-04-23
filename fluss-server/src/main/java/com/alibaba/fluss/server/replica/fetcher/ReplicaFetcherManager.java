@@ -36,7 +36,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.function.ThrowingConsumer.unchecked;
@@ -63,15 +65,21 @@ public class ReplicaFetcherManager {
     private final int serverId;
     private final ReplicaManager replicaManager;
     private final int numFetchersPerServer;
+    private final Function<Integer, Optional<ServerNode>> serverNodeMetadataCache;
     private final Object lock = new Object();
 
     public ReplicaFetcherManager(
-            Configuration conf, RpcClient rpcClient, int serverId, ReplicaManager replicaManager) {
+            Configuration conf,
+            RpcClient rpcClient,
+            int serverId,
+            ReplicaManager replicaManager,
+            Function<Integer, Optional<ServerNode>> serverNodeMetadataCache) {
         this.conf = conf;
         this.rpcClient = rpcClient;
         this.serverId = serverId;
         this.replicaManager = replicaManager;
         this.numFetchersPerServer = conf.getInt(ConfigOptions.LOG_REPLICA_FETCHER_NUMBER);
+        this.serverNodeMetadataCache = serverNodeMetadataCache;
     }
 
     public void addFetcherForBuckets(Map<TableBucket, InitialFetchStatus> bucketAndStatus) {
@@ -93,8 +101,7 @@ public class ReplicaFetcherManager {
                     (serverAndFetcherId, initialFetchStatusMap) -> {
                         ServerIdAndFetcherId serverIdAndFetcherId =
                                 new ServerIdAndFetcherId(
-                                        serverAndFetcherId.serverNode.id(),
-                                        serverAndFetcherId.fetcherId);
+                                        serverAndFetcherId.leaderId, serverAndFetcherId.fetcherId);
                         // default reuse the exists thread.
                         ReplicaFetcherThread fetcherThread =
                                 fetcherThreadMap.get(serverIdAndFetcherId);
@@ -102,10 +109,8 @@ public class ReplicaFetcherManager {
                             fetcherThread =
                                     addAndStartFetcherThread(
                                             serverAndFetcherId, serverIdAndFetcherId);
-                        } else if (!fetcherThread
-                                .getLeader()
-                                .leaderNode()
-                                .equals(serverAndFetcherId.serverNode)) {
+                        } else if (fetcherThread.getLeader().leaderServerId()
+                                != serverAndFetcherId.leaderId) {
                             try {
                                 fetcherThread.shutdown();
                             } catch (InterruptedException e) {
@@ -168,21 +173,36 @@ public class ReplicaFetcherManager {
     private ReplicaFetcherThread addAndStartFetcherThread(
             ServerAndFetcherId serverAndFetcherId, ServerIdAndFetcherId serverIdAndFetcherId) {
         ReplicaFetcherThread fetcherThread =
-                createFetcherThread(serverAndFetcherId.fetcherId, serverAndFetcherId.serverNode);
+                createFetcherThread(serverAndFetcherId.fetcherId, serverAndFetcherId.leaderId);
         fetcherThreadMap.put(serverIdAndFetcherId, fetcherThread);
         fetcherThread.start();
         return fetcherThread;
     }
 
-    ReplicaFetcherThread createFetcherThread(int fetcherId, ServerNode remoteNode) {
-        String threadName = "ReplicaFetcherThread-" + fetcherId + "-" + remoteNode.id();
+    ReplicaFetcherThread createFetcherThread(int fetcherId, int leaderId) {
+        String threadName = "ReplicaFetcherThread-" + fetcherId + "-" + leaderId;
         LeaderEndpoint leaderEndpoint =
                 new RemoteLeaderEndpoint(
                         conf,
                         serverId,
-                        remoteNode,
+                        leaderId,
                         GatewayClientProxy.createGatewayProxy(
-                                () -> remoteNode, rpcClient, TabletServerGateway.class));
+                                () -> {
+                                    Optional<ServerNode> optionalServerNode =
+                                            serverNodeMetadataCache.apply(leaderId);
+                                    if (optionalServerNode.isPresent()) {
+                                        return optionalServerNode.get();
+                                    } else {
+                                        // no available serverNode to connect, throw exception,
+                                        // fetch thead expects to retry
+                                        throw new RuntimeException(
+                                                "ServerNode "
+                                                        + leaderId
+                                                        + " is not available in metadata cache.");
+                                    }
+                                },
+                                rpcClient,
+                                TabletServerGateway.class));
         return new ReplicaFetcherThread(
                 threadName,
                 replicaManager,
@@ -197,7 +217,7 @@ public class ReplicaFetcherManager {
             fetcherThread.addBuckets(initialFetchStatusMap);
             LOG.info(
                     "Added fetcher to server {} with initial fetch status {}",
-                    fetcherThread.getLeader().leaderNode().id(),
+                    fetcherThread.getLeader().leaderServerId(),
                     initialFetchStatusMap);
         } catch (InterruptedException e) {
             LOG.error("Interrupted while add buckets to fetcher threads.", e);
@@ -226,12 +246,29 @@ public class ReplicaFetcherManager {
 
     /** Class to represent server node and fetcher id. */
     private static class ServerAndFetcherId {
-        private final ServerNode serverNode;
+        private final int leaderId;
         private final int fetcherId;
 
-        ServerAndFetcherId(ServerNode serverNode, int fetcherId) {
-            this.serverNode = serverNode;
+        ServerAndFetcherId(int leaderId, int fetcherId) {
+            this.leaderId = leaderId;
             this.fetcherId = fetcherId;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            ServerAndFetcherId that = (ServerAndFetcherId) o;
+            return fetcherId == that.fetcherId && leaderId == that.leaderId;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(leaderId, fetcherId);
         }
     }
 

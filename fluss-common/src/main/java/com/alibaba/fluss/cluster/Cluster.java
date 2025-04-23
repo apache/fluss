@@ -80,7 +80,9 @@ public final class Cluster {
         for (Map.Entry<PhysicalTablePath, List<BucketLocation>> entry :
                 bucketLocationsByPath.entrySet()) {
             PhysicalTablePath physicalTablePath = entry.getKey();
-            List<BucketLocation> bucketsForTable = entry.getValue();
+            // avoid StackOverflowError on N levels UnmodifiableCollection,
+            // see https://stackoverflow.com/a/29027474
+            List<BucketLocation> bucketsForTable = new ArrayList<>(entry.getValue());
             // Optimise for the common case where all buckets are available.
             boolean foundUnavailableBucket = false;
             List<BucketLocation> availableBucketsForTable = new ArrayList<>(bucketsForTable.size());

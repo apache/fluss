@@ -29,6 +29,8 @@ import com.alibaba.fluss.testutils.common.EachCallbackWrapper;
 
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+
 /** IT Case for {@link CoordinatorServer} . */
 class CoordinatorServerITCase extends ServerITCaseBase {
 
@@ -56,8 +58,9 @@ class CoordinatorServerITCase extends ServerITCaseBase {
     @Override
     protected Configuration getServerConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.COORDINATOR_PORT, getPort() + "");
-        conf.set(ConfigOptions.COORDINATOR_HOST, HOSTNAME);
+        conf.set(
+                ConfigOptions.BIND_LISTENERS,
+                String.format("%s://%s:%d", DEFAULT_LISTENER_NAME, HOSTNAME, getPort()));
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;
     }

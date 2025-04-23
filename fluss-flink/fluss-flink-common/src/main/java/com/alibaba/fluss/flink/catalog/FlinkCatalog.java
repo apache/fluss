@@ -92,20 +92,22 @@ public class FlinkCatalog implements Catalog {
     protected final String catalogName;
     protected final @Nullable String defaultDatabase;
     protected final String bootstrapServers;
+    private final Map<String, String> securityConfigs;
     protected Connection connection;
     protected Admin admin;
-
     private volatile @Nullable LakeCatalog lakeCatalog;
 
     public FlinkCatalog(
             String name,
             @Nullable String defaultDatabase,
             String bootstrapServers,
-            ClassLoader classLoader) {
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs) {
         this.catalogName = name;
         this.defaultDatabase = defaultDatabase;
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
+        this.securityConfigs = securityConfigs;
     }
 
     @Override
@@ -115,9 +117,11 @@ public class FlinkCatalog implements Catalog {
 
     @Override
     public void open() throws CatalogException {
-        Configuration flussConfigs = new Configuration();
-        flussConfigs.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
-        connection = ConnectionFactory.createConnection(flussConfigs);
+        Map<String, String> flussConfigs = new HashMap<>();
+        flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
+        flussConfigs.putAll(securityConfigs);
+
+        connection = ConnectionFactory.createConnection(Configuration.fromMap(flussConfigs));
         admin = connection.getAdmin();
     }
 
@@ -282,6 +286,7 @@ public class FlinkCatalog implements Catalog {
             // add bootstrap servers option
             Map<String, String> newOptions = new HashMap<>(catalogTable.getOptions());
             newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
+            newOptions.putAll(securityConfigs);
             return catalogTable.copy(newOptions);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);

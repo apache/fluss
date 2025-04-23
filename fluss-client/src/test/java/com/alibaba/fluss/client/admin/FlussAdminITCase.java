@@ -39,6 +39,8 @@ import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
+import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
@@ -52,8 +54,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
-import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
 import com.alibaba.fluss.types.DataTypes;
@@ -75,7 +75,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -354,7 +353,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(0);
 
         // assert the cluster should have tablet server number to be 2
-        assertHasTabletServerNumber(2);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
 
         // let's set the table's replica.factor to 3, should also throw exception
         TableDescriptor tableDescriptor =
@@ -374,7 +373,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.startTabletServer(0);
 
         // assert the cluster should have tablet server number to be 3
-        assertHasTabletServerNumber(3);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
         // we can create the table now
@@ -775,19 +774,36 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         }
     }
 
-    private void assertHasTabletServerNumber(int tabletServerNumber) {
-        CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
-        retry(
-                Duration.ofMinutes(2),
-                () -> {
-                    assertThat(
-                                    coordinatorGateway
-                                            .metadata(new MetadataRequest())
-                                            .get()
-                                            .getTabletServersCount())
-                            .as("Tablet server number should be " + tabletServerNumber)
-                            .isEqualTo(tabletServerNumber);
-                });
+    @Test
+    void testAddTooManyPartitions() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("age")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_add_too_many_partitioned_table");
+        admin.createTable(tablePath, partitionedTable, true).get();
+
+        // add 10 partitions.
+        for (int i = 0; i < 10; i++) {
+            admin.createPartition(tablePath, newPartitionSpec("age", String.valueOf(i)), false)
+                    .get();
+        }
+        // add out of limit partition
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath, newPartitionSpec("age", "11"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TooManyPartitionsException.class);
     }
 
     private void assertNoBucketSnapshot(KvSnapshots snapshots, int expectBucketNum) {
@@ -846,7 +862,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .map(
                         kvFileHandleAndLocalPath ->
                                 new FsPathAndFileName(
-                                        kvFileHandleAndLocalPath.getKvFileHandle().getFilePath(),
+                                        new FsPath(
+                                                kvFileHandleAndLocalPath
+                                                        .getKvFileHandle()
+                                                        .getFilePath()),
                                         kvFileHandleAndLocalPath.getLocalPath()))
                 .collect(Collectors.toList());
     }

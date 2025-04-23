@@ -102,6 +102,13 @@ public class ApiManager {
         return enabledApis;
     }
 
+    @VisibleForTesting
+    public void registerApiMethod(ApiKeys api, Method method, ServerType providerType) {
+        id2Api.put(api.id, createApiMethod(api, method, providerType));
+        enabledApis.addAll(
+                id2Api.values().stream().map(ApiMethod::getApiKey).collect(Collectors.toList()));
+    }
+
     // ----------------------------------------------------------------------------------------
     // Internal Utilities
     // ----------------------------------------------------------------------------------------

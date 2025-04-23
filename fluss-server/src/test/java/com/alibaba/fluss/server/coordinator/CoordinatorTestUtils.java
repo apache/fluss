@@ -16,10 +16,11 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.tablet.TestTabletServerGateway;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -81,10 +82,14 @@ public class CoordinatorTestUtils {
         return gateways;
     }
 
-    public static List<ServerNode> createServers(List<Integer> servers) {
-        List<ServerNode> tabletServes = new ArrayList<>();
+    public static List<ServerInfo> createServers(List<Integer> servers) {
+        List<ServerInfo> tabletServes = new ArrayList<>();
         for (int server : servers) {
-            tabletServes.add(new ServerNode(server, "host", 100, ServerType.TABLET_SERVER));
+            tabletServes.add(
+                    new ServerInfo(
+                            server,
+                            Endpoint.fromListenersString("CLIENT://host:100"),
+                            ServerType.TABLET_SERVER));
         }
         return tabletServes;
     }

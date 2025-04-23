@@ -34,6 +34,7 @@ import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.ExplainDetail;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
@@ -47,6 +48,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -59,6 +62,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
@@ -68,16 +72,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkTableSink}. */
-class FlinkTableSinkITCase {
+abstract class FlinkTableSinkITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
 
-    private static final String CATALOG_NAME = "testcatalog";
-    private static final String DEFAULT_DB = "defaultdb";
+    static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = "defaultdb";
     static StreamExecutionEnvironment env;
     static StreamTableEnvironment tEnv;
     static TableEnvironment tBatchEnv;
+
+    static Stream<Arguments> writePartitionedTableParams() {
+        return Stream.of(
+                Arguments.of(false, false),
+                Arguments.of(true, false),
+                Arguments.of(false, true),
+                Arguments.of(true, true));
+    }
 
     @BeforeAll
     static void beforeAll() {
@@ -155,25 +167,34 @@ class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
-    @Test
-    void testAppendLogWithBucketKey() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
         tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3', 'bucket.key' = 'c')");
-        tEnv.executeSql(
-                        "INSERT INTO sink_test(a, b, c) "
-                                + "VALUES (1, 3501, 'Tim'), "
-                                + "(2, 3502, 'Fabian'), "
-                                + "(3, 3503, 'Tim'), "
-                                + "(4, 3504, 'jerry'), "
-                                + "(5, 3505, 'piggy'), "
-                                + "(7, 3507, 'Fabian'), "
-                                + "(8, 3508, 'stave'), "
-                                + "(9, 3509, 'Tim'), "
-                                + "(10, 3510, 'coco'), "
-                                + "(11, 3511, 'stave'), "
-                                + "(12, 3512, 'Tim')")
-                .await();
+                String.format(
+                        "create table sink_test (a int not null, b bigint, c string) "
+                                + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.bucket-shuffle'= '%s')",
+                        sinkBucketShuffle));
+        String insertSql =
+                "INSERT INTO sink_test(a, b, c) "
+                        + "VALUES (1, 3501, 'Tim'), "
+                        + "(2, 3502, 'Fabian'), "
+                        + "(3, 3503, 'Tim'), "
+                        + "(4, 3504, 'jerry'), "
+                        + "(5, 3505, 'piggy'), "
+                        + "(7, 3507, 'Fabian'), "
+                        + "(8, 3508, 'stave'), "
+                        + "(9, 3509, 'Tim'), "
+                        + "(10, 3510, 'coco'), "
+                        + "(11, 3511, 'stave'), "
+                        + "(12, 3512, 'Tim')";
+        String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
+        if (sinkBucketShuffle) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
+        } else {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
+        }
+        tEnv.executeSql(insertSql).await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
         //noinspection ArraysAsListWithZeroOrOneArgument
@@ -290,19 +311,30 @@ class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
-    @Test
-    void testPut() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPut(boolean sinkBucketShuffle) throws Exception {
         tEnv.executeSql(
-                "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
-        tEnv.executeSql(
-                        "INSERT INTO sink_test(a, b, c) "
-                                + "VALUES (1, 3501, 'Tim'), "
-                                + "(2, 3502, 'Fabian'), "
-                                + "(3, 3503, 'coco'), "
-                                + "(4, 3504, 'jerry'), "
-                                + "(5, 3505, 'piggy'), "
-                                + "(6, 3506, 'stave')")
-                .await();
+                String.format(
+                        "create table sink_test (a int not null primary key not enforced, b bigint, c string)"
+                                + " with('bucket.num' = '3', 'sink.bucket-shuffle'= '%s')",
+                        sinkBucketShuffle));
+
+        String insertSql =
+                "INSERT INTO sink_test(a, b, c) "
+                        + "VALUES (1, 3501, 'Tim'), "
+                        + "(2, 3502, 'Fabian'), "
+                        + "(3, 3503, 'coco'), "
+                        + "(4, 3504, 'jerry'), "
+                        + "(5, 3505, 'piggy'), "
+                        + "(6, 3506, 'stave')";
+        String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
+        if (sinkBucketShuffle) {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
+        } else {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
+        }
+        tEnv.executeSql(insertSql).await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
         List<String> expectedRows =
@@ -483,27 +515,9 @@ class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
-    @Test
-    void testWritePartitionedLogTable() throws Exception {
-        testWritePartitionedTable(false, false);
-    }
-
-    @Test
-    void testWritePartitionedPrimaryKeyTable() throws Exception {
-        testWritePartitionedTable(true, false);
-    }
-
-    @Test
-    void testWriteAutoPartitionedLogTable() throws Exception {
-        testWritePartitionedTable(false, true);
-    }
-
-    @Test
-    void testWriteAutoPartitionedPrimaryKeyTable() throws Exception {
-        testWritePartitionedTable(true, true);
-    }
-
-    private void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition)
+    @ParameterizedTest
+    @MethodSource("writePartitionedTableParams")
+    void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition)
             throws Exception {
         String tableName =
                 String.format(

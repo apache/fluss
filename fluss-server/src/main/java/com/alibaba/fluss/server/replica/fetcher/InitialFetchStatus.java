@@ -16,16 +16,20 @@
 
 package com.alibaba.fluss.server.replica.fetcher;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.metadata.TablePath;
+
+import java.util.Objects;
 
 /** Initial fetch state for specify table. */
 public class InitialFetchStatus {
     private final long tableId;
-    private final ServerNode leader;
+    private final TablePath tablePath;
+    private final int leader;
     private final long initOffset;
 
-    public InitialFetchStatus(long tableId, ServerNode leader, long initOffset) {
+    public InitialFetchStatus(long tableId, TablePath tablePath, int leader, long initOffset) {
         this.tableId = tableId;
+        this.tablePath = tablePath;
         this.leader = leader;
         this.initOffset = initOffset;
     }
@@ -34,8 +38,12 @@ public class InitialFetchStatus {
         return tableId;
     }
 
-    public ServerNode leader() {
+    public int leader() {
         return leader;
+    }
+
+    public TablePath tablePath() {
+        return tablePath;
     }
 
     public long initOffset() {
@@ -47,6 +55,8 @@ public class InitialFetchStatus {
         return "InitialFetchState{"
                 + "tableId="
                 + tableId
+                + ", tablePath="
+                + tablePath
                 + ", leader="
                 + leader
                 + ", initOffset="
@@ -55,28 +65,22 @@ public class InitialFetchStatus {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) {
+    public boolean equals(Object object) {
+        if (this == object) {
             return true;
         }
-        if (o == null || getClass() != o.getClass()) {
+        if (!(object instanceof InitialFetchStatus)) {
             return false;
         }
-        InitialFetchStatus that = (InitialFetchStatus) o;
-        if (tableId != that.tableId) {
-            return false;
-        }
-        if (initOffset != that.initOffset) {
-            return false;
-        }
-        return leader.equals(that.leader);
+        InitialFetchStatus that = (InitialFetchStatus) object;
+        return tableId == that.tableId
+                && tablePath.equals(that.tablePath)
+                && leader == that.leader
+                && initOffset == that.initOffset;
     }
 
     @Override
     public int hashCode() {
-        int result = (int) (tableId ^ (tableId >>> 32));
-        result = 31 * result + leader.hashCode();
-        result = 31 * result + (int) (initOffset ^ (initOffset >>> 32));
-        return result;
+        return Objects.hash(tableId, tablePath, leader, initOffset);
     }
 }

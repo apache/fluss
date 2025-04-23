@@ -16,11 +16,12 @@
 
 package com.alibaba.fluss.server.coordinator;
 
-import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
+import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -29,18 +30,24 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotResponse;
+import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import com.alibaba.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
+import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.server.coordinator.event.AccessContextEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
+import com.alibaba.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
 import com.alibaba.fluss.server.coordinator.statemachine.BucketState;
 import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
+import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
-import com.alibaba.fluss.server.testutils.KvTestUtils;
+import com.alibaba.fluss.server.tablet.TestTabletServerGateway;
 import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -55,6 +62,7 @@ import com.alibaba.fluss.server.zk.data.ZkData.TableIdsZNode;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;
@@ -74,12 +82,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.checkLeaderAndIsr;
 import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
 import static com.alibaba.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext;
@@ -87,6 +97,7 @@ import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.Offl
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
+import static com.alibaba.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -133,7 +144,11 @@ class CoordinatorEventProcessorTest {
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(
-                    i, new TabletServerRegistration("host" + i, 1000, System.currentTimeMillis()));
+                    i,
+                    new TabletServerRegistration(
+                            Collections.singletonList(
+                                    new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
+                            System.currentTimeMillis()));
         }
     }
 
@@ -146,14 +161,7 @@ class CoordinatorEventProcessorTest {
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
@@ -215,14 +223,7 @@ class CoordinatorEventProcessorTest {
         metadataManager.dropTable(t2, false);
 
         // start the coordinator
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         initCoordinatorChannel();
         eventProcessor.startup();
         // make sure the table can still be deleted successfully
@@ -278,7 +279,9 @@ class CoordinatorEventProcessorTest {
                         .createZooKeeperClient(NOPErrorHandler.INSTANCE);
         int newlyServerId = 3;
         TabletServerRegistration tabletServerRegistration =
-                new TabletServerRegistration("host3", 1234, System.currentTimeMillis());
+                new TabletServerRegistration(
+                        Endpoint.fromListenersString(DEFAULT_LISTENER_NAME + "://host3:1234"),
+                        System.currentTimeMillis());
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled
@@ -289,10 +292,11 @@ class CoordinatorEventProcessorTest {
         // verify the context has the exact tablet server
         retryVerifyContext(
                 ctx -> {
-                    ServerNode tabletServer = ctx.getLiveTabletServers().get(newlyServerId);
+                    ServerInfo tabletServer = ctx.getLiveTabletServers().get(newlyServerId);
                     assertThat(tabletServer.id()).isEqualTo(newlyServerId);
-                    assertThat(tabletServer.host()).isEqualTo(tabletServerRegistration.getHost());
-                    assertThat(tabletServer.port()).isEqualTo(tabletServerRegistration.getPort());
+
+                    assertThat(tabletServer.endpoints())
+                            .isEqualTo(tabletServerRegistration.getEndpoints());
                 });
 
         // we try to assign a replica to this newly server, every thing will
@@ -317,10 +321,9 @@ class CoordinatorEventProcessorTest {
 
         // retry until the table2 been created
         retryVerifyContext(
-                ctx -> {
-                    assertThat(ctx.getBucketLeaderAndIsr(new TableBucket(table2Id, 0)))
-                            .isNotEmpty();
-                });
+                ctx ->
+                        assertThat(ctx.getBucketLeaderAndIsr(new TableBucket(table2Id, 0)))
+                                .isNotEmpty());
 
         // now, assume the server 3 is down;
         client.close();
@@ -334,8 +337,11 @@ class CoordinatorEventProcessorTest {
         // should be offline
         verifyReplicaOnlineOrOffline(
                 table1Id, table1Assignment, Collections.singleton(newlyServerId));
+        verifyBucketIsr(table1Id, 0, new int[] {0, 2});
+        verifyBucketIsr(table1Id, 1, new int[] {2, 0});
         verifyReplicaOnlineOrOffline(
                 table2Id, table2Assignment, Collections.singleton(newlyServerId));
+        verifyBucketIsr(table2Id, 0, new int[] {3});
 
         // now, check bucket state
         TableBucket t1Bucket0 = new TableBucket(table1Id, 0);
@@ -377,14 +383,7 @@ class CoordinatorEventProcessorTest {
 
         // let's restart to check everything is ok
         eventProcessor.shutdown();
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
 
         // in this test case, so make requests to gateway should always be
         // successful for when start up, it will send request to tablet servers
@@ -422,14 +421,7 @@ class CoordinatorEventProcessorTest {
         // let's restart
         initCoordinatorChannel();
         eventProcessor.shutdown();
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         int failedServer = 0;
         initCoordinatorChannel(failedServer);
         eventProcessor.startup();
@@ -479,7 +471,7 @@ class CoordinatorEventProcessorTest {
                     "leader not elected");
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
                 CompletedSnapshot completedSnapshot =
-                        KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                        mockCompletedSnapshot(tempDir, tableBucket, snapshot);
                 CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture =
                         new CompletableFuture<>();
                 coordinatorEventManager.put(
@@ -507,8 +499,7 @@ class CoordinatorEventProcessorTest {
 
         // in valid bucket leader epoch
         int invalidBucketLeaderEpoch = -1;
-        CompletedSnapshot completedSnapshot =
-                KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 2);
+        CompletedSnapshot completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 2);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture =
                 new CompletableFuture<>();
         coordinatorEventManager.put(
@@ -522,7 +513,7 @@ class CoordinatorEventProcessorTest {
 
         // invalid coordinator epoch
         int invalidCoordinatorEpoch = 1;
-        completedSnapshot = KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 2);
+        completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 2);
         responseCompletableFuture = new CompletableFuture<>();
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
@@ -593,14 +584,7 @@ class CoordinatorEventProcessorTest {
         metadataManager.dropTable(tablePath, false);
 
         // start the coordinator
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         initCoordinatorChannel();
         eventProcessor.startup();
         verifyPartitionDropped(tableId, partition2Id);
@@ -647,14 +631,7 @@ class CoordinatorEventProcessorTest {
         zookeeperClient.deletePartition(tablePath, partition2Name);
 
         // start the coordinator
-        eventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        testCoordinatorChannelManager,
-                        autoPartitionManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration());
+        eventProcessor = buildCoordinatorEventProcessor();
         initCoordinatorChannel();
         eventProcessor.startup();
 
@@ -666,6 +643,82 @@ class CoordinatorEventProcessorTest {
                 partitionAssignment,
                 nBuckets,
                 replicationFactor);
+    }
+
+    @Test
+    void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
+        final long t1Id = createTable(t1, new int[] {0, 1, 2});
+        TableBucket tableBucket = new TableBucket(t1Id, 0);
+        LeaderAndIsr leaderAndIsr =
+                waitValue(
+                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tableBucket)),
+                        Duration.ofMinutes(1),
+                        "leader not elected");
+        // remove one follower from isr
+        int leader = leaderAndIsr.leader();
+        int bucketLeaderEpoch = leaderAndIsr.leaderEpoch();
+        int coordinatorEpoch = leaderAndIsr.coordinatorEpoch();
+        List<Integer> newIsr = leaderAndIsr.isr();
+        Integer follower = newIsr.stream().filter(i -> i != leader).findFirst().get();
+        newIsr.remove(follower);
+        // change isr in coordinator context
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(
+                            tableBucket,
+                            new LeaderAndIsr(
+                                    leader,
+                                    leaderAndIsr.leaderEpoch(),
+                                    newIsr,
+                                    coordinatorEpoch,
+                                    bucketLeaderEpoch));
+                    return null;
+                });
+
+        CoordinatorEventManager coordinatorEventManager =
+                eventProcessor.getCoordinatorEventManager();
+
+        // verify CommitRemoteLogManifest trigger notify offsets request
+        CompletableFuture<CommitRemoteLogManifestResponse> responseCompletableFuture1 =
+                new CompletableFuture<>();
+        coordinatorEventManager.put(
+                new CommitRemoteLogManifestEvent(
+                        new CommitRemoteLogManifestData(
+                                tableBucket,
+                                new FsPath(tempDir.toString()),
+                                0,
+                                0,
+                                coordinatorEpoch,
+                                bucketLeaderEpoch),
+                        responseCompletableFuture1));
+        responseCompletableFuture1.get();
+        verifyReceiveRequestExceptFor(3, leader, NotifyRemoteLogOffsetsRequest.class);
+
+        // verify CommitKvSnapshot trigger notify offsets request
+        initCoordinatorChannel();
+        CompletedSnapshot completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 0);
+        CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
+                new CompletableFuture<>();
+        coordinatorEventManager.put(
+                new CommitKvSnapshotEvent(
+                        new CommitKvSnapshotData(
+                                completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
+                        responseCompletableFuture2));
+        responseCompletableFuture2.get();
+        verifyReceiveRequestExceptFor(3, leader, NotifyKvSnapshotOffsetRequest.class);
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return new CoordinatorEventProcessor(
+                zookeeperClient,
+                serverMetadataCache,
+                testCoordinatorChannelManager,
+                autoPartitionManager,
+                TestingMetricGroups.COORDINATOR_METRICS,
+                new Configuration(),
+                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")));
     }
 
     private void initCoordinatorChannel() throws Exception {
@@ -858,6 +911,23 @@ class CoordinatorEventProcessorTest {
                         });
     }
 
+    private void verifyBucketIsr(long tableId, int bucket, int[] expectedIsr) {
+        retryVerifyContext(
+                ctx -> {
+                    TableBucket tableBucket = new TableBucket(tableId, bucket);
+                    // verify leaderAndIsr from coordinator context
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(leaderAndIsr.isrArray()).isEqualTo(expectedIsr);
+                    // verify leaderAndIsr from tablet server
+                    try {
+                        leaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+                    } catch (Exception e) {
+                        throw new RuntimeException("Fail to get leaderAndIsr of " + tableBucket);
+                    }
+                    assertThat(leaderAndIsr.isrArray()).isEqualTo(expectedIsr);
+                });
+    }
+
     private void verifyReplicaForPartitionInState(
             TablePartition tablePartition, int expectedReplicaCount, ReplicaState expectedState) {
         retryVerifyContext(
@@ -885,6 +955,25 @@ class CoordinatorEventProcessorTest {
                         assertThat(ctx.getBucketState(tableBucket)).isEqualTo(expectedState);
                     }
                 });
+    }
+
+    private void verifyReceiveRequestExceptFor(
+            int serverCount, int notReceiveServer, Class<?> requestClass) {
+        // make sure all follower should receive notify offsets request
+        for (int i = 0; i < serverCount; i++) {
+            TestTabletServerGateway testTabletServerGateway =
+                    (TestTabletServerGateway)
+                            testCoordinatorChannelManager.getTabletServerGateway(i).get();
+            if (i == notReceiveServer) {
+                // should not contain NotifyKvSnapshotOffsetRequest
+                assertThatThrownBy(() -> testTabletServerGateway.getRequest(0))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("No requests pending for inbound response.");
+            } else {
+                // should contain NotifyKvSnapshotOffsetRequest
+                assertThat(testTabletServerGateway.getRequest(0)).isInstanceOf(requestClass);
+            }
+        }
     }
 
     private void retryVerifyContext(Consumer<CoordinatorContext> verifyFunction) {

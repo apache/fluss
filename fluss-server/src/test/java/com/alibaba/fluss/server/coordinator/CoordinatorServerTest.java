@@ -54,7 +54,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @Override
     protected ServerBase getStartFailServer() {
         Configuration configuration = createConfiguration();
-        configuration.setString(ConfigOptions.COORDINATOR_PORT, "-12");
+        configuration.set(ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:-12");
         return new CoordinatorServer(configuration);
     }
 
@@ -64,8 +64,8 @@ class CoordinatorServerTest extends ServerTestBase {
         // check the data put in zk after coordinator server start
         Optional<CoordinatorAddress> optCoordinatorAddr = zookeeperClient.getCoordinatorAddress();
         assertThat(optCoordinatorAddr).isNotEmpty();
-        CoordinatorAddress coordinatorAddress = optCoordinatorAddr.get();
-        assertThat(coordinatorAddress.getHost())
-                .isEqualTo(coordinatorServer.getRpcServer().getHostname());
+        verifyEndpoint(
+                optCoordinatorAddr.get().getEndpoints(),
+                coordinatorServer.getRpcServer().getBindEndpoints());
     }
 }

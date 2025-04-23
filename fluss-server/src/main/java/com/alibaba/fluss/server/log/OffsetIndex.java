@@ -16,9 +16,9 @@
 
 package com.alibaba.fluss.server.log;
 
-import com.alibaba.fluss.exception.CorruptIndexException;
 import com.alibaba.fluss.exception.IndexOffsetOverflowException;
 import com.alibaba.fluss.exception.InvalidOffsetException;
+import com.alibaba.fluss.server.exception.CorruptIndexException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
