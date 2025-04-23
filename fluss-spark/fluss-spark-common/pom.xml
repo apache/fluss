@@ -100,6 +100,13 @@
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-common</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
 
     </dependencies>
 

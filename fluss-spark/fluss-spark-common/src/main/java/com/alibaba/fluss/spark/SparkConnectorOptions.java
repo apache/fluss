@@ -28,6 +28,28 @@ import static com.alibaba.fluss.config.ConfigBuilder.key;
 /** Options for spark connector. */
 public class SparkConnectorOptions {
 
+    public static final String MOCK_SYSTEM_TIME = "_mockSystemTime";
+
+    public static final ConfigOption<Duration> MAX_TRIGGER_DELAY =
+            key("max.trigger.delay")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(15))
+                    .withDescription(
+                            "The maximum delay between two adjacent batches, which used to create MinRowsReadLimit with min.offset.per.trigger together.Note:Kv table not support it.");
+
+    public static final ConfigOption<Long> MAX_OFFSET_PER_TRIGGER =
+            key("max.offset.per.trigger")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription("The maximum number of rows returned in a single batch.");
+
+    public static final ConfigOption<Long> MIN_OFFSET_PER_TRIGGER =
+            key("min.offset.per.trigger")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The minimum number of rows returned in a single batch, which used to create MinRowsReadLimit with max.trigger.delay together.");
+
     public static final ConfigOption<Integer> BUCKET_NUMBER =
             key("bucket.num")
                     .intType()
@@ -86,7 +108,7 @@ public class SparkConnectorOptions {
     public static final ConfigOption<ScanStartupMode> SCAN_STARTUP_MODE =
             key("scan.startup.mode")
                     .enumType(ScanStartupMode.class)
-                    .defaultValue(ScanStartupMode.INITIAL)
+                    .defaultValue(ScanStartupMode.FULL)
                     .withDescription(
                             "Optional startup mode for Fluss source. Default is 'initial'.");
 
@@ -126,17 +148,17 @@ public class SparkConnectorOptions {
 
     /** Startup mode for the fluss scanner, see {@link #SCAN_STARTUP_MODE}. */
     public enum ScanStartupMode {
-        INITIAL(
-                "initial",
-                "Performs an initial snapshot n the table upon first startup, "
-                        + "ans continue to read the latest changelog with exactly once guarantee. "
-                        + "If the table to read is a log table, the initial snapshot means "
+        FULL(
+                "full",
+                "Performs a full snapshot on the table upon first startup, "
+                        + "and continue to read the latest changelog with exactly once guarantee. "
+                        + "If the table to read is a log table, the full snapshot means "
                         + "reading from earliest log offset. If the table to read is a primary key table, "
-                        + "the initial snapshot means reading a latest snapshot which "
+                        + "the full snapshot means reading a latest snapshot which "
                         + "materializes all changes on the table."),
-        EARLIEST("earliest", "Start reading logs from the earliest offset."),
-        LATEST("latest", "Start reading logs from the latest offset."),
-        TIMESTAMP("timestamp", "Start reading logs from user-supplied timestamp.");
+        EARLIEST("earliest", ("Start reading logs from the earliest offset.")),
+        LATEST("latest", ("Start reading logs from the latest offset.")),
+        TIMESTAMP("timestamp", ("Start reading logs from user-supplied timestamp."));
 
         private final String value;
         private final String description;

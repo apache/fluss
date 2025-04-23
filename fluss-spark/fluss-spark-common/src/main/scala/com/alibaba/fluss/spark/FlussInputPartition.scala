@@ -22,17 +22,13 @@ import org.apache.spark.sql.connector.read.InputPartition
 
 /** A [[InputPartition]] for reading Fluss data in a batch based streaming/batch query. */
 trait FlussInputPartition extends InputPartition {
-  def splits: Seq[FlussOffsetRange]
+  def split: FlussOffsetRange
 }
 
-case class SimpleFlussInputPartition(splits: Seq[FlussOffsetRange]) extends FlussInputPartition
+case class SimpleFlussInputPartition(split: FlussOffsetRange) extends FlussInputPartition
 object FlussInputPartition {
   def apply(split: FlussOffsetRange): FlussInputPartition = {
-    SimpleFlussInputPartition(Seq(split))
-  }
-
-  def apply(splits: Seq[FlussOffsetRange]): FlussInputPartition = {
-    SimpleFlussInputPartition(splits)
+    SimpleFlussInputPartition(split)
   }
 }
 

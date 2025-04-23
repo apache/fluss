@@ -29,6 +29,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Test for {@link com.alibaba.fluss.spark.utils.SparkTypeUtils}. */
 public class SparkTypeUtilsTest {
 
     @Test

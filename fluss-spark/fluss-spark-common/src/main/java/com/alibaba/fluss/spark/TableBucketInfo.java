@@ -18,27 +18,38 @@ package com.alibaba.fluss.spark;
 
 import com.alibaba.fluss.metadata.TableBucket;
 
-public class TableBucketInfo {
+import javax.annotation.Nullable;
+
+import java.io.Serializable;
+import java.util.Objects;
+
+/** Table bucket info. */
+public class TableBucketInfo implements Serializable {
     private final TableBucket tableBucket;
     private final String partitionName;
-    private final long snapshotId;
+    private Long snapshotId;
 
-    public TableBucketInfo(TableBucket tableBucket, String partitionName, long snapshotId) {
+    public TableBucketInfo() {
+        this(null, null, null);
+    }
+
+    public TableBucketInfo(
+            TableBucket tableBucket, @Nullable String partitionName, @Nullable Long snapshotId) {
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
         this.snapshotId = snapshotId;
     }
 
     public TableBucketInfo(TableBucket tableBucket) {
-        this(tableBucket, null, 0);
+        this(tableBucket, null, null);
     }
 
     public TableBucketInfo(TableBucket tableBucket, String partitionName) {
-        this(tableBucket, partitionName, 0);
+        this(tableBucket, partitionName, null);
     }
 
     public boolean isBatch() {
-        return snapshotId != 0;
+        return snapshotId != null;
     }
 
     public TableBucket getTableBucket() {
@@ -49,7 +60,43 @@ public class TableBucketInfo {
         return partitionName;
     }
 
-    public long getSnapshotId() {
+    public Long getSnapshotId() {
         return snapshotId;
+    }
+
+    public void setSnapshotId(Long snapshotId) {
+        this.snapshotId = snapshotId;
+    }
+
+    @Override
+    public String toString() {
+        return "TableBucketInfo{"
+                + "tableBucket="
+                + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + ", snapshotId="
+                + snapshotId
+                + '}';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        TableBucketInfo that = (TableBucketInfo) o;
+        return Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(partitionName, that.partitionName)
+                && Objects.equals(snapshotId, that.snapshotId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(tableBucket, partitionName, snapshotId);
     }
 }
