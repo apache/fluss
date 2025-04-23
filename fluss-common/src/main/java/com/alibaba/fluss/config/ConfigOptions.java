@@ -343,6 +343,14 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription("The id for the tablet server.");
 
+    public static final ConfigOption<String> TABLET_SERVER_RACK =
+            key("tablet-server.rack")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The rack for the tabletServer. This will be used in rack aware bucket assignment "
+                                    + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
+
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
                     .stringType()

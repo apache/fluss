@@ -297,7 +297,8 @@ public class MetadataUtils {
                                             nodeId,
                                             serverNode.getHost(),
                                             serverNode.getPort(),
-                                            ServerType.TABLET_SERVER));
+                                            ServerType.TABLET_SERVER,
+                                            serverNode.getRack()));
                         });
         return aliveTabletServers;
     }

@@ -42,7 +42,7 @@ public class TabletServerITCase extends ServerITCaseBase {
 
     @Override
     protected ServerNode getServerNode() {
-        return new ServerNode(1, HOSTNAME, getPort(), ServerType.TABLET_SERVER);
+        return new ServerNode(1, HOSTNAME, getPort(), ServerType.TABLET_SERVER, "rack1");
     }
 
     @Override
@@ -62,6 +62,7 @@ public class TabletServerITCase extends ServerITCaseBase {
                 ConfigOptions.BIND_LISTENERS,
                 String.format("%s://%s:%d", DEFAULT_LISTENER_NAME, HOSTNAME, getPort()));
         conf.set(ConfigOptions.TABLET_SERVER_ID, 1);
+        conf.set(ConfigOptions.TABLET_SERVER_RACK, "rack1");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;
     }

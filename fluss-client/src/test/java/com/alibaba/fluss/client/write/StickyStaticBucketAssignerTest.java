@@ -46,9 +46,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link StickyBucketAssigner}. */
 class StickyStaticBucketAssignerTest {
-    ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER);
-    ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER);
-    ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER);
+    ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
+    ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
+    ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
     private final ServerNode[] serverNodes = new ServerNode[] {node1, node2, node3};
     private final BucketLocation bucket1 =
             new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1, serverNodes);

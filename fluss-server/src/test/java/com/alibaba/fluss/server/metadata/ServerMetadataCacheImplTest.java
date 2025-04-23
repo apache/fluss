@@ -41,6 +41,7 @@ public class ServerMetadataCacheImplTest {
         coordinatorServer =
                 new ServerInfo(
                         0,
+                        "rack0",
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:99,INTERNAL://localhost:100"),
                         ServerType.COORDINATOR);
@@ -49,15 +50,18 @@ public class ServerMetadataCacheImplTest {
                         Arrays.asList(
                                 new ServerInfo(
                                         0,
+                                        "rack0",
                                         Endpoint.fromListenersString(
                                                 "CLIENT://localhost:101, INTERNAL://localhost:102"),
                                         ServerType.TABLET_SERVER),
                                 new ServerInfo(
                                         1,
+                                        "rack1",
                                         Endpoint.fromListenersString("INTERNAL://localhost:103"),
                                         ServerType.TABLET_SERVER),
                                 new ServerInfo(
                                         2,
+                                        "rack2",
                                         Endpoint.fromListenersString("INTERNAL://localhost:104"),
                                         ServerType.TABLET_SERVER)));
     }

@@ -17,11 +17,13 @@
 package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 
 import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -68,7 +70,14 @@ public class ServerCluster {
         return serverNodes;
     }
 
-    public Set<Integer> getAliveTabletServerIds() {
-        return Collections.unmodifiableSet(aliveTabletServers.keySet());
+    public Set<TabletServerInfo> getAliveTabletServerInfos() {
+        Set<TabletServerInfo> tabletServerInfos = new HashSet<>();
+        aliveTabletServers
+                .values()
+                .forEach(
+                        serverInfo ->
+                                tabletServerInfos.add(
+                                        new TabletServerInfo(serverInfo.id(), serverInfo.rack())));
+        return Collections.unmodifiableSet(tabletServerInfos);
     }
 }

@@ -23,6 +23,7 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -35,7 +36,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
@@ -57,6 +57,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -227,10 +228,14 @@ public class FlinkTestBase extends AbstractTestBase {
             long partitionId = zkClient.getPartitionIdAndIncrement();
             newPartitionIds.put(partitionId, partition);
             TableAssignment assignment =
-                    TableAssignmentUtils.generateAssignment(
+                    generateAssignment(
                             tableInfo.getNumBuckets(),
                             tableInfo.getTableConfig().getReplicationFactor(),
-                            new int[] {0, 1, 2});
+                            new TabletServerInfo[] {
+                                new TabletServerInfo(0, "rack0"),
+                                new TabletServerInfo(1, "rack1"),
+                                new TabletServerInfo(2, "rack2")
+                            });
 
             // register partition assignments
             zkClient.registerPartitionAssignment(

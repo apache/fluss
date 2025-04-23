@@ -548,11 +548,13 @@ message PbPhysicalTablePath {
 // For UpdateMetadataRequest,
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
+// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
+  optional string rack = 5;
 }
 
 message PbTableMetadata {

@@ -31,9 +31,11 @@ public class BucketLocationTest {
         TablePath tablePath = new TablePath("test_db", "test_table");
         int bucketId = 0;
         long tableId = 150001L;
-        ServerNode leader = new ServerNode(0, "localhost", 9092, ServerType.TABLET_SERVER);
-        ServerNode replica1 = new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER);
-        ServerNode replica2 = new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER);
+        ServerNode leader = new ServerNode(0, "localhost", 9092, ServerType.TABLET_SERVER, "rack0");
+        ServerNode replica1 =
+                new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER, "rack1");
+        ServerNode replica2 =
+                new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER, "rack2");
         ServerNode[] replicas = {leader, replica1, replica2};
         // TODO add isr and offline.
         BucketLocation bucketLocation =

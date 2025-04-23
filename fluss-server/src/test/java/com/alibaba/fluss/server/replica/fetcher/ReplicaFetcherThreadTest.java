@@ -111,9 +111,12 @@ public class ReplicaFetcherThreadTest {
         leaderRM = createReplicaManager(leaderServerId);
         followerRM = createReplicaManager(followerServerId);
         // with local test leader end point.
-        leader = new ServerNode(leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER);
+        leader =
+                new ServerNode(
+                        leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER, "rack1");
         ServerNode follower =
-                new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER);
+                new ServerNode(
+                        followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
         followerFetcher =
                 new ReplicaFetcherThread(
                         "test-fetcher-thread",

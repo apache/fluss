@@ -122,6 +122,7 @@ public class ReplicaTestBase {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     protected static final int TABLET_SERVER_ID = 1;
+    private static final String TABLET_SERVER_RACK = "rack1";
     private static ZooKeeperClient zkClient;
 
     // to register all should be closed after each test
@@ -206,22 +207,26 @@ public class ReplicaTestBase {
                         Optional.of(
                                 new ServerInfo(
                                         0,
+                                        "rack0",
                                         Endpoint.fromListenersString("CLIENT://localhost:1234"),
                                         ServerType.COORDINATOR)),
                         new HashSet<>(
                                 Arrays.asList(
                                         new ServerInfo(
                                                 TABLET_SERVER_ID,
+                                                TABLET_SERVER_RACK,
                                                 Endpoint.fromListenersString(
                                                         "CLIENT://localhost:90"),
                                                 ServerType.TABLET_SERVER),
                                         new ServerInfo(
                                                 2,
+                                                "rack2",
                                                 Endpoint.fromListenersString(
                                                         "CLIENT://localhost:91"),
                                                 ServerType.TABLET_SERVER),
                                         new ServerInfo(
                                                 3,
+                                                "rack3",
                                                 Endpoint.fromListenersString(
                                                         "CLIENT://localhost:92"),
                                                 ServerType.TABLET_SERVER)))));

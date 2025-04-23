@@ -87,6 +87,7 @@ public class TabletServerChangeWatcher {
                                     new NewTabletServerEvent(
                                             new ServerInfo(
                                                     serverId,
+                                                    registration.getRack(),
                                                     registration.getEndpoints(),
                                                     ServerType.TABLET_SERVER)));
                         }

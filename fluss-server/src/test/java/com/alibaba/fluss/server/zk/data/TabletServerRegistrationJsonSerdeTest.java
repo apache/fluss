@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
-/** Test for {@link com.alibaba.fluss.server.zk.data.TabletServerRegistrationJsonSerde}. */
+/** Test for {@link TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
         extends JsonSerdeTestBase<TabletServerRegistration> {
 
@@ -36,23 +36,34 @@ public class TabletServerRegistrationJsonSerdeTest
 
     @Override
     protected TabletServerRegistration[] createObjects() {
-        TabletServerRegistration tabletServerRegistration =
+        TabletServerRegistration tabletServerRegistration1 =
                 new TabletServerRegistration(
+                        null,
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000);
-        return new TabletServerRegistration[] {tabletServerRegistration};
+        TabletServerRegistration tabletServerRegistration2 =
+                new TabletServerRegistration(
+                        "cn-hangzhou-server10",
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000);
+        return new TabletServerRegistration[] {
+            tabletServerRegistration1, tabletServerRegistration2
+        };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}"
+            "{\"version\":3,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
+            "{\"version\":3,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}"
         };
     }
 
     @Test
     void testCompatibility() throws IOException {
+        // compatibility with version 1
         JsonNode jsonInVersion1 =
                 new ObjectMapper()
                         .readTree(
@@ -63,7 +74,24 @@ public class TabletServerRegistrationJsonSerdeTest
                 TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion1);
         TabletServerRegistration expectedTabletServerRegistration =
                 new TabletServerRegistration(
-                        Endpoint.fromListenersString("FLUSS://localhost:1001"), 10000);
+                        null, Endpoint.fromListenersString("FLUSS://localhost:1001"), 10000);
+        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+
+        // compatibility with version 2
+        JsonNode jsonInVersion2 =
+                new ObjectMapper()
+                        .readTree(
+                                ("{\"version\":2,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\","
+                                                + "\"register_timestamp\":10000}")
+                                        .getBytes(StandardCharsets.UTF_8));
+        tabletServerRegistration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion2);
+        expectedTabletServerRegistration =
+                new TabletServerRegistration(
+                        null,
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000);
         assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
     }
 }

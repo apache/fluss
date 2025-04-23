@@ -662,7 +662,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                 // and port as -1 just like kafka
                                 // TODO: client will not use this node to connect,
                                 //  should be removed in the future.
-                                new ServerNode(replicas.get(i), "", -1, ServerType.TABLET_SERVER));
+                                new ServerNode(
+                                        replicas.get(i), "", -1, ServerType.TABLET_SERVER, null));
             }
 
             // now get the leader

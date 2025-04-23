@@ -98,11 +98,15 @@ public class ClusterMetadataInfo {
 
         List<PbServerNode> serverNodeList = new ArrayList<>();
         for (ServerNode serverNode : aliveTabletServers) {
-            serverNodeList.add(
+            PbServerNode tabletServerNode =
                     new PbServerNode()
                             .setNodeId(serverNode.id())
                             .setHost(serverNode.host())
-                            .setPort(serverNode.port()));
+                            .setPort(serverNode.port());
+            if (serverNode.rack() != null) {
+                tabletServerNode.setRack(serverNode.rack());
+            }
+            serverNodeList.add(tabletServerNode);
         }
 
         List<PbTableMetadata> tableMetadatas = new ArrayList<>();
@@ -181,6 +185,7 @@ public class ClusterMetadataInfo {
                     Optional.of(
                             new ServerInfo(
                                     pbCoordinatorServer.getNodeId(),
+                                    null,
                                     endpoints,
                                     ServerType.COORDINATOR));
         }
@@ -197,8 +202,13 @@ public class ClusterMetadataInfo {
                                             tabletServer.getPort(),
                                             // TODO: maybe use internal listener name from conf
                                             ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
+
             aliveTabletServers.add(
-                    new ServerInfo(tabletServer.getNodeId(), endpoints, ServerType.TABLET_SERVER));
+                    new ServerInfo(
+                            tabletServer.getNodeId(),
+                            tabletServer.hasRack() ? tabletServer.getRack() : null,
+                            endpoints,
+                            ServerType.TABLET_SERVER));
         }
         return new ClusterMetadataInfo(coordinatorServer, aliveTabletServers);
     }

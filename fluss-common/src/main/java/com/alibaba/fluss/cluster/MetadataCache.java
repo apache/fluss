@@ -64,17 +64,17 @@ public interface MetadataCache {
      */
     Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName);
 
-    Set<Integer> getAliveTabletServerIds();
+    Set<TabletServerInfo> getAliveTabletServerInfos();
 
     @Nullable
     PhysicalTablePath getTablePath(long tableId);
 
     /** Get ids of all alive tablet server nodes. */
-    default int[] getLiveServerIds() {
-        Set<Integer> aliveTabletServerIds = getAliveTabletServerIds();
-        int[] server = new int[aliveTabletServerIds.size()];
-        Iterator<Integer> iterator = aliveTabletServerIds.iterator();
-        for (int i = 0; i < aliveTabletServerIds.size(); i++) {
+    default TabletServerInfo[] getLiveServers() {
+        Set<TabletServerInfo> aliveTabletServerInfos = getAliveTabletServerInfos();
+        TabletServerInfo[] server = new TabletServerInfo[aliveTabletServerInfos.size()];
+        Iterator<TabletServerInfo> iterator = aliveTabletServerInfos.iterator();
+        for (int i = 0; i < aliveTabletServerInfos.size(); i++) {
             server[i] = iterator.next();
         }
         return server;

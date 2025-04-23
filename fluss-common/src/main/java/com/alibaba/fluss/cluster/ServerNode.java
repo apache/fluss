@@ -18,6 +18,8 @@ package com.alibaba.fluss.cluster;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
@@ -33,15 +35,23 @@ public class ServerNode {
     private final int port;
     private final ServerType serverType;
 
+    /** rack info for ServerNode. Currently, only tabletServer has rack info. */
+    private final @Nullable String rack;
+
     // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
     // RecordAccumulator.ready)
     private Integer hash;
 
     public ServerNode(int id, String host, int port, ServerType serverType) {
+        this(id, host, port, serverType, null);
+    }
+
+    public ServerNode(int id, String host, int port, ServerType serverType, @Nullable String rack) {
         this.id = id;
         this.host = host;
         this.port = port;
         this.serverType = serverType;
+        this.rack = rack;
         if (serverType == ServerType.COORDINATOR) {
             this.uid = "cs-" + id;
         } else {
@@ -80,6 +90,11 @@ public class ServerNode {
         return serverType;
     }
 
+    /** The rack for this node. */
+    public @Nullable String rack() {
+        return rack;
+    }
+
     /**
      * Check whether this node is empty, which may be the case if noNode() is used as a placeholder
      * in a response payload with an error.
@@ -98,6 +113,7 @@ public class ServerNode {
             result = 31 * result + id;
             result = 31 * result + port;
             result = 31 * result + serverType.hashCode();
+            result = 31 * result + ((rack == null) ? 0 : rack.hashCode());
             this.hash = result;
             return result;
         } else {
@@ -117,11 +133,12 @@ public class ServerNode {
         return id == other.id
                 && port == other.port
                 && Objects.equals(host, other.host)
-                && serverType == other.serverType;
+                && serverType == other.serverType
+                && Objects.equals(rack, other.rack);
     }
 
     @Override
     public String toString() {
-        return host + ":" + port + " (id: " + uid + ")";
+        return host + ":" + port + " (id: " + uid + ", rack: " + rack + ")";
     }
 }

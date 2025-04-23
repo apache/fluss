@@ -63,12 +63,14 @@ class TabletServerChangeWatcherTest {
         for (int i = 0; i < 10; i++) {
             TabletServerRegistration tabletServerRegistration =
                     new TabletServerRegistration(
+                            "rack" + i,
                             Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
                             System.currentTimeMillis());
             expectedEvents.add(
                     new NewTabletServerEvent(
                             new ServerInfo(
                                     i,
+                                    tabletServerRegistration.getRack(),
                                     tabletServerRegistration.getEndpoints(),
                                     ServerType.TABLET_SERVER)));
             zookeeperClient.registerTabletServer(i, tabletServerRegistration);
