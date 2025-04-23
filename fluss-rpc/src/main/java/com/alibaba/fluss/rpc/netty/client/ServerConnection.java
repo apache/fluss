@@ -94,10 +94,10 @@ final class ServerConnection {
             ClientAuthenticator authenticator) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
+        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         bootstrap
                 .connect(node.host(), node.port())
                 .addListener((ChannelFutureListener) this::establishConnection);
-        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         this.authenticator = authenticator;
     }
 
