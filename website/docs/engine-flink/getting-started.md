@@ -46,7 +46,10 @@ Fluss only supports Apache Flink's Table API.
 | [SQL add partiiton](ddl.md#add-partition)         | ✔️    |                                        |
 | [SQL drop partiiton](ddl.md#drop-partition)       | ✔️    |                                        |
 | [SQL select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
+| [SQL limit](reads.md#limit-read)                  | ✔️    | Only for Log Table                     |
 | [SQL insert into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
+| [SQL delete from](writes.md#delete-from)          | ✔️    | Only in batch mode.                    |
+| [SQL update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
 | [SQL lookup join](lookups.md)                     | ✔️    |                                        |
 
 ## Preparation when using Flink SQL Client
