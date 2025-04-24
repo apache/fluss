@@ -22,6 +22,8 @@ import javax.annotation.Nullable;
 
 import java.util.Objects;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * Represents a filter which matches access control entries.
  *
@@ -48,10 +50,8 @@ public class AccessControlEntryFilter {
             PermissionType permissionType) {
         this.principal = principal;
         this.host = host;
-        Objects.requireNonNull(operation);
-        Objects.requireNonNull(permissionType);
-        this.operationType = operation;
-        this.permissionType = permissionType;
+        this.operationType = checkNotNull(operation);
+        this.permissionType = checkNotNull(permissionType);
     }
 
     /** Returns true if this filter matches the given AccessControlEntry. */

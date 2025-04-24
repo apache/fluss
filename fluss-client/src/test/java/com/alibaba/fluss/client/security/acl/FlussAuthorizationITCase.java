@@ -408,6 +408,9 @@ public class FlussAuthorizationITCase {
                             rpcClient,
                             AdminGateway.class);
 
+            assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
+                    .isEmpty();
+
             // if add acl to allow guest read any resource, it will allow to get metadata.
             rootAdmin
                     .createAcls(

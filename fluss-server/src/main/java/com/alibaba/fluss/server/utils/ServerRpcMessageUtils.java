@@ -473,6 +473,12 @@ public class ServerRpcMessageUtils {
     }
 
     public static FetchLogResponse makeFetchLogResponse(
+            Map<TableBucket, FetchLogResultForBucket> fetchLogResult,
+            Map<TableBucket, FetchLogResultForBucket> fetchLogErrors) {
+        return makeFetchLogResponse(mergeResponse(fetchLogResult, fetchLogErrors));
+    }
+
+    public static FetchLogResponse makeFetchLogResponse(
             Map<TableBucket, FetchLogResultForBucket> fetchLogResult) {
         Map<Long, List<PbFetchLogRespForBucket>> fetchLogRespMap = new HashMap<>();
         for (Map.Entry<TableBucket, FetchLogResultForBucket> entry : fetchLogResult.entrySet()) {
@@ -707,6 +713,12 @@ public class ServerRpcMessageUtils {
     }
 
     public static LookupResponse makeLookupResponse(
+            Map<TableBucket, LookupResultForBucket> lookupResult,
+            Map<TableBucket, LookupResultForBucket> lookupError) {
+        return makeLookupResponse(mergeResponse(lookupResult, lookupError));
+    }
+
+    public static LookupResponse makeLookupResponse(
             Map<TableBucket, LookupResultForBucket> lookupResult) {
         LookupResponse lookupResponse = new LookupResponse();
         for (Map.Entry<TableBucket, LookupResultForBucket> entry : lookupResult.entrySet()) {
@@ -730,6 +742,12 @@ public class ServerRpcMessageUtils {
             }
         }
         return lookupResponse;
+    }
+
+    public static PrefixLookupResponse makePrefixLookupResponse(
+            Map<TableBucket, PrefixLookupResultForBucket> prefixLookupResult,
+            Map<TableBucket, PrefixLookupResultForBucket> prefixLookupErrors) {
+        return makePrefixLookupResponse(mergeResponse(prefixLookupResult, prefixLookupErrors));
     }
 
     public static PrefixLookupResponse makePrefixLookupResponse(
@@ -1334,8 +1352,8 @@ public class ServerRpcMessageUtils {
                     aclBindingDeleteResults) {
                 PbDropAclsMatchingAcl dropAclsMatchingAcl = new PbDropAclsMatchingAcl();
                 dropAclsMatchingAcl.setAcl(toPbAclInfo(aclBindingDeleteResult.aclBinding()));
-                if (result.error().isPresent()) {
-                    ApiError apiError = result.error().get();
+                if (aclBindingDeleteResult.error().isPresent()) {
+                    ApiError apiError = aclBindingDeleteResult.error().get();
                     dropAclsMatchingAcl.setError(apiError.error().code(), apiError.message());
                 }
                 dropAclsMatchingAcls.add(dropAclsMatchingAcl);
@@ -1344,5 +1362,26 @@ public class ServerRpcMessageUtils {
                     new PbDropAclsFilterResult().addAllMatchingAcls(dropAclsMatchingAcls));
         }
         return new DropAclsResponse().addAllFilterResults(dropAclsFilterResults);
+    }
+
+    private static <T> Map<TableBucket, T> mergeResponse(
+            Map<TableBucket, T> response, Map<TableBucket, T> errors) {
+        if (errors.isEmpty()) {
+            return response;
+        }
+        Map<TableBucket, T> result = new HashMap<>(response.size() + errors.size());
+        result.putAll(response);
+        result.putAll(errors);
+        return result;
+    }
+
+    private static <T> Collection<T> mergeResponse(Collection<T> response, Collection<T> errors) {
+        if (errors.isEmpty()) {
+            return response;
+        }
+        Collection<T> result = new ArrayList<>(response.size() + errors.size());
+        result.addAll(response);
+        result.addAll(errors);
+        return result;
     }
 }

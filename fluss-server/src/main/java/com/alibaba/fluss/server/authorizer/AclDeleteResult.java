@@ -48,7 +48,7 @@ public class AclDeleteResult {
     }
 
     public Optional<ApiError> error() {
-        return error == null ? Optional.empty() : Optional.of(error);
+        return Optional.ofNullable(error);
     }
 
     public Collection<AclBindingDeleteResult> aclBindingDeleteResults() {

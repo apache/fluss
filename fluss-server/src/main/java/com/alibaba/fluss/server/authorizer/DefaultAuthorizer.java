@@ -218,30 +218,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                                                         new AclCreateResult(
                                                                 aclBindings.get(idx), exception);
                                             });
-                            entries.values()
-                                    .forEach(
-                                            idx ->
-                                                    results[idx] =
-                                                            new AclCreateResult(
-                                                                    aclBindings.get(idx),
-                                                                    exception));
                         }
                     });
-
-            Map<FlussPrincipal, Integer> readIndices = new HashMap<>();
-            Map<FlussPrincipal, Integer> writeIndices = new HashMap<>();
-            for (int i = 0; i < aclBindings.size(); i++) {
-                if (results[i].exception().isPresent()) {
-                    continue;
-                }
-                if (aclBindings.get(i).getAccessControlEntry().getOperationType()
-                        == OperationType.READ) {
-                    readIndices.put(aclBindings.get(i).getAccessControlEntry().getPrincipal(), i);
-                } else if (aclBindings.get(i).getAccessControlEntry().getOperationType()
-                        == OperationType.WRITE) {
-                    writeIndices.put(aclBindings.get(i).getAccessControlEntry().getPrincipal(), i);
-                }
-            }
         }
         return Arrays.asList(results);
     }

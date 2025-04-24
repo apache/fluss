@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.authorizer;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.plugin.PluginUtils;
 import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.AccessControlEntryFilter;
@@ -91,16 +90,9 @@ public class DefaultAuthorizerTest {
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
         authorizer =
                 (DefaultAuthorizer)
-                        AuthorizerLoader.createAuthorizer(
-                                configuration,
-                                zooKeeperClient,
-                                PluginUtils.createPluginManagerFromRootFolder(configuration));
+                        AuthorizerLoader.createAuthorizer(configuration, zooKeeperClient, null);
         authorizer2 =
-                (DefaultAuthorizer)
-                        AuthorizerLoader.createAuthorizer(
-                                configuration,
-                                null,
-                                PluginUtils.createPluginManagerFromRootFolder(configuration));
+                (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, null, null);
         authorizer.startup();
         authorizer2.startup();
     }
@@ -211,13 +203,7 @@ public class DefaultAuthorizerTest {
     void testAuthorizerNoZkConfig() {
         Configuration configuration =
                 new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
-        assertThatThrownBy(
-                        () ->
-                                AuthorizerLoader.createAuthorizer(
-                                        configuration,
-                                        null,
-                                        PluginUtils.createPluginManagerFromRootFolder(
-                                                configuration)))
+        assertThatThrownBy(() -> AuthorizerLoader.createAuthorizer(configuration, null, null))
                 .hasMessageContaining(
                         "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
     }
@@ -422,10 +408,7 @@ public class DefaultAuthorizerTest {
         deleteAclChangeNotifications();
 
         try (Authorizer newAuthorizer =
-                AuthorizerLoader.createAuthorizer(
-                        configuration,
-                        null,
-                        PluginUtils.createPluginManagerFromRootFolder(configuration))) {
+                AuthorizerLoader.createAuthorizer(configuration, null, null)) {
             newAuthorizer.startup();
             assertThat(listAcls(newAuthorizer, resource1)).isEqualTo(acls1);
             assertThat(listAcls(newAuthorizer, resource2)).isEqualTo(acls2);

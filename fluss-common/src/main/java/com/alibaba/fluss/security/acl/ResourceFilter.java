@@ -52,9 +52,25 @@ public class ResourceFilter {
         if ((name != null) && (!name.equals(other.getName()))) {
             return false;
         }
-        if ((type != ResourceType.ANY) && (!type.equals(other.getType()))) {
+        return (type == ResourceType.ANY) || (type.equals(other.getType()));
+    }
+
+    @Override
+    public String toString() {
+        return "(resourceType=" + type + ", name=" + ((name == null) ? "<any>" : name) + ")";
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (!(o instanceof ResourceFilter)) {
             return false;
         }
-        return true;
+        ResourceFilter other = (ResourceFilter) o;
+        return type.equals(other.type) && Objects.equals(name, other.name);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(type, name);
     }
 }

@@ -86,7 +86,6 @@ public class Resource {
     }
 
     public static Resource table(TablePath tablePath) {
-        return new Resource(
-                ResourceType.TABLE, tablePath.getDatabaseName() + "." + tablePath.getTableName());
+        return table(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 }

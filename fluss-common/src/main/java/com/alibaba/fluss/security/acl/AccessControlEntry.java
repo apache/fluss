@@ -20,6 +20,8 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 
 import java.util.Objects;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * Represents an Access Control List (ACL) entry defining permissions for a principal on a specific
  * resource operation.
@@ -50,14 +52,10 @@ public class AccessControlEntry {
             String host,
             OperationType operationType,
             PermissionType permissionType) {
-        Objects.requireNonNull(principal);
-        Objects.requireNonNull(host);
-        Objects.requireNonNull(operationType);
-        Objects.requireNonNull(permissionType);
-        this.principal = principal;
-        this.host = host;
-        this.permissionType = permissionType;
-        this.operationType = operationType;
+        this.principal = checkNotNull(principal);
+        this.host = checkNotNull(host);
+        this.permissionType = checkNotNull(permissionType);
+        this.operationType = checkNotNull(operationType);
     }
 
     public FlussPrincipal getPrincipal() {

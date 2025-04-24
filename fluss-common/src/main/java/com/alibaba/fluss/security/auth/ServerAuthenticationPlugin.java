@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.config.Configuration;
 
 /**
@@ -28,6 +29,7 @@ import com.alibaba.fluss.config.Configuration;
  *
  * @since 0.7
  */
+@PublicEvolving
 public interface ServerAuthenticationPlugin extends AuthenticationPlugin {
 
     /**

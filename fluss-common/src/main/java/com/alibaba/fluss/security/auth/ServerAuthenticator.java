@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 
@@ -24,6 +25,7 @@ import com.alibaba.fluss.security.acl.FlussPrincipal;
  *
  * @since 0.7
  */
+@PublicEvolving
 public interface ServerAuthenticator {
 
     String protocol();

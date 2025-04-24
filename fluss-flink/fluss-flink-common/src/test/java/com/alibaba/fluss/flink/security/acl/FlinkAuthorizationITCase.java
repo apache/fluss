@@ -109,7 +109,7 @@ abstract class FlinkAuthorizationITCase {
                         "create catalog %s with ( \n"
                                 + "'type' = 'fluss', \n"
                                 + "'bootstrap.servers' = '%s', \n"
-                                + " 'client.security.protocol' = 'username_password', \n"
+                                + "'client.security.protocol' = 'username_password', \n"
                                 + "'client.security.username_password.username' = 'guest', \n"
                                 + "'client.security.username_password.password' = 'password2' \n"
                                 + ")",
@@ -274,7 +274,6 @@ abstract class FlinkAuthorizationITCase {
         tEnv.executeSql(String.format(addPartitionDDL)).await();
 
         // test drop partition
-        addAcl(Resource.cluster(), DROP);
         dropAcl(Resource.database(DEFAULT_DB), WRITE);
         String dropPartitionDDL =
                 String.format("alter table %s drop partition (dt='2022-01-01');", tableName);
@@ -413,10 +412,7 @@ abstract class FlinkAuthorizationITCase {
                                 new AclBinding(
                                         resource,
                                         new AccessControlEntry(
-                                                new FlussPrincipal("guest", "USER"),
-                                                "*",
-                                                operationType,
-                                                PermissionType.ALLOW))))
+                                                guest, "*", operationType, PermissionType.ALLOW))))
                 .all()
                 .get();
     }

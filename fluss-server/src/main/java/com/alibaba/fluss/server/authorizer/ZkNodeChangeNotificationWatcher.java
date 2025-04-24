@@ -36,9 +36,9 @@ import static com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.rec
 
 /** A watcher to watch the change notification (create/delete/alter) in zookeeper. */
 public class ZkNodeChangeNotificationWatcher {
-
     private static final Logger LOG =
             LoggerFactory.getLogger(ZkNodeChangeNotificationWatcher.class);
+
     private final CuratorCache curatorCache;
     private final NotificationHandler notificationHandler;
     private volatile boolean running;

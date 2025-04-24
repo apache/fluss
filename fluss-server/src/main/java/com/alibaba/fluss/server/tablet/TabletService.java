@@ -27,8 +27,6 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.LookupResultForBucket;
 import com.alibaba.fluss.rpc.entity.PrefixLookupResultForBucket;
-import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
-import com.alibaba.fluss.rpc.entity.PutKvResultForBucket;
 import com.alibaba.fluss.rpc.entity.ResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
@@ -74,7 +72,6 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -145,31 +142,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
-        Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
-        Map<TableBucket, ProduceLogResultForBucket> errorResponseMap = new HashMap<>();
-        Map<TableBucket, MemoryLogRecords> interesting =
-                authorizer != null
-                        ? processBucketAuthorization(
-                                OperationType.WRITE,
-                                produceLogData,
-                                errorResponseMap,
-                                ProduceLogResultForBucket::new)
-                        : produceLogData;
-        if (interesting.isEmpty()) {
-            return CompletableFuture.completedFuture(
-                    makeProduceLogResponse(errorResponseMap.values()));
-        }
-
+        authorizeTable(WRITE, request.getTableId());
         CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
+        Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
         replicaManager.appendRecordsToLog(
                 request.getTimeoutMs(),
                 request.getAcks(),
                 produceLogData,
                 bucketResponseMap -> {
-                    if (!errorResponseMap.isEmpty()) {
-                        bucketResponseMap = new ArrayList<>(bucketResponseMap);
-                        bucketResponseMap.addAll(errorResponseMap.values());
-                    }
                     response.complete(makeProduceLogResponse(bucketResponseMap));
                 });
         return response;
@@ -180,8 +160,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         Map<TableBucket, FetchData> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, FetchData> interesting =
+                // TODO: we should also authorize for follower, otherwise, users can mock follower
+                //  to skip the authorization.
                 authorizer != null && request.getFollowerServerId() < 0
-                        ? processBucketAuthorization(
+                        ? authorizeRequestData(
                                 READ, fetchLogData, errorResponseMap, FetchLogResultForBucket::new)
                         : fetchLogData;
         if (interesting.isEmpty()) {
@@ -189,6 +171,17 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         }
 
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
+        FetchParams fetchParams = getFetchParams(request);
+        replicaManager.fetchLogRecords(
+                fetchParams,
+                interesting,
+                fetchResponseMap ->
+                        response.complete(
+                                makeFetchLogResponse(fetchResponseMap, errorResponseMap)));
+        return response;
+    }
+
+    private static FetchParams getFetchParams(FetchLogRequest request) {
         FetchParams fetchParams;
         if (request.hasMinBytes()) {
             fetchParams =
@@ -202,45 +195,22 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         } else {
             fetchParams = new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
         }
-        replicaManager.fetchLogRecords(
-                fetchParams,
-                interesting,
-                fetchResponseMap -> {
-                    if (!errorResponseMap.isEmpty()) {
-                        fetchResponseMap = new HashMap<>(fetchResponseMap);
-                        fetchResponseMap.putAll(errorResponseMap);
-                    }
-                    response.complete(makeFetchLogResponse(fetchResponseMap));
-                });
-
-        return response;
+        return fetchParams;
     }
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
-        Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
-        Map<TableBucket, PutKvResultForBucket> errorResponseMap = new HashMap<>();
-        Map<TableBucket, KvRecordBatch> interesting =
-                authorizer != null
-                        ? processBucketAuthorization(
-                                WRITE, putKvData, errorResponseMap, PutKvResultForBucket::new)
-                        : putKvData;
-        if (interesting.isEmpty()) {
-            return CompletableFuture.completedFuture(makePutKvResponse(errorResponseMap.values()));
-        }
+        authorizeTable(WRITE, request.getTableId());
 
+        Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
         replicaManager.putRecordsToKv(
                 request.getTimeoutMs(),
                 request.getAcks(),
                 putKvData,
                 getTargetColumns(request),
-                bucketResponseMap -> {
-                    if (!errorResponseMap.isEmpty()) {
-                        bucketResponseMap = new ArrayList<>(bucketResponseMap);
-                        bucketResponseMap.addAll(errorResponseMap.values());
-                    }
-                    response.complete(makePutKvResponse(bucketResponseMap));
+                bucketResponse -> {
+                    response.complete(makePutKvResponse(bucketResponse));
                 });
         return response;
     }
@@ -250,10 +220,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, List<byte[]>> interesting =
-                authorizer != null
-                        ? processBucketAuthorization(
-                                READ, lookupData, errorResponseMap, LookupResultForBucket::new)
-                        : lookupData;
+                authorizeRequestData(
+                        READ, lookupData, errorResponseMap, LookupResultForBucket::new);
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
         }
@@ -262,11 +230,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         replicaManager.lookups(
                 lookupData,
                 value -> {
-                    if (!errorResponseMap.isEmpty()) {
-                        value = new HashMap<>(value);
-                        value.putAll(errorResponseMap);
-                    }
-                    response.complete(makeLookupResponse(value));
+                    response.complete(makeLookupResponse(value, errorResponseMap));
                 });
         return response;
     }
@@ -276,13 +240,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, List<byte[]>> interesting =
-                authorizer != null
-                        ? processBucketAuthorization(
-                                READ,
-                                prefixLookupData,
-                                errorResponseMap,
-                                PrefixLookupResultForBucket::new)
-                        : prefixLookupData;
+                authorizeRequestData(
+                        READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makePrefixLookupResponse(errorResponseMap));
         }
@@ -291,32 +250,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         replicaManager.prefixLookups(
                 prefixLookupData,
                 value -> {
-                    if (!errorResponseMap.isEmpty()) {
-                        value = new HashMap<>(value);
-                        value.putAll(errorResponseMap);
-                    }
-                    response.complete(makePrefixLookupResponse(value));
+                    response.complete(makePrefixLookupResponse(value, errorResponseMap));
                 });
         return response;
     }
 
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
-        long tableId = request.getTableId();
-        PhysicalTablePath path = metadataCache.getTablePath(tableId);
-        if (path == null) {
-            throw new UnknownTableOrBucketException(
-                    String.format("Leader bucket of %s is not ready.", tableId));
-        }
-
-        if (authorizer != null
-                && !authorizer.isAuthorized(
-                        currentSession(), READ, Resource.table(path.getTablePath()))) {
-            throw new AuthorizationException(
-                    String.format(
-                            "No permission to %s table %s in database %s",
-                            READ, path.getTableName(), path.getDatabaseName()));
-        }
+        authorizeTable(READ, request.getTableId());
 
         CompletableFuture<LimitScanResponse> response = new CompletableFuture<>();
         replicaManager.limitScan(
@@ -356,6 +297,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
+        // TODO: authorize DESCRIBE permission
         CompletableFuture<ListOffsetsResponse> response = new CompletableFuture<>();
         Set<TableBucket> tableBuckets = getListOffsetsData(request);
         replicaManager.listOffsets(
@@ -402,31 +344,58 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
-    private <T, K extends ResultForBucket> Map<TableBucket, T> processBucketAuthorization(
+    private void authorizeTable(OperationType operationType, long tableId) {
+        PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
+        if (tablePath == null) {
+            throw new UnknownTableOrBucketException(
+                    String.format("This server does not host this table ID %s.", tableId));
+        }
+        if (authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(),
+                        operationType,
+                        Resource.table(tablePath.getTablePath()))) {
+            throw new AuthorizationException(
+                    String.format(
+                            "No permission to %s table %s in database %s",
+                            operationType, tablePath.getTableName(), tablePath.getDatabaseName()));
+        }
+    }
+
+    /**
+     * Authorize the given request data for each table bucket, and return the successfully
+     * authorized request data. The failed authorization will be put into the errorResponseMap.
+     */
+    private <T, K extends ResultForBucket> Map<TableBucket, T> authorizeRequestData(
             OperationType operationType,
-            Map<TableBucket, T> bucketDataMap,
+            Map<TableBucket, T> requestData,
             Map<TableBucket, K> errorResponseMap,
-            BiFunction<TableBucket, ApiError, K> resultForBucketSupplier) {
+            BiFunction<TableBucket, ApiError, K> resultCreator) {
+        if (authorizer == null) {
+            // return all request data if authorization is disabled.
+            return requestData;
+        }
+
         Map<TableBucket, T> interesting = new HashMap<>();
-        Set<Long> filteredTableIds = filterAuthorizedTables(bucketDataMap.keySet(), operationType);
-        bucketDataMap.forEach(
+        Set<Long> filteredTableIds = filterAuthorizedTables(requestData.keySet(), operationType);
+        requestData.forEach(
                 (tableBucket, bucketData) -> {
                     long tableId = tableBucket.getTableId();
                     PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
                     if (tablePath == null) {
                         errorResponseMap.put(
                                 tableBucket,
-                                resultForBucketSupplier.apply(
+                                resultCreator.apply(
                                         tableBucket,
                                         new ApiError(
                                                 Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
                                                 String.format(
-                                                        "Leader bucket of %s is not ready.",
+                                                        "This server does not host this table ID %s.",
                                                         tableId))));
                     } else if (!filteredTableIds.contains(tableId)) {
                         errorResponseMap.put(
                                 tableBucket,
-                                resultForBucketSupplier.apply(
+                                resultCreator.apply(
                                         tableBucket,
                                         new ApiError(
                                                 Errors.AUTHORIZATION_EXCEPTION,
@@ -446,6 +415,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             Collection<TableBucket> tableBuckets, OperationType operationType) {
         return tableBuckets.stream()
                 .map(TableBucket::getTableId)
+                .distinct()
                 .filter(
                         tableId -> {
                             PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
@@ -454,9 +424,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                     && authorizer.isAuthorized(
                                             currentSession(),
                                             operationType,
-                                            Resource.table(
-                                                    tablePath.getDatabaseName(),
-                                                    tablePath.getTableName()));
+                                            Resource.table(tablePath.getTablePath()));
                         })
                 .collect(Collectors.toSet());
     }

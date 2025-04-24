@@ -156,7 +156,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Specifies the type of authorizer to be used for access control. "
                                     + "This value corresponds to the identifier of the authorization plugin. "
-                                    + "The default value is 'default', which indicates the built-in authorizer. "
+                                    + "The default value is 'default', which indicates the built-in authorizer implementation. "
                                     + "Custom authorizers can be implemented by providing a matching plugin identifier.");
 
     public static final ConfigOption<String> SUPER_USERS =
@@ -165,7 +165,8 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "A semicolon-separated list of superusers who have unrestricted access to all operations and resources. "
-                                    + "Each superuser should be specified in the format 'principal_type:principal_name', e.g., 'User:admin'. "
+                                    + "Note that the delimiter is semicolon since SSL user names may contain comma, "
+                                    + "and each super user should be specified in the format 'principal_type:principal_name', e.g., 'User:admin;User:bob'. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
     // ------------------------------------------------------------------------
