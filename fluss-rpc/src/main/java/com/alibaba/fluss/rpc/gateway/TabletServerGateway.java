@@ -35,6 +35,8 @@ import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import com.alibaba.fluss.rpc.messages.OffsetForLeaderEpochRequest;
+import com.alibaba.fluss.rpc.messages.OffsetForLeaderEpochResponse;
 import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
@@ -160,4 +162,13 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.NOTIFY_LAKE_TABLE_OFFSET)
     CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request);
+
+    /**
+     * Get logEndOffset for leaderEpoch.
+     *
+     * @return logEndOffset for leaderEpoch response
+     */
+    @RPC(api = ApiKeys.OFFSET_FOR_LEADER_EPOCH)
+    CompletableFuture<OffsetForLeaderEpochResponse> offsetForLeaderEpoch(
+            OffsetForLeaderEpochRequest request);
 }

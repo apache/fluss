@@ -44,6 +44,7 @@ import com.alibaba.fluss.record.DefaultValueRecordBatch;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.record.MemoryLogRecords;
+import com.alibaba.fluss.rpc.entity.EpochAndLogEndOffsetForBucket;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.SequenceIDCounter;
 import com.alibaba.fluss.server.coordinator.CoordinatorContext;
@@ -91,6 +92,7 @@ import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.IOUtils;
 import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.clock.Clock;
+import com.alibaba.fluss.utils.types.Either;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -1310,6 +1312,39 @@ public final class Replica {
                 () -> logManager.truncateFullyAndStartAt(tableBucket, newOffset));
     }
 
+    /**
+     * Find the (exclusive) last log offset of the largest leaderEpoch less than or equal to the
+     * requested epoch.
+     *
+     * @param currentLeaderEpoch The expected leaderEpoch of the current leader (if known)
+     * @param leaderEpoch Requested leaderEpoch
+     * @param requireLeader Whether to require servicing only from the leader
+     * @return The requested leaderEpoch and the endLogOffset of this leaderEpoch, or if the
+     *     requested leaderEpoch is unknown, the leaderEpoch less than the requested leaderEpoch and
+     *     the logEndOffset of this leaderEpoch. The logEndOffset of a leaderEpoch is defined as the
+     *     startLogOffset of the first leaderEpoch larger than the leaderEpoch, or else the
+     *     logEndOffset if the leaderEpoch is the latest leaderEpoch.
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public EpochAndLogEndOffsetForBucket lastLogOffsetForLeaderEpoch(
+            Optional<Integer> currentLeaderEpoch, int leaderEpoch, boolean requireLeader) {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    Either<LogTablet, Errors> localLogOrError =
+                            localLogOrThrow(currentLeaderEpoch, requireLeader);
+                    if (localLogOrError.isLeft()) {
+                        // TODO add localLog.endOffsetForEpoch() in next pr.
+                        LogTablet localLog = localLogOrError.left();
+                        return new EpochAndLogEndOffsetForBucket(
+                                tableBucket, leaderEpoch, localLog.localLogEndOffset());
+                    } else {
+                        return new EpochAndLogEndOffsetForBucket(
+                                tableBucket, localLogOrError.right().toApiError());
+                    }
+                });
+    }
+
     private LogReadInfo readRecords(FetchParams fetchParams, LogTablet logTablet)
             throws IOException {
         // Note we use the log end offset prior to the read. This ensures that any appends following
@@ -1742,15 +1777,51 @@ public final class Replica {
     }
 
     private LogTablet localLogOrThrow(boolean requireLeader) {
-        // TODO check leader epoch.
-        if (requireLeader && !isLeader()) {
-            throw new NotLeaderOrFollowerException(
-                    String.format(
-                            "Leader not local for bucket %s on tabletServer %d",
-                            tableBucket, localTabletServerId));
+        Either<LogTablet, Errors> either = localLogOrThrow(Optional.empty(), requireLeader);
+        if (either.isLeft()) {
+            return either.left();
+        } else {
+            throw either.right()
+                    .exception(
+                            String.format(
+                                    "Failed to find %s logTablet for tableBucket %s which leaderEpoch %s. The "
+                                            + "current leader is %s and the current leaderEpoch is %s",
+                                    requireLeader ? "leader" : "",
+                                    tableBucket,
+                                    -1,
+                                    leaderReplicaIdOpt,
+                                    leaderEpoch));
         }
+    }
 
-        return logTablet;
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private Either<LogTablet, Errors> localLogOrThrow(
+            Optional<Integer> currentLeaderEpoch, boolean requireLeader) {
+        if (checkCurrentLeaderEpoch(currentLeaderEpoch) == Errors.NONE) {
+            if (requireLeader && !isLeader()) {
+                return Either.right(Errors.NOT_LEADER_OR_FOLLOWER);
+            } else {
+                return Either.left(logTablet);
+            }
+        }
+        return Either.right(Errors.FENCED_LEADER_EPOCH_EXCEPTION);
+    }
+
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private Errors checkCurrentLeaderEpoch(Optional<Integer> currentLeaderEpochOpt) {
+        if (!currentLeaderEpochOpt.isPresent()) {
+            return Errors.NONE;
+        } else {
+            int currentLeaderEpoch = currentLeaderEpochOpt.get();
+            int localLeaderEpoch = leaderEpoch;
+            if (currentLeaderEpoch < localLeaderEpoch) {
+                return Errors.FENCED_LEADER_EPOCH_EXCEPTION;
+            } else if (currentLeaderEpoch > localLeaderEpoch) {
+                return Errors.UNKNOWN_LEADER_EPOCH_EXCEPTION;
+            } else {
+                return Errors.NONE;
+            }
+        }
     }
 
     @VisibleForTesting

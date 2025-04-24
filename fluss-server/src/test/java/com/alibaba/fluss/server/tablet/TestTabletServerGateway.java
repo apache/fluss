@@ -67,6 +67,8 @@ import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import com.alibaba.fluss.rpc.messages.OffsetForLeaderEpochRequest;
+import com.alibaba.fluss.rpc.messages.OffsetForLeaderEpochResponse;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaReqForBucket;
@@ -314,6 +316,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<OffsetForLeaderEpochResponse> offsetForLeaderEpoch(
+            OffsetForLeaderEpochRequest request) {
         throw new UnsupportedOperationException();
     }
 
