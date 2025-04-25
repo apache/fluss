@@ -348,6 +348,7 @@
                                         <exclude>com.alibaba.fluss.lakehouse.cli.*</exclude>
                                         <exclude>com.alibaba.fluss.kafka.*</exclude>
                                         <exclude>com.alibaba.fluss.spark.*</exclude>
+                                        <exclude>org.apache.spark.sql.*</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
