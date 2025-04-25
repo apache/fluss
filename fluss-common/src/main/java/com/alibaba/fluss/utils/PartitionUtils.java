@@ -21,7 +21,7 @@ import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.DataTypeRoot;
 
 import java.time.ZonedDateTime;
@@ -46,14 +46,14 @@ public class PartitionUtils {
     private static final String DAY_FORMAT = "yyyyMMdd";
     private static final String HOUR_FORMAT = "yyyyMMddHH";
 
-    public static void validatePartitionSpec(TableInfo tableInfo, PartitionSpec partitionSpec) {
-        List<String> partitionKeys = tableInfo.getPartitionKeys();
+    public static void validatePartitionSpec(
+            TablePath tablePath, List<String> partitionKeys, PartitionSpec partitionSpec) {
         Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         if (partitionKeys.size() != partitionSpecMap.size()) {
             throw new InvalidPartitionException(
                     String.format(
                             "PartitionSpec size is not equal to partition keys size for partitioned table %s.",
-                            tableInfo.getTablePath()));
+                            tablePath));
         }
 
         List<String> reOrderedPartitionValues = new ArrayList<>(partitionKeys.size());
@@ -62,7 +62,7 @@ public class PartitionUtils {
                 throw new InvalidPartitionException(
                         String.format(
                                 "PartitionSpec %s does not contain partition key '%s' for partitioned table %s.",
-                                partitionSpec, partitionKey, tableInfo.getTablePath()));
+                                partitionSpec, partitionKey, tablePath));
             } else {
                 reOrderedPartitionValues.add(partitionSpecMap.get(partitionKey));
             }

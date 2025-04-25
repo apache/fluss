@@ -29,7 +29,6 @@ import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
@@ -78,6 +77,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
+import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
@@ -290,32 +290,30 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         CreatePartitionResponse response = new CreatePartitionResponse();
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        if (!tableInfo.isPartitioned()) {
+        TableRegistration table = metadataManager.getTableRegistration(tablePath);
+        if (!table.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Only partitioned table support create partition.");
         }
 
         // first, validate the partition spec, and get resolved partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tableInfo, partitionSpec);
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec);
         ResolvedPartitionSpec partitionToCreate =
-                ResolvedPartitionSpec.fromPartitionSpec(
-                        tableInfo.getPartitionKeys(), partitionSpec);
+                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
 
         // second, generate the PartitionAssignment.
-        int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
         int[] servers = metadataCache.getLiveServerIds();
         Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(
-                                tableInfo.getNumBuckets(), replicaFactor, servers)
+                TableAssignmentUtils.generateAssignment(table.bucketCount, replicaFactor, servers)
                         .getBucketAssignments();
         PartitionAssignment partitionAssignment =
-                new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+                new PartitionAssignment(table.tableId, bucketAssignments);
 
         metadataManager.createPartition(
-                tableInfo.getTablePath(),
-                tableInfo.getTableId(),
+                tablePath,
+                table.tableId,
                 partitionAssignment,
                 partitionToCreate,
                 request.isIgnoreIfNotExists());
@@ -333,18 +331,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         DropPartitionResponse response = new DropPartitionResponse();
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        if (!tableInfo.isPartitioned()) {
+        TableRegistration table = metadataManager.getTableRegistration(tablePath);
+        if (!table.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Only partitioned table support drop partition.");
         }
 
         // first, validate the partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tableInfo, partitionSpec);
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec);
         ResolvedPartitionSpec partitionToDrop =
-                ResolvedPartitionSpec.fromPartitionSpec(
-                        tableInfo.getPartitionKeys(), partitionSpec);
+                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
 
         metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);

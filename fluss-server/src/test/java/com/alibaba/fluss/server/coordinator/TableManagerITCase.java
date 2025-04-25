@@ -394,6 +394,16 @@ class TableManagerITCase {
 
         // let's drop the table
         adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
+        assertThat(zkClient.getPartitions(tablePath)).isEmpty();
+
+        // create a non-auto-partitioned table
+        adminGateway
+                .createTable(
+                        newCreateTableRequest(
+                                tablePath,
+                                newPartitionedTable().withProperties(new HashMap<>()),
+                                false))
+                .get();
 
         // verify the partition assignment is deleted
         for (Long partitionId : partitions.values()) {
@@ -401,6 +411,9 @@ class TableManagerITCase {
                     Duration.ofMinutes(1),
                     () -> assertThat(zkClient.getPartitionAssignment(partitionId)).isEmpty());
         }
+
+        // make sure the auto partition manager won't create partitions for the new table
+        assertThat(zkClient.getPartitions(tablePath)).isEmpty();
     }
 
     @Test

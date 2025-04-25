@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.zk.data;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -74,6 +75,14 @@ public class TableRegistration {
         this.customProperties = customProperties;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
+    }
+
+    public boolean isPartitioned() {
+        return !partitionKeys.isEmpty();
+    }
+
+    public TableConfig getTableConfig() {
+        return new TableConfig(Configuration.fromMap(properties));
     }
 
     public TableInfo toTableInfo(TablePath tablePath, SchemaInfo schemaInfo) {

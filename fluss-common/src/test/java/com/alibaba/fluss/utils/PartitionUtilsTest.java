@@ -71,7 +71,9 @@ class PartitionUtilsTest {
         assertThatThrownBy(
                         () ->
                                 validatePartitionSpec(
-                                        tableInfo, new PartitionSpec(Collections.emptyMap())))
+                                        tableInfo.getTablePath(),
+                                        tableInfo.getPartitionKeys(),
+                                        new PartitionSpec(Collections.emptyMap())))
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(
                         "PartitionSpec size is not equal to partition keys size for "
