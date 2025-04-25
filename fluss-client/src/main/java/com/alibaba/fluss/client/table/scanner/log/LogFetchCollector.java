@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.FetchException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -262,6 +263,8 @@ public class LogFetchCollector {
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION) {
             throw new LogOffsetOutOfRangeException(errorMessage);
+        } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
+            throw new AuthorizationException(errorMessage);
         } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
             LOG.warn(
                     "Unknown server error while fetching offset {} for bucket {}: {}",

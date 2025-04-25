@@ -16,12 +16,16 @@
 
 package com.alibaba.fluss.rpc.gateway;
 
+import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
+import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.CreatePartitionResponse;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
+import com.alibaba.fluss.rpc.messages.DropAclsRequest;
+import com.alibaba.fluss.rpc.messages.DropAclsResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
@@ -83,5 +87,22 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.DROP_PARTITION)
     CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request);
 
+    /**
+     * create acls for a resource.
+     *
+     * @param request create acl request.
+     */
+    @RPC(api = ApiKeys.CREATE_ACLS)
+    CompletableFuture<CreateAclsResponse> createAcls(CreateAclsRequest request);
+
+    /**
+     * Drop acls for a resource.
+     *
+     * @param request drop acl request.
+     */
+    @RPC(api = ApiKeys.DROP_ACLS)
+    CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request);
+
     // todo: rename table & alter table
+
 }

@@ -36,6 +36,16 @@ public abstract class RpcGatewayService implements RpcGateway {
         currentSession.set(session);
     }
 
+    public Session currentSession() {
+        Session session = currentSession.get();
+        if (session == null) {
+            throw new IllegalStateException(
+                    "No session set. This method should only be called from within an RPC call.");
+        } else {
+            return session;
+        }
+    }
+
     /**
      * Returns the current API version of an RPC call. This method is thread-safe and can only be
      * accessed in RPC methods.

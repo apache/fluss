@@ -38,10 +38,12 @@ import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
+import com.alibaba.fluss.rpc.messages.DropAclsRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -50,6 +52,7 @@ import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
+import com.alibaba.fluss.rpc.messages.ListAclsRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
@@ -60,6 +63,8 @@ import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.security.acl.AclBindingFilter;
 import com.alibaba.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
@@ -76,6 +81,10 @@ import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePar
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -370,6 +379,60 @@ public class FlussAdmin implements Admin {
 
         sendListOffsetsRequest(metadataUpdater, client, requestMap, bucketToOffsetMap);
         return new ListOffsetsResult(bucketToOffsetMap);
+    }
+
+    @Override
+    public CompletableFuture<Collection<AclBinding>> listAcls(AclBindingFilter aclBindingFilter) {
+        CompletableFuture<Collection<AclBinding>> future = new CompletableFuture<>();
+        ListAclsRequest listAclsRequest =
+                new ListAclsRequest().setAclFilter(toPbAclFilter(aclBindingFilter));
+
+        gateway.listAcls(listAclsRequest)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                future.completeExceptionally(t);
+                            } else {
+                                future.complete(toAclBindings(r.getAclsList()));
+                            }
+                        });
+        return future;
+    }
+
+    @Override
+    public CreateAclsResult createAcls(Collection<AclBinding> aclBindings) {
+        CreateAclsResult result = new CreateAclsResult(aclBindings);
+        CreateAclsRequest createAclsRequest =
+                new CreateAclsRequest().addAllAcls(toPbAclInfos(aclBindings));
+
+        gateway.createAcls(createAclsRequest)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                result.completeExceptionally(t);
+                            } else {
+                                result.complete(r.getAclResList());
+                            }
+                        });
+        return result;
+    }
+
+    @Override
+    public DropAclsResult dropAcls(Collection<AclBindingFilter> filters) {
+        DropAclsResult result = new DropAclsResult(filters);
+        DropAclsRequest dropAclsRequest =
+                new DropAclsRequest()
+                        .addAllAclFilters(toPbAclBindingFilters(result.values().keySet()));
+        gateway.dropAcls(dropAclsRequest)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                result.completeExceptionally(t);
+                            } else {
+                                result.complete(r.getFilterResultsList());
+                            }
+                        });
+        return result;
     }
 
     @Override

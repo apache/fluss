@@ -19,13 +19,15 @@ package com.alibaba.fluss.rpc.netty.authenticate;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.auth.ClientAuthenticationPlugin;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
 import com.alibaba.fluss.security.auth.ServerAuthenticationPlugin;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
 
 import static com.alibaba.fluss.config.ConfigBuilder.key;
 
@@ -39,11 +41,10 @@ public class UsernamePasswordAuthenticationPlugin
     private static final ConfigOption<String> CLIENT_PASSWORD =
             key("client.security.username_password.password").stringType().noDefaultValue();
 
-    private static final ConfigOption<String> SERVER_USERNAME =
-            key("security.username_password.username").stringType().noDefaultValue();
-
-    private static final ConfigOption<String> SERVER_PASSWORD =
-            key("security.username_password.password").stringType().noDefaultValue();
+    private static final ConfigOption<Map<String, String>> CREDENTIALS =
+            key("security.username_password.credentials")
+                    .mapType()
+                    .defaultValue(Collections.emptyMap());
 
     private static final String AUTH_PROTOCOL = "username_password";
 
@@ -82,13 +83,10 @@ public class UsernamePasswordAuthenticationPlugin
 
     @Override
     public ServerAuthenticator createServerAuthenticator(Configuration configuration) {
-        String expectedUsername = configuration.getString(SERVER_USERNAME);
-        String expectedPassword = configuration.getString(SERVER_PASSWORD);
-        if (expectedPassword == null || expectedUsername == null) {
-            throw new AuthenticationException("username and password shouldn't be null.");
-        }
+        Map<String, String> credentials = configuration.getMap(CREDENTIALS);
         return new ServerAuthenticator() {
             volatile boolean isComplete = false;
+            volatile FlussPrincipal flussPrincipal;
 
             @Override
             public String protocol() {
@@ -97,14 +95,21 @@ public class UsernamePasswordAuthenticationPlugin
 
             @Override
             public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
-                byte[] expectedToken = serializeToken(expectedUsername, expectedPassword);
-                if (!Arrays.equals(token, expectedToken)) {
+                String[] credential = deserializeToken(token);
+                if (!credentials.containsKey(credential[0])
+                        || !credentials.get(credential[0]).equals(credential[1])) {
                     throw new AuthenticationException("username or password is incorrect.");
                 }
 
                 isComplete = true;
+                flussPrincipal = new FlussPrincipal(credential[0], "USER");
 
                 return new byte[0];
+            }
+
+            @Override
+            public FlussPrincipal createPrincipal() {
+                return flussPrincipal;
             }
 
             @Override
@@ -116,5 +121,13 @@ public class UsernamePasswordAuthenticationPlugin
 
     private byte[] serializeToken(String username, String password) {
         return (username + "," + password).getBytes(StandardCharsets.UTF_8);
+    }
+
+    private String[] deserializeToken(byte[] token) {
+        String[] parts = new String(token, StandardCharsets.UTF_8).split(",");
+        if (parts.length != 2) {
+            throw new AuthenticationException("Invalid token format.");
+        }
+        return parts;
     }
 }

@@ -208,8 +208,7 @@ public class AuthenticationTest {
         configuration.setString(
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
                 "CLIENT1:mutual,CLIENT2:username_password");
-        configuration.setString("security.username_password.username", "root");
-        configuration.setString("security.username_password.password", "password");
+        configuration.setString("security.username_password.credentials", "root:password");
         // 3 worker threads is enough for this test
         configuration.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();

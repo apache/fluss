@@ -17,9 +17,11 @@
 package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.tablet.TabletServer;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -41,9 +43,12 @@ public abstract class AbstractServerMetadataCache implements ServerMetadataCache
      */
     protected volatile ServerCluster clusterMetadata;
 
+    protected volatile Map<Long, PhysicalTablePath> tableBucketMetadata;
+
     public AbstractServerMetadataCache() {
         // no coordinator server address while creating.
         this.clusterMetadata = ServerCluster.empty();
+        this.tableBucketMetadata = new HashMap<>();
     }
 
     @Override
@@ -70,5 +75,10 @@ public abstract class AbstractServerMetadataCache implements ServerMetadataCache
     @Override
     public Set<Integer> getAliveTabletServerIds() {
         return clusterMetadata.getAliveTabletServerIds();
+    }
+
+    @Override
+    public PhysicalTablePath getTablePath(long tableId) {
+        return tableBucketMetadata.get(tableId);
     }
 }

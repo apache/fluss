@@ -49,6 +49,7 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
+import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.utils.IOUtils;
 import com.alibaba.fluss.utils.Projection;
 
@@ -327,7 +328,8 @@ public class LogFetcher implements Closeable {
                                     fetchResultForBucket.getHighWatermark());
                         } else {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
-                            if (!MemoryLogRecords.EMPTY.equals(logRecords)) {
+                            if (!MemoryLogRecords.EMPTY.equals(logRecords)
+                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
                                 // In oder to not signal notEmptyCondition, add completed fetch to
                                 // buffer until log records is not empty.
                                 DefaultCompletedFetch completedFetch =

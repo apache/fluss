@@ -16,16 +16,30 @@
 
 package com.alibaba.fluss.rpc.netty.server;
 
+import com.alibaba.fluss.security.acl.FlussPrincipal;
+
 import java.io.Serializable;
+import java.net.InetAddress;
 
 /** The connection session of a request. */
 public class Session implements Serializable {
     private final short apiVersion;
     private final String listenerName;
+    private final boolean isInternal;
+    private final InetAddress inetAddress;
+    private final FlussPrincipal principal;
 
-    public Session(short apiVersion, String listenerName) {
+    public Session(
+            short apiVersion,
+            String listenerName,
+            boolean isInternal,
+            InetAddress inetAddress,
+            FlussPrincipal principal) {
         this.apiVersion = apiVersion;
         this.listenerName = listenerName;
+        this.isInternal = isInternal;
+        this.inetAddress = inetAddress;
+        this.principal = principal;
     }
 
     public short getApiVersion() {
@@ -34,5 +48,17 @@ public class Session implements Serializable {
 
     public String getListenerName() {
         return listenerName;
+    }
+
+    public InetAddress getInetAddress() {
+        return inetAddress;
+    }
+
+    public FlussPrincipal getPrincipal() {
+        return principal;
+    }
+
+    public boolean isInternal() {
+        return isInternal;
     }
 }

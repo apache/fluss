@@ -481,6 +481,31 @@ message AuthenticateResponse {
   optional bytes challenge = 1;
 }
 
+// acl related requests and responses
+message ListAclsRequest{
+  required PbAclFilter acl_filter = 1;
+}
+
+message ListAclsResponse{
+  repeated PbAclInfo acl = 1;
+}
+
+message CreateAclsRequest{
+  repeated PbAclInfo acl = 1;
+}
+
+message CreateAclsResponse{
+  repeated PbCreateAclRespInfo aclRes = 1;
+}
+
+message DropAclsRequest{
+  repeated PbAclFilter acl_filter = 1;
+}
+
+message DropAclsResponse{
+  repeated PbDropAclsFilterResult filter_results = 1;
+}
+
 // --------------- Inner classes ----------------
 message PbApiVersion {
   required int32 api_key = 1;
@@ -753,5 +778,41 @@ message PbPartitionSpec {
   repeated PbKeyValue partition_key_values = 1;
 }
 
+message PbCreateAclRespInfo {
+  required PbAclInfo acl = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}
 
+message PbAclInfo {
+  required string resource_name = 1;
+  required int32 resource_type = 2;
+  required string principal_name = 3;
+  required string principal_type = 4;
+  required string host = 5;
+  required int32 operation_type = 6;
+  required int32 permission_type = 7;
+}
 
+message PbAclFilter {
+  optional string resource_name = 1;
+  required int32 resource_type = 2;
+  optional string principal_name = 3;
+  optional string principal_type = 4;
+  optional string host = 5;
+  required int32 operation_type = 6;
+  required int32 permission_type = 7;
+}
+
+message PbDropAclsFilterResult {
+  repeated PbDropAclsMatchingAcl matching_acls = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+
+}
+
+message PbDropAclsMatchingAcl {
+  required PbAclInfo acl = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}

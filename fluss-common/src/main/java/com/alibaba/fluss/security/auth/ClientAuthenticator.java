@@ -16,11 +16,13 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 
 import javax.annotation.Nullable;
 
 /** Authenticator for client side. */
+@PublicEvolving
 public interface ClientAuthenticator {
 
     /** The protocol name of the authenticator, which will send in the AuthenticateRequest. */

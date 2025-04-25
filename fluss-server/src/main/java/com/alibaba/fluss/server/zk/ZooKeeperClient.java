@@ -22,6 +22,10 @@ import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.security.acl.AccessControlEntry;
+import com.alibaba.fluss.security.acl.Resource;
+import com.alibaba.fluss.security.acl.ResourceType;
+import com.alibaba.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
@@ -29,9 +33,11 @@ import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
+import com.alibaba.fluss.server.zk.data.ResourceAcl;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
+import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
@@ -45,6 +51,7 @@ import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionsZNode;
+import com.alibaba.fluss.server.zk.data.ZkData.ResourceAclNode;
 import com.alibaba.fluss.server.zk.data.ZkData.SchemaZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.SchemasZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
@@ -83,6 +90,7 @@ import java.util.Set;
 public class ZooKeeperClient implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperClient.class);
+    public static final int UNKNOWN_VERSION = -2;
 
     private final CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper;
 
@@ -100,7 +108,7 @@ public class ZooKeeperClient implements AutoCloseable {
         this.writerIdCounter = new ZkSequenceIDCounter(zkClient, WriterIdZNode.path());
     }
 
-    private Optional<byte[]> getOrEmpty(String path) throws Exception {
+    public Optional<byte[]> getOrEmpty(String path) throws Exception {
         try {
             return Optional.of(zkClient.getData().forPath(path));
         } catch (KeeperException.NoNodeException e) {
@@ -635,7 +643,7 @@ public class ZooKeeperClient implements AutoCloseable {
             // after the previous commit
             LakeTableSnapshot previous = optLakeTableSnapshot.get();
 
-            // merge log start offset, current will override the previous
+            // merge log startup offset, current will override the previous
             Map<TableBucket, Long> bucketLogStartOffset =
                     new HashMap<>(previous.getBucketLogStartOffset());
             bucketLogStartOffset.putAll(lakeTableSnapshot.getBucketLogStartOffset());
@@ -664,6 +672,95 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(LakeTableZNode::decode);
     }
 
+    /**
+     * Register or update the acl registration to zookeeper.
+     *
+     * <p>Note: If there is already an acl registration for the given resources and the acl version
+     * is smaller than new one, it will be overwritten.(we need to compare the version before
+     * upsert)
+     *
+     * @return the version of the acl node after upsert.
+     */
+    public int updateResourceAcl(
+            Resource resource, Set<AccessControlEntry> accessControlEntries, int expectedVersion)
+            throws Exception {
+        String path = ResourceAclNode.path(resource);
+        LOG.info("update acl node {} with value {}", resource, accessControlEntries);
+        return zkClient.setData()
+                .withVersion(expectedVersion)
+                .forPath(path, ResourceAclNode.encode(new ResourceAcl(accessControlEntries)))
+                .getVersion();
+    }
+
+    public void createResourceAcl(Resource resource, Set<AccessControlEntry> accessControlEntries)
+            throws Exception {
+        String path = ResourceAclNode.path(resource);
+        LOG.info("insert acl node {} with value {}", resource, accessControlEntries);
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, ResourceAclNode.encode(new ResourceAcl(accessControlEntries)));
+    }
+
+    /**
+     * Retrieves the ACL (Access Control List) for a specific resource from ZooKeeper.
+     *
+     * @param resource the resource to query
+     * @return an Optional containing the ResourceAcl if it exists, or empty if not found
+     * @throws Exception if there is an error accessing ZooKeeper
+     */
+    public VersionedAcls getResourceAclWithVersion(Resource resource) throws Exception {
+        String path = ResourceAclNode.path(resource);
+        try {
+            Stat stat = new Stat();
+            byte[] bytes = zkClient.getData().storingStatIn(stat).forPath(path);
+            int zkVersion = stat.getVersion();
+            Optional<ResourceAcl> resourceAcl =
+                    Optional.ofNullable(bytes).map(ResourceAclNode::decode);
+
+            return new VersionedAcls(
+                    zkVersion,
+                    resourceAcl.isPresent()
+                            ? resourceAcl.get().getEntries()
+                            : Collections.emptySet());
+        } catch (KeeperException.NoNodeException e) {
+            return new VersionedAcls(UNKNOWN_VERSION, Collections.emptySet());
+        }
+    }
+
+    /**
+     * Retrieves all resources of a specific type and their corresponding ACLs from ZooKeeper.
+     *
+     * @param resourceType the type of resource to query
+     * @return a list of child node names representing resources of the given type
+     * @throws Exception if there is an error accessing ZooKeeper
+     */
+    public List<String> listResourcesByType(ResourceType resourceType) throws Exception {
+        String path = ResourceAclNode.path(resourceType);
+        return getChildren(path);
+    }
+
+    /**
+     * Deletes the ACL (Access Control List) for a specific resource from ZooKeeper.
+     *
+     * @param resource the resource whose ACL should be deleted
+     * @throws Exception if there is an error accessing ZooKeeper
+     */
+    public void contitionalDeleteResourceAcl(Resource resource, int zkVersion) throws Exception {
+        String path = ResourceAclNode.path(resource);
+        zkClient.delete().withVersion(zkVersion).forPath(path);
+    }
+
+    public void insertAclChangeNotification(Resource resource) throws Exception {
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT_SEQUENTIAL)
+                .forPath(
+                        AclChangeNotificationNode.pathPrefix(),
+                        AclChangeNotificationNode.encode(resource));
+        LOG.info("add acl change notification for resource {}  ", resource);
+    }
+
     // --------------------------------------------------------------------------------------------
     // Utils
     // --------------------------------------------------------------------------------------------
@@ -679,6 +776,25 @@ public class ZooKeeperClient implements AutoCloseable {
             return zkClient.getChildren().forPath(path);
         } catch (KeeperException.NoNodeException e) {
             return Collections.emptyList();
+        }
+    }
+
+    /** Gets the data and stat of a given zk node path. */
+    public Optional<Stat> getStat(String path) throws Exception {
+        try {
+            Stat stat = zkClient.checkExists().forPath(path);
+            LOG.info("stat of path {} is {}", path, stat);
+            return Optional.of(stat);
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** delete a path. */
+    public void deletePath(String path) throws Exception {
+        try {
+            zkClient.delete().forPath(path);
+        } catch (KeeperException.NoNodeException ignored) {
         }
     }
 

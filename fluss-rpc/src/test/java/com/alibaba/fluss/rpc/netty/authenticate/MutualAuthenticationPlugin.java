@@ -19,6 +19,7 @@ package com.alibaba.fluss.rpc.netty.authenticate;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.auth.ClientAuthenticationPlugin;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
 import com.alibaba.fluss.security.auth.ServerAuthenticationPlugin;
@@ -149,6 +150,11 @@ public class MutualAuthenticationPlugin
                             + (initialSalt + 1)
                             + ", but got "
                             + tokenValue);
+        }
+
+        @Override
+        public FlussPrincipal createPrincipal() {
+            return FlussPrincipal.ANONYMOUS;
         }
 
         @Override

@@ -40,6 +40,8 @@ import com.alibaba.fluss.rpc.messages.InitWriterRequest;
 import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanRequest;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
+import com.alibaba.fluss.rpc.messages.ListAclsRequest;
+import com.alibaba.fluss.rpc.messages.ListAclsResponse;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
@@ -231,6 +233,11 @@ public class TestingTabletGatewayService extends TestingGatewayService
     @Override
     public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
             GetLatestLakeSnapshotRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
         return null;
     }
 }

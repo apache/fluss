@@ -48,6 +48,8 @@ import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
+import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
+import com.alibaba.fluss.rpc.messages.DropAclsResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -56,6 +58,7 @@ import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
+import com.alibaba.fluss.rpc.messages.ListAclsResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListOffsetsResponse;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosResponse;
@@ -66,10 +69,14 @@ import com.alibaba.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
+import com.alibaba.fluss.rpc.messages.PbAclInfo;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForTable;
+import com.alibaba.fluss.rpc.messages.PbCreateAclRespInfo;
+import com.alibaba.fluss.rpc.messages.PbDropAclsFilterResult;
+import com.alibaba.fluss.rpc.messages.PbDropAclsMatchingAcl;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
@@ -112,6 +119,10 @@ import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.protocol.ApiError;
+import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.server.authorizer.AclCreateResult;
+import com.alibaba.fluss.server.authorizer.AclDeleteResult;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.entity.CommitLakeTableSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
@@ -147,6 +158,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -405,7 +417,7 @@ public class ServerRpcMessageUtils {
     }
 
     public static ProduceLogResponse makeProduceLogResponse(
-            List<ProduceLogResultForBucket> appendLogResultForBucketList) {
+            Collection<ProduceLogResultForBucket> appendLogResultForBucketList) {
         ProduceLogResponse produceResponse = new ProduceLogResponse();
         List<PbProduceLogRespForBucket> produceLogRespForBucketList = new ArrayList<>();
         for (ProduceLogResultForBucket bucketResult : appendLogResultForBucketList) {
@@ -458,6 +470,12 @@ public class ServerRpcMessageUtils {
         }
 
         return fetchDataMap;
+    }
+
+    public static FetchLogResponse makeFetchLogResponse(
+            Map<TableBucket, FetchLogResultForBucket> fetchLogResult,
+            Map<TableBucket, FetchLogResultForBucket> fetchLogErrors) {
+        return makeFetchLogResponse(mergeResponse(fetchLogResult, fetchLogErrors));
     }
 
     public static FetchLogResponse makeFetchLogResponse(
@@ -621,7 +639,7 @@ public class ServerRpcMessageUtils {
         return targetColumns.length == 0 ? null : targetColumns;
     }
 
-    public static PutKvResponse makePutKvResponse(List<PutKvResultForBucket> kvPutResult) {
+    public static PutKvResponse makePutKvResponse(Collection<PutKvResultForBucket> kvPutResult) {
         PutKvResponse putKvResponse = new PutKvResponse();
         List<PbPutKvRespForBucket> putKvRespForBucketList = new ArrayList<>();
         for (PutKvResultForBucket bucketResult : kvPutResult) {
@@ -695,6 +713,12 @@ public class ServerRpcMessageUtils {
     }
 
     public static LookupResponse makeLookupResponse(
+            Map<TableBucket, LookupResultForBucket> lookupResult,
+            Map<TableBucket, LookupResultForBucket> lookupError) {
+        return makeLookupResponse(mergeResponse(lookupResult, lookupError));
+    }
+
+    public static LookupResponse makeLookupResponse(
             Map<TableBucket, LookupResultForBucket> lookupResult) {
         LookupResponse lookupResponse = new LookupResponse();
         for (Map.Entry<TableBucket, LookupResultForBucket> entry : lookupResult.entrySet()) {
@@ -718,6 +742,12 @@ public class ServerRpcMessageUtils {
             }
         }
         return lookupResponse;
+    }
+
+    public static PrefixLookupResponse makePrefixLookupResponse(
+            Map<TableBucket, PrefixLookupResultForBucket> prefixLookupResult,
+            Map<TableBucket, PrefixLookupResultForBucket> prefixLookupErrors) {
+        return makePrefixLookupResponse(mergeResponse(prefixLookupResult, prefixLookupErrors));
     }
 
     public static PrefixLookupResponse makePrefixLookupResponse(
@@ -1263,5 +1293,95 @@ public class ServerRpcMessageUtils {
             partitionKeyAndValues.put(pbKeyValue.getKey(), pbKeyValue.getValue());
         }
         return new PartitionSpec(partitionKeyAndValues);
+    }
+
+    public static ListAclsResponse makeListAclsResponse(Collection<AclBinding> aclBindings) {
+        ListAclsResponse listAclsResponse = new ListAclsResponse();
+        for (AclBinding aclBinding : aclBindings) {
+            PbAclInfo aclInfo = listAclsResponse.addAcl();
+            aclInfo.setResourceName(aclBinding.getResource().getName())
+                    .setResourceType(aclBinding.getResource().getType().getCode())
+                    .setPrincipalName(aclBinding.getAccessControlEntry().getPrincipal().getName())
+                    .setPrincipalType(aclBinding.getAccessControlEntry().getPrincipal().getType())
+                    .setHost(aclBinding.getAccessControlEntry().getHost())
+                    .setOperationType(
+                            aclBinding.getAccessControlEntry().getOperationType().getCode())
+                    .setPermissionType(
+                            aclBinding.getAccessControlEntry().getPermissionType().getCode());
+        }
+        return listAclsResponse;
+    }
+
+    public static CreateAclsResponse makeCreateAclsResponse(
+            List<AclCreateResult> aclCreateResults) {
+        List<PbCreateAclRespInfo> pbAclRespInfos = new ArrayList<>();
+
+        for (AclCreateResult result : aclCreateResults) {
+            PbCreateAclRespInfo pbAclRespInfo = new PbCreateAclRespInfo();
+            pbAclRespInfo.setAcl(toPbAclInfo(result.getAclBinding()));
+            if (result.exception().isPresent()) {
+                ApiError apiError = ApiError.fromThrowable(result.exception().get());
+                pbAclRespInfos.add(
+                        pbAclRespInfo
+                                .setErrorCode(apiError.error().code())
+                                .setErrorMessage(apiError.message()));
+            } else {
+                pbAclRespInfos.add(pbAclRespInfo.setErrorCode(Errors.NONE.code()));
+            }
+        }
+        return new CreateAclsResponse().addAllAclRes(pbAclRespInfos);
+    }
+
+    public static DropAclsResponse makeDropAclsResponse(List<AclDeleteResult> aclDeleteResults) {
+        List<PbDropAclsFilterResult> dropAclsFilterResults = new ArrayList<>();
+
+        for (AclDeleteResult result : aclDeleteResults) {
+            if (result.error().isPresent()) {
+                ApiError apiError = result.error().get();
+                dropAclsFilterResults.add(
+                        new PbDropAclsFilterResult()
+                                .setErrorCode(apiError.error().code())
+                                .setErrorMessage(apiError.message()));
+                continue;
+            }
+
+            Collection<AclDeleteResult.AclBindingDeleteResult> aclBindingDeleteResults =
+                    result.aclBindingDeleteResults();
+            List<PbDropAclsMatchingAcl> dropAclsMatchingAcls = new ArrayList<>();
+            for (AclDeleteResult.AclBindingDeleteResult aclBindingDeleteResult :
+                    aclBindingDeleteResults) {
+                PbDropAclsMatchingAcl dropAclsMatchingAcl = new PbDropAclsMatchingAcl();
+                dropAclsMatchingAcl.setAcl(toPbAclInfo(aclBindingDeleteResult.aclBinding()));
+                if (aclBindingDeleteResult.error().isPresent()) {
+                    ApiError apiError = aclBindingDeleteResult.error().get();
+                    dropAclsMatchingAcl.setError(apiError.error().code(), apiError.message());
+                }
+                dropAclsMatchingAcls.add(dropAclsMatchingAcl);
+            }
+            dropAclsFilterResults.add(
+                    new PbDropAclsFilterResult().addAllMatchingAcls(dropAclsMatchingAcls));
+        }
+        return new DropAclsResponse().addAllFilterResults(dropAclsFilterResults);
+    }
+
+    private static <T> Map<TableBucket, T> mergeResponse(
+            Map<TableBucket, T> response, Map<TableBucket, T> errors) {
+        if (errors.isEmpty()) {
+            return response;
+        }
+        Map<TableBucket, T> result = new HashMap<>(response.size() + errors.size());
+        result.putAll(response);
+        result.putAll(errors);
+        return result;
+    }
+
+    private static <T> Collection<T> mergeResponse(Collection<T> response, Collection<T> errors) {
+        if (errors.isEmpty()) {
+            return response;
+        }
+        Collection<T> result = new ArrayList<>(response.size() + errors.size());
+        result.addAll(response);
+        result.addAll(errors);
+        return result;
     }
 }

@@ -46,6 +46,8 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.security.acl.AclBindingFilter;
 
 import java.util.Collection;
 import java.util.List;
@@ -387,4 +389,39 @@ public interface Admin extends AutoCloseable {
             String partitionName,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec);
+
+    /**
+     * Retrieves ACL entries filtered by principal for the specified resource.
+     *
+     * <p>1. Validates the user has 'describe' permission on the resource. 2. Returns entries
+     * matching the principal if permitted; throws an exception otherwise.
+     *
+     * @return A CompletableFuture containing the filtered ACL entries.
+     */
+    CompletableFuture<Collection<AclBinding>> listAcls(AclBindingFilter aclBindingFilter);
+
+    /**
+     * Creates multiple ACL entries in a single atomic operation.
+     *
+     * <p>1. Validates the user has 'alter' permission on the resource. 2. Creates the ACL entries
+     * if valid and permitted.
+     *
+     * <p>Each entry in {@code aclBindings} must have a valid principal, operation and permission.
+     *
+     * @param aclBindings List of ACL entries to create.
+     * @return A CompletableFuture indicating completion of the operation.
+     */
+    CreateAclsResult createAcls(Collection<AclBinding> aclBindings);
+
+    /**
+     * Removes multiple ACL entries in a single atomic operation.
+     *
+     * <p>1. Validates the user has 'alter' permission on the resource. 2. Removes entries only if
+     * they exactly match the provided entries (principal, operation, permission). 3. Does not
+     * remove entries if any of the ACL entries do not exist.
+     *
+     * @param filters List of ACL entries to remove.
+     * @return A CompletableFuture indicating completion of the operation.
+     */
+    DropAclsResult dropAcls(Collection<AclBindingFilter> filters);
 }

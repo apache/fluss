@@ -63,8 +63,8 @@ public class ServerMetadataCacheImplTest {
     }
 
     @Test
-    void testUpdateMetadataRequest() {
-        serverMetadataCache.updateMetadata(
+    void testUpdateClusterMetadataRequest() {
+        serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadataInfo(Optional.of(coordinatorServer), aliveTableServers));
         assertThat(serverMetadataCache.getCoordinatorServer("CLIENT").get())
                 .isEqualTo(coordinatorServer.node("CLIENT"));

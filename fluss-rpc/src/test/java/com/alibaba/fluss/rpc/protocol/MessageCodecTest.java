@@ -41,6 +41,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
 import java.util.Collections;
 
 import static com.alibaba.fluss.testutils.ByteBufChannel.toByteBuf;
@@ -67,7 +68,8 @@ class MessageCodecTest {
                 new NettyServerHandler(
                         requestChannel,
                         new ApiManager(ServerType.TABLET_SERVER),
-                        "CLIENT",
+                        "FLUSS",
+                        true,
                         RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
@@ -194,6 +196,7 @@ class MessageCodecTest {
         when(channelId.asLongText()).thenReturn("long_text");
         Channel channel = mock(Channel.class);
         when(channel.id()).thenReturn(channelId);
+        when(channel.remoteAddress()).thenReturn(new InetSocketAddress("localhost", 8080));
         ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
         when(ctx.channel()).thenReturn(channel);
         EventExecutor eventExecutor = mock(EventExecutor.class);

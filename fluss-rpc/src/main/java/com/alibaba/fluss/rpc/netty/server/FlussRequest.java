@@ -19,8 +19,10 @@ package com.alibaba.fluss.rpc.netty.server;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.RequestType;
+import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
+import java.net.InetAddress;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -35,6 +37,9 @@ public final class FlussRequest implements RpcRequest {
     private final ApiMessage message;
     private final ByteBuf buffer;
     private final String listenerName;
+    private final boolean isInternal;
+    private final FlussPrincipal principal;
+    private final InetAddress address;
     private final CompletableFuture<ApiMessage> responseFuture;
 
     // the time when the request is received by server
@@ -51,6 +56,9 @@ public final class FlussRequest implements RpcRequest {
             ApiMessage message,
             ByteBuf buffer,
             String listenerName,
+            boolean isInternal,
+            FlussPrincipal principal,
+            InetAddress address,
             CompletableFuture<ApiMessage> responseFuture) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
@@ -58,8 +66,11 @@ public final class FlussRequest implements RpcRequest {
         this.apiMethod = apiMethod;
         this.message = message;
         this.buffer = checkNotNull(buffer);
-        this.listenerName = listenerName;
         this.responseFuture = responseFuture;
+        this.isInternal = isInternal;
+        this.principal = principal;
+        this.address = address;
+        this.listenerName = listenerName;
         this.startTimeMs = System.currentTimeMillis();
     }
 
@@ -136,6 +147,18 @@ public final class FlussRequest implements RpcRequest {
 
     public boolean cancelled() {
         return cancelled;
+    }
+
+    public InetAddress getAddress() {
+        return address;
+    }
+
+    public FlussPrincipal getPrincipal() {
+        return principal;
+    }
+
+    public boolean isInternal() {
+        return isInternal;
     }
 
     @Override

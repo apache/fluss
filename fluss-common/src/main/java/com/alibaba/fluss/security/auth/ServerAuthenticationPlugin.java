@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.config.Configuration;
 
 /**
@@ -25,7 +26,10 @@ import com.alibaba.fluss.config.Configuration;
  * <p>The protocol type is specified via {@link
  * com.alibaba.fluss.config.ConfigOptions#SERVER_SECURITY_PROTOCOL_MAP}, and configuration
  * parameters must be prefixed with {@code security.${protocol}}.
+ *
+ * @since 0.7
  */
+@PublicEvolving
 public interface ServerAuthenticationPlugin extends AuthenticationPlugin {
 
     /**

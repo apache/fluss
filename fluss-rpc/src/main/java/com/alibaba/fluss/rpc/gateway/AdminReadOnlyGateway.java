@@ -33,6 +33,8 @@ import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaResponse;
+import com.alibaba.fluss.rpc.messages.ListAclsRequest;
+import com.alibaba.fluss.rpc.messages.ListAclsResponse;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesResponse;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -186,4 +188,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     @RPC(api = ApiKeys.GET_LATEST_LAKE_SNAPSHOT)
     CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
             GetLatestLakeSnapshotRequest request);
+
+    /**
+     * List acls for a table.
+     *
+     * @param request the request that specifies the table path.
+     * @return a future returns the list of acls.
+     */
+    @RPC(api = ApiKeys.LIST_ACLS)
+    CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request);
 }

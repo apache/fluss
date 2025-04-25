@@ -63,6 +63,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
@@ -295,7 +296,8 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                result -> {});
+                result -> {},
+                (tableId, path) -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
@@ -309,7 +311,8 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                result -> {});
+                result -> {},
+                (tableId, path) -> {});
     }
 
     private ReplicaManager createReplicaManager(int serverId) throws Exception {
@@ -374,7 +377,8 @@ public class ReplicaFetcherThreadTest {
         public void becomeLeaderOrFollower(
                 int requestCoordinatorEpoch,
                 List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
-                Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
+                Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback,
+                BiConsumer<Long, PhysicalTablePath> leaderBucketCallback) {
             for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
                 Optional<Replica> replicaOpt = maybeCreateReplica(data);
                 if (replicaOpt.isPresent() && data.getReplicas().contains(serverId)) {

@@ -42,6 +42,7 @@ import com.alibaba.fluss.utils.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -59,6 +60,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     private final RequestChannel requestChannel;
     private final ApiManager apiManager;
+    private final boolean isInternal;
     private final String listenerName;
     private final RequestsMetrics requestsMetrics;
     private volatile ChannelHandlerContext ctx;
@@ -72,11 +74,13 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             RequestChannel requestChannel,
             ApiManager apiManager,
             String listenerName,
+            boolean isInternal,
             RequestsMetrics requestsMetrics,
             ServerAuthenticator authenticator) {
         this.requestChannel = requestChannel;
         this.apiManager = apiManager;
         this.listenerName = listenerName;
+        this.isInternal = isInternal;
         this.requestsMetrics = requestsMetrics;
         this.authenticator = authenticator;
         this.state = ConnectionState.START;
@@ -120,6 +124,9 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             requestMessage,
                             buffer,
                             listenerName,
+                            isInternal,
+                            authenticator.isCompleted() ? authenticator.createPrincipal() : null,
+                            ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
                             future);
 
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());

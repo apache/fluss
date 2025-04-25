@@ -16,9 +16,16 @@
 
 package com.alibaba.fluss.security.auth;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.security.acl.FlussPrincipal;
 
-/** Authenticator for server side. */
+/**
+ * Authenticator for server side.
+ *
+ * @since 0.7
+ */
+@PublicEvolving
 public interface ServerAuthenticator {
 
     String protocol();
@@ -66,4 +73,10 @@ public interface ServerAuthenticator {
 
     /** Checks if the authentication from server side is completed. */
     boolean isCompleted();
+
+    /**
+     * Create principal from authenticated token for later authorization.(this can only invoke if is
+     * complete).
+     */
+    FlussPrincipal createPrincipal();
 }

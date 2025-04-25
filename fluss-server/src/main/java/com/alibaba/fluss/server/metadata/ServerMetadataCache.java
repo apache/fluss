@@ -17,14 +17,22 @@
 package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.MetadataCache;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 
 /** Metadata cache for server. it only caches the cluster metadata. */
 public interface ServerMetadataCache extends MetadataCache {
 
     /**
-     * Update the metadata by the remote update metadata request.
+     * Update the cluster metadata by the remote update metadata request.
      *
      * @param clusterMetadataInfo the metadata info.
      */
-    void updateMetadata(ClusterMetadataInfo clusterMetadataInfo);
+    void updateClusterMetadata(ClusterMetadataInfo clusterMetadataInfo);
+
+    /**
+     * Update the table and database metadata by the remote update table leader and isr request.
+     * only leader server cache the table which it stored data. This metedata will used to get the
+     * table name and database name when consumer and produce.
+     */
+    void upsertTableBucketMetadata(Long tableId, PhysicalTablePath physicalTablePath);
 }

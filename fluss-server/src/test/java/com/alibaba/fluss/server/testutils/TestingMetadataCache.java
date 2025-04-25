@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.testutils;
 
 import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 
 import java.util.Collections;
 import java.util.Map;
@@ -61,5 +62,10 @@ public class TestingMetadataCache implements MetadataCache {
 
     public int[] getLiveServerIds() {
         return serverIds;
+    }
+
+    @Override
+    public PhysicalTablePath getTablePath(long tableId) {
+        return null;
     }
 }

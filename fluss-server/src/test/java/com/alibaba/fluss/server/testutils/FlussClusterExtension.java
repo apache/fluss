@@ -152,12 +152,12 @@ public final class FlussClusterExtension
     }
 
     @Override
-    public void afterEach(ExtensionContext extensionContext) {
+    public void afterEach(ExtensionContext extensionContext) throws Exception {
         String defaultDb = BUILTIN_DATABASE;
         // TODO: we need to cleanup all zk nodes, including the assignments,
         //  but currently, we don't have a good way to do it
         if (metadataManager != null) {
-            // drop all database and tables
+            // drop all database and tables.
             List<String> databases = metadataManager.listDatabases();
             for (String database : databases) {
                 if (!database.equals(defaultDb)) {
@@ -335,6 +335,10 @@ public final class FlussClusterExtension
     }
 
     public Configuration getClientConfig() {
+        return getClientConfig(null);
+    }
+
+    public Configuration getClientConfig(@Nullable String listenerName) {
         Configuration flussConf = new Configuration();
         // now, just use the coordinator server as the bootstrap server
         flussConf.set(
@@ -342,8 +346,8 @@ public final class FlussClusterExtension
                 Collections.singletonList(
                         String.format(
                                 "%s:%d",
-                                getCoordinatorServerNode().host(),
-                                getCoordinatorServerNode().port())));
+                                getCoordinatorServerNode(listenerName).host(),
+                                getCoordinatorServerNode(listenerName).port())));
 
         // set a small memory buffer for testing.
         flussConf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("2mb"));
@@ -418,6 +422,11 @@ public final class FlussClusterExtension
                 this::getCoordinatorServerNode, rpcClient, CoordinatorGateway.class);
     }
 
+    public CoordinatorGateway newCoordinatorClient(String listenerName) {
+        return GatewayClientProxy.createGatewayProxy(
+                () -> getCoordinatorServerNode(listenerName), rpcClient, CoordinatorGateway.class);
+    }
+
     public TabletServerGateway newTabletServerClientForNode(int serverId) {
         final ServerNode serverNode =
                 getTabletServerNodes().stream()
@@ -450,7 +459,11 @@ public final class FlussClusterExtension
                         ServerNode coordinatorNode =
                                 toServerNode(
                                         response.getCoordinatorServer(), ServerType.COORDINATOR);
-                        assertThat(coordinatorNode).isEqualTo(getCoordinatorServerNode());
+                        assertThat(coordinatorNode)
+                                .isEqualTo(
+                                        getCoordinatorServerNode(
+                                                clusterConf.get(
+                                                        ConfigOptions.INTERNAL_LISTENER_NAME)));
                         // check tablet server nodes
                         List<ServerNode> tsNodes =
                                 response.getTabletServersList().stream()
@@ -700,10 +713,11 @@ public final class FlussClusterExtension
     }
 
     private List<AdminReadOnlyGateway> collectAllRpcGateways() {
+        String internalListenerName = clusterConf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
         List<AdminReadOnlyGateway> rpcServiceBases = new ArrayList<>();
-        rpcServiceBases.add(newCoordinatorClient());
+        rpcServiceBases.add(newCoordinatorClient(internalListenerName));
         rpcServiceBases.addAll(
-                getTabletServerNodes().stream()
+                getTabletServerNodes(internalListenerName).stream()
                         .map(this::newTabletServerClientForNode)
                         .collect(Collectors.toList()));
         return rpcServiceBases;

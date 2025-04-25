@@ -68,7 +68,8 @@ final class NettyServerHandlerTest {
                 new NettyServerHandler(
                         requestChannel,
                         new ApiManager(ServerType.TABLET_SERVER),
-                        "CLIENT",
+                        "FLUSS",
+                        true,
                         RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();

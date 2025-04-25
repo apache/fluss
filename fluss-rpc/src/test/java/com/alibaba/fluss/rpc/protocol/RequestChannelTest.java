@@ -51,7 +51,10 @@ public class RequestChannelTest {
                             null,
                             new GetTableInfoRequest(),
                             new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                            "CLIENT",
+                            "FLUSS",
+                            true,
+                            null,
+                            null,
                             new CompletableFuture<>());
             channel.putRequest(rpcRequest);
             rpcRequests.add(rpcRequest);
@@ -71,7 +74,10 @@ public class RequestChannelTest {
                         null,
                         new GetTableInfoRequest(),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                        "CLIENT",
+                        "FLUSS",
+                        true,
+                        null,
+                        null,
                         new CompletableFuture<>());
         RpcRequest rpcRequest2 =
                 new FlussRequest(
@@ -81,7 +87,10 @@ public class RequestChannelTest {
                         null,
                         new FetchLogRequest().setMaxBytes(100).setFollowerServerId(2),
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                        "CLIENT",
+                        "FLUSS",
+                        true,
+                        null,
+                        null,
                         new CompletableFuture<>());
         channel.putRequest(rpcRequest1);
         channel.putRequest(rpcRequest2);

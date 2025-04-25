@@ -117,6 +117,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -327,7 +328,8 @@ public class ReplicaManager {
     public void becomeLeaderOrFollower(
             int requestCoordinatorEpoch,
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
-            Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
+            Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback,
+            BiConsumer<Long, PhysicalTablePath> leaderBucketCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
         inLock(
                 replicaStateChangeLock,
@@ -343,6 +345,8 @@ public class ReplicaManager {
                             boolean becomeLeader = validateAndGetIsBecomeLeader(data);
                             if (becomeLeader) {
                                 replicasToBeLeader.add(data);
+                                leaderBucketCallback.accept(
+                                        tb.getTableId(), data.getPhysicalTablePath());
                             } else {
                                 replicasToBeFollower.add(data);
                             }

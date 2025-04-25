@@ -129,6 +129,46 @@ public class ConfigOptions {
                             "Limits the maximum number of partitions that can be created for a partitioned table "
                                     + "to avoid creating too many partitions.");
 
+    public static final ConfigOption<Duration> ACL_NOTIFICATION_EXPIRATION_TIME =
+            key("acl.notification.expiration-time")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(15))
+                    .withDescription(
+                            "The duration for which ACL notifications are valid before they expire. "
+                                    + "This configuration determines the time window during which an ACL notification is considered active. "
+                                    + "After this duration, the notification will no longer be valid and will be discarded. "
+                                    + "The default value is 15 minutes. "
+                                    + "This setting is important to ensure that ACL changes are propagated in a timely manner and do not remain active longer than necessary.");
+
+    public static final ConfigOption<Boolean> AUTHORIZER_ENABLED =
+            key("authorizer.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Specifies whether to enable the authorization feature. "
+                                    + "If enabled, access control is enforced based on the authorization rules defined in the configuration. "
+                                    + "If disabled, all operations and resources are accessible to all users.");
+
+    public static final ConfigOption<String> AUTHORIZER_TYPE =
+            key("authorizer.type")
+                    .stringType()
+                    .defaultValue("default")
+                    .withDescription(
+                            "Specifies the type of authorizer to be used for access control. "
+                                    + "This value corresponds to the identifier of the authorization plugin. "
+                                    + "The default value is 'default', which indicates the built-in authorizer implementation. "
+                                    + "Custom authorizers can be implemented by providing a matching plugin identifier.");
+
+    public static final ConfigOption<String> SUPER_USERS =
+            key("super.users")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A semicolon-separated list of superusers who have unrestricted access to all operations and resources. "
+                                    + "Note that the delimiter is semicolon since SSL user names may contain comma, "
+                                    + "and each super user should be specified in the format 'principal_type:principal_name', e.g., 'User:admin;User:bob'. "
+                                    + "This configuration is critical for defining administrative privileges in the system.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------
