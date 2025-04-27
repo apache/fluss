@@ -46,15 +46,16 @@ public final class CoordinatorEventManager implements EventManager {
     private final EventProcessor eventProcessor;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
-    private final LinkedBlockingQueue<CoordinatorEvent> queue = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<QueuedEvent> queue = new LinkedBlockingQueue<>();
     private final CoordinatorEventThread thread =
             new CoordinatorEventThread(COORDINATOR_EVENT_THREAD_NAME);
     private final Lock putLock = new ReentrantLock();
 
     // metrics
     private Histogram eventProcessTime;
+    private Histogram eventQueueTime;
 
-    private static final int WINDOW_SIZE = 1024;
+    private static final int WINDOW_SIZE = 100;
 
     public CoordinatorEventManager(
             EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
@@ -69,6 +70,11 @@ public final class CoordinatorEventManager implements EventManager {
         eventProcessTime =
                 coordinatorMetricGroup.histogram(
                         MetricNames.EVENT_PROCESS_TIME_MS,
+                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+
+        eventQueueTime =
+                coordinatorMetricGroup.histogram(
+                        MetricNames.EVENT_QUEUE_TIME_MS,
                         new DescriptiveStatisticsHistogram(WINDOW_SIZE));
     }
 
@@ -91,7 +97,9 @@ public final class CoordinatorEventManager implements EventManager {
                 putLock,
                 () -> {
                     try {
-                        queue.put(event);
+                        QueuedEvent queuedEvent =
+                                new QueuedEvent(event, System.currentTimeMillis());
+                        queue.put(queuedEvent);
                     } catch (InterruptedException e) {
                         LOG.error("Fail to put coordinator event {}.", event, e);
                     }
@@ -115,20 +123,32 @@ public final class CoordinatorEventManager implements EventManager {
 
         @Override
         public void doWork() throws Exception {
-            CoordinatorEvent event = queue.take();
+            QueuedEvent queuedEvent = queue.take();
+            CoordinatorEvent coordinatorEvent = queuedEvent.event;
 
             long eventStartTimeMs = System.currentTimeMillis();
 
             try {
-                if (!(event instanceof ShutdownEventThreadEvent)) {
-                    eventProcessor.process(event);
+                if (!(coordinatorEvent instanceof ShutdownEventThreadEvent)) {
+                    eventQueueTime.update(System.currentTimeMillis() - queuedEvent.enqueueTimeMs);
+                    eventProcessor.process(coordinatorEvent);
                 }
             } catch (Throwable e) {
-                log.error("Uncaught error processing event {}.", event, e);
+                log.error("Uncaught error processing event {}.", coordinatorEvent, e);
             } finally {
                 long eventFinishTimeMs = System.currentTimeMillis();
                 eventProcessTime.update(eventFinishTimeMs - eventStartTimeMs);
             }
+        }
+    }
+
+    private static class QueuedEvent {
+        private final CoordinatorEvent event;
+        private final long enqueueTimeMs;
+
+        public QueuedEvent(CoordinatorEvent event, long enqueueTimeMs) {
+            this.event = event;
+            this.enqueueTimeMs = enqueueTimeMs;
         }
     }
 }
