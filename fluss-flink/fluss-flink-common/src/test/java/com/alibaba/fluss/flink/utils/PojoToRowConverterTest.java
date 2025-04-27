@@ -17,6 +17,7 @@
 package com.alibaba.fluss.flink.utils;
 
 import com.alibaba.fluss.flink.common.Order;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.BinaryType;
 import com.alibaba.fluss.types.BooleanType;
@@ -35,7 +36,6 @@ import com.alibaba.fluss.types.TimestampType;
 import com.alibaba.fluss.types.TinyIntType;
 
 import org.apache.flink.api.common.functions.InvalidTypesException;
-import org.apache.flink.table.data.RowData;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -48,8 +48,8 @@ import java.util.Collections;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Unit test for {@link com.alibaba.fluss.flink.utils.PojoToRowDataConverter}. */
-public class PojoToRowDataConverterTest {
+/** Unit test for {@link PojoToRowConverter}. */
+public class PojoToRowConverterTest {
 
     @Test
     public void testBasicConversion() throws Exception {
@@ -63,14 +63,13 @@ public class PojoToRowDataConverterTest {
                                 new DataField(
                                         "address", new StringType(true), "Shipping address")));
 
-        PojoToRowDataConverter<Order> converter =
-                new PojoToRowDataConverter<>(Order.class, rowType);
+        PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
         Order order = new Order(1001L, 5001L, 10, "123 Mumbai");
 
-        RowData result = converter.convert(order);
+        GenericRow result = converter.convert(order);
 
-        assertThat(result.getArity()).isEqualTo(4);
+        assertThat(result.getFieldCount()).isEqualTo(4);
         assertThat(result.getLong(0)).isEqualTo(1001L);
         assertThat(result.getLong(1)).isEqualTo(5001L);
         assertThat(result.getInt(2)).isEqualTo(10);
@@ -89,14 +88,13 @@ public class PojoToRowDataConverterTest {
                                 new DataField(
                                         "address", new StringType(true), "Shipping address")));
 
-        PojoToRowDataConverter<Order> converter =
-                new PojoToRowDataConverter<>(Order.class, rowType);
+        PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
-        RowData nullResult = converter.convert(null);
+        GenericRow nullResult = converter.convert(null);
         assertThat(nullResult).isNull();
 
         Order order = new Order(1002L, 5002L, 5, null);
-        RowData result = converter.convert(order);
+        GenericRow result = converter.convert(order);
 
         assertThat(result.getLong(0)).isEqualTo(1002L);
         assertThat(result.getLong(1)).isEqualTo(5002L);
@@ -119,14 +117,13 @@ public class PojoToRowDataConverterTest {
                                         new StringType(true),
                                         "Non-existent field")));
 
-        PojoToRowDataConverter<Order> converter =
-                new PojoToRowDataConverter<>(Order.class, rowType);
+        PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
         Order order = new Order(1003L, 5003L, 15, "456 Shenzhen");
 
-        RowData result = converter.convert(order);
+        GenericRow result = converter.convert(order);
 
-        assertThat(result.getArity()).isEqualTo(5);
+        assertThat(result.getFieldCount()).isEqualTo(5);
         assertThat(result.getLong(0)).isEqualTo(1003L);
         assertThat(result.getLong(1)).isEqualTo(5003L);
         assertThat(result.getInt(2)).isEqualTo(15);
@@ -145,14 +142,13 @@ public class PojoToRowDataConverterTest {
                                 new DataField("orderId", new BigIntType(false), "Order ID"),
                                 new DataField("itemId", new BigIntType(false), "Item ID")));
 
-        PojoToRowDataConverter<Order> converter =
-                new PojoToRowDataConverter<>(Order.class, rowType);
+        PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
         Order order = new Order(1004L, 5004L, 20, "789 Greece");
 
-        RowData result = converter.convert(order);
+        GenericRow result = converter.convert(order);
 
-        assertThat(result.getArity()).isEqualTo(4);
+        assertThat(result.getFieldCount()).isEqualTo(4);
         assertThat(result.getString(0).toString()).isEqualTo("789 Greece");
         assertThat(result.getInt(1)).isEqualTo(20);
         assertThat(result.getLong(2)).isEqualTo(1004L);
@@ -222,22 +218,36 @@ public class PojoToRowDataConverterTest {
                                         "Nested POJO")));
 
         // Accept either exception type since Flink's POJO analysis happens first
-        assertThatThrownBy(() -> new PojoToRowDataConverter<>(NestedContainer.class, rowType))
+        assertThatThrownBy(() -> new PojoToRowConverter<>(NestedContainer.class, rowType))
                 .isInstanceOfAny(UnsupportedOperationException.class, InvalidTypesException.class);
+    }
+
+    @Test
+    public void testUnsupportedJavaClass() {
+        RowType rowType =
+                new RowType(
+                        true,
+                        Arrays.asList(
+                                new DataField("id", new IntType(false), "Id"),
+                                new DataField("price", new DecimalType(38, 18), "Price")));
+
+        assertThatThrownBy(() -> new PojoToRowConverter<>(ProductWithPrice.class, rowType))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(
+                        "Field Java type class java.lang.Long for field id is not supported, the supported Java types are [int, class java.lang.Integer]");
     }
 
     @Test
     public void testEmptySchema() throws Exception {
         RowType emptyRowType = new RowType(true, Collections.emptyList());
 
-        PojoToRowDataConverter<Order> converter =
-                new PojoToRowDataConverter<>(Order.class, emptyRowType);
+        PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, emptyRowType);
 
         Order order = new Order(1005L, 5005L, 25, "Empty schema test");
 
-        RowData result = converter.convert(order);
+        GenericRow result = converter.convert(order);
 
-        assertThat(result.getArity()).isEqualTo(0);
+        assertThat(result.getFieldCount()).isEqualTo(0);
     }
 
     /** Test class with various data types to test type conversion. */
@@ -430,11 +440,11 @@ public class PojoToRowDataConverterTest {
                         'A' // char
                         );
 
-        PojoToRowDataConverter<ComplexTypeOrder> converter =
-                new PojoToRowDataConverter<>(ComplexTypeOrder.class, rowType);
-        RowData result = converter.convert(order);
+        PojoToRowConverter<ComplexTypeOrder> converter =
+                new PojoToRowConverter<>(ComplexTypeOrder.class, rowType);
+        GenericRow result = converter.convert(order);
 
-        assertThat(result.getArity()).isEqualTo(15);
+        assertThat(result.getFieldCount()).isEqualTo(15);
         assertThat(result.getLong(0)).isEqualTo(1001L);
         assertThat(result.getLong(1)).isEqualTo(5001L);
         assertThat(result.getInt(2)).isEqualTo(10);
@@ -459,9 +469,9 @@ public class PojoToRowDataConverterTest {
         LocalDateTime expectedTimestamp = LocalDateTime.of(2023, 7, 15, 14, 30, 45, 123456000);
         long expectedEpochMillis =
                 expectedTimestamp.toEpochSecond(java.time.ZoneOffset.UTC) * 1000L + 123L;
-        assertThat(result.getTimestamp(12, 6).getMillisecond()).isEqualTo(expectedEpochMillis);
+        assertThat(result.getTimestampNtz(12, 6).getMillisecond()).isEqualTo(expectedEpochMillis);
 
-        assertThat(result.getBinary(13)).isEqualTo(new byte[] {1, 2, 3, 4, 5});
+        assertThat(result.getBytes(13)).isEqualTo(new byte[] {1, 2, 3, 4, 5});
         assertThat(result.getString(14).toString()).isEqualTo("A");
     }
 }
