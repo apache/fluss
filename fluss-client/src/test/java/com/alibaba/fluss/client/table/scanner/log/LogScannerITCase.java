@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
+import com.alibaba.fluss.exception.FetchException;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -48,6 +49,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.apache.commons.lang3.RandomStringUtils.randomAlphanumeric;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link LogScannerImpl}. */
 public class LogScannerITCase extends ClientToServerITCaseBase {
@@ -430,6 +432,38 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
             assertThat(rowList).hasSize(batchRecordSize);
             assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+        }
+    }
+
+    @Test
+    void testSubscribeOutOfRangeLog() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_subscribe_out_of_range_log");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .build();
+        createTable(tablePath, tableDescriptor, false);
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int n = 0; n < 10; n++) {
+                appendWriter.append(row(1, "a"));
+            }
+            appendWriter.flush();
+
+            try (LogScanner logScanner = table.newScan().createLogScanner()) {
+                logScanner.subscribe(0, Long.MIN_VALUE);
+
+                assertThatThrownBy(() -> logScanner.poll(Duration.ofSeconds(1)))
+                        .isInstanceOf(FetchException.class)
+                        .hasMessageContaining(
+                                String.format(
+                                        "The fetching offset %s is out of range", Long.MIN_VALUE));
+            }
         }
     }
 }
