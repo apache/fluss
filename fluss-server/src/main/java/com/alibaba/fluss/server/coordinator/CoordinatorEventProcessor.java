@@ -58,6 +58,7 @@ import com.alibaba.fluss.server.coordinator.event.NewTabletServerEvent;
 import com.alibaba.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import com.alibaba.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
+import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
 import com.alibaba.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import com.alibaba.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
@@ -143,6 +144,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private volatile int offlineBucketCount;
     private volatile int tableCount;
     private volatile int bucketCount;
+    private volatile int replicasToDeleteCount;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -221,6 +223,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
         coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
         coordinatorMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -505,6 +509,30 @@ public class CoordinatorEventProcessor implements EventProcessor {
         tableCount = coordinatorContext.allTables().size();
         bucketCount = coordinatorContext.bucketLeaderAndIsr().size();
         offlineBucketCount = coordinatorContext.getOfflineBucketCount();
+
+        int replicasToDeletes = 0;
+        // for replica in partitions to be deleted
+        for (TablePartition tablePartition : coordinatorContext.getPartitionsToBeDeleted()) {
+            for (TableBucketReplica replica :
+                    coordinatorContext.getAllReplicasForPartition(
+                            tablePartition.getTableId(), tablePartition.getPartitionId())) {
+                replicasToDeletes =
+                        isReplicaToDelete(replica) ? replicasToDeletes + 1 : replicasToDeletes;
+            }
+        }
+        // for replica in tables to be deleted
+        for (long tableId : coordinatorContext.getTablesToBeDeleted()) {
+            for (TableBucketReplica replica : coordinatorContext.getAllReplicasForTable(tableId)) {
+                replicasToDeletes =
+                        isReplicaToDelete(replica) ? replicasToDeletes + 1 : replicasToDeletes;
+            }
+        }
+        this.replicasToDeleteCount = replicasToDeletes;
+    }
+
+    private boolean isReplicaToDelete(TableBucketReplica replica) {
+        ReplicaState replicaState = coordinatorContext.getReplicaState(replica);
+        return replicaState != null && replicaState != ReplicaDeletionSuccessful;
     }
 
     private void processCreateTable(CreateTableEvent createTableEvent) {

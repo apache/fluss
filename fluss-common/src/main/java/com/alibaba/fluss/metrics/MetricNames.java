@@ -39,6 +39,7 @@ public class MetricNames {
     public static final String OFFLINE_BUCKET_COUNT = "offlineBucketCount";
     public static final String TABLE_COUNT = "tableCount";
     public static final String BUCKET_COUNT = "bucketCount";
+    public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";
