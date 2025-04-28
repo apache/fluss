@@ -83,10 +83,8 @@ public class AdjustIsrITCase {
         Integer stopFollower = isr.stream().filter(i -> i != leader).findFirst().get();
 
         FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, stopFollower);
-        TabletServerGateway followerGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(stopFollower);
         // stop follower replica for the bucket
-        FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, leader);
+        FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, currentLeaderAndIsr.leaderEpoch());
 
         isr.remove(stopFollower);
 
