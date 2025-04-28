@@ -68,7 +68,8 @@ public class RequestsMetrics {
                         ApiKeys.PUT_KV,
                         ApiKeys.LOOKUP,
                         ApiKeys.FETCH_LOG,
-                        ApiKeys.PREFIX_LOOKUP);
+                        ApiKeys.PREFIX_LOOKUP,
+                        ApiKeys.GET_METADATA);
         return new RequestsMetrics(serverMetricsGroup, apiKeys);
     }
 
@@ -101,6 +102,8 @@ public class RequestsMetrics {
                 return "prefixLookup";
             case FETCH_LOG:
                 return isFromFollower ? "fetchLogFollower" : "fetchLogClient";
+            case GET_METADATA:
+                return "metadata";
             default:
                 return "unknown";
         }
