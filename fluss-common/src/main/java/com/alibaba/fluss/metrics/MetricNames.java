@@ -97,6 +97,7 @@ public class MetricNames {
     // --------------------------------------------------------------------------------------------
 
     // for replica
+    public static final String UNDER_REPLICATED = "underReplicated";
     public static final String IN_SYNC_REPLICAS = "inSyncReplicasCount";
     public static final String UNDER_MIN_ISR = "underMinIsr";
     public static final String AT_MIN_ISR = "atMinIsr";

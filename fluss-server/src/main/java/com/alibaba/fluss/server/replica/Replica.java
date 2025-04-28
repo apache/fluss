@@ -244,6 +244,7 @@ public final class Replica {
     }
 
     private void registerMetrics() {
+        bucketMetricGroup.gauge(MetricNames.UNDER_REPLICATED, () -> isUnderReplicated() ? 1 : 0);
         bucketMetricGroup.gauge(
                 MetricNames.IN_SYNC_REPLICAS, () -> isLeader() ? isrState.isr().size() : 0);
         bucketMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, () -> isUnderMinIsr() ? 1 : 0);
@@ -1729,6 +1730,11 @@ public final class Replica {
                                     + "the required acks %s for table bucket %s.",
                             isrState.isr(), requiredAcks, tableBucket));
         }
+    }
+
+    private boolean isUnderReplicated() {
+        // is leader and isr size less than numReplicas
+        return isLeader() && isrState.isr().size() < tableConfig.getReplicationFactor();
     }
 
     private boolean isUnderMinIsr() {
