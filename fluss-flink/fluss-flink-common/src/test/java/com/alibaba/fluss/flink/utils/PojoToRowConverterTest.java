@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.flink.utils;
 
-import com.alibaba.fluss.flink.common.Order;
+import com.alibaba.fluss.flink.source.testutils.Order;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.BinaryType;

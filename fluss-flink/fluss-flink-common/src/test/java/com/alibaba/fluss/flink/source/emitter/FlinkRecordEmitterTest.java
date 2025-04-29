@@ -17,14 +17,14 @@
 package com.alibaba.fluss.flink.source.emitter;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.flink.common.Order;
 import com.alibaba.fluss.flink.source.deserializer.InitializationContextImpl;
-import com.alibaba.fluss.flink.source.deserializer.OrderDeserializationSchema;
 import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
 import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.flink.source.testutils.Order;
+import com.alibaba.fluss.flink.source.testutils.OrderDeserializationSchema;
 import com.alibaba.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;

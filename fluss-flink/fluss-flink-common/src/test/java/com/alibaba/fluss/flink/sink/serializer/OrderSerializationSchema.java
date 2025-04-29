@@ -17,7 +17,7 @@
 package com.alibaba.fluss.flink.sink.serializer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.flink.common.Order;
+import com.alibaba.fluss.flink.source.testutils.Order;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.table.data.GenericRowData;

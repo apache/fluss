@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.flink.common;
+package com.alibaba.fluss.flink.source.testutils;
 
 import java.util.Objects;
 

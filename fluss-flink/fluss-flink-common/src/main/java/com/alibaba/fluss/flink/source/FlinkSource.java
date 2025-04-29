@@ -32,12 +32,14 @@ import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
@@ -45,7 +47,8 @@ import org.apache.flink.core.io.SimpleVersionedSerializer;
 import javax.annotation.Nullable;
 
 /** Flink source for Fluss. */
-public class FlinkSource<OUT> implements Source<OUT, SourceSplitBase, SourceEnumeratorState> {
+public class FlinkSource<OUT>
+        implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
     private static final long serialVersionUID = 1L;
 
     private final Configuration flussConf;
@@ -54,8 +57,8 @@ public class FlinkSource<OUT> implements Source<OUT, SourceSplitBase, SourceEnum
     private final boolean isPartitioned;
     private final RowType sourceOutputType;
     @Nullable private final int[] projectedFields;
-    private final OffsetsInitializer offsetsInitializer;
-    private final long scanPartitionDiscoveryIntervalMs;
+    protected final OffsetsInitializer offsetsInitializer;
+    protected final long scanPartitionDiscoveryIntervalMs;
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
 
@@ -152,5 +155,10 @@ public class FlinkSource<OUT> implements Source<OUT, SourceSplitBase, SourceEnum
                 projectedFields,
                 flinkSourceReaderMetrics,
                 recordEmitter);
+    }
+
+    @Override
+    public TypeInformation<OUT> getProducedType() {
+        return deserializationSchema.getProducedType(sourceOutputType);
     }
 }

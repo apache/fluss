@@ -40,7 +40,6 @@ import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.List;
 
 import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
@@ -88,7 +87,8 @@ public final class FlussConnection implements Connection {
 
     @Override
     public Table getTable(TablePath tablePath) {
-        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+        // force to update the table info from server to avoid stale data in cache
+        metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
         return new FlussTable(this, tablePath, tableInfo);
     }

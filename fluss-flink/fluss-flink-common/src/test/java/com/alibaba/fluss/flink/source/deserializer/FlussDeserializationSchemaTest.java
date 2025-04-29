@@ -17,7 +17,8 @@
 package com.alibaba.fluss.flink.source.deserializer;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.flink.common.Order;
+import com.alibaba.fluss.flink.source.testutils.Order;
+import com.alibaba.fluss.flink.source.testutils.OrderDeserializationSchema;
 import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.GenericRow;

@@ -639,8 +639,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
-    private static Map<Integer, Integer> putRows(TablePath tablePath, int rowsNum)
-            throws Exception {
+    private Map<Integer, Integer> putRows(TablePath tablePath, int rowsNum) throws Exception {
         CompactedKeyEncoder keyEncoder =
                 new CompactedKeyEncoder(
                         DEFAULT_PK_TABLE_SCHEMA.getRowType(),
