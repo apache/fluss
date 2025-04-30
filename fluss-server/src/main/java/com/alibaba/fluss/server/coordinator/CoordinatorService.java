@@ -24,6 +24,7 @@ import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.DataLakeFormat;
@@ -223,6 +224,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+
+        // check for max bucket
+        int maxBucketNum = ConfigOptions.MAX_BUCKET_NUM.defaultValue();
+        if (bucketCount > maxBucketNum) {
+            throw new TooManyBucketsException(
+                    String.format(
+                            "Table %s is configured with %s buckets, exceeding the maximum limit %s.",
+                            tablePath, bucketCount, maxBucketNum));
+        }
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;

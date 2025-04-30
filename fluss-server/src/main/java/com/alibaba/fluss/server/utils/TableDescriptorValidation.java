@@ -22,6 +22,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.ReadableConfig;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.MergeEngineType;
@@ -79,6 +80,14 @@ public class TableDescriptorValidation {
         }
         if (!tableDescriptor.getTableDistribution().get().getBucketCount().isPresent()) {
             throw new InvalidTableException("Bucket number must be set.");
+        }
+        int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        int maxBucketNum = ConfigOptions.MAX_BUCKET_NUM.defaultValue();
+        if (bucketCount > maxBucketNum) {
+            throw new TooManyBucketsException(
+                    String.format(
+                            "Bucket count %s exceeds the maximum limit %s.",
+                            bucketCount, maxBucketNum));
         }
     }
 
