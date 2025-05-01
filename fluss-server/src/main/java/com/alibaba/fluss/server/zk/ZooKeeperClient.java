@@ -810,4 +810,37 @@ public class ZooKeeperClient implements AutoCloseable {
             curatorFrameworkWrapper.close();
         }
     }
+
+    // --------------------------------------------------------------------------------------------
+    // Bucket
+    // --------------------------------------------------------------------------------------------
+
+    /** Get the total bucket num of a table. */
+    public int getTotalBucketNumber(TablePath tablePath) throws Exception {
+        int bucketCount = 0;
+        Optional<TableRegistration> tableReg = getTable(tablePath);
+        if (tableReg.isPresent()) {
+            if (!tableReg.get().isPartitioned()) {
+                bucketCount = tableReg.get().bucketCount;
+            } else {
+                Set<String> partitions = getPartitions(tablePath);
+                if (partitions.isEmpty()) {
+                    // No partitions yet, so no buckets
+                    return 0;
+                }
+                for (String partition : partitions) {
+                    Optional<TablePartition> tablePartition = getPartition(tablePath, partition);
+                    if (tablePartition.isPresent()) {
+                        long partitionId = tablePartition.get().getPartitionId();
+                        Optional<PartitionAssignment> partitionAssignment =
+                                getPartitionAssignment(partitionId);
+                        if (partitionAssignment.isPresent()) {
+                            bucketCount += partitionAssignment.get().getBucketAssignments().size();
+                        }
+                    }
+                }
+            }
+        }
+        return bucketCount;
+    }
 }

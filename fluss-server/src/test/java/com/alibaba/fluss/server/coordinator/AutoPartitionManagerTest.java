@@ -370,6 +370,58 @@ class AutoPartitionManagerTest {
                         "20250419", "20250420", "20250421", "20250422", "20250423");
     }
 
+    /**
+     * Test if AutoPartionManager.createPartition adheres to maxBucketLimit while adding new
+     * parition automatically, skip if it breaches limit.
+     */
+    @Test
+    void testMaxBucketNum() throws Exception {
+
+        int bucketCountPerPartition = 10;
+        int maxBucketNum = 30; // Allow only 3 partitions with 10 buckets each
+
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.MAX_BUCKET_NUM, maxBucketNum);
+        MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
+
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingMetadataCache(3),
+                        metadataManager,
+                        config,
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // Create a partitioned table with 10 buckets per partition and no auto-drop
+        TableInfo table =
+                createPartitionedTableWithBuckets(
+                        -1, 4, AutoPartitionTimeUnit.DAY, bucketCountPerPartition);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        // Trigger immediate partition creation
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        int partitionsNum = zookeeperClient.getPartitionNumber(tablePath);
+        // Only 3 partitions should be created (3 * 10 = 30 buckets) out of the 4 requested
+        assertThat(partitionsNum).isEqualTo(3);
+
+        // Advance time to trigger another auto-partition cycle
+        clock.advanceTime(Duration.ofDays(1).plusHours(23));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        // Check partitions again - should still have only 3 due to bucket limit
+        partitionsNum = zookeeperClient.getPartitionNumber(tablePath);
+        assertThat(partitionsNum).isEqualTo(3);
+    }
+
     private static class TestParams {
         final AutoPartitionTimeUnit timeUnit;
         final long startTimeMs;
@@ -508,6 +560,48 @@ class AutoPartitionManagerTest {
                                         .build())
                         .comment("partitioned table")
                         .distributedBy(16)
+                        .partitionedBy("dt")
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
+                                partitionRetentionNum)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
+                                partitionPreCreateNum)
+                        .build();
+        long currentMillis = System.currentTimeMillis();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
+        TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
+        zookeeperClient.registerTable(tablePath, registration);
+        return tableInfo;
+    }
+
+    /**
+     * Helper method creates a partitioned table with the specified number of buckets per partition.
+     */
+    private TableInfo createPartitionedTableWithBuckets(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            int bucketCount)
+            throws Exception {
+        long tableId = 1;
+        TablePath tablePath = TablePath.of("db", "test_bucket_limit_" + UUID.randomUUID());
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("name", DataTypes.STRING())
+                                        .column("dt", DataTypes.STRING())
+                                        .column("ts", DataTypes.TIMESTAMP())
+                                        .primaryKey("id", "dt")
+                                        .build())
+                        .comment("partitioned table with bucket limit")
+                        .distributedBy(bucketCount) // Specify bucket count here
                         .partitionedBy("dt")
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)

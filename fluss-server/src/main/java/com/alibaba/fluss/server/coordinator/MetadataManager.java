@@ -28,6 +28,7 @@ import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
@@ -66,6 +67,7 @@ public class MetadataManager {
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> defaultTableLakeOptions;
     private final int maxPartitionNum;
+    private final int maxBucketNum;
 
     /**
      * Creates a new metadata manager.
@@ -77,6 +79,7 @@ public class MetadataManager {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
         maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
+        maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
     }
 
     public void createDatabase(
@@ -380,6 +383,26 @@ public class MetadataManager {
                             "Get the number of partition from zookeeper failed for table %s",
                             tablePath),
                     e);
+        }
+
+        try {
+            int newPartitionBucketCount = partitionAssignment.getBucketAssignments().size();
+
+            int currentTotalBuckets = zookeeperClient.getTotalBucketNumber(tablePath);
+            if (currentTotalBuckets + newPartitionBucketCount > maxBucketNum) {
+                throw new TooManyBucketsException(
+                        String.format(
+                                "Adding partition '%s' would result in %d total buckets for table %s, exceeding the maximum of %d buckets.",
+                                partition.getPartitionName(),
+                                currentTotalBuckets + newPartitionBucketCount,
+                                tablePath,
+                                maxBucketNum));
+            }
+        } catch (TooManyBucketsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to check total bucket count for table %s", tablePath), e);
         }
 
         try {

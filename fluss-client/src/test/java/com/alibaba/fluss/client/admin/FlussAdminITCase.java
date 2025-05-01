@@ -39,6 +39,7 @@ import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
@@ -868,5 +869,44 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                                         .getFilePath()),
                                         kvFileHandleAndLocalPath.getLocalPath()))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Test that creating a table with bucket count exceeding the maximum throws
+     * TooManyBucketsException.
+     */
+    @Test
+    public void testAddTooManyBuckets() throws Exception {
+        // Already set low maximum bucket limit to 30 for this test in ClientToServerITCaseBase
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(10, "id") // 10 buckets per partition
+                        .partitionedBy("age")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_add_too_many_buckets_table");
+        admin.createTable(tablePath, partitionedTable, true).get();
+
+        // Add 3 partitions (3 * 10 = 30 buckets, which is the limit)
+        for (int i = 0; i < 3; i++) {
+            admin.createPartition(tablePath, newPartitionSpec("age", String.valueOf(i)), false)
+                    .get();
+        }
+
+        // Try to add one more partition, exceeding the bucket limit (4 * 10 > 30)
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath, newPartitionSpec("age", "4"), false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TooManyBucketsException.class)
+                .hasMessageContaining("exceeding the maximum of 30 buckets");
     }
 }
