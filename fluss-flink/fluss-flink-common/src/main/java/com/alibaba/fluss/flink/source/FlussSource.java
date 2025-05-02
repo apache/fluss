@@ -38,6 +38,7 @@ import javax.annotation.Nullable;
  *     .setBootstrapServers("localhost:9092")
  *     .setDatabase("mydb")
  *     .setTable("orders")
+ *     .setProjectedFields("orderId", "amount")
  *     .setStartingOffsets(OffsetsInitializer.earliest())
  *     .setScanPartitionDiscoveryIntervalMs(1000L)
  *     .setDeserializationSchema(new OrderDeserializationSchema())
