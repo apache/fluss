@@ -17,12 +17,12 @@
 package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.DataGetters;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.Float8Vector;
 
 /** {@link ArrowFieldWriter} for Double. */
 @Internal
-public class ArrowDoubleWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowDoubleWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowDoubleWriter forField(Float8Vector doubleVector) {
         return new ArrowDoubleWriter(doubleVector);
@@ -33,7 +33,7 @@ public class ArrowDoubleWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         Float8Vector vector = (Float8Vector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -44,11 +44,11 @@ public class ArrowDoubleWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private double readDouble(InternalRow row, int ordinal) {
+    private double readDouble(DataGetters row, int ordinal) {
         return row.getDouble(ordinal);
     }
 }

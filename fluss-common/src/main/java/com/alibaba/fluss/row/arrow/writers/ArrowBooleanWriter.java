@@ -17,12 +17,12 @@
 package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.DataGetters;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BitVector;
 
 /** {@link ArrowFieldWriter} for Boolean. */
 @Internal
-public class ArrowBooleanWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowBooleanWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowBooleanWriter forField(BitVector booleanVector) {
         return new ArrowBooleanWriter(booleanVector);
@@ -33,7 +33,7 @@ public class ArrowBooleanWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         BitVector vector = (BitVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -44,11 +44,11 @@ public class ArrowBooleanWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private boolean readBoolean(InternalRow row, int ordinal) {
+    private boolean readBoolean(DataGetters row, int ordinal) {
         return row.getBoolean(ordinal);
     }
 }

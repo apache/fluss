@@ -18,6 +18,7 @@ package com.alibaba.fluss.row.columnar;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.Decimal;
+import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 
@@ -100,5 +101,9 @@ public class VectorizedColumnBatch {
 
     public TimestampLtz getTimestampLtz(int rowId, int colId, int precision) {
         return ((TimestampLtzColumnVector) (columns[colId])).getTimestampLtz(rowId, precision);
+    }
+
+    public InternalRow getRow(int rowId, int colId, int numFields) {
+        throw new UnsupportedOperationException("Not support the operation!");
     }
 }

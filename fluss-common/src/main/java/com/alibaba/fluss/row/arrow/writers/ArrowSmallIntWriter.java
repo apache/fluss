@@ -17,12 +17,12 @@
 package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.DataGetters;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.SmallIntVector;
 
 /** {@link ArrowFieldWriter} for SmallInt. */
 @Internal
-public class ArrowSmallIntWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowSmallIntWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowSmallIntWriter forField(SmallIntVector smallIntVector) {
         return new ArrowSmallIntWriter(smallIntVector);
@@ -33,7 +33,7 @@ public class ArrowSmallIntWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         SmallIntVector vector = (SmallIntVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -44,11 +44,11 @@ public class ArrowSmallIntWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    public boolean isNullAt(InternalRow row, int ordinal) {
+    public boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    public short readShort(InternalRow row, int ordinal) {
+    public short readShort(DataGetters row, int ordinal) {
         return row.getShort(ordinal);
     }
 }

@@ -17,15 +17,15 @@
 package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.row.DataGetters;
 import com.alibaba.fluss.row.Decimal;
-import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.DecimalVector;
 
 import java.math.BigDecimal;
 
 /** {@link ArrowFieldWriter} for Decimal. */
 @Internal
-public class ArrowDecimalWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowDecimalWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowDecimalWriter forField(
             DecimalVector decimalVector, int precision, int scale) {
@@ -42,7 +42,7 @@ public class ArrowDecimalWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         DecimalVector vector = (DecimalVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -60,11 +60,11 @@ public class ArrowDecimalWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private Decimal readDecimal(InternalRow row, int ordinal) {
+    private Decimal readDecimal(DataGetters row, int ordinal) {
         return row.getDecimal(ordinal, precision, scale);
     }
 }

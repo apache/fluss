@@ -17,12 +17,12 @@
 package com.alibaba.fluss.row.arrow.writers;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.DataGetters;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
 
 /** {@link ArrowFieldWriter} for Int. */
 @Internal
-public class ArrowIntWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowIntWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowIntWriter forField(IntVector intVector) {
         return new ArrowIntWriter(intVector);
@@ -33,7 +33,7 @@ public class ArrowIntWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         IntVector vector = (IntVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -44,11 +44,11 @@ public class ArrowIntWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    int readInt(InternalRow row, int ordinal) {
+    int readInt(DataGetters row, int ordinal) {
         return row.getInt(ordinal);
     }
 }

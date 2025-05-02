@@ -74,77 +74,13 @@ import static com.alibaba.fluss.types.DataTypeChecks.getScale;
  * @since 0.1
  */
 @PublicEvolving
-public interface InternalRow {
+public interface InternalRow extends DataGetters {
     /**
      * Returns the number of fields in this row.
      *
      * <p>The number does not include {@link ChangeType}. It is kept separately.
      */
     int getFieldCount();
-
-    // ------------------------------------------------------------------------------------------
-    // Read-only accessor methods
-    // ------------------------------------------------------------------------------------------
-
-    /** Returns true if the element is null at the given position. */
-    boolean isNullAt(int pos);
-
-    /** Returns the boolean value at the given position. */
-    boolean getBoolean(int pos);
-
-    /** Returns the byte value at the given position. */
-    byte getByte(int pos);
-
-    /** Returns the short value at the given position. */
-    short getShort(int pos);
-
-    /** Returns the integer value at the given position. */
-    int getInt(int pos);
-
-    /** Returns the long value at the given position. */
-    long getLong(int pos);
-
-    /** Returns the float value at the given position. */
-    float getFloat(int pos);
-
-    /** Returns the double value at the given position. */
-    double getDouble(int pos);
-
-    /** Returns the string value at the given position with fixed length. */
-    BinaryString getChar(int pos, int length);
-
-    /** Returns the string value at the given position. */
-    BinaryString getString(int pos);
-
-    /**
-     * Returns the decimal value at the given position.
-     *
-     * <p>The precision and scale are required to determine whether the decimal value was stored in
-     * a compact representation (see {@link Decimal}).
-     */
-    Decimal getDecimal(int pos, int precision, int scale);
-
-    /**
-     * Returns the timestamp value at the given position.
-     *
-     * <p>The precision is required to determine whether the timestamp value was stored in a compact
-     * representation (see {@link TimestampNtz}).
-     */
-    TimestampNtz getTimestampNtz(int pos, int precision);
-
-    /**
-     * Returns the timestamp value at the given position.
-     *
-     * <p>The precision is required to determine whether the timestamp value was stored in a compact
-     * representation (see {@link TimestampLtz}).
-     */
-    TimestampLtz getTimestampLtz(int pos, int precision);
-
-    /** Returns the binary value at the given position with fixed length. */
-    byte[] getBinary(int pos, int length);
-
-    /** Returns the binary value at the given position. */
-    byte[] getBytes(int pos);
 
     // ------------------------------------------------------------------------------------------
     // Access Utilities

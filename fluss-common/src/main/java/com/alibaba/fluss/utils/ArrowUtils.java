@@ -20,7 +20,7 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.compression.ArrowCompressionFactory;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.DataGetters;
 import com.alibaba.fluss.row.arrow.ArrowReader;
 import com.alibaba.fluss.row.arrow.vectors.ArrowBigIntColumnVector;
 import com.alibaba.fluss.row.arrow.vectors.ArrowBinaryColumnVector;
@@ -279,7 +279,7 @@ public class ArrowUtils {
         return buffers;
     }
 
-    public static ArrowFieldWriter<InternalRow> createArrowFieldWriter(
+    public static ArrowFieldWriter<DataGetters> createArrowFieldWriter(
             ValueVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
             return ArrowTinyIntWriter.forField((TinyIntVector) vector);
