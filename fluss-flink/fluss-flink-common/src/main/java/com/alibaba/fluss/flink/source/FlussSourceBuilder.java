@@ -27,6 +27,7 @@ import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
