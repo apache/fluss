@@ -18,6 +18,7 @@ package com.alibaba.fluss.flink.row;
 
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
+import com.alibaba.fluss.row.InternalArray;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
@@ -130,5 +131,10 @@ public class FlinkAsFlussRow implements InternalRow {
     @Override
     public byte[] getBytes(int pos) {
         return flinkRow.getBinary(pos);
+    }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        throw new UnsupportedOperationException("Not support the operation!");
     }
 }

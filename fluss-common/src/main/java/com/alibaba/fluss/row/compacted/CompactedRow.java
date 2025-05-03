@@ -23,6 +23,7 @@ import com.alibaba.fluss.row.BinarySegmentUtils;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.GenericRow;
+import com.alibaba.fluss.row.InternalArray;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
@@ -222,6 +223,11 @@ public class CompactedRow implements BinaryRow {
     @Override
     public byte[] getBytes(int pos) {
         return decodedRow().getBytes(pos);
+    }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        throw new UnsupportedOperationException("Not support the operation!");
     }
 
     @Override

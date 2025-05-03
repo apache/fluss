@@ -23,6 +23,7 @@ import com.alibaba.fluss.row.BinaryRow;
 import com.alibaba.fluss.row.BinarySegmentUtils;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
+import com.alibaba.fluss.row.InternalArray;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.NullAwareGetters;
 import com.alibaba.fluss.row.TimestampLtz;
@@ -432,6 +433,11 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         byte[] bytes = new byte[length];
         segment.get(getFieldOffset(pos), bytes, 0, length);
         return bytes;
+    }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        throw new UnsupportedOperationException("Not support the operation!");
     }
 
     private void assertIndexIsValid(int index) {

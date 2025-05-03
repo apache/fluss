@@ -133,6 +133,11 @@ public class ProjectedRow implements InternalRow {
     }
 
     @Override
+    public InternalArray getArray(int pos) {
+        throw new UnsupportedOperationException("Not support the operation!");
+    }
+
+    @Override
     public boolean equals(Object o) {
         throw new UnsupportedOperationException("Projected row data cannot be compared");
     }

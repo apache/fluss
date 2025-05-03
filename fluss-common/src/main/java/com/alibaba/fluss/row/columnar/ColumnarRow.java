@@ -19,6 +19,7 @@ package com.alibaba.fluss.row.columnar;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
+import com.alibaba.fluss.row.InternalArray;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
@@ -128,6 +129,11 @@ public class ColumnarRow implements InternalRow {
     @Override
     public byte[] getBytes(int pos) {
         return vectorizedColumnBatch.getBytes(rowId, pos);
+    }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        throw new UnsupportedOperationException("Not support the operation!");
     }
 
     @Override

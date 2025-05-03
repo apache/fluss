@@ -146,6 +146,9 @@ public interface InternalRow {
     /** Returns the binary value at the given position. */
     byte[] getBytes(int pos);
 
+    /** Returns the array value at the given position. */
+    InternalArray getArray(int pos);
+
     // ------------------------------------------------------------------------------------------
     // Access Utilities
     // ------------------------------------------------------------------------------------------
@@ -182,6 +185,8 @@ public interface InternalRow {
                 return TimestampNtz.class;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return TimestampLtz.class;
+            case ARRAY:
+                return InternalArray.class;
             default:
                 throw new IllegalArgumentException("Illegal type: " + type);
         }
@@ -260,6 +265,9 @@ public interface InternalRow {
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldGetter = row -> row.getTimestampLtz(fieldPos, timestampLtzPrecision);
+                break;
+            case ARRAY:
+                fieldGetter = row -> row.getArray(fieldPos);
                 break;
             default:
                 throw new IllegalArgumentException("Illegal type: " + fieldType);

@@ -163,6 +163,11 @@ public final class GenericRow implements InternalRow {
     }
 
     @Override
+    public InternalArray getArray(int pos) {
+        return (InternalArray) this.fields[pos];
+    }
+
+    @Override
     public boolean equals(Object o) {
         if (this == o) {
             return true;

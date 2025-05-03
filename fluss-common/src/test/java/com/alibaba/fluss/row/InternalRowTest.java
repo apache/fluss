@@ -46,8 +46,8 @@ public class InternalRowTest {
         assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP())).isEqualTo(TimestampNtz.class);
         assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP_LTZ()))
                 .isEqualTo(TimestampLtz.class);
-        assertThatThrownBy(() -> InternalRow.getDataClass(DataTypes.ARRAY(DataTypes.TIMESTAMP())))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(InternalRow.getDataClass(DataTypes.ARRAY(DataTypes.TIMESTAMP())))
+                .isEqualTo(InternalArray.class);
         assertThatThrownBy(
                         () ->
                                 InternalRow.getDataClass(
