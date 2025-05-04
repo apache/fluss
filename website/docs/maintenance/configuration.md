@@ -175,8 +175,9 @@ during the Fluss cluster working.
 
 ## Kafka
 
-| Option         | Type    | Default | Description                                                                                                        |
-|----------------|---------|---------|--------------------------------------------------------------------------------------------------------------------|
-| kafka.enabled  | boolean | false   | Whether enable fluss kafka. Disabled by default. When this option is set to true, the fluss kafka will be enabled. |
-| kafka.port     | Integer | 9092    | The port for fluss kafka. The default port is 9092.                                                                |
-| kafka.database | String  | _kafka  | The database for fluss kafka. The default database is '_kafka'.                                                    |
+| Option                         | Type     | Default | Description                                                                                                        |
+|--------------------------------|----------|---------|--------------------------------------------------------------------------------------------------------------------|
+| kafka.enabled                  | boolean  | false   | Whether enable fluss kafka. Disabled by default. When this option is set to true, the fluss kafka will be enabled. |
+| kafka.port                     | Integer  | 9092    | The port for fluss kafka. The default port is 9092.                                                                |
+| kafka.database                 | String   | _kafka  | The database for fluss kafka. The default database is '_kafka'.                                                    |
+| kafka.connection.max-idle-time | Duration | 60s     | Close kafka idle connections after the number of milliseconds specified by this config.                            |

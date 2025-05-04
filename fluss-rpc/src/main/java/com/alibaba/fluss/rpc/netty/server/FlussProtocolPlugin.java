@@ -25,33 +25,21 @@ import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.NetworkProtocolPlugin;
 import com.alibaba.fluss.security.auth.AuthenticationFactory;
 import com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin;
-import com.alibaba.fluss.security.auth.ServerAuthenticator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.function.Supplier;
 
 /** Build-in protocol plugin for Fluss. */
 public class FlussProtocolPlugin implements NetworkProtocolPlugin {
-    public static final String FLUSS_PROTOCOL_NAME = "FLUSS";
-    private final Map<String, Supplier<ServerAuthenticator>> authenticatorSuppliers;
     private final ApiManager apiManager;
-    private final long maxIdleTimeSeconds;
     private final List<String> listeners;
     private final RequestsMetrics requestsMetrics;
-    private final String internalListenerName;
+    private Configuration conf;
 
     public FlussProtocolPlugin(
-            Configuration conf,
-            ServerType serverType,
-            List<String> listeners,
-            RequestsMetrics requestsMetrics) {
-        this.authenticatorSuppliers = AuthenticationFactory.loadServerAuthenticatorSuppliers(conf);
+            ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
         this.apiManager = new ApiManager(serverType);
-        maxIdleTimeSeconds = conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
-        this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.listeners = listeners;
         this.requestsMetrics = requestsMetrics;
     }
@@ -62,7 +50,12 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
     }
 
     @Override
-    public List<String> listenerNames(Configuration conf) {
+    public void setup(Configuration conf) {
+        this.conf = conf;
+    }
+
+    @Override
+    public List<String> listenerNames() {
         return listeners;
     }
 
@@ -73,10 +66,12 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
                 requestChannels,
                 apiManager,
                 listenerName,
-                listenerName.equals(internalListenerName),
+                listenerName.equals(conf.get(ConfigOptions.INTERNAL_LISTENER_NAME)),
                 requestsMetrics,
-                maxIdleTimeSeconds,
-                Optional.ofNullable(authenticatorSuppliers.get(listenerName))
+                conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
+                Optional.ofNullable(
+                                AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
+                                        .get(listenerName))
                         .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new));
     }
 

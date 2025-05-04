@@ -28,13 +28,17 @@ import java.util.List;
 /** A network protocol plugin that provides the server side implementation of a network protocol. */
 public interface NetworkProtocolPlugin extends Plugin {
 
+    String FLUSS_PROTOCOL_NAME = RequestType.FLUSS.name();
     String KAFKA_PROTOCOL_NAME = RequestType.KAFKA.name();
 
     /** Returns the name of the protocol. */
     String name();
 
+    /** Setup network protocol plugin with the given {@link Configuration}. */
+    void setup(Configuration conf);
+
     /** Returns the names of the listeners that the protocol binds to. */
-    List<String> listenerNames(Configuration conf);
+    List<String> listenerNames();
 
     /**
      * Creates a Netty {@link ChannelHandler} for handling server side I/O events and operations of
