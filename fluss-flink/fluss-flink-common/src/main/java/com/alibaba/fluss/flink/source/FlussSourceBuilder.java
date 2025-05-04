@@ -31,7 +31,9 @@ import com.alibaba.fluss.types.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -106,7 +108,8 @@ public class FlussSourceBuilder<OUT> {
         return this;
     }
 
-    public FlussSourceBuilder<OUT> setProjectedFields(String[] projectedFieldNames) {
+    public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
+        checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
         return this;
     }
@@ -163,18 +166,30 @@ public class FlussSourceBuilder<OUT> {
                     "Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
         }
 
-        if (this.projectedFieldNames != null && projectedFieldNames.length > 0) {
+        if (this.projectedFieldNames != null && this.projectedFieldNames.length > 0) {
             RowType rowType = tableInfo.getRowType();
             List<String> allFieldNames = rowType.getFieldNames();
+
+            // Create a map of field name to index
+            Map<String, Integer> fieldNameToIndex = new HashMap<>();
+            for (int i = 0; i < allFieldNames.size(); i++) {
+                fieldNameToIndex.put(allFieldNames.get(i), i);
+            }
+
             int[] indices = new int[projectedFieldNames.length];
             for (int i = 0; i < projectedFieldNames.length; i++) {
-                int index = allFieldNames.indexOf(projectedFieldNames[i]);
-                if (index == -1) {
+                String fieldName = projectedFieldNames[i];
+                Integer index = fieldNameToIndex.get(fieldName);
+
+                if (index == null) {
                     throw new IllegalArgumentException(
                             "Field name '"
-                                    + projectedFieldNames[i]
-                                    + "' not found in table schema.");
+                                    + fieldName
+                                    + "' not found in table schema. "
+                                    + "Available fields: "
+                                    + String.join(", ", allFieldNames));
                 }
+
                 indices[i] = index;
             }
 

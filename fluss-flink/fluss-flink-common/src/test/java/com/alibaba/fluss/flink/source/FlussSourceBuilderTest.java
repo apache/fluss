@@ -232,7 +232,6 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testSetProjectedFields() {
         // Given
-        String[] projectedFieldNames = new String[] {"id", "name"};
         FlussSource<TestRecord> source =
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
@@ -241,7 +240,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
-                        .setProjectedFields(projectedFieldNames)
+                        .setProjectedFields("id", "name")
                         .build();
 
         // Then
@@ -250,9 +249,6 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
 
     @Test
     public void testProjectedFields() {
-        // Given
-        String[] projectedFieldsNames = new String[] {"id", "name"};
-
         // When
         FlussSource<TestRecord> source =
                 FlussSource.<TestRecord>builder()
@@ -262,7 +258,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
-                        .setProjectedFields(projectedFieldsNames)
+                        .setProjectedFields("id", "name")
                         .build();
 
         // Then
