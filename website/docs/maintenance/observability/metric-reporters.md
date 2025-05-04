@@ -1,5 +1,5 @@
 ---
-sidebar_label: Metric Reporters
+title: Metric Reporters
 sidebar_position: 2
 ---
 

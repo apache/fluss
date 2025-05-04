@@ -1,5 +1,5 @@
 ---
-sidebar_label: Aliyun OSS
+title: Aliyun OSS
 sidebar_position: 3
 ---
 

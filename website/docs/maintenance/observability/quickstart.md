@@ -1,5 +1,6 @@
 ---
 sidebar_label: Quickstart Guides
+title: Observability Quickstart Guides
 sidebar_position: 1
 ---
 

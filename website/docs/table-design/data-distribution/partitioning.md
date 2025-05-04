@@ -1,5 +1,5 @@
 ---
-sidebar_label: Partitioning
+title: Partitioning
 sidebar_position: 2
 ---
 

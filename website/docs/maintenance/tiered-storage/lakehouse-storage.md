@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Lakehouse Storage"
+title: "Lakehouse Storage"
 sidebar_position: 3
 ---
 

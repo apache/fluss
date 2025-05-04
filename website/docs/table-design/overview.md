@@ -1,5 +1,6 @@
 ---
 sidebar_label: Overview
+title: Table Overview
 sidebar_position: 2
 ---
 

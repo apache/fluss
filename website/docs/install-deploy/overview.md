@@ -1,5 +1,6 @@
 ---
 sidebar_label: "Overview"
+title: Installation & Deployment
 sidebar_position: 1
 ---
 

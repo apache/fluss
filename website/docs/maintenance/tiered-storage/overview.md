@@ -1,5 +1,6 @@
 ---
 sidebar_label: Overview
+title: Tiered Storage
 sidebar_position: 1
 ---
 

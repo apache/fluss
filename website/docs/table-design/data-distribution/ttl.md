@@ -1,5 +1,5 @@
 ---
-sidebar_label: TTL
+title: TTL
 sidebar_position: 3
 ---
 

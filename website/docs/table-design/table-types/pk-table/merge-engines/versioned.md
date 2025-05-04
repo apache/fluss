@@ -1,5 +1,6 @@
 ---
 sidebar_label: Versioned
+title: Versioned Merge Engine
 sidebar_position: 4
 ---
 

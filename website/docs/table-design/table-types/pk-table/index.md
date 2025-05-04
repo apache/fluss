@@ -1,5 +1,5 @@
 ---
-sidebar_label: PrimaryKey Table
+title: PrimaryKey Table
 sidebar_position: 1
 ---
 

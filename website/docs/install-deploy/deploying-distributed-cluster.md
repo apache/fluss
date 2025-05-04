@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Deploying Distributed Cluster"
+title: "Deploying Distributed Cluster"
 sidebar_position: 3
 ---
 

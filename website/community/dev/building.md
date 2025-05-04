@@ -1,6 +1,6 @@
 ---
 sidebar_position: 1
-sidebar_label: Building Fluss
+title: Building Fluss
 ---
 
 <!--

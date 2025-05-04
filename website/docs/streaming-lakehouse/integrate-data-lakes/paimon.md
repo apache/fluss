@@ -1,5 +1,5 @@
 ---
-sidebar_label: Paimon
+title: Paimon
 sidebar_position: 1
 ---
 

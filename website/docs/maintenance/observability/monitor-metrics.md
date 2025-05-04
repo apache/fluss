@@ -1,5 +1,5 @@
 ---
-sidebar_label: Monitor Metrics
+title: Monitor Metrics
 sidebar_position: 3
 ---
 

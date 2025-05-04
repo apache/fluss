@@ -1,5 +1,5 @@
 ---
-sidebar_label: Connector Options
+title: Connector Options
 sidebar_position: 6
 ---
 

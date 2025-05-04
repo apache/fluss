@@ -1,5 +1,6 @@
 ---
 sidebar_label: "Getting Started"
+title: "Getting Started with Flink"
 sidebar_position: 1
 ---
 

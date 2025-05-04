@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Merge Engines"
+title: "Merge Engines"
 sidebar_position: 1
 ---
 

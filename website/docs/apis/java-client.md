@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Java Client"
+title: "Java Client"
 sidebar_position: 1
 ---
 
