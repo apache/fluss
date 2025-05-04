@@ -705,7 +705,7 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofMinutes(10))
                     .withDescription(
-                            "Close idle connections after the number of milliseconds specified by this config.");
+                            "Close idle connections after the given time specified by this config.");
 
     public static final ConfigOption<Integer> NETTY_CLIENT_NUM_NETWORK_THREADS =
             key("netty.client.num-network-threads")
@@ -1541,7 +1541,7 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofSeconds(60))
                     .withDescription(
-                            "Close kafka idle connections after the number of milliseconds specified by this config.");
+                            "Close kafka idle connections after the given time specified by this config.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

@@ -60,7 +60,8 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
     }
 
     @Override
-    protected void initChannel(SocketChannel ch) {
+    protected void initChannel(SocketChannel ch) throws Exception {
+        super.initChannel(ch);
         // initialBytesToStrip=0 to include the frame size field after decoding
         addFrameDecoder(ch, Integer.MAX_VALUE, 0);
         addIdleStateHandler(ch);
