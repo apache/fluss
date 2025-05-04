@@ -1,5 +1,5 @@
 ---
-sidebar_label: Logging
+title: Logging
 sidebar_position: 4
 ---
 

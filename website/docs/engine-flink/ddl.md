@@ -1,5 +1,6 @@
 ---
 sidebar_label: DDL
+title: Flink DDL
 sidebar_position: 2
 ---
 

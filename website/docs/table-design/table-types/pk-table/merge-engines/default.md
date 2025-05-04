@@ -1,5 +1,6 @@
 ---
 sidebar_label: Default (LastRow)
+title: Default Merge Engine
 sidebar_position: 2
 ---
 

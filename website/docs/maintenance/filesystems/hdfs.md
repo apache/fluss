@@ -1,5 +1,5 @@
 ---
-sidebar_label: HDFS
+title: HDFS
 sidebar_position: 2
 ---
 

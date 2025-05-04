@@ -1,5 +1,5 @@
 ---
-sidebar_label: Contribute Code
+title: Contribute Code
 sidebar_position: 1
 ---
 

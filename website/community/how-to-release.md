@@ -1,5 +1,5 @@
 ---
-sidebar_label: How to Release
+title: How to Release
 sidebar_position: 3
 ---
 

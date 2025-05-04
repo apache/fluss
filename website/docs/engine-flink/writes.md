@@ -1,5 +1,6 @@
 ---
 sidebar_label: Writes
+title: Flink Writes
 sidebar_position: 3
 ---
 

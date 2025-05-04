@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Data Types"
+title: "Data Types"
 sidebar_position: 10
 ---
 

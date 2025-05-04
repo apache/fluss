@@ -1,5 +1,5 @@
 ---
-sidebar_label: Flink
+title: Flink
 sidebar_position: 1
 ---
 

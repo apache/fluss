@@ -1,5 +1,5 @@
 ---
-sidebar_label: Welcome
+title: Welcome
 sidebar_position: 1
 ---
 

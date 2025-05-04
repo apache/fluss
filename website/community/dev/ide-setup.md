@@ -1,6 +1,6 @@
 ---
 sidebar_position: 2
-sidebar_label: IDE Setup
+title: IDE Setup
 ---
 
 <!--

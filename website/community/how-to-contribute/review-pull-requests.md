@@ -1,5 +1,5 @@
 ---
-sidebar_label: Review Pull Requests
+title: Review Pull Requests
 sidebar_position: 1
 ---
 

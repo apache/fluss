@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Bucketing"
+title: "Bucketing"
 sidebar_position: 1
 ---
 

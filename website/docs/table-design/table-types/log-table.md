@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Log Table"
+title: "Log Table"
 sidebar_position: 1
 ---
 

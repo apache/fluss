@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Architecture"
+title: "Architecture"
 sidebar_position: 1
 ---
 

@@ -1,5 +1,6 @@
 ---
 sidebar_label: Lookups
+title: Flink Lookup Joins
 sidebar_position: 5
 ---
 

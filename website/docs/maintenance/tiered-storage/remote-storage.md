@@ -1,5 +1,5 @@
 ---
-sidebar_label: "Remote Storage"
+title: "Remote Storage"
 sidebar_position: 2
 ---
 

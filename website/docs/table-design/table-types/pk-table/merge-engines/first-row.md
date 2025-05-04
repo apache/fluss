@@ -1,5 +1,6 @@
 ---
 sidebar_label: FirstRow
+title: FirstRow Merge Engine
 sidebar_position: 3
 ---
 

@@ -1,5 +1,5 @@
 ---
-sidebar_label: Contribute Documentation
+title: Contribute Documentation
 sidebar_position: 1
 ---
 
