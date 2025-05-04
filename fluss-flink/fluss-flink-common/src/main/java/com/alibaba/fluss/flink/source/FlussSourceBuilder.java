@@ -41,7 +41,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 /**
  * Builder class for creating {@link FlussSource} instances.
  *
- * <p>The builder llows for step-by-step configuration of a Fluss source connector. It handles the
+ * <p>The builder allows for step-by-step configuration of a Fluss source connector. It handles the
  * setup of connection parameters, table metadata retrieval, and source configuration.
  *
  * <p>Sample usage:
@@ -76,49 +76,129 @@ public class FlussSourceBuilder<OUT> {
     private String database;
     private String tableName;
 
+    /**
+     * Sets the bootstrap servers for the Fluss source connection.
+     *
+     * <p>This is a required parameter.
+     *
+     * @param bootstrapServers bootstrap server addresses
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setBootstrapServers(String bootstrapServers) {
         this.bootstrapServers = bootstrapServers;
         return this;
     }
 
+    /**
+     * Sets the database name for the Fluss source.
+     *
+     * <p>This is a required parameter.
+     *
+     * @param database name of the database
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setDatabase(String database) {
         this.database = database;
         return this;
     }
 
+    /**
+     * Sets the table name for the Fluss source.
+     *
+     * <p>This is a required parameter.
+     *
+     * @param table name of the table
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setTable(String table) {
         this.tableName = table;
         return this;
     }
 
+    /**
+     * Sets the scan partition discovery interval in milliseconds.
+     *
+     * <p>If not specified, the default value from {@link
+     * FlinkConnectorOptions#SCAN_PARTITION_DISCOVERY_INTERVAL} is used.
+     *
+     * @param scanPartitionDiscoveryIntervalMs interval in milliseconds
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setScanPartitionDiscoveryIntervalMs(
             long scanPartitionDiscoveryIntervalMs) {
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         return this;
     }
 
+    /**
+     * Sets the starting offsets strategy for the Fluss source.
+     *
+     * <p>If not specified, {@link OffsetsInitializer#initial()} is used by default.
+     *
+     * @param offsetsInitializer the strategy for determining starting offsets
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setStartingOffsets(OffsetsInitializer offsetsInitializer) {
         this.offsetsInitializer = offsetsInitializer;
         return this;
     }
 
+    /**
+     * Sets the deserialization schema for converting Fluss records to output records.
+     *
+     * <p>This is a required parameter.
+     *
+     * @param deserializationSchema the deserialization schema to use
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setDeserializationSchema(
             FlussDeserializationSchema<OUT> deserializationSchema) {
         this.deserializationSchema = deserializationSchema;
         return this;
     }
 
+    /**
+     * Sets the projected fields for this source using field names.
+     *
+     * <p>Projection allows selecting a subset of fields from the table. Without projection, all
+     * fields from the table are included.
+     *
+     * @param projectedFieldNames names of the fields to project
+     * @return this builder
+     * @throws NullPointerException if projectedFieldNames is null
+     */
     public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
         checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
         return this;
     }
 
+    /**
+     * Sets custom Fluss configuration properties for the source connector.
+     *
+     * <p>If not specified, an empty configuration will be created and populated with required
+     * properties. Any configuration set through this method will be merged with table-specific
+     * properties retrieved from the Fluss system.
+     *
+     * @param flussConf the configuration to use
+     * @return this builder
+     */
     public FlussSourceBuilder<OUT> setFlussConfig(Configuration flussConf) {
         this.flussConf = flussConf;
         return this;
     }
 
+    /**
+     * Builds and returns a new {@link FlussSource} instance with the configured properties.
+     *
+     * <p>This method validates all required parameters, connects to the Fluss system to retrieve
+     * table metadata, and constructs a configured source.
+     *
+     * @return a new {@link FlussSource} instance
+     * @throws NullPointerException if any required parameter is missing
+     * @throws IllegalArgumentException if any parameter is invalid
+     * @throws RuntimeException if connection to Fluss fails or the table cannot be found
+     */
     public FlussSource<OUT> build() {
         checkNotNull(bootstrapServers, "BootstrapServers is required but not provided.");
         checkNotNull(database, "Database is required but not provided.");
