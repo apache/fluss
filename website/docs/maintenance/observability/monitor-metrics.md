@@ -310,8 +310,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="5"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="5">-</td>
+      <th rowspan="6"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
@@ -334,6 +334,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>bucketCount</td>
       <td>The total number of buckets in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>replicasToDeleteCount</td>
+      <td>The total number of replicas in the progress to be deleted in this cluster.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -428,25 +433,37 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="6">tabletserver</th>
-      <td rowspan="6">request</td>
+      <th rowspan="8">tabletserver</th>
+      <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>requestPerSecond</td>
-      <td>The total number of requests processed per second by the TabletServer node.</td>
+      <td rowspan="7">
+          request_productLog
+          request_putKv
+          request_lookup
+          request_prefixLookup
+          request_metadata
+      </td>
+      <td>requestsPerSecond</td>
+      <td>The total number of requests processed per second for each request type.</td>
       <td>Meter</td>
     </tr>
     <tr>
       <td>errorsPerSecond</td>
-      <td>The total number of error requests processed per second by the TabletServer node.</td>
+      <td>The total number of error requests processed per second for each request type.</td>
       <td>Meter</td>
     </tr>
     <tr>
+      <td>requestBytes</td>
+      <td>Size of requests for each request type.</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
       <td>totalTimeMs</td>
-      <td>The total time it takes for the current TabletServer node to process a request.</td>
+      <td>The total time it takes for each request type, it's requestQueueTimeMs + requestProcessTimeMs + responseSendTimeMs.</td>
       <td>Histogram</td>
     </tr>
     <tr>
@@ -456,7 +473,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>requestQueueTimeMs</td>
-      <td>The wait time spent by the request in the network waiting queue in this TabletServer node.</td>
+      <td>The wait time spent by the request in the network waiting queue for each request type.</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>responseSendTimeMs</td>
+      <td>Time to send the response	for each request type.</td>
       <td>Histogram</td>
     </tr>
      <tr>
@@ -610,7 +632,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td rowspan="6">table_bucket</td>
+      <td rowspan="7">table_bucket</td>
       <td>inSyncReplicasCount</td>
       <td>The inSync replicas count of this table bucket.</td>
       <td>Gauge</td>
@@ -618,6 +640,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>underMinIsr</td>
       <td>If this bucket is under min isr, this value is 1, otherwise 0.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>underReplicated</td>
+      <td>If this bucket is under replication factor, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
     </tr>
      <tr>
