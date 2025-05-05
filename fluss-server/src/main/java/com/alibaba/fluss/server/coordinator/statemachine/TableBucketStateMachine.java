@@ -27,6 +27,8 @@ import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -235,7 +237,7 @@ public class TableBucketStateMachine {
                 doStateChange(tableBucket, targetState);
                 break;
             case NonExistentBucket:
-                coordinatorContext.removeBucketState(tableBucket);
+                doStateChange(tableBucket, null);
                 break;
         }
     }
@@ -350,8 +352,14 @@ public class TableBucketStateMachine {
         }
     }
 
-    private void doStateChange(TableBucket tableBucket, BucketState targetState) {
-        coordinatorContext.putBucketState(tableBucket, targetState);
+    private void doStateChange(TableBucket tableBucket, @Nullable BucketState targetState) {
+        BucketState previousState;
+        if (targetState != null) {
+            previousState = coordinatorContext.putBucketState(tableBucket, targetState);
+        } else {
+            previousState = coordinatorContext.removeBucketState(tableBucket);
+        }
+        logSuccessfulStateChange(tableBucket, previousState, targetState);
     }
 
     private boolean isValidReplicaStateTransition(BucketState curState, BucketState targetState) {
@@ -373,6 +381,15 @@ public class TableBucketStateMachine {
             TableBucket tableBucket, BucketState currState, BucketState targetState) {
         LOG.error(
                 "Fail to change state for table bucket {} from {} to {}.",
+                stringifyBucket(tableBucket),
+                currState,
+                targetState);
+    }
+
+    private void logSuccessfulStateChange(
+            TableBucket tableBucket, BucketState currState, BucketState targetState) {
+        LOG.debug(
+                "Successfully changed state for table bucket {} from {} to {}.",
                 stringifyBucket(tableBucket),
                 currState,
                 targetState);

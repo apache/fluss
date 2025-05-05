@@ -309,12 +309,12 @@ public class CoordinatorContext {
         replicaStates.putIfAbsent(replica, state);
     }
 
-    public void putReplicaState(TableBucketReplica replica, ReplicaState state) {
-        replicaStates.put(replica, state);
+    public ReplicaState putReplicaState(TableBucketReplica replica, ReplicaState state) {
+        return replicaStates.put(replica, state);
     }
 
-    public void removeReplicaState(TableBucketReplica replica) {
-        replicaStates.remove(replica);
+    public ReplicaState removeReplicaState(TableBucketReplica replica) {
+        return replicaStates.remove(replica);
     }
 
     public Set<TableBucket> getAllBucketsForTable(long tableId) {
@@ -449,8 +449,8 @@ public class CoordinatorContext {
                 .allMatch(replica -> getReplicaState(replica) == replicaState);
     }
 
-    public void removeBucketState(TableBucket tableBucket) {
-        bucketStates.remove(tableBucket);
+    public BucketState removeBucketState(TableBucket tableBucket) {
+        return bucketStates.remove(tableBucket);
     }
 
     public Set<TableBucket> bucketsInStates(Set<BucketState> states) {
@@ -460,9 +460,10 @@ public class CoordinatorContext {
                 .collect(Collectors.toSet());
     }
 
-    public void putBucketState(TableBucket tableBucket, BucketState targetState) {
+    public BucketState putBucketState(TableBucket tableBucket, BucketState targetState) {
         BucketState currentState = bucketStates.put(tableBucket, targetState);
         updateBucketStateMetrics(tableBucket, currentState, targetState);
+        return currentState;
     }
 
     private void updateBucketStateMetrics(

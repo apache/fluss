@@ -303,16 +303,12 @@ public class ReplicaStateMachine {
 
                 // finally, set to offline
                 validReplicas.forEach(
-                        replica ->
-                                coordinatorContext.putReplicaState(
-                                        replica, ReplicaState.OfflineReplica));
+                        replica -> doStateChange(replica, ReplicaState.OfflineReplica));
 
                 break;
             case ReplicaDeletionStarted:
                 validReplicas.forEach(
-                        replica ->
-                                coordinatorContext.putReplicaState(
-                                        replica, ReplicaState.ReplicaDeletionStarted));
+                        replica -> doStateChange(replica, ReplicaState.ReplicaDeletionStarted));
                 // send stop replica request with delete = true
                 validReplicas.forEach(
                         tableBucketReplica -> {
@@ -327,12 +323,10 @@ public class ReplicaStateMachine {
                 break;
             case ReplicaDeletionSuccessful:
                 validReplicas.forEach(
-                        replica ->
-                                coordinatorContext.putReplicaState(
-                                        replica, ReplicaState.ReplicaDeletionSuccessful));
+                        replica -> doStateChange(replica, ReplicaState.ReplicaDeletionSuccessful));
                 break;
             case NonExistentReplica:
-                validReplicas.forEach(coordinatorContext::removeReplicaState);
+                validReplicas.forEach(replica -> doStateChange(replica, null));
                 break;
         }
     }
@@ -360,8 +354,14 @@ public class ReplicaStateMachine {
         return targetState.getValidPreviousStates().contains(currentState);
     }
 
-    private void doStateChange(TableBucketReplica replica, ReplicaState targetState) {
-        coordinatorContext.putReplicaState(replica, targetState);
+    private void doStateChange(TableBucketReplica replica, @Nullable ReplicaState targetState) {
+        ReplicaState previousState;
+        if (targetState != null) {
+            previousState = coordinatorContext.putReplicaState(replica, targetState);
+        } else {
+            previousState = coordinatorContext.removeReplicaState(replica);
+        }
+        logSuccessfulStateChange(replica, previousState, targetState);
     }
 
     private void logInvalidTransition(
@@ -378,6 +378,15 @@ public class ReplicaStateMachine {
             TableBucketReplica replica, ReplicaState currState, ReplicaState targetState) {
         LOG.error(
                 "Fail to change state for table bucket replica {} from {} to {}.",
+                stringifyReplica(replica),
+                currState,
+                targetState);
+    }
+
+    private void logSuccessfulStateChange(
+            TableBucketReplica replica, ReplicaState currState, ReplicaState targetState) {
+        LOG.debug(
+                "Successfully changed state for table bucket replica {} from {} to {}.",
                 stringifyReplica(replica),
                 currState,
                 targetState);
