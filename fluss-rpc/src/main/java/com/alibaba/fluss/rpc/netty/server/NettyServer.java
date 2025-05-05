@@ -207,7 +207,7 @@ public final class NettyServer implements RpcServer {
     private Map<String, NetworkProtocolPlugin> getProtocolsByListenerName() {
         Map<String, NetworkProtocolPlugin> protocolsByListenerName = new HashMap<>();
         for (NetworkProtocolPlugin protocol : protocols) {
-            for (String listenerName : protocol.listenerNames(conf)) {
+            for (String listenerName : protocol.listenerNames()) {
                 checkState(
                         !protocolsByListenerName.containsKey(listenerName),
                         "Multiple network protocols are bound to the same listener name %s",
@@ -229,13 +229,17 @@ public final class NettyServer implements RpcServer {
         if (conf.get(ConfigOptions.KAFKA_ENABLED)) {
             NetworkProtocolPlugin kafkaPlugin =
                     loadProtocolPlugin(NetworkProtocolPlugin.KAFKA_PROTOCOL_NAME);
-            listeners.removeAll(kafkaPlugin.listenerNames(conf));
+            kafkaPlugin.setup(conf);
+            listeners.removeAll(kafkaPlugin.listenerNames());
             protocolPlugins.add(kafkaPlugin);
         }
 
         // Add the Fluss protocol plugin in the end to allow other protocol
         // pick their listener names first
-        protocolPlugins.add(new FlussProtocolPlugin(conf, serverType, listeners, requestsMetrics));
+        NetworkProtocolPlugin flussPlugin =
+                new FlussProtocolPlugin(serverType, listeners, requestsMetrics);
+        flussPlugin.setup(conf);
+        protocolPlugins.add(flussPlugin);
         return protocolPlugins;
     }
 

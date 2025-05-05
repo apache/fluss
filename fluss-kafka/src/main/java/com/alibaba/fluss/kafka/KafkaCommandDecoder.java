@@ -20,6 +20,8 @@ import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
+import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import com.alibaba.fluss.utils.MathUtils;
 
@@ -111,6 +113,17 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
         super.channelInactive(ctx);
         LOG.info("Connection closed from {}", ctx.channel().remoteAddress());
         // TODO Channel metrics
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof IdleStateEvent) {
+            IdleStateEvent event = (IdleStateEvent) evt;
+            if (event.state().equals(IdleState.ALL_IDLE)) {
+                LOG.warn("Connection {} is idle, closing...", ctx.channel().remoteAddress());
+                ctx.close();
+            }
+        }
     }
 
     private void sendResponse(ChannelHandlerContext ctx) {

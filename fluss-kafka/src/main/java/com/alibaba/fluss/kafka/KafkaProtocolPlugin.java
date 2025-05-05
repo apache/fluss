@@ -30,20 +30,29 @@ import java.util.List;
 /** The Kafka protocol plugin. */
 public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
 
+    private Configuration conf;
+
     @Override
     public String name() {
         return KAFKA_PROTOCOL_NAME;
     }
 
     @Override
-    public List<String> listenerNames(Configuration conf) {
+    public void setup(Configuration conf) {
+        this.conf = conf;
+    }
+
+    @Override
+    public List<String> listenerNames() {
         return conf.get(ConfigOptions.KAFKA_LISTENER_NAMES);
     }
 
     @Override
     public ChannelHandler createChannelHandler(
             RequestChannel[] requestChannels, String listenerName) {
-        return new KafkaChannelInitializer(requestChannels);
+        return new KafkaChannelInitializer(
+                requestChannels,
+                conf.get(ConfigOptions.KAFKA_CONNECTION_MAX_IDLE_TIME).getSeconds());
     }
 
     @Override

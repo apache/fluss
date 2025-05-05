@@ -16,38 +16,34 @@
 
 package com.alibaba.fluss.kafka;
 
+import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldPrepender;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
-
-import java.util.concurrent.TimeUnit;
 
 /**
  * A {@link ChannelInitializer} for initializing {@link SocketChannel} instances that will be used
  * by the server to handle the Kafka requests for the client.
  */
-public class KafkaChannelInitializer extends ChannelInitializer<SocketChannel> {
+public class KafkaChannelInitializer extends NettyChannelInitializer {
     public static final int MAX_FRAME_LENGTH = 100 * 1024 * 1024; // 100MB
 
     private final RequestChannel[] requestChannels;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
 
-    public KafkaChannelInitializer(RequestChannel[] requestChannels) {
+    public KafkaChannelInitializer(RequestChannel[] requestChannels, long maxIdleTimeSeconds) {
+        super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
-        ch.pipeline().addLast("idleStateHandler", new IdleStateHandler(0, 0, 60, TimeUnit.SECONDS));
+        super.initChannel(ch);
+        addIdleStateHandler(ch);
         ch.pipeline().addLast(prepender);
-        ch.pipeline()
-                .addLast(
-                        "frameDecoder",
-                        new LengthFieldBasedFrameDecoder(MAX_FRAME_LENGTH, 0, 4, 0, 4));
+        addFrameDecoder(ch, MAX_FRAME_LENGTH, 4);
         ch.pipeline().addLast("flowController", new FlowControlHandler());
         ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels));
     }
