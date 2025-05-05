@@ -132,7 +132,7 @@ public class FlussSourceITCase extends FlinkTestBase {
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new OrderPartialDeserializationSchema())
-                        .setProjectedFields(new int[] {0, 2})
+                        .setProjectedFields("orderId", "amount")
                         .build();
 
         DataStreamSource<OrderPartial> stream =
@@ -262,7 +262,7 @@ public class FlussSourceITCase extends FlinkTestBase {
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new OrderPartialDeserializationSchema())
-                        .setProjectedFields(new int[] {0, 2})
+                        .setProjectedFields("orderId", "amount")
                         .build();
 
         DataStreamSource<OrderPartial> stream =

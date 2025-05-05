@@ -232,7 +232,6 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testSetProjectedFields() {
         // Given
-        int[] projectedFields = new int[] {0, 1};
         FlussSource<TestRecord> source =
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
@@ -241,7 +240,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
-                        .setProjectedFields(projectedFields)
+                        .setProjectedFields("id", "name")
                         .build();
 
         // Then
@@ -250,9 +249,6 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
 
     @Test
     public void testProjectedFields() {
-        // Given
-        int[] projectedFields = new int[] {0, 1}; // Only include orderId and amount fields
-
         // When
         FlussSource<TestRecord> source =
                 FlussSource.<TestRecord>builder()
@@ -262,7 +258,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
-                        .setProjectedFields(projectedFields)
+                        .setProjectedFields("id", "name")
                         .build();
 
         // Then

@@ -31,6 +31,9 @@ import com.alibaba.fluss.types.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -48,6 +51,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  *     .setBootstrapServers("localhost:9092")
  *     .setDatabase("mydb")
  *     .setTable("orders")
+ *     .setProjectedFields("orderId", "amount")
  *     .setScanPartitionDiscoveryIntervalMs(1000L)
  *     .setStartingOffsets(OffsetsInitializer.earliest())
  *     .setDeserializationSchema(new OrderDeserializationSchema())
@@ -62,6 +66,7 @@ public class FlussSourceBuilder<OUT> {
     private Configuration flussConf;
 
     private int[] projectedFields;
+    private String[] projectedFieldNames;
     private Long scanPartitionDiscoveryIntervalMs;
     private OffsetsInitializer offsetsInitializer;
     private FlussDeserializationSchema<OUT> deserializationSchema;
@@ -103,10 +108,9 @@ public class FlussSourceBuilder<OUT> {
         return this;
     }
 
-    // TODO: refactor this method to use field names instead of indexes
-    //  see: https://github.com/alibaba/fluss/issues/804
-    public FlussSourceBuilder<OUT> setProjectedFields(int[] projectedFields) {
-        this.projectedFields = projectedFields;
+    public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
+        checkNotNull(projectedFieldNames, "Field names must not be null");
+        this.projectedFieldNames = projectedFieldNames;
         return this;
     }
 
@@ -146,7 +150,6 @@ public class FlussSourceBuilder<OUT> {
 
         TablePath tablePath = new TablePath(this.database, this.tableName);
         this.flussConf.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
-
         TableInfo tableInfo;
         try (Connection connection = ConnectionFactory.createConnection(flussConf);
                 Admin admin = connection.getAdmin()) {
@@ -161,6 +164,36 @@ public class FlussSourceBuilder<OUT> {
         } catch (Exception e) {
             throw new RuntimeException(
                     "Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
+        }
+
+        if (this.projectedFieldNames != null && this.projectedFieldNames.length > 0) {
+            RowType rowType = tableInfo.getRowType();
+            List<String> allFieldNames = rowType.getFieldNames();
+
+            // Create a map of field name to index
+            Map<String, Integer> fieldNameToIndex = new HashMap<>();
+            for (int i = 0; i < allFieldNames.size(); i++) {
+                fieldNameToIndex.put(allFieldNames.get(i), i);
+            }
+
+            int[] indices = new int[projectedFieldNames.length];
+            for (int i = 0; i < projectedFieldNames.length; i++) {
+                String fieldName = projectedFieldNames[i];
+                Integer index = fieldNameToIndex.get(fieldName);
+
+                if (index == null) {
+                    throw new IllegalArgumentException(
+                            "Field name '"
+                                    + fieldName
+                                    + "' not found in table schema. "
+                                    + "Available fields: "
+                                    + String.join(", ", allFieldNames));
+                }
+
+                indices[i] = index;
+            }
+
+            this.projectedFields = indices;
         }
 
         flussConf.addAll(tableInfo.getCustomProperties());
