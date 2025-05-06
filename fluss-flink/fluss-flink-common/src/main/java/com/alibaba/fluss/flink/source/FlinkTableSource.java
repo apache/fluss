@@ -241,7 +241,7 @@ public class FlinkTableSource
                 offsetsInitializer = OffsetsInitializer.latest();
                 break;
             case FULL:
-                offsetsInitializer = OffsetsInitializer.initial();
+                offsetsInitializer = OffsetsInitializer.full();
                 break;
             case TIMESTAMP:
                 offsetsInitializer =

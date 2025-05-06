@@ -93,7 +93,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             true,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming);
 
@@ -139,7 +139,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             true,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming);
             enumerator.start();
@@ -209,7 +209,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             false,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming);
 
@@ -254,7 +254,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             true,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming);
 
@@ -289,7 +289,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             true,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming);
 
@@ -389,7 +389,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 isPrimaryKeyTable,
                                 true,
                                 context,
-                                OffsetsInitializer.initial(),
+                                OffsetsInitializer.full(),
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming)) {
             Map<Long, String> partitionNameByIds =
@@ -503,7 +503,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 false,
                                 true,
                                 context,
-                                OffsetsInitializer.initial(),
+                                OffsetsInitializer.full(),
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming)) {
 

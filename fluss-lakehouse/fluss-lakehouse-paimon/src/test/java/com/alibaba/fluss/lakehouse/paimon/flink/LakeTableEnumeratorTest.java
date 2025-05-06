@@ -91,7 +91,7 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
                             false,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             1000,
                             // use batch mode
                             false);
@@ -167,7 +167,7 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
                             false,
                             false,
                             context,
-                            OffsetsInitializer.initial(),
+                            OffsetsInitializer.full(),
                             1000,
                             // use batch mode
                             false);
