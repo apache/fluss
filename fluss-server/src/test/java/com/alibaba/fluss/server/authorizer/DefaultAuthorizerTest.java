@@ -480,10 +480,9 @@ public class DefaultAuthorizerTest {
 
         retry(
                 Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer, commonResource))
-                            .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
-                });
+                () ->
+                        assertThat(listAcls(authorizer, commonResource))
+                                .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2))));
 
         retry(
                 Duration.ofMinutes(1),
@@ -499,6 +498,7 @@ public class DefaultAuthorizerTest {
         // generate 50 concurrent acl operation tasks.
         List<Runnable> concurrentTasks = new ArrayList<>();
         Set<AccessControlEntry> expectedAcls = new HashSet<>();
+
         for (int i = 0; i < 50; i++) {
             // each task represent that add acl to different user on same resource.
             final AccessControlEntry accessControlEntry =
@@ -519,10 +519,22 @@ public class DefaultAuthorizerTest {
                         }
 
                         if (finalI % 10 == 0) {
-                            dropAcls(
-                                    authorizer2,
-                                    commonResource,
-                                    Collections.singleton(accessControlEntry));
+                            // If cache is still empty because modify notification is not arrived,
+                            // AclBindingFilter will match nothing. Thus retry to make sure that the
+                            // acl is deleted.
+                            retry(
+                                    Duration.ofMinutes(1),
+                                    () ->
+                                            assertThat(
+                                                            dropAcls(
+                                                                    authorizer2,
+                                                                    commonResource,
+                                                                    Collections.singleton(
+                                                                            accessControlEntry)))
+                                                    .containsExactly(
+                                                            new AclBinding(
+                                                                    commonResource,
+                                                                    accessControlEntry)));
                         }
                     };
             concurrentTasks.add(runnable);
@@ -533,14 +545,13 @@ public class DefaultAuthorizerTest {
         }
 
         runInConcurrent(concurrentTasks);
+        // Make sure all acl notifacations are arrived.
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(listAcls(authorizer, commonResource)).isEqualTo(expectedAcls));
         retry(
                 Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer2, commonResource)).isEqualTo(expectedAcls);
-                });
+                () -> assertThat(listAcls(authorizer2, commonResource)).isEqualTo(expectedAcls));
     }
 
     @Test
@@ -597,7 +608,8 @@ public class DefaultAuthorizerTest {
                 .collect(Collectors.toSet());
     }
 
-    void dropAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
+    List<AclBinding> dropAcls(
+            Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
         List<AclBindingFilter> aclBindings =
                 entries.stream()
                         .map(
@@ -611,14 +623,23 @@ public class DefaultAuthorizerTest {
                                                         entry.getOperationType(),
                                                         entry.getPermissionType())))
                         .collect(Collectors.toList());
+        List<AclBinding> deleteAclBindings = new ArrayList<>();
         authorizer
                 .dropAcls(createRootUserSession(), aclBindings)
                 .forEach(
                         result -> {
                             if (result.error().isPresent()) {
                                 throw result.error().get().exception();
+                            } else {
+                                deleteAclBindings.addAll(
+                                        result.aclBindingDeleteResults().stream()
+                                                .map(
+                                                        AclDeleteResult.AclBindingDeleteResult
+                                                                ::aclBinding)
+                                                .collect(Collectors.toList()));
                             }
                         });
+        return deleteAclBindings;
     }
 
     /**
