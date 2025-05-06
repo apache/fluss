@@ -133,7 +133,7 @@ public class FlussSourceBuilder<OUT> {
     /**
      * Sets the starting offsets strategy for the Fluss source.
      *
-     * <p>If not specified, {@link OffsetsInitializer#initial()} is used by default.
+     * <p>If not specified, {@link OffsetsInitializer#full()} is used by default.
      *
      * @param offsetsInitializer the strategy for determining starting offsets
      * @return this builder
@@ -213,7 +213,7 @@ public class FlussSourceBuilder<OUT> {
 
         // if null use the default value:
         if (offsetsInitializer == null) {
-            offsetsInitializer = OffsetsInitializer.initial();
+            offsetsInitializer = OffsetsInitializer.full();
         }
 
         // if null use the default value:

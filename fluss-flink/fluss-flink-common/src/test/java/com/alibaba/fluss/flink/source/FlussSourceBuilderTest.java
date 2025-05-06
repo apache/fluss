@@ -207,7 +207,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         .build();
 
         assertThat(source.getOffsetsInitializer().getClass())
-                .isEqualTo(OffsetsInitializer.initial().getClass());
+                .isEqualTo(OffsetsInitializer.full().getClass());
     }
 
     @Test

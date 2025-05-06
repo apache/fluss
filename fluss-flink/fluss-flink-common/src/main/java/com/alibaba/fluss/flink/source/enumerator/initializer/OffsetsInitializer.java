@@ -84,12 +84,17 @@ public interface OffsetsInitializer extends Serializable {
     }
 
     /**
-     * Get an {@link OffsetsInitializer} which initializes the offsets to the specified snapshot
-     * offsets.
+     * Get an {@link OffsetsInitializer} which performs a full snapshot on the table upon first
+     * startup, and continue to read log with the offset to the snapshot.
+     *
+     * <p>If the table to read is a log table, the full snapshot means reading from the earliest log
+     * offset which means "full" OffsetsInitializer equal to the {@link #earliest()}
+     * OffsetsInitializer. If the table to read is a primary key table, the full snapshot means
+     * reading the latest snapshot which materializes all changes on the table.
      *
      * @return an {@link OffsetsInitializer} which initializes the offsets to snapshot offsets.
      */
-    static OffsetsInitializer initial() {
+    static OffsetsInitializer full() {
         return new SnapshotOffsetsInitializer();
     }
 
