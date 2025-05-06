@@ -43,7 +43,8 @@ import static com.alibaba.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYP
 public class TableDescriptorValidation {
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
-    public static void validateTableDescriptor(TableDescriptor tableDescriptor) {
+    public static void validateTableDescriptor(
+            TableDescriptor tableDescriptor, Configuration conf) {
         boolean hasPrimaryKey = tableDescriptor.getSchema().getPrimaryKey().isPresent();
         RowType schema = tableDescriptor.getSchema().getRowType();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -63,7 +64,7 @@ public class TableDescriptorValidation {
         }
 
         // check distribution
-        checkDistribution(tableDescriptor);
+        checkDistribution(tableDescriptor, conf);
 
         // check individual options
         checkReplicationFactor(tableConf);
@@ -74,7 +75,7 @@ public class TableDescriptorValidation {
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
     }
 
-    private static void checkDistribution(TableDescriptor tableDescriptor) {
+    private static void checkDistribution(TableDescriptor tableDescriptor, Configuration conf) {
         if (!tableDescriptor.getTableDistribution().isPresent()) {
             throw new InvalidTableException("Table distribution is required.");
         }
@@ -82,7 +83,7 @@ public class TableDescriptorValidation {
             throw new InvalidTableException("Bucket number must be set.");
         }
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
-        int maxBucketNum = ConfigOptions.MAX_BUCKET_NUM.defaultValue();
+        int maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(

@@ -817,30 +817,21 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Get the total bucket num of a table. */
     public int getTotalBucketNumber(TablePath tablePath) throws Exception {
-        int bucketCount = 0;
         Optional<TableRegistration> tableReg = getTable(tablePath);
-        if (tableReg.isPresent()) {
-            if (!tableReg.get().isPartitioned()) {
-                bucketCount = tableReg.get().bucketCount;
-            } else {
-                Set<String> partitions = getPartitions(tablePath);
-                if (partitions.isEmpty()) {
-                    // No partitions yet, so no buckets
-                    return 0;
-                }
-                for (String partition : partitions) {
-                    Optional<TablePartition> tablePartition = getPartition(tablePath, partition);
-                    if (tablePartition.isPresent()) {
-                        long partitionId = tablePartition.get().getPartitionId();
-                        Optional<PartitionAssignment> partitionAssignment =
-                                getPartitionAssignment(partitionId);
-                        if (partitionAssignment.isPresent()) {
-                            bucketCount += partitionAssignment.get().getBucketAssignments().size();
-                        }
-                    }
-                }
-            }
+        if (!tableReg.isPresent()) {
+            // Table doesn't exist
+            return 0;
         }
-        return bucketCount;
+
+        int bucketsPerPartition = tableReg.get().bucketCount;
+
+        if (!tableReg.get().isPartitioned()) {
+            // Non-partitioned table - return the bucket count directly
+            return bucketsPerPartition;
+        } else {
+            // Partitioned table - calculate based on partition count
+            int partitionCount = getPartitionNumber(tablePath);
+            return partitionCount * bucketsPerPartition;
+        }
     }
 }

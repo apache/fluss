@@ -872,7 +872,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     /**
-     * Test that creating a table with bucket count exceeding the maximum throws
+     * Test that creating a partitioned table with bucket count exceeding the maximum throws
      * TooManyBucketsException.
      */
     @Test
@@ -908,5 +908,36 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
                 .hasMessageContaining("exceeding the maximum of 30 buckets");
+    }
+
+    /**
+     * Test that creating a non-partitioned table with bucket count exceeding the maximum throws
+     * TooManyBucketsException.
+     */
+    @Test
+    public void testBucketLimitForNonPartitionedTable() throws Exception {
+        // Set a low maximum bucket limit for this test
+        // (Assuming the configuration is already set to 30 in ClientToServerITCaseBase)
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        // Create a non-partitioned table with 40 buckets (exceeding limit of 30)
+        TableDescriptor nonPartitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("value", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(40, "id") // 40 buckets exceeds the limit of 30
+                        .build(); // No partitionedBy call makes this non-partitioned
+
+        TablePath tablePath = TablePath.of(dbName, "test_too_many_buckets_non_partitioned");
+
+        // Creating this table should throw TooManyBucketsException
+        assertThatThrownBy(() -> admin.createTable(tablePath, nonPartitionedTable, false).get())
+                .cause()
+                .isInstanceOf(TooManyBucketsException.class)
+                .hasMessageContaining("exceeds the maximum limit");
     }
 }

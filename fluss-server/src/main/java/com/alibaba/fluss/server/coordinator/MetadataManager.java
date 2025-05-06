@@ -66,8 +66,7 @@ public class MetadataManager {
 
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> defaultTableLakeOptions;
-    private final int maxPartitionNum;
-    private final int maxBucketNum;
+    private final Configuration conf;
 
     /**
      * Creates a new metadata manager.
@@ -78,8 +77,7 @@ public class MetadataManager {
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
-        maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
-        maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
+        this.conf = conf;
     }
 
     public void createDatabase(
@@ -230,6 +228,9 @@ public class MetadataManager {
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
+        // validate table properties before creating table
+        validateTableDescriptor(tableToCreate, conf);
+
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
                     "Database " + tablePath.getDatabaseName() + " does not exist.");
@@ -369,6 +370,7 @@ public class MetadataManager {
 
         try {
             int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
+            int maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
             if (partitionNumber + 1 > maxPartitionNum) {
                 throw new TooManyPartitionsException(
                         String.format(
@@ -387,7 +389,7 @@ public class MetadataManager {
 
         try {
             int newPartitionBucketCount = partitionAssignment.getBucketAssignments().size();
-
+            int maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
             int currentTotalBuckets = zookeeperClient.getTotalBucketNumber(tablePath);
             if (currentTotalBuckets + newPartitionBucketCount > maxBucketNum) {
                 throw new TooManyBucketsException(
