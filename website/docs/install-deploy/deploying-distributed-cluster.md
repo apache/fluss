@@ -30,15 +30,18 @@ This page provides instructions on how to deploy a *distributed cluster* for Flu
 
 Fluss runs on all *UNIX-like environments*, e.g. **Linux**, **Mac OS X**.
 To build a distributed cluster, you need to have at least two nodes.
-This doc provides a simple example of how to deploy a distributed cluster on three nodes.
+This doc provides a simple example of how to deploy a distributed cluster on four nodes.
 
 ### Software Requirements
 
-Before you start to set up the system, make sure you have the following software installed **on each node**:
-- **Java 17** or higher (Java 8 and Java 11 are not recommended)
-- **Zookeeper 3.6.0** or higher (It is not recommended to use zookeeper versions below 3.6.0)
+Before you start to set up the system, make sure you have installed **Java 17** or higher **on each node** in your cluster. 
+Java 8 and Java 11 are not recommended.
 
-If your cluster does not fulfill these software requirements you will need to install/upgrade it.
+Additionally, you need a running **ZooKeeper** cluster with version 3.6.0 or higher. 
+We do not recommend to use ZooKeeper versions below 3.6.0.
+For further information how to deploy a distributed ZooKeeper cluster, see [Running Replicated ZooKeeper](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper).
+
+If your cluster does not fulfill these software requirements, you will need to install/upgrade them.
 
 ### `JAVA_HOME` Configuration
 
@@ -46,17 +49,18 @@ Flink requires the `JAVA_HOME` environment variable to be set on all nodes and p
 
 ## Fluss Setup
 
-This part will describe how to set up Fluss cluster consisting of one coordinator server and multiple tablet servers
-across three machines. Suppose you have three nodes in a `192.168.10/24` subnet with the following IP address assignment:
-- Node1: `192.168.10.1`
-- Node2: `192.168.10.2`
-- Node3: `192.168.10.3`
+This part will describe how to set up a Fluss cluster consisting of one CoordinatorServer and multiple TabletServers
+across four machines. Suppose you have four nodes in a `192.168.10/24` subnet with the following IP address assignment:
+- Node0: `192.168.10.100`
+- Node1: `192.168.10.101`
+- Node2: `192.168.10.102`
+- Node3: `192.168.10.103`
 
-Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 will deploy one TabletServer.
+Node0 will deploy a CoordinatorServer instance. Node1, Node2 and Node3 will deploy one TabletServer instance, respectively.
 
 ### Preparation
 
-1. Make sure ZooKeeper has been deployed, and assuming ZooKeeper is also part of the subnet and listens on `192.168.10.99:2181`. See [Running zookeeper cluster](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper) how to deploy a distributed ZooKeeper.
+1. Make sure ZooKeeper has been deployed. We assume that ZooKeeper listens on `192.168.10.199:2181`.
 
 2. Download Fluss
 
@@ -70,45 +74,43 @@ cd fluss-$FLUSS_VERSION$/
 
 ### Configuring Fluss
 
-After having extracted the archived files, you need to configure Fluss for the cluster.
+After having extracted the archived files, you need to configure Fluss for a distributed deployment.
+We will use the _default config file_ (`conf/server.yaml`) to configure Fluss.
+Adapt the `server.yaml` on each node as follows.
 
-On **each node**, we will use the _default config file_ (`conf/server.yaml`) to configure the _TabletServer_.
-Additionally, we will use a separate _custom config file_ (`conf/coordinator-server.yaml`) to configure the _CoordinatorServer_ on **Node1**.
-The custom config file on **Node1** is necessary to avoid a port collision for the `bind.listeners` config option with between the CoordianatorServer and the TabletServer instance running on the same node.
+**Node0**
 
-Adapt the files on each node as follows.
-
-**Node1**
 ```yaml title="server.yaml"
-# tablet server
-bind.listeners: FLUSS://192.168.10.1:9124 # alternatively, setting the port to 0 assigns a random port
-tablet-server.id: 1
+# coordinator server
+bind.listeners: FLUSS://192.168.10.100:9123
 
-zookeeper.address: 192.168.10.99:2181
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
 
 remote.data.dir: /tmp/fluss-remote-data
 ```
 
-Additionally, create a file named `coordinator-server.yaml` in `conf` and add the following content.
+**Node1**
 
-```yaml title="coordinator-server.yaml"
-# coordinator server
-bind.listeners: FLUSS://192.168.10.1:9123
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.101:9124 # alternatively, setting the port to 0 assigns a random port
+tablet-server.id: 1
 
-zookeeper.address: 192.168.10.99:2181
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
 
 remote.data.dir: /tmp/fluss-remote-data
 ```
 
 **Node2**
+
 ```yaml title="server.yaml"
 # tablet server
-bind.listeners: FLUSS://192.168.10.2:9124 # alternatively, setting the port to 0 assigns a random port
+bind.listeners: FLUSS://192.168.10.102:9124 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 2
 
-zookeeper.address: 192.168.10.99:2181
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
 
 remote.data.dir: /tmp/fluss-remote-data
@@ -117,10 +119,13 @@ remote.data.dir: /tmp/fluss-remote-data
 **Node3**
 ```yaml title="server.yaml"
 # tablet server
-bind.listeners: FLUSS://192.168.10.3:9124 # alternatively, setting the port to 0 assigns a random port
+bind.listeners: FLUSS://192.168.10.103:9124 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 3
-zookeeper.address: 192.168.10.99:2181
+
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
+
+remote.data.dir: /tmp/fluss-remote-data
 ```
 
 :::note
@@ -130,25 +135,24 @@ zookeeper.path.root: /fluss
 
 ### Starting Fluss
 
-To start Fluss, you should first start a CoordinatorServer instance on **Node1**. 
+To deploy a distributed Fluss cluster, you should first start a CoordinatorServer instance on **Node0**. 
 Then, start a TabletServer instance on **Node1**, **Node2**, and **Node3**, respectively.
 
-#### Starting CoordinatorServer
+**CoordinatorServer**
 
-On **Node1**, start a CoordinatorServer instance with the custom config file as follows.
+On **Node0**, start a CoordinatorServer as follows.
 ```shell
-./bin/coordinator-server.sh start -D configFile=conf/coordinator-server.yaml
+./bin/coordinator-server.sh start
 ```
 
-#### Starting TabletServer
+**TabletServer**
 
 On **Node1**, **Node2** and **Node3**, start a TabletServer as follows.
 ```shell
-# uses conf/server.yaml
 ./bin/tablet-server.sh start
 ```
 
-After that, the Fluss distributed cluster is started.
+After that, you have successfully deployed a distributed Fluss cluster.
 
 ## Interacting with Fluss
 
@@ -171,7 +175,7 @@ In Flink SQL client, a catalog is created and named by executing the following q
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
-  'bootstrap.servers' = '192.168.10.1:9123'
+  'bootstrap.servers' = '192.168.10.100:9123'
 );
 ```
 
