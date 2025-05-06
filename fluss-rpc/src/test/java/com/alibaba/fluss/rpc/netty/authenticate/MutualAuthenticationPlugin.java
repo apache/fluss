@@ -59,7 +59,7 @@ public class MutualAuthenticationPlugin
     private static class ClientAuthenticatorImpl implements ClientAuthenticator {
         private boolean isCompleted = false;
         private int initialSalt;
-        private final byte errorType;
+        private final int errorType;
 
         public ClientAuthenticatorImpl(Configuration configuration) {
             this.errorType = configuration.get(ERROR_TYPE).code;
@@ -127,10 +127,10 @@ public class MutualAuthenticationPlugin
             int tokenValue = parseToken(token);
 
             // If mock error, return null.
-            if (isError((byte) tokenValue, ErrorType.SERVER_NO_CHALLENGE)) {
+            if (isError(tokenValue, ErrorType.SERVER_NO_CHALLENGE)) {
                 return null;
             }
-            if (isError((byte) tokenValue, ErrorType.SERVER_ERROR_CHALLENGE)) {
+            if (isError(tokenValue, ErrorType.SERVER_ERROR_CHALLENGE)) {
                 return "-1".getBytes();
             }
 
@@ -174,7 +174,7 @@ public class MutualAuthenticationPlugin
         return ThreadLocalRandom.current().nextInt(0, Integer.MAX_VALUE);
     }
 
-    private static boolean isError(byte errorType, ErrorType... errorTypes) {
+    private static boolean isError(int errorType, ErrorType... errorTypes) {
         for (ErrorType type : errorTypes) {
             if (errorType == type.code) {
                 return true;
@@ -184,14 +184,14 @@ public class MutualAuthenticationPlugin
     }
 
     enum ErrorType {
-        NONE((byte) -1),
-        SERVER_NO_CHALLENGE((byte) -2),
-        SERVER_ERROR_CHALLENGE((byte) -3),
-        CLIENT_ERROR_SECOND_TOKEN((byte) -4);
+        NONE(-1),
+        SERVER_NO_CHALLENGE(-2),
+        SERVER_ERROR_CHALLENGE(-3),
+        CLIENT_ERROR_SECOND_TOKEN(-4);
 
-        final byte code;
+        final int code;
 
-        ErrorType(byte code) {
+        ErrorType(int code) {
             this.code = code;
         }
     }
