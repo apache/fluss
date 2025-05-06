@@ -87,8 +87,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollWhileCreateTableNotReady() throws Exception {
-        // create one table with 100 buckets.
-        int bucketNumber = 100;
+        // create one table with 30 buckets.
+        int bucketNumber = 30;
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(bucketNumber).build();
         createTable(DATA1_TABLE_PATH, tableDescriptor, false);
