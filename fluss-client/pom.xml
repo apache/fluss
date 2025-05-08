@@ -94,12 +94,13 @@
 
     <build>
         <plugins>
+            <!-- TODO: fluss-clients shouldn't publish bundled jar -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>shade-flink</id>
+                        <id>shade-fluss</id>
                         <phase>package</phase>
                         <goals>
                             <goal>shade</goal>

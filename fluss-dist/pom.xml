@@ -213,7 +213,7 @@
                 <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>shade-dist</id>
+                        <id>shade-fluss</id>
                         <phase>package</phase>
                         <goals>
                             <goal>shade</goal>
@@ -226,6 +226,7 @@
                                 <includes>
                                     <!-- only include log4j-api to package source and javadoc to make sonatype happy -->
                                     <include>org.apache.logging.log4j:log4j-api</include>
+                                    <include>META-INF/*</include>
                                 </includes>
                             </artifactSet>
                         </configuration>
@@ -282,25 +283,6 @@
                             <descriptors>
                                 <descriptor>src/main/assemblies/tgz.xml</descriptor>
                             </descriptors>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Generate empty javadoc jar to make Sonatype OSS happy -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>empty-javadoc-jar</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                        <configuration>
-                            <classifier>javadoc</classifier>
-                            <classesDirectory>${basedir}/javadoc</classesDirectory>
                         </configuration>
                     </execution>
                 </executions>

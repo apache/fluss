@@ -28,9 +28,6 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import com.alibaba.fluss.utils.ProtoCodecUtils;
 
-import org.jibx.schema.codegen.extend.DefaultNameConverter;
-import org.jibx.schema.codegen.extend.NameConverter;
-
 import java.io.PrintWriter;
 
 import static com.alibaba.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_CAMEL;
@@ -135,13 +132,11 @@ public class ProtoGenUtil {
         return sb.toString().toUpperCase();
     }
 
-    private static final NameConverter nameTools = new DefaultNameConverter();
-
     public static String plural(String s) {
-        return nameTools.pluralize(s);
+        return NameUtilities.pluralize(s);
     }
 
     public static String singular(String s) {
-        return nameTools.depluralize(s);
+        return NameUtilities.depluralize(s);
     }
 }
