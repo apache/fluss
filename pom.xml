@@ -76,6 +76,7 @@
         <!-- fluss-lakehouse module is deprecated, will be removed once fluss-lake ready -->
         <module>fluss-lakehouse</module>
         <module>fluss-kafka</module>
+        <module>tools/ci/fluss-ci-tools</module>
     </modules>
 
     <properties>
@@ -1007,6 +1008,35 @@
                             <phase>none</phase>
                         </execution>
                     </executions>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.1.0</version>
+                    <inherited>false</inherited>
+                    <executions>
+                        <execution>
+                            <id>check-license</id>
+                            <!-- manually called -->
+                            <phase>none</phase>
+                            <goals>
+                                <goal>java</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <mainClass>com.alibaba.fluss.tools.ci.licensecheck.LicenseChecker</mainClass>
+                        <includePluginDependencies>true</includePluginDependencies>
+                        <includeProjectDependencies>false</includeProjectDependencies>
+                    </configuration>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.alibaba.fluss</groupId>
+                            <artifactId>fluss-ci-tools</artifactId>
+                            <version>${project.version}</version>
+                        </dependency>
+                    </dependencies>
                 </plugin>
 
             </plugins>
