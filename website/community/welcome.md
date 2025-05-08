@@ -38,9 +38,9 @@ Please note that this link may occasionally break when Slack does an upgrade. If
 ## Community Events
 Join our monthly community gatherings to get involved:
 
-* **Fluss Contributors Call**  
-  1:30 – 2:10pm UTC+8  
-  Invitation link: [https://meet.google.com/nsu-rxvq-vuk](https://meet.google.com/nsu-rxvq-vuk)
+**Fluss Contributors Call**
+
+  Invitation link: [Event](https://calendar.app.google/HUHUns4tSiv9NFt26)
 
 These community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
