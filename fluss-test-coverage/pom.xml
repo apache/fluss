@@ -347,6 +347,10 @@
                                         <!-- end exclude for lakehouse-paimon -->
                                         <exclude>com.alibaba.fluss.lakehouse.cli.*</exclude>
                                         <exclude>com.alibaba.fluss.kafka.*</exclude>
+                                        <!-- exclude for fluss-ci-tools -->
+                                        <exclude>com.alibaba.fluss.tools.ci.*</exclude>
+                                        <!-- exclude for fluss-dist -->
+                                        <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
                                     </excludes>
                                 </rule>
                             </rules>

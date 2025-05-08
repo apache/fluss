@@ -50,6 +50,12 @@
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-fs-hadoop</artifactId>
             <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-hdfs-client</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -200,6 +206,10 @@
                                 <includes>
                                     <include>*:*</include>
                                 </includes>
+                                <excludes>
+                                    <exclude>javax.servlet:servlet-api</exclude>
+                                    <exclude>xmlenc:xmlenc</exclude>
+                                </excludes>
                             </artifactSet>
                             <filters>
                                 <filter>
@@ -208,6 +218,10 @@
                                         <exclude>.gitkeep</exclude>
                                         <exclude>mime.types</exclude>
                                         <exclude>mozilla/**</exclude>
+                                        <exclude>LICENSE.txt</exclude>
+                                        <exclude>license/LICENSE*</exclude>
+                                        <exclude>okhttp3/internal/publicsuffix/NOTICE</exclude>
+                                        <exclude>NOTICE</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

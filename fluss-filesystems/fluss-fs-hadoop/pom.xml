@@ -46,8 +46,9 @@
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-hdfs</artifactId>
-            <!-- to keep same to the haddop version of fluss-fs-hadoop-shaded -->
+            <!-- to keep same to the hadoop version of fluss-fs-hadoop-shaded -->
             <version>${fs.hadoopshaded.version}</version>
+            <scope>provided</scope>
             <exclusions>
                 <exclusion>
                     <groupId>ch.qos.reload4j</groupId>
@@ -174,6 +175,10 @@
                                 <includes>
                                     <include>*:*</include>
                                 </includes>
+                                <excludes>
+                                    <exclude>javax.servlet:servlet-api</exclude>
+                                    <exclude>xmlenc:xmlenc</exclude>
+                                </excludes>
                             </artifactSet>
                             <filters>
                                 <filter>
@@ -182,6 +187,7 @@
                                         <exclude>.gitkeep</exclude>
                                         <exclude>mime.types</exclude>
                                         <exclude>mozilla/**</exclude>
+                                        <exclude>okhttp3/internal/publicsuffix/NOTICE</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

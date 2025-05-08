@@ -46,13 +46,6 @@
             <artifactId>fluss-shaded-guava</artifactId>
         </dependency>
 
-        <!--suppress VulnerableLibrariesLocal -->
-        <dependency>
-            <groupId>org.jibx</groupId>
-            <artifactId>jibx-tools</artifactId>
-            <version>${jibx.version}</version>
-        </dependency>
-
         <dependency>
             <groupId>org.jboss.forge.roaster</groupId>
             <artifactId>roaster-api</artifactId>
