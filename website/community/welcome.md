@@ -30,5 +30,17 @@ If you are not sure on what to work on, look at issue tagged with [good first is
 
 The development discussions and user questions happen primarily on [GitHub Discussions](https://github.com/alibaba/fluss/discussions).
 
+## Slack 
+We use Slack for real-time communication and collaboration. To join our workspace, follow this [invite link](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw).
 
+Please note that this link may occasionally break when Slack does an upgrade. If you encounter problems using it, please let us know by creating an issue on GitHub.
+
+## Community Events
+Join our monthly community gatherings to get involved:
+
+* **Fluss Contributors Call**  
+  1:30 – 2:10pm UTC+8  
+  Inviattion link: [https://meet.google.com/nsu-rxvq-vuk](https://meet.google.com/nsu-rxvq-vuk)
+
+These community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
