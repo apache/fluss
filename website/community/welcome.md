@@ -40,7 +40,7 @@ Join our monthly community gatherings to get involved:
 
 * **Fluss Contributors Call**  
   1:30 – 2:10pm UTC+8  
-  Inviattion link: [https://meet.google.com/nsu-rxvq-vuk](https://meet.google.com/nsu-rxvq-vuk)
+  Invitation link: [https://meet.google.com/nsu-rxvq-vuk](https://meet.google.com/nsu-rxvq-vuk)
 
 These community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
