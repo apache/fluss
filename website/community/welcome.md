@@ -40,7 +40,7 @@ Join our monthly community gatherings to get involved:
 
 **Fluss Contributors Call**
 
-  Invitation link: [Event](https://calendar.app.google/HUHUns4tSiv9NFt26)
+  Invitation link: [Community Events](https://calendar.app.google/1u58VvHpn71H9rz57)
 
 These community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
