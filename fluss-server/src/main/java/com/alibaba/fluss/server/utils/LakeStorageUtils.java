@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.alibaba.fluss.utils.PropertiesUtils.asPrefixedMap;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** Utils for Fluss lake storage. */
@@ -41,5 +42,21 @@ public class LakeStorageUtils {
 
         String dataLakePrefix = "datalake." + optDataLakeFormat.get() + ".";
         return asPrefixedMap(extractPrefix(clusterConf.toMap(), dataLakePrefix), "table.");
+    }
+
+    /**
+     * Extract the datalake properties configured from the configuration. Return null if datalake is
+     * not configured.
+     */
+    @Nullable
+    public static Map<String, String> extractLakeProperties(Configuration configuration) {
+        DataLakeFormat datalakeFormat = configuration.get(ConfigOptions.DATALAKE_FORMAT);
+        if (datalakeFormat == null) {
+            return null;
+        }
+
+        Map<String, String> configMap = configuration.toMap();
+        String datalakePrefix = "datalake." + datalakeFormat + ".";
+        return extractAndRemovePrefix(configMap, datalakePrefix);
     }
 }

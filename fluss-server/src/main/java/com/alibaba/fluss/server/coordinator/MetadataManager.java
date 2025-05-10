@@ -58,8 +58,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
-import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
-
 /** A manager for metadata. */
 public class MetadataManager {
 
@@ -229,9 +227,6 @@ public class MetadataManager {
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
-        // validate table properties before creating table
-        validateTableDescriptor(tableToCreate);
-
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
                     "Database " + tablePath.getDatabaseName() + " does not exist.");

@@ -28,6 +28,7 @@ fluss-lakehouse,\
 fluss-lakehouse/fluss-lakehouse-cli,\
 fluss-lakehouse/fluss-lakehouse-paimon,\
 fluss-lake,\
+fluss-lake/fluss-lake-paimon
 "
 
 function get_test_modules_for_stage() {

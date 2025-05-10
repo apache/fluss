@@ -25,6 +25,21 @@
     <includeBaseDirectory>true</includeBaseDirectory>
     <baseDirectory>fluss-${project.version}</baseDirectory>
 
+    <dependencySets>
+        <dependencySet>
+            <outputDirectory>plugins/paimon</outputDirectory>
+            <unpack>false</unpack>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useProjectAttachments>false</useProjectAttachments>
+            <useTransitiveDependencies>true</useTransitiveDependencies>
+            <useTransitiveFiltering>true</useTransitiveFiltering>
+            <includes>
+                <include>org.apache.flink:flink-shaded-hadoop-2-uber</include>
+            </includes>
+        </dependencySet>
+
+    </dependencySets>
+
     <files>
         <!-- filesystem -->
         <!-- output directory should correspond to the file system *schema* name, i.e., plugins/<schema>/  -->
@@ -61,6 +76,14 @@
             <source>../fluss-metrics/fluss-metrics-jmx/target/fluss-metrics-jmx-${project.version}.jar</source>
             <outputDirectory>plugins/jmx/</outputDirectory>
             <destName>fluss-metrics-jmx-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- lake formats -->
+        <file>
+            <source>../fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-${project.version}.jar</source>
+            <outputDirectory>plugins/paimon/</outputDirectory>
+            <destName>fluss-lake-paimon-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
     </files>

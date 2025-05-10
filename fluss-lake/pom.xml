@@ -28,6 +28,7 @@
     <artifactId>fluss-lake</artifactId>
     <name>Fluss : Lake :</name>
     <modules>
+        <module>fluss-lake-paimon</module>
     </modules>
     <packaging>pom</packaging>
 </project>
