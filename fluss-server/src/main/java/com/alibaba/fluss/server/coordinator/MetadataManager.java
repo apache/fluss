@@ -66,7 +66,8 @@ public class MetadataManager {
 
     private final ZooKeeperClient zookeeperClient;
     private @Nullable final Map<String, String> defaultTableLakeOptions;
-    private final Configuration conf;
+    private final int maxPartitionNum;
+    private final int maxBucketNum;
 
     /**
      * Creates a new metadata manager.
@@ -77,7 +78,8 @@ public class MetadataManager {
     public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
-        this.conf = conf;
+        this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
+        this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
     }
 
     public void createDatabase(
@@ -229,7 +231,7 @@ public class MetadataManager {
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
         // validate table properties before creating table
-        validateTableDescriptor(tableToCreate, conf);
+        validateTableDescriptor(tableToCreate, maxBucketNum);
 
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
@@ -368,9 +370,9 @@ public class MetadataManager {
                             partition.getPartitionQualifiedName(), tablePath));
         }
 
+        final int partitionNumber;
         try {
-            int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
-            int maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
+            partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
             if (partitionNumber + 1 > maxPartitionNum) {
                 throw new TooManyPartitionsException(
                         String.format(
@@ -388,15 +390,15 @@ public class MetadataManager {
         }
 
         try {
-            int newPartitionBucketCount = partitionAssignment.getBucketAssignments().size();
-            int maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
-            int currentTotalBuckets = zookeeperClient.getTotalBucketNumber(tablePath);
-            if (currentTotalBuckets + newPartitionBucketCount > maxBucketNum) {
+            int bucketCount = partitionAssignment.getBucketAssignments().size();
+            // currently, every partition has the same bucket count
+            int totalBuckets = bucketCount * (partitionNumber + 1);
+            if (totalBuckets > maxBucketNum) {
                 throw new TooManyBucketsException(
                         String.format(
                                 "Adding partition '%s' would result in %d total buckets for table %s, exceeding the maximum of %d buckets.",
                                 partition.getPartitionName(),
-                                currentTotalBuckets + newPartitionBucketCount,
+                                totalBuckets,
                                 tablePath,
                                 maxBucketNum));
             }
