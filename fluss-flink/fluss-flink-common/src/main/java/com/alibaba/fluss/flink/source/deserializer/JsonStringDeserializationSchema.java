@@ -17,14 +17,17 @@
 package com.alibaba.fluss.flink.source.deserializer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.flink.utils.FlussRowToJsonConverters;
+import com.alibaba.fluss.flink.utils.TimestampFormat;
 import com.alibaba.fluss.record.LogRecord;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.SerializationFeature;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
+import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.SerializationFeature;
-import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -68,12 +71,32 @@ public class JsonStringDeserializationSchema implements FlussDeserializationSche
      */
     private transient ObjectMapper objectMapper = new ObjectMapper();
 
+    /** Reusable object node. */
+    private transient ObjectNode node;
+
     /**
      * Reusable map for building the record representation before serializing to JSON. This avoids
      * creating a new Map for each record. Using LinkedHashMap to ensure a stable order of fields in
      * the JSON output.
      */
     private final Map<String, Object> recordMap = new LinkedHashMap<>(4);
+
+    /**
+     * Converter responsible for transforming Fluss row data into json. Initialized during {@link
+     * #open(InitializationContext)}.
+     */
+    private transient FlussRowToJsonConverters.FlussRowToJsonConverter runtimeConverter;
+
+    /** Timestamp format specification which is used to parse timestamp. */
+    private final TimestampFormat timestampFormat;
+
+    public JsonStringDeserializationSchema() {
+        this(TimestampFormat.ISO_8601);
+    }
+
+    private JsonStringDeserializationSchema(TimestampFormat timestampFormat) {
+        this.timestampFormat = timestampFormat;
+    }
 
     /**
      * Initializes the JSON serialization mechanism.
@@ -90,6 +113,11 @@ public class JsonStringDeserializationSchema implements FlussDeserializationSche
      */
     @Override
     public void open(InitializationContext context) throws Exception {
+        if (runtimeConverter == null) {
+            this.runtimeConverter =
+                    new FlussRowToJsonConverters(timestampFormat)
+                            .createNullableConverter(context.getRowSchema());
+        }
         objectMapper = new ObjectMapper();
 
         objectMapper.registerModule(new JavaTimeModule());
@@ -111,8 +139,11 @@ public class JsonStringDeserializationSchema implements FlussDeserializationSche
         recordMap.put("offset", record.logOffset());
         recordMap.put("timestamp", record.timestamp());
         recordMap.put("change_type", record.getChangeType().toString());
-        // TODO: convert row into JSON https://github.com/alibaba/fluss/issues/678
-        recordMap.put("row", record.getRow().toString());
+
+        if (node == null) {
+            node = objectMapper.createObjectNode();
+        }
+        recordMap.put("row", runtimeConverter.convert(objectMapper, node, record.getRow()));
 
         return objectMapper.writeValueAsString(recordMap);
     }
