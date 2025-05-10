@@ -59,6 +59,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
+
 /** A manager for metadata. */
 public class MetadataManager {
 

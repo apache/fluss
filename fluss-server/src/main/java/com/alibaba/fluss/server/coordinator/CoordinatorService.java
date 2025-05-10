@@ -100,7 +100,6 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPartitionS
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
-import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 import static com.alibaba.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
@@ -235,9 +234,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     TableAssignmentUtils.generateAssignment(bucketCount, replicaFactor, servers);
         }
 
-        // validate table properties before creating table
-        validateTableDescriptor(tableDescriptor);
-
+        // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
+        //  consistent by idempotently creating the table multiple times. See #846
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
