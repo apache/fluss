@@ -94,7 +94,7 @@ remote.data.dir: /tmp/fluss-remote-data
 
 ```yaml title="server.yaml"
 # tablet server
-bind.listeners: FLUSS://192.168.10.101:9124 # alternatively, setting the port to 0 assigns a random port
+bind.listeners: FLUSS://192.168.10.101:9123 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 1
 
 zookeeper.address: 192.168.10.199:2181
@@ -107,7 +107,7 @@ remote.data.dir: /tmp/fluss-remote-data
 
 ```yaml title="server.yaml"
 # tablet server
-bind.listeners: FLUSS://192.168.10.102:9124 # alternatively, setting the port to 0 assigns a random port
+bind.listeners: FLUSS://192.168.10.102:9123 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 2
 
 zookeeper.address: 192.168.10.199:2181
@@ -119,7 +119,7 @@ remote.data.dir: /tmp/fluss-remote-data
 **Node3**
 ```yaml title="server.yaml"
 # tablet server
-bind.listeners: FLUSS://192.168.10.103:9124 # alternatively, setting the port to 0 assigns a random port
+bind.listeners: FLUSS://192.168.10.103:9123 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 3
 
 zookeeper.address: 192.168.10.199:2181
