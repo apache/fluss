@@ -63,7 +63,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
@@ -77,7 +77,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server
+        bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
@@ -140,7 +140,7 @@ This command automatically starts all the containers defined in the Docker Compo
 
 Run 
 ```shell
-docker ps
+docker container ls -a
 ```
 to check whether all containers are running properly.
 
@@ -363,7 +363,7 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
 Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
 ```shell
-docker compose exec coordinator-server ./bin/lakehouse.sh -Dflink.rest.address=jobmanager -Dflink.rest.port=8081 -Dflink.execution.checkpointing.interval=30s
+docker compose exec coordinator-server ./bin/lakehouse.sh -Dflink.rest.address=jobmanager -Dflink.rest.port=8081 -Dflink.execution.checkpointing.interval=30s -Dbootstrap.servers=coordinator-server:9123
 ```
 You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
 

@@ -108,7 +108,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
@@ -130,7 +130,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server
+        bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
@@ -223,7 +223,7 @@ This recreates `shared-tmpfs` and all data is lost (created tables, running jobs
 Make sure that the modified and added containers are up and running using
 
 ```shell
-docker ps
+docker container ls -a
 ```
 
 4. Now you are all set! You can visit
