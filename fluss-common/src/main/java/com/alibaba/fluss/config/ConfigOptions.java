@@ -169,6 +169,14 @@ public class ConfigOptions {
                                     + "and each super user should be specified in the format 'principal_type:principal_name', e.g., 'User:admin;User:bob'. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
+    public static final ConfigOption<Integer> MAX_BUCKET_NUM =
+            key("max.bucket.num")
+                    .intType()
+                    .defaultValue(128000)
+                    .withDescription(
+                            "The maximum number of buckets that can be created for a table."
+                                    + "The default value is 128000");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------

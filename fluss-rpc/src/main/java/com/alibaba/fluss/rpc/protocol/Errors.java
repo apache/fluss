@@ -61,6 +61,7 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.exception.TimeoutException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.exception.UnknownServerException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
@@ -196,7 +197,9 @@ public enum Errors {
             45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
     AUTHENTICATE_EXCEPTION(46, "Authentication failed.", AuthenticationException::new),
     SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new),
-    AUTHORIZATION_EXCEPTION(48, "Authorization failed", AuthorizationException::new);
+    AUTHORIZATION_EXCEPTION(48, "Authorization failed", AuthorizationException::new),
+    BUCKET_MAX_NUM_EXCEPTION(
+            49, "Exceed the maximum number of buckets", TooManyBucketsException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

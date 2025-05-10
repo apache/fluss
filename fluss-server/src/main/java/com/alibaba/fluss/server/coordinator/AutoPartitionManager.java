@@ -23,6 +23,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -317,6 +318,12 @@ public class AutoPartitionManager implements AutoCloseable {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
                                 + "because exceed the maximum number of partitions.",
+                        partition,
+                        tablePath);
+            } catch (TooManyBucketsException t) {
+                LOG.warn(
+                        "Auto partitioning skip to create partition {} for table [{}], "
+                                + "because exceed the maximum number of buckets.",
                         partition,
                         tablePath);
             } catch (Exception e) {
