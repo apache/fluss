@@ -20,7 +20,9 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.InitWriterRequest;
@@ -32,6 +34,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 
@@ -277,11 +281,11 @@ public class IdempotenceManager {
         return false;
     }
 
-    void maybeWaitForWriterId() {
+    void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) {
         if (!isWriterIdValid()) {
             try {
                 tabletServerGateway
-                        .initWriter(new InitWriterRequest())
+                        .initWriter(prepareInitWriterRequest(tablePaths))
                         .thenAccept(response -> setWriterId(response.getWriterId()))
                         .exceptionally(
                                 e -> {
@@ -295,6 +299,21 @@ public class IdempotenceManager {
                         e);
             }
         }
+    }
+
+    InitWriterRequest prepareInitWriterRequest(Set<PhysicalTablePath> physicalTables) {
+        InitWriterRequest initWriterRequest = new InitWriterRequest();
+        Set<TablePath> tables =
+                physicalTables.stream()
+                        .map(PhysicalTablePath::getTablePath)
+                        .collect(Collectors.toSet());
+        for (TablePath tablePath : tables) {
+            initWriterRequest
+                    .addTablePath()
+                    .setDatabaseName(tablePath.getDatabaseName())
+                    .setTableName(tablePath.getTableName());
+        }
+        return initWriterRequest;
     }
 
     private int maybeUpdateLastAckedSequence(TableBucket tableBucket, int sequence) {

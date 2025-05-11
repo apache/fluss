@@ -360,6 +360,10 @@ public final class RecordAccumulator {
         return bucketAndWriteBatches.batches.get(tableBucket.getBucket());
     }
 
+    public Set<PhysicalTablePath> getPhysicalTablePathsInBatches() {
+        return writeBatches.keySet();
+    }
+
     private List<MemorySegment> allocateMemorySegments(WriteRecord writeRecord) throws IOException {
         if (writeRecord.getWriteFormat() == WriteFormat.ARROW_LOG) {
             // pre-allocate a batch memory size for Arrow, if it is not sufficient during batching,
