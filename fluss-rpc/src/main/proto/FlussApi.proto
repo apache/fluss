@@ -367,6 +367,7 @@ message GetFileSystemSecurityTokenResponse {
 
 // init writer request and response
 message InitWriterRequest {
+  repeated PbTablePath table_path = 1;
 }
 
 message InitWriterResponse {

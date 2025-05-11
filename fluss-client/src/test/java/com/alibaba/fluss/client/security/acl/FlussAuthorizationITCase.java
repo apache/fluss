@@ -18,6 +18,7 @@ package com.alibaba.fluss.client.security.acl;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.FlussConnection;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
@@ -26,14 +27,19 @@ import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
+import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.InitWriterRequest;
+import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
@@ -190,6 +196,14 @@ public class FlussAuthorizationITCase {
                                             .get();
                                 })
                         .hasMessageContaining("No Authorizer is configured.");
+
+                // test initWriter without authorizer and empty table paths
+                FlussConnection flussConnection = (FlussConnection) connection;
+                TabletServerGateway tabletServerGateway =
+                        flussConnection.getMetadataUpdater().newTabletServerClientForNode(0);
+                InitWriterResponse response =
+                        tabletServerGateway.initWriter(new InitWriterRequest()).get();
+                assertThat(response.getWriterId()).isGreaterThanOrEqualTo(0);
             }
 
         } finally {
@@ -428,6 +442,70 @@ public class FlussAuthorizationITCase {
             assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
                     .hasSize(1);
         }
+    }
+
+    @Test
+    void testInitWriter() throws Exception {
+        TablePath writeAclTable = TablePath.of("test_db_1", "write_acl_table");
+        TablePath noWriteAclTable = TablePath.of("test_db_1", "no_write_acl_table");
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
+        rootAdmin.createTable(writeAclTable, descriptor, false).get();
+        // create acl to allow guest write.
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.table(writeAclTable),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.WRITE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId());
+
+        FlussConnection flussConnection = (FlussConnection) guestConn;
+        TabletServerGateway tabletServerGateway =
+                flussConnection.getMetadataUpdater().newTabletServerClientForNode(0);
+
+        // test 1: empty table paths
+        assertThatThrownBy(() -> tabletServerGateway.initWriter(new InitWriterRequest()).get())
+                .cause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "The request of InitWriter requires non empty table paths for authorization.");
+
+        // request contains a table path without permission
+        InitWriterRequest noAclRequest = new InitWriterRequest();
+        noAclRequest
+                .addTablePath()
+                .setDatabaseName(noWriteAclTable.getDatabaseName())
+                .setTableName(noWriteAclTable.getTableName());
+
+        // test 2: no table has write permission
+        assertThatThrownBy(() -> tabletServerGateway.initWriter(noAclRequest).get())
+                .cause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "No WRITE permission among all the tables: [test_db_1.no_write_acl_table]");
+
+        // request contains both a table path with/without permission
+        InitWriterRequest request = new InitWriterRequest();
+        request.addTablePath()
+                .setTableName(writeAclTable.getTableName())
+                .setDatabaseName(writeAclTable.getDatabaseName());
+        request.addTablePath()
+                .setTableName(noWriteAclTable.getTableName())
+                .setDatabaseName(noWriteAclTable.getDatabaseName());
+
+        // test 3: one table has write permission, the other doesn't have permission
+        InitWriterResponse response = tabletServerGateway.initWriter(request).get();
+        assertThat(response.getWriterId()).isGreaterThanOrEqualTo(0);
     }
 
     @Test

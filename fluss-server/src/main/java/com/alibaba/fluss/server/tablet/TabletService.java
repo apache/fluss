@@ -22,6 +22,7 @@ import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
@@ -68,6 +69,7 @@ import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.replica.ReplicaManager;
+import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import javax.annotation.Nullable;
@@ -312,7 +314,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
-        // todo: add authorization for table acl until https://github.com/alibaba/fluss/issues/756.
+        List<TablePath> tablePathsList =
+                request.getTablePathsList().stream()
+                        .map(ServerRpcMessageUtils::toTablePath)
+                        .collect(Collectors.toList());
+        authorizeAnyTable(WRITE, tablePathsList);
         CompletableFuture<InitWriterResponse> response = new CompletableFuture<>();
         response.complete(makeInitWriterResponse(metadataManager.initWriterId()));
         return response;
@@ -361,6 +367,27 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     String.format(
                             "No permission to %s table %s in database %s",
                             operationType, tablePath.getTableName(), tablePath.getDatabaseName()));
+        }
+    }
+
+    private void authorizeAnyTable(OperationType operationType, List<TablePath> tablePaths) {
+        if (authorizer != null) {
+            if (tablePaths.isEmpty()) {
+                throw new AuthorizationException(
+                        "The request of InitWriter requires non empty table paths for authorization.");
+            }
+
+            for (TablePath tablePath : tablePaths) {
+                Resource tableResource = Resource.table(tablePath);
+                if (authorizer.isAuthorized(currentSession(), operationType, tableResource)) {
+                    // authorized success if one of the tables has the permission
+                    return;
+                }
+            }
+            throw new AuthorizationException(
+                    String.format(
+                            "No %s permission among all the tables: %s",
+                            operationType, tablePaths));
         }
     }
 

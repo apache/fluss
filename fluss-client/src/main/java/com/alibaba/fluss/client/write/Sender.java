@@ -172,7 +172,9 @@ public class Sender implements Runnable {
     public void runOnce() throws Exception {
         if (idempotenceManager.idempotenceEnabled()) {
             // may be wait for writer id.
-            idempotenceManager.maybeWaitForWriterId();
+            Set<PhysicalTablePath> targetTables = accumulator.getPhysicalTablePathsInBatches();
+            // TODO: only request to init writer_id when we have valid target tables
+            idempotenceManager.maybeWaitForWriterId(targetTables);
         }
 
         // do send.
