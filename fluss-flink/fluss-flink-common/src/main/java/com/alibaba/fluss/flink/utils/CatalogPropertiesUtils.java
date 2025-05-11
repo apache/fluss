@@ -40,6 +40,10 @@ import java.util.stream.Stream;
 import static com.alibaba.fluss.utils.PropertiesUtils.excludeByPrefix;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
+/* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
+ * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership. */
+
 /**
  * Utilities for de/serializing {@link Catalog} objects into a map of string properties.
  *
