@@ -32,6 +32,10 @@ import java.util.Arrays;
 
 import static com.alibaba.fluss.types.DataTypeChecks.getPrecision;
 
+/* This file is based on source code of Apache Paimon Project (https://paimon.apache.org/), licensed by the Apache
+ * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership. */
+
 /**
  * A writer to encode Fluss's {@link InternalRow} using Paimon's BinaryRow encoding way.
  *

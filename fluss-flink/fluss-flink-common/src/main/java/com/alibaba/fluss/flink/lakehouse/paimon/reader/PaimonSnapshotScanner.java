@@ -31,6 +31,10 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Objects;
 
+/* This file is based on source code of Apache Paimon Project (https://paimon.apache.org/), licensed by the Apache
+ * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership. */
+
 /** A scanner for reading paimon split. Most logic is copied from paimon. */
 public class PaimonSnapshotScanner implements BatchScanner {
 

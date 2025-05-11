@@ -53,6 +53,10 @@ import java.util.Set;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
+/* This file is based on source code of Apache Paimon Project (https://paimon.apache.org/), licensed by the Apache
+ * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership. */
+
 /**
  * Most copied from Paimon's {@link StoreMultiCommitter}, but add the logic that after committing to
  * Paimon, it'll also report to Fluss so that Fluss can know what data has been tiered to Paimon.
