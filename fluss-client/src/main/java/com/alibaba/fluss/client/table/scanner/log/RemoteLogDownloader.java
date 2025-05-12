@@ -163,6 +163,7 @@ public class RemoteLogDownloader implements Closeable {
                     segmentPath,
                     new CloseableRegistry());
             File localFile = new File(segmentPath.toFile(), fsPathAndFileName.getFileName());
+            scannerMetricGroup.remoteFetchBytes().inc(localFile.length());
             String segmentId = request.segment.remoteLogSegmentId().toString();
             fetchedFiles.put(segmentId, segmentPath);
             request.future.complete(localFile);
@@ -229,6 +230,18 @@ public class RemoteLogDownloader implements Closeable {
         return localLogDir;
     }
 
+    protected static FsPathAndFileName getFsPathAndFileName(
+            FsPath remoteLogTabletDir, RemoteLogSegment segment) {
+        FsPath remotePath =
+                remoteLogSegmentFile(
+                        remoteLogSegmentDir(remoteLogTabletDir, segment.remoteLogSegmentId()),
+                        segment.remoteLogStartOffset());
+        return new FsPathAndFileName(
+                remotePath,
+                FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
+                        + LOG_FILE_SUFFIX);
+    }
+
     /**
      * Thread to download remote log files to local. The thread will keep fetching remote log files
      * until it is interrupted.
@@ -257,14 +270,7 @@ public class RemoteLogDownloader implements Closeable {
         }
 
         public FsPathAndFileName getFsPathAndFileName() {
-            FsPath remotePath =
-                    remoteLogSegmentFile(
-                            remoteLogSegmentDir(remoteLogTabletDir, segment.remoteLogSegmentId()),
-                            segment.remoteLogStartOffset());
-            return new FsPathAndFileName(
-                    remotePath,
-                    FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
-                            + LOG_FILE_SUFFIX);
+            return RemoteLogDownloader.getFsPathAndFileName(remoteLogTabletDir, segment);
         }
     }
 }
