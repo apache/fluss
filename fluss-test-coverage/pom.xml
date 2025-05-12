@@ -253,7 +253,6 @@
                                             com.alibaba.fluss.utils.concurrent.FutureUtils.Timeout
                                         </exclude>
                                         <exclude>com.alibaba.fluss.row.BinarySection</exclude>
-                                        <exclude>com.alibaba.fluss.row.GenericRow</exclude>
                                         <exclude>com.alibaba.fluss.row.arrow.*</exclude>
                                         <exclude>
                                             com.alibaba.fluss.row.columnar.BytesColumnVector.Bytes
