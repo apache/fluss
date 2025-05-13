@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.flink.table.catalog.CatalogBaseTable;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogTable;
 
 import java.util.HashMap;
@@ -40,12 +42,25 @@ public class CatalogTableTestUtils {
         return catalogTable.copy(options);
     }
 
+    /** create a materialized table with a newly added options. */
+    public static CatalogMaterializedTable addOptions(
+            CatalogMaterializedTable materializedTable, Map<String, String> addedOptions) {
+        Map<String, String> options = new HashMap<>(materializedTable.getOptions());
+        options.putAll(addedOptions);
+        return materializedTable.copy(options);
+    }
+
     /**
      * Check the catalog table {@code actualTable} is equal to the catalog table {@code
      * expectedTable} without ignoring schema.
      */
     public static void checkEqualsRespectSchema(
             CatalogTable actualTable, CatalogTable expectedTable) {
+        checkEquals(actualTable, expectedTable, false);
+    }
+
+    public static void checkEqualsRespectSchema(
+            CatalogBaseTable actualTable, CatalogBaseTable expectedTable) {
         checkEquals(actualTable, expectedTable, false);
     }
 
@@ -59,21 +74,63 @@ public class CatalogTableTestUtils {
     }
 
     /**
-     * Check the catalog table {@code actualTable} is equal to the catalog table {@code
+     * Check the catalog materialized table {@code actualTable} is equal to the catalog materialized
+     * table {@code expectedTable} with ignoring schema.
+     */
+    public static void checkEqualsIgnoreSchema(
+            CatalogMaterializedTable actualTable, CatalogMaterializedTable expectedTable) {
+        checkEquals(actualTable, expectedTable, true);
+    }
+
+    /**
+     * Check the catalog base table {@code actualTable} is equal to the catalog base table {@code
      * expectedTable}.
      *
      * @param ignoreSchema whether to ignore schema
      */
     private static void checkEquals(
-            CatalogTable actualTable, CatalogTable expectedTable, boolean ignoreSchema) {
+            CatalogBaseTable actualTable, CatalogBaseTable expectedTable, boolean ignoreSchema) {
         assertThat(actualTable.getTableKind()).isEqualTo(expectedTable.getTableKind());
         if (!ignoreSchema) {
             assertThat(actualTable.getUnresolvedSchema())
                     .isEqualTo(expectedTable.getUnresolvedSchema());
         }
         assertThat(actualTable.getComment()).isEqualTo(expectedTable.getComment());
-        assertThat(actualTable.getPartitionKeys()).isEqualTo(expectedTable.getPartitionKeys());
-        assertThat(actualTable.isPartitioned()).isEqualTo(expectedTable.isPartitioned());
+
+        if (actualTable.getTableKind() == CatalogBaseTable.TableKind.TABLE) {
+            CatalogTable actualCatalogTable = (CatalogTable) actualTable;
+            CatalogTable expectedCatalogTable = (CatalogTable) expectedTable;
+            assertThat(actualCatalogTable.getPartitionKeys())
+                    .isEqualTo(expectedCatalogTable.getPartitionKeys());
+            assertThat(actualCatalogTable.isPartitioned())
+                    .isEqualTo(expectedCatalogTable.isPartitioned());
+        } else if (actualTable.getTableKind() == CatalogBaseTable.TableKind.MATERIALIZED_TABLE) {
+            CatalogMaterializedTable actualMaterializedTable =
+                    (CatalogMaterializedTable) actualTable;
+            CatalogMaterializedTable expectedMaterializedTable =
+                    (CatalogMaterializedTable) expectedTable;
+            assertThat(actualMaterializedTable.getPartitionKeys())
+                    .isEqualTo(expectedMaterializedTable.getPartitionKeys());
+            assertThat(actualMaterializedTable.isPartitioned())
+                    .isEqualTo(expectedMaterializedTable.isPartitioned());
+            assertThat(actualMaterializedTable.getDefinitionFreshness())
+                    .isEqualTo(expectedMaterializedTable.getDefinitionFreshness());
+            assertThat(actualMaterializedTable.getDefinitionQuery())
+                    .isEqualTo(expectedMaterializedTable.getDefinitionQuery());
+            assertThat(actualMaterializedTable.getLogicalRefreshMode())
+                    .isEqualTo(expectedMaterializedTable.getLogicalRefreshMode());
+            assertThat(actualMaterializedTable.getRefreshMode())
+                    .isEqualTo(expectedMaterializedTable.getRefreshMode());
+            assertThat(actualMaterializedTable.getRefreshStatus())
+                    .isEqualTo(expectedMaterializedTable.getRefreshStatus());
+            if (actualMaterializedTable.getRefreshHandlerDescription().isPresent()) {
+                assertThat(actualMaterializedTable.getRefreshHandlerDescription().get())
+                        .isEqualTo(expectedMaterializedTable.getRefreshHandlerDescription().get());
+                assertThat(actualMaterializedTable.getSerializedRefreshHandler())
+                        .isEqualTo(expectedMaterializedTable.getSerializedRefreshHandler());
+            }
+        }
+
         assertOptionsEqual(actualTable.getOptions(), expectedTable.getOptions());
     }
 

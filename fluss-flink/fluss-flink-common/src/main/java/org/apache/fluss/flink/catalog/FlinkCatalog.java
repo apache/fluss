@@ -45,11 +45,14 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
 import org.apache.flink.table.catalog.CatalogFunction;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartition;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.CatalogView;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
@@ -301,12 +304,22 @@ public class FlinkCatalog extends AbstractCatalog {
             }
 
             // should be as a fluss table
-            CatalogTable catalogTable = FlinkConversions.toFlinkTable(tableInfo);
+            CatalogBaseTable catalogBaseTable = FlinkConversions.toFlinkTable(tableInfo);
             // add bootstrap servers option
-            Map<String, String> newOptions = new HashMap<>(catalogTable.getOptions());
+            Map<String, String> newOptions = new HashMap<>(catalogBaseTable.getOptions());
             newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
             newOptions.putAll(securityConfigs);
-            return catalogTable.copy(newOptions);
+            if (CatalogBaseTable.TableKind.TABLE == catalogBaseTable.getTableKind()) {
+                return ((CatalogTable) catalogBaseTable).copy(newOptions);
+            } else if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE
+                    == catalogBaseTable.getTableKind()) {
+                return ((CatalogMaterializedTable) catalogBaseTable).copy(newOptions);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to get table %s in %s, only CatalogTable and CatalogMaterializedTable are supported.",
+                                objectPath, getName()));
+            }
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (isTableNotExist(t)) {
@@ -377,11 +390,14 @@ public class FlinkCatalog extends AbstractCatalog {
                     "CREATE [TEMPORARY] VIEW is not supported for Fluss catalog");
         }
 
-        checkArgument(table instanceof ResolvedCatalogTable, "table should be resolved");
+        checkArgument(
+                table instanceof ResolvedCatalogTable
+                        || table instanceof ResolvedCatalogMaterializedTable,
+                "table should be resolved");
 
         TablePath tablePath = toTablePath(objectPath);
         TableDescriptor tableDescriptor =
-                FlinkConversions.toFlussTable((ResolvedCatalogTable) table);
+                FlinkConversions.toFlussTable((ResolvedCatalogBaseTable<?>) table);
         try {
             admin.createTable(tablePath, tableDescriptor, ignoreIfExist).get();
         } catch (Exception e) {
@@ -413,7 +429,7 @@ public class FlinkCatalog extends AbstractCatalog {
         List<TableChange> flussTableChanges =
                 tableChanges.stream()
                         .filter(Objects::nonNull)
-                        .map(FlinkConversions::toFlussTableChange)
+                        .flatMap(change -> FlinkConversions.toFlussTableChanges(change).stream())
                         .collect(Collectors.toList());
 
         // some connector options are table storage related, not allowed to alter
