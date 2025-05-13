@@ -47,7 +47,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     private final Histogram bytesPerRequest;
 
     // remote log
-    private final Counter remoteFetchBytesCount;
+    private final Counter remoteFetchBytes;
     private final Counter remoteFetchRequestCount;
     private final Counter remoteFetchErrorCount;
 
@@ -64,8 +64,8 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
         fetchRequestCount = new ThreadSafeSimpleCounter();
         meter(MetricNames.SCANNER_FETCH_RATE, new MeterView(fetchRequestCount));
 
-        remoteFetchBytesCount = new ThreadSafeSimpleCounter();
-        meter(MetricNames.SCANNER_REMOTE_FETCH_BYTES_RATE, new MeterView(remoteFetchBytesCount));
+        remoteFetchBytes = new ThreadSafeSimpleCounter();
+        meter(MetricNames.SCANNER_REMOTE_FETCH_BYTES_RATE, new MeterView(remoteFetchBytes));
         remoteFetchRequestCount = new ThreadSafeSimpleCounter();
         meter(MetricNames.SCANNER_REMOTE_FETCH_RATE, new MeterView(remoteFetchRequestCount));
         remoteFetchErrorCount = new ThreadSafeSimpleCounter();
@@ -90,8 +90,8 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
         return bytesPerRequest;
     }
 
-    public Counter remoteFetchBytesCount() {
-        return remoteFetchBytesCount;
+    public Counter remoteFetchBytes() {
+        return remoteFetchBytes;
     }
 
     public Counter remoteFetchRequestCount() {
