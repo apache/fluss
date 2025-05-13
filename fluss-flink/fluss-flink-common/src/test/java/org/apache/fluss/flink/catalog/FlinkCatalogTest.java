@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -31,10 +32,13 @@ import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
@@ -91,6 +95,10 @@ class FlinkCatalogTest {
 
     private static final String CATALOG_NAME = "test-catalog";
     private static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
+
+    private static final FlinkConversionsTest.TestRefreshHandler REFRESH_HANDLER =
+            new FlinkConversionsTest.TestRefreshHandler("jobID: xxx, clusterId: yyy");
+
     static Catalog catalog;
     private final ObjectPath tableInDefaultDb = new ObjectPath(DEFAULT_DB, "t1");
 
@@ -124,6 +132,25 @@ class FlinkCatalogTest {
                         Collections.emptyList(),
                         options);
         return new ResolvedCatalogTable(origin, resolvedSchema);
+    }
+
+    private CatalogMaterializedTable newCatalogMaterializedTable(
+            ResolvedSchema resolvedSchema, Map<String, String> options) {
+        CatalogMaterializedTable origin =
+                CatalogMaterializedTable.newBuilder()
+                        .schema(Schema.newBuilder().fromResolvedSchema(resolvedSchema).build())
+                        .comment("test comment")
+                        .options(options)
+                        .partitionKeys(Collections.emptyList())
+                        .definitionQuery("select first, second, third from t")
+                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
+                        .logicalRefreshMode(CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS)
+                        .refreshMode(CatalogMaterializedTable.RefreshMode.CONTINUOUS)
+                        .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
+                        .refreshHandlerDescription(REFRESH_HANDLER.asSummaryString())
+                        .serializedRefreshHandler(REFRESH_HANDLER.toBytes())
+                        .build();
+        return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
     }
 
     @BeforeAll
@@ -389,6 +416,72 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.createTable(this.tableInDefaultDb, table1, false))
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("Metadata column %s is not supported.", metaDataCol);
+    }
+
+    @Test
+    void testCreateMaterializedTable() throws Exception {
+        Map<String, String> options = new HashMap<>();
+        assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s does not exist in Catalog %s.",
+                                tableInDefaultDb, CATALOG_NAME));
+
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(this.createSchema(), options);
+        catalog.createTable(this.tableInDefaultDb, materializedTable, false);
+
+        assertThat(catalog.tableExists(this.tableInDefaultDb)).isTrue();
+        // create the table again, should throw exception with ignore if exist = false
+        assertThatThrownBy(
+                        () -> catalog.createTable(this.tableInDefaultDb, materializedTable, false))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s already exists in Catalog %s.",
+                                this.tableInDefaultDb, CATALOG_NAME));
+
+        // should be ok since we set ignore if exist = true
+        catalog.createTable(this.tableInDefaultDb, materializedTable, true);
+        // get the table and check
+        CatalogBaseTable tableCreated = catalog.getTable(this.tableInDefaultDb);
+
+        // put bucket key option
+        Map<String, String> addedOptions = new HashMap<>();
+        addedOptions.put(BUCKET_KEY.key(), "first,third");
+        addedOptions.put(BUCKET_NUMBER.key(), "1");
+        CatalogMaterializedTable expectedTable = addOptions(materializedTable, addedOptions);
+        checkEqualsRespectSchema(tableCreated, expectedTable);
+        assertThat(tableCreated.getDescription().get()).isEqualTo("test comment");
+
+        // list tables
+        List<String> tables = catalog.listTables(DEFAULT_DB);
+        assertThat(tables.size()).isEqualTo(1L);
+        assertThat(tables.get(0)).isEqualTo(this.tableInDefaultDb.getObjectName());
+        catalog.dropTable(this.tableInDefaultDb, false);
+        assertThat(catalog.listTables(DEFAULT_DB)).isEmpty();
+
+        // drop the table again, should throw exception with ignoreIfNotExists = false
+        assertThatThrownBy(() -> catalog.dropTable(this.tableInDefaultDb, false))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s does not exist in Catalog %s.",
+                                this.tableInDefaultDb, CATALOG_NAME));
+        // should be ok since we set ignoreIfNotExists = true
+        catalog.dropTable(this.tableInDefaultDb, true);
+
+        // create table from an non-exist db
+        ObjectPath nonExistDbPath = ObjectPath.fromString("non.exist");
+
+        // remove bucket-key
+        materializedTable.getOptions().remove("bucket-key");
+        assertThatThrownBy(() -> catalog.createTable(nonExistDbPath, materializedTable, false))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.",
+                        nonExistDbPath.getDatabaseName(), CATALOG_NAME);
     }
 
     @Test
