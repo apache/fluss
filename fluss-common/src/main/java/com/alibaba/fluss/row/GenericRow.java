@@ -23,7 +23,7 @@ import com.alibaba.fluss.utils.StringUtils;
 import java.util.Arrays;
 
 /**
- * An internal data structure representing data of {@link RowType}..
+ * An internal data structure representing data of {@link RowType}.
  *
  * <p>{@link GenericRow} is a generic implementation of {@link InternalRow} which is backed by an
  * array of Java {@link Object}. A {@link GenericRow} can have an arbitrary number of fields of

@@ -22,7 +22,7 @@ import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for {@link com.alibaba.fluss.row.ProjectedRow}. */
+/** Tests for {@link ProjectedRow}. */
 class ProjectedRowTest {
     @Test
     void testProjectedRows() {
