@@ -108,6 +108,30 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
+    @AfterEach
+    void cleanupAfterTest() {
+        try {
+            // Cancel any running jobs in the environment
+            if (execEnv != null) {
+                try {
+                    execEnv.close();
+                } catch (Exception e) {
+                    // Log and continue
+                    System.err.println(
+                            "Error during execution environment cleanup: " + e.getMessage());
+                }
+            }
+
+            // Force garbage collection to help clean up lingering connections
+            System.gc();
+
+            // Add a small delay to allow resources to be released
+            Thread.sleep(500);
+        } catch (Exception e) {
+            System.err.println("Error during test cleanup: " + e.getMessage());
+        }
+    }
+
     @Test
     public void testCreateTableLike() throws Exception {
         tEnv.executeSql(
@@ -911,6 +935,7 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                                 + " ON src.b = h.name AND h.address = 'address5'",
                         dim);
 
+        waitUtilAllBucketFinishSnapshot(admin, TablePath.of(DEFAULT_DB, dim));
         CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
         List<String> expected = Collections.singletonList("+I[1, name1, address5]");
         assertResultsIgnoreOrder(collected, expected, true);

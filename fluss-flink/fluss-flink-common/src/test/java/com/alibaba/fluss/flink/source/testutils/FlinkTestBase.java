@@ -170,14 +170,21 @@ public class FlinkTestBase {
             List<String> expected,
             boolean closeIterator)
             throws Exception {
-        int expectRecords = expected.size();
-        List<String> actual = new ArrayList<>(expectRecords);
-        for (int i = 0; i < expectRecords; i++) {
-            actual.add(iterator.next().toString());
-        }
-        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
-        if (closeIterator) {
-            iterator.close();
+        try {
+            int expectRecords = expected.size();
+            List<String> actual = new ArrayList<>(expectRecords);
+            for (int i = 0; i < expectRecords; i++) {
+                actual.add(iterator.next().toString());
+            }
+            assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+        } finally {
+            if (closeIterator) {
+                try {
+                    iterator.close();
+                } catch (Exception e) {
+                    System.err.println("Error closing iterator: " + e.getMessage());
+                }
+            }
         }
     }
 
