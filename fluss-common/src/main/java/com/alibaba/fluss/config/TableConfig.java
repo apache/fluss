@@ -24,6 +24,7 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 
+import java.time.Duration;
 import java.util.Optional;
 
 /**
@@ -82,6 +83,14 @@ public class TableConfig {
      */
     public Optional<DataLakeFormat> getDataLakeFormat() {
         return config.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
+    }
+
+    /**
+     * Gets the data lake freshness of the table. It defines the maximum amount of time that the
+     * datalake table's content should lag behind updates to the Fluss table.
+     */
+    public Duration getDataLakeFreshness() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_FRESHNESS);
     }
 
     /** Gets the optional merge engine type of the table. */

@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.server.utils.timer;
 
+import com.alibaba.fluss.utils.clock.Clock;
+
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Timer;
@@ -129,6 +131,7 @@ final class TimingWheel {
     private final AtomicInteger taskCounter;
 
     private final DelayQueue<TimerTaskList> queue;
+    private final Clock clock;
     /** The upper level timing wheel. */
     private volatile TimingWheel overflowWheel;
 
@@ -139,7 +142,8 @@ final class TimingWheel {
             int wheelSize,
             long startMs,
             AtomicInteger taskCounter,
-            DelayQueue<TimerTaskList> queue) {
+            DelayQueue<TimerTaskList> queue,
+            Clock clock) {
         this.tickMs = tickMs;
         this.wheelSize = wheelSize;
         this.interval = tickMs * wheelSize;
@@ -151,13 +155,15 @@ final class TimingWheel {
 
         // Initialize buckets
         for (int i = 0; i < wheelSize; i++) {
-            buckets[i] = new TimerTaskList(taskCounter);
+            buckets[i] = new TimerTaskList(taskCounter, clock);
         }
+        this.clock = clock;
     }
 
     private synchronized void addOverflowWheel() {
         if (overflowWheel == null) {
-            overflowWheel = new TimingWheel(interval, wheelSize, currentTime, taskCounter, queue);
+            overflowWheel =
+                    new TimingWheel(interval, wheelSize, currentTime, taskCounter, queue, clock);
         }
     }
 

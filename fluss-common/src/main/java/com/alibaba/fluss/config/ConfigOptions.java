@@ -1190,6 +1190,15 @@ public class ConfigOptions {
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
                                     + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
 
+    public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
+            key("table.datalake.freshness")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(3))
+                    .withDescription(
+                            "It defines the maximum amount of time that the datalake table's content should lag behind updates to the Fluss table. "
+                                    + "Based on this target freshness, the Fluss service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target. "
+                                    + "If the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.");
+
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
                     .enumType(MergeEngineType.class)

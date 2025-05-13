@@ -28,6 +28,7 @@ import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorEventProcessor;
 import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
 import com.alibaba.fluss.server.coordinator.CoordinatorTestUtils;
+import com.alibaba.fluss.server.coordinator.LakeTableTieringManager;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
@@ -74,6 +75,7 @@ class TableBucketStateMachineTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
+    private LakeTableTieringManager lakeTableTieringManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -102,6 +104,7 @@ class TableBucketStateMachineTest {
                         serverMetadataCache,
                         new MetadataManager(zookeeperClient, new Configuration()),
                         new Configuration());
+        lakeTableTieringManager = new LakeTableTieringManager();
     }
 
     @Test
@@ -235,6 +238,7 @@ class TableBucketStateMachineTest {
                                         TestingClientMetricGroup.newInstance())),
                         coordinatorContext,
                         autoPartitionManager,
+                        lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
                         new Configuration(),
                         Executors.newFixedThreadPool(

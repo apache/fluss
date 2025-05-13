@@ -34,7 +34,7 @@ public class DefaultTimerTest {
 
     @BeforeEach
     void setup() {
-        timer = new DefaultTimer("test", 1, 3, TimeUnit.NANOSECONDS.toMillis(System.nanoTime()));
+        timer = new DefaultTimer("test", 1, 3);
     }
 
     @AfterEach

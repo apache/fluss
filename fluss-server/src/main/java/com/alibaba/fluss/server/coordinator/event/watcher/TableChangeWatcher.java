@@ -16,6 +16,8 @@
 
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.TableConfig;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -36,7 +38,6 @@ import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
-import com.alibaba.fluss.utils.AutoPartitionStrategy;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -140,11 +141,15 @@ public class TableChangeWatcher {
                                 break;
                             }
                             TableRegistration table = TableZNode.decode(oldData.getData());
+                            TableConfig tableConfig =
+                                    new TableConfig(Configuration.fromMap(table.properties));
                             eventManager.put(
                                     new DropTableEvent(
                                             table.tableId,
-                                            AutoPartitionStrategy.from(table.properties)
-                                                    .isAutoPartitionEnabled()));
+                                            tableConfig
+                                                    .getAutoPartitionStrategy()
+                                                    .isAutoPartitionEnabled(),
+                                            tableConfig.isDataLakeEnabled()));
                         }
                         break;
                     }

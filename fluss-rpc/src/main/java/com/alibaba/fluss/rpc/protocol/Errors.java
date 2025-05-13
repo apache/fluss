@@ -26,6 +26,7 @@ import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.DuplicateSequenceException;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
+import com.alibaba.fluss.exception.FencedTieringEpochException;
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
@@ -199,7 +200,9 @@ public enum Errors {
     SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new),
     AUTHORIZATION_EXCEPTION(48, "Authorization failed", AuthorizationException::new),
     BUCKET_MAX_NUM_EXCEPTION(
-            49, "Exceed the maximum number of buckets", TooManyBucketsException::new);
+            49, "Exceed the maximum number of buckets", TooManyBucketsException::new),
+    FENCED_TIERING_EPOCH_EXCEPTION(
+            50, "The tiering epoch is invalid.", FencedTieringEpochException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

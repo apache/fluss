@@ -132,6 +132,7 @@ class CoordinatorEventProcessorTest {
     private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private AutoPartitionManager autoPartitionManager;
+    private LakeTableTieringManager lakeTableTieringManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
 
     @BeforeAll
@@ -159,6 +160,7 @@ class CoordinatorEventProcessorTest {
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
+        lakeTableTieringManager = new LakeTableTieringManager();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         eventProcessor = buildCoordinatorEventProcessor();
@@ -716,6 +718,7 @@ class CoordinatorEventProcessorTest {
                 serverMetadataCache,
                 testCoordinatorChannelManager,
                 autoPartitionManager,
+                lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")));
