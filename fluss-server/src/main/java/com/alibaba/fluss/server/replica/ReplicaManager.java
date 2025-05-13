@@ -38,6 +38,7 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.rpc.RpcClient;
+import com.alibaba.fluss.rpc.entity.EpochAndLogEndOffsetForBucket;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.LimitScanResultForBucket;
 import com.alibaba.fluss.rpc.entity.ListOffsetsResultForBucket;
@@ -60,6 +61,7 @@ import com.alibaba.fluss.server.entity.NotifyLakeTableOffsetData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.entity.NotifyRemoteLogOffsetsData;
+import com.alibaba.fluss.server.entity.OffsetForLeaderEpochData;
 import com.alibaba.fluss.server.entity.StopReplicaData;
 import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
 import com.alibaba.fluss.server.kv.KvManager;
@@ -699,6 +701,35 @@ public class ReplicaManager {
                         responseCallback.accept(new NotifyLakeTableOffsetResponse());
                     }
                 });
+    }
+
+    public void lastLogOffsetForLeaderEpoch(
+            List<OffsetForLeaderEpochData> offsetForLeaderEpochDataList,
+            Consumer<List<EpochAndLogEndOffsetForBucket>> responseCallback) {
+        List<EpochAndLogEndOffsetForBucket> result = new ArrayList<>();
+        for (OffsetForLeaderEpochData epochData : offsetForLeaderEpochDataList) {
+            TableBucket tb = epochData.getTableBucket();
+            try {
+                Replica replica = getReplicaOrException(tb);
+                Optional<Integer> currentLeaderEpochOpt;
+                // TODO -1 change to NO_LEADER_EPOCH
+                if (epochData.getCurrentLeaderEpoch() == -1) {
+                    currentLeaderEpochOpt = Optional.empty();
+                } else {
+                    currentLeaderEpochOpt = Optional.of(epochData.getCurrentLeaderEpoch());
+                }
+                result.add(
+                        replica.lastLogOffsetForLeaderEpoch(
+                                currentLeaderEpochOpt, epochData.getLeaderEpoch(), true));
+            } catch (Exception e) {
+                LOG.error(
+                        "Error processing fetch last offset for leader epoch operation on replica {}",
+                        tb,
+                        e);
+                result.add(new EpochAndLogEndOffsetForBucket(tb, ApiError.fromThrowable(e)));
+            }
+        }
+        responseCallback.accept(result);
     }
 
     /**

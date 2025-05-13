@@ -17,7 +17,9 @@
 package com.alibaba.fluss.server.replica.fetcher;
 
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.rpc.entity.EpochAndLogEndOffsetForBucket;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
+import com.alibaba.fluss.server.entity.OffsetForLeaderEpochData;
 
 import java.util.Map;
 import java.util.Optional;
@@ -36,6 +38,10 @@ interface LeaderEndpoint {
     CompletableFuture<Long> fetchLocalLogStartOffset(TableBucket tableBucket);
 
     CompletableFuture<Long> fetchLeaderEndOffsetSnapshot(TableBucket tableBucket);
+
+    /** Fetches the logEndOffset for leader epoch of the given table bucket. */
+    CompletableFuture<Map<TableBucket, EpochAndLogEndOffsetForBucket>> fetchOffsetForLeaderEpoch(
+            Map<TableBucket, OffsetForLeaderEpochData> leaderEpochDataMap);
 
     /**
      * Given a fetchLogRequest, carries out the expected request and returns the results from

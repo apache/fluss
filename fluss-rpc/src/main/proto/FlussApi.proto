@@ -506,6 +506,16 @@ message DropAclsResponse{
   repeated PbDropAclsFilterResult filter_results = 1;
 }
 
+// OffsetForLeaderEpochRequest and response
+message OffsetForLeaderEpochRequest {
+  required int32 follower_server_id = 1;  // value -1 indicate the request from client.
+  repeated PbOffsetForLeaderEpochReqForTable tables_req = 2;
+}
+
+message OffsetForLeaderEpochResponse {
+  repeated PbOffsetForLeaderEpochRespForTable tables_resp = 1;
+}
+
 // --------------- Inner classes ----------------
 message PbApiVersion {
   required int32 api_key = 1;
@@ -815,4 +825,31 @@ message PbDropAclsMatchingAcl {
   required PbAclInfo acl = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
+}
+
+message PbOffsetForLeaderEpochReqForTable {
+  required int64 table_id = 1;
+  repeated PbOffsetForLeaderEpochReqForBucket buckets_req = 2;
+}
+
+
+message PbOffsetForLeaderEpochReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int32 current_leader_epoch = 3;
+  required int32 leader_epoch = 4;
+}
+
+message PbOffsetForLeaderEpochRespForTable {
+  required int64 table_id = 1;
+  repeated PbOffsetForLeaderEpochRespForBucket buckets_resp = 2;
+}
+
+message PbOffsetForLeaderEpochRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  optional int32 leader_epoch = 5;
+  optional int64 log_end_offset = 6;
 }

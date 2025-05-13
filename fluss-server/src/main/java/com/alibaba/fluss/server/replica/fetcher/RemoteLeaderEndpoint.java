@@ -20,6 +20,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.rpc.entity.EpochAndLogEndOffsetForBucket;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
@@ -28,7 +29,12 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.server.entity.OffsetForLeaderEpochData;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
+import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -39,9 +45,12 @@ import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeOffsetForLeaderEpochRequest;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
 final class RemoteLeaderEndpoint implements LeaderEndpoint {
+    private static final Logger LOG = LoggerFactory.getLogger(RemoteLeaderEndpoint.class);
+
     private final int followerServerId;
     private final int remoteServerId;
     private final TabletServerGateway tabletServerGateway;
@@ -87,6 +96,22 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     @Override
     public CompletableFuture<Long> fetchLeaderEndOffsetSnapshot(TableBucket tableBucket) {
         return fetchLogOffset(tableBucket, ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE);
+    }
+
+    @Override
+    public CompletableFuture<Map<TableBucket, EpochAndLogEndOffsetForBucket>>
+            fetchOffsetForLeaderEpoch(
+                    Map<TableBucket, OffsetForLeaderEpochData> leaderEpochDataMap) {
+        if (leaderEpochDataMap.isEmpty()) {
+            LOG.info(
+                    "Skipping send OffsetForLeaderEpochRequest since all tableBuckets don't have an epoch");
+            return CompletableFuture.completedFuture(new HashMap<>());
+        }
+
+        return tabletServerGateway
+                .offsetForLeaderEpoch(
+                        makeOffsetForLeaderEpochRequest(followerServerId, leaderEpochDataMap))
+                .thenApply(ServerRpcMessageUtils::getOffsetForLeaderEpochData);
     }
 
     @Override

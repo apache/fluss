@@ -63,6 +63,7 @@ import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.exception.TimeoutException;
 import com.alibaba.fluss.exception.TooManyBucketsException;
 import com.alibaba.fluss.exception.TooManyPartitionsException;
+import com.alibaba.fluss.exception.UnknownLeaderEpochException;
 import com.alibaba.fluss.exception.UnknownServerException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
@@ -199,7 +200,11 @@ public enum Errors {
     SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new),
     AUTHORIZATION_EXCEPTION(48, "Authorization failed", AuthorizationException::new),
     BUCKET_MAX_NUM_EXCEPTION(
-            49, "Exceed the maximum number of buckets", TooManyBucketsException::new);
+            49, "Exceed the maximum number of buckets", TooManyBucketsException::new),
+    UNKNOWN_LEADER_EPOCH_EXCEPTION(
+            50,
+            "The leaderEpoch in the request is newer than the leaderEpoch on the tabletServer.",
+            UnknownLeaderEpochException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
