@@ -19,6 +19,7 @@ package com.alibaba.fluss.security.auth;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
+import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 
 /**
  * Authenticator for server side.
@@ -29,6 +30,9 @@ import com.alibaba.fluss.security.acl.FlussPrincipal;
 public interface ServerAuthenticator {
 
     String protocol();
+
+    /** Initialize the authenticator. */
+    default void initialize(AuthenticateContext context) {}
 
     /**
      * * Generates the challenge based on the client's token, then sends it back to the client. This
@@ -79,4 +83,9 @@ public interface ServerAuthenticator {
      * complete).
      */
     FlussPrincipal createPrincipal();
+
+    /** The context of the authentication process. */
+    interface AuthenticateContext {
+        Channel channel();
+    }
 }

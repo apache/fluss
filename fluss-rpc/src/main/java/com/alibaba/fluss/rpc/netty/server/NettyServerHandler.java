@@ -19,6 +19,7 @@ package com.alibaba.fluss.rpc.netty.server;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.NetworkException;
+import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.record.send.Send;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
@@ -32,6 +33,7 @@ import com.alibaba.fluss.rpc.protocol.MessageCodec;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
@@ -162,6 +164,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         super.channelActive(ctx);
         this.ctx = ctx;
         this.remoteAddress = ctx.channel().remoteAddress();
+        authenticator.initialize(new DefaultAuthenticateContext());
         switchState(
                 authenticator.isCompleted()
                         ? ConnectionState.READY
@@ -316,14 +319,27 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
 
         AuthenticateResponse authenticateResponse = new AuthenticateResponse();
-        if (!authenticator.isCompleted()) {
-            byte[] token = authenticateRequest.getToken();
-            byte[] challenge = authenticator.evaluateResponse(token);
-            if (!authenticator.isCompleted() && challenge != null) {
-                authenticateResponse.setChallenge(challenge);
+        try {
+            if (!authenticator.isCompleted()) {
+                byte[] token = authenticateRequest.getToken();
+                byte[] challenge = authenticator.evaluateResponse(token);
+                if (challenge != null) {
+                    authenticateResponse.setChallenge(challenge);
+                }
             }
+            future.complete(authenticateResponse);
+        } catch (AuthenticationException e) {
+            if (e instanceof RetriableAuthenticationException) {
+                LOG.warn(
+                        "Authentication from {} failed due to a retriable exception: {}. Reinitializing authenticator for subsequent retries.",
+                        ctx.channel().remoteAddress(),
+                        e.getMessage(),
+                        e);
+                authenticator.initialize(new DefaultAuthenticateContext());
+            }
+
+            future.completeExceptionally(e);
         }
-        future.complete(authenticateResponse);
 
         if (authenticator.isCompleted()) {
             switchState(ConnectionState.READY);
@@ -347,6 +363,13 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
         public boolean isAuthenticating() {
             return this == AUTHENTICATING;
+        }
+    }
+
+    private class DefaultAuthenticateContext implements ServerAuthenticator.AuthenticateContext {
+        @Override
+        public Channel channel() {
+            return ctx.channel();
         }
     }
 }

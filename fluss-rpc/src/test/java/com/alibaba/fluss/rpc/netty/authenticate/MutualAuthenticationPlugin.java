@@ -19,6 +19,7 @@ package com.alibaba.fluss.rpc.netty.authenticate;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.AuthenticationException;
+import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.auth.ClientAuthenticationPlugin;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
@@ -57,8 +58,15 @@ public class MutualAuthenticationPlugin
     }
 
     private static class ClientAuthenticatorImpl implements ClientAuthenticator {
-        private boolean isCompleted = false;
-        private int initialSalt;
+        private enum Status {
+            SEND_CLIENT_FIRST_MESSAGE,
+            RECEIVE_SERVER_FIRST_MESSAGE,
+            RECEIVE_SERVER_FINAL_MESSAGE,
+            COMPLETED
+        }
+
+        private Status status;
+        Integer initialSalt;
         private final int errorType;
 
         public ClientAuthenticatorImpl(Configuration configuration) {
@@ -71,51 +79,71 @@ public class MutualAuthenticationPlugin
         }
 
         @Override
+        public void initialize(AuthenticateContext context) {
+            this.status = Status.SEND_CLIENT_FIRST_MESSAGE;
+            this.initialSalt = null;
+        }
+
+        @Override
         public byte[] authenticate(byte[] data) throws AuthenticationException {
-            if (isCompleted) {
-                return null;
+            switch (status) {
+                case SEND_CLIENT_FIRST_MESSAGE:
+                    initialSalt =
+                            isError(
+                                            errorType,
+                                            ErrorType.SERVER_NO_CHALLENGE,
+                                            ErrorType.SERVER_ERROR_CHALLENGE,
+                                            ErrorType.RETRIABLE_EXCEPTION)
+                                    ? errorType
+                                    : generateInitialSalt();
+                    status = Status.RECEIVE_SERVER_FIRST_MESSAGE;
+                    return String.valueOf(initialSalt).getBytes();
+                case RECEIVE_SERVER_FIRST_MESSAGE:
+                    int challenge = parseToken(data);
+                    if (challenge == initialSalt + 1) {
+                        status = Status.RECEIVE_SERVER_FINAL_MESSAGE;
+                        return String.valueOf(
+                                        isError(errorType, ErrorType.CLIENT_ERROR_SECOND_TOKEN)
+                                                ? errorType
+                                                : challenge + 1)
+                                .getBytes();
+                    } else {
+                        throw new AuthenticationException(
+                                "Invalid challenge value: expected "
+                                        + (initialSalt + 1)
+                                        + ", but got "
+                                        + challenge);
+                    }
+                case RECEIVE_SERVER_FINAL_MESSAGE:
+                    if (data.length == 0) {
+                        status = Status.COMPLETED;
+                        return null;
+                    } else {
+                        throw new AuthenticationException(
+                                "Invalid token value: expected empty token, but got "
+                                        + new String(data));
+                    }
+                default:
+                    return null;
             }
-
-            // Initial token
-            if (data.length == 0) {
-                initialSalt = generateInitialSalt();
-                return String.valueOf(
-                                isError(
-                                                errorType,
-                                                ErrorType.SERVER_NO_CHALLENGE,
-                                                ErrorType.SERVER_ERROR_CHALLENGE)
-                                        ? errorType
-                                        : initialSalt)
-                        .getBytes();
-            }
-
-            int challenge = parseToken(data);
-            if (challenge == initialSalt + 1) {
-                isCompleted = true;
-                return String.valueOf(
-                                isError(errorType, ErrorType.CLIENT_ERROR_SECOND_TOKEN)
-                                        ? errorType
-                                        : challenge + 1)
-                        .getBytes();
-            }
-
-            throw new AuthenticationException(
-                    "Invalid challenge value: expected "
-                            + (initialSalt + 1)
-                            + ", but got "
-                            + challenge);
         }
 
         @Override
         public boolean isCompleted() {
-            return isCompleted;
+            return status == Status.COMPLETED;
         }
     }
 
     private static class ServerAuthenticatorImpl implements ServerAuthenticator {
-        private boolean isCompleted = false;
-        private boolean firstAuthRequest = true;
-        private int initialSalt;
+        private enum Status {
+            RECEIVE_CLIENT_FIRST_MESSAGE,
+            RECEIVE_CLIENT_FINAL_MESSAGE,
+            COMPLETED
+        }
+
+        private Integer initialSalt;
+        private int retryNumber = 0;
+        private Status status = Status.RECEIVE_CLIENT_FIRST_MESSAGE;
 
         @Override
         public String protocol() {
@@ -123,33 +151,43 @@ public class MutualAuthenticationPlugin
         }
 
         @Override
+        public void initialize(AuthenticateContext context) {
+            this.status = Status.RECEIVE_CLIENT_FIRST_MESSAGE;
+            this.initialSalt = null;
+        }
+
+        @Override
         public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
             int tokenValue = parseToken(token);
+            switch (status) {
+                case RECEIVE_CLIENT_FIRST_MESSAGE:
+                    if (isError(tokenValue, ErrorType.SERVER_NO_CHALLENGE)) {
+                        return null;
+                    }
+                    if (isError(tokenValue, ErrorType.SERVER_ERROR_CHALLENGE)) {
+                        return "-1".getBytes();
+                    }
+                    if (isError(tokenValue, ErrorType.RETRIABLE_EXCEPTION) && retryNumber++ < 3) {
+                        throw new RetriableAuthenticationException("Retriable exception");
+                    }
 
-            // If mock error, return null.
-            if (isError(tokenValue, ErrorType.SERVER_NO_CHALLENGE)) {
-                return null;
+                    initialSalt = tokenValue + 1;
+                    status = Status.RECEIVE_CLIENT_FINAL_MESSAGE;
+                    return String.valueOf(initialSalt).getBytes();
+                case RECEIVE_CLIENT_FINAL_MESSAGE:
+                    if (tokenValue == initialSalt + 1) {
+                        status = Status.COMPLETED;
+                        return new byte[0];
+                    } else {
+                        throw new IllegalArgumentException(
+                                "Invalid token value: expected "
+                                        + (initialSalt + 1)
+                                        + ", but got "
+                                        + tokenValue);
+                    }
+                default:
+                    return null;
             }
-            if (isError(tokenValue, ErrorType.SERVER_ERROR_CHALLENGE)) {
-                return "-1".getBytes();
-            }
-
-            if (firstAuthRequest) {
-                initialSalt = tokenValue + 1;
-                firstAuthRequest = false;
-                return String.valueOf(initialSalt).getBytes();
-            }
-
-            if (tokenValue == initialSalt + 1) {
-                isCompleted = true;
-                return new byte[0];
-            }
-
-            throw new IllegalArgumentException(
-                    "Invalid token value: expected "
-                            + (initialSalt + 1)
-                            + ", but got "
-                            + tokenValue);
         }
 
         @Override
@@ -159,7 +197,7 @@ public class MutualAuthenticationPlugin
 
         @Override
         public boolean isCompleted() {
-            return isCompleted;
+            return status == Status.COMPLETED;
         }
     }
 
@@ -187,7 +225,8 @@ public class MutualAuthenticationPlugin
         NONE(-1),
         SERVER_NO_CHALLENGE(-2),
         SERVER_ERROR_CHALLENGE(-3),
-        CLIENT_ERROR_SECOND_TOKEN(-4);
+        CLIENT_ERROR_SECOND_TOKEN(-4),
+        RETRIABLE_EXCEPTION(-5);
 
         final int code;
 

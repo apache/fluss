@@ -52,7 +52,7 @@ public class ExponentialBackoffTest {
         ExponentialBackoff exponentialBackoff = new ExponentialBackoff(100, 2, 400, 0.0);
         assertThat(exponentialBackoff.backoff(0)).isEqualTo(100);
         assertThat(exponentialBackoff.backoff(1)).isEqualTo(200);
-        assertThat(exponentialBackoff.backoff(2)).isEqualTo(300);
+        assertThat(exponentialBackoff.backoff(2)).isEqualTo(400);
         assertThat(exponentialBackoff.backoff(3)).isEqualTo(400);
     }
 }
