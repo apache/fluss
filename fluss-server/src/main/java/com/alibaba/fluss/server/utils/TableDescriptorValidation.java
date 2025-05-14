@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.utils;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -32,11 +33,16 @@ import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
+import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static com.alibaba.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPES;
 
 /** Validator of {@link TableDescriptor}. */
@@ -72,6 +78,23 @@ public class TableDescriptorValidation {
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
+        checkSystemColumns(schema);
+    }
+
+    @VisibleForTesting
+    static void checkSystemColumns(RowType schema) {
+        List<String> fieldNames = schema.getFieldNames();
+        List<String> systemColumns =
+                Arrays.asList(OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME, BUCKET_COLUMN_NAME);
+        List<String> unsupportedColumns =
+                fieldNames.stream().filter(systemColumns::contains).collect(Collectors.toList());
+        if (!unsupportedColumns.isEmpty()) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Unsupported columns: %s. %s are system columns, please don't use them.",
+                            String.join(", ", unsupportedColumns),
+                            String.join(", ", systemColumns)));
+        }
     }
 
     private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {
