@@ -20,6 +20,7 @@ import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
+import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
@@ -49,6 +50,10 @@ public class CatalogExceptionUtils {
 
     public static boolean isTableAlreadyExist(Throwable throwable) {
         return throwable instanceof TableAlreadyExistException;
+    }
+
+    public static boolean isTableInvalid(Throwable throwable) {
+        return throwable instanceof InvalidTableException;
     }
 
     public static boolean isTableNotPartitioned(Throwable throwable) {

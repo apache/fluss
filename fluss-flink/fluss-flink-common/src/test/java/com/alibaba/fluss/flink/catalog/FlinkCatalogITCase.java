@@ -19,6 +19,7 @@ package com.alibaba.fluss.flink.catalog;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
@@ -40,7 +41,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -61,7 +65,17 @@ abstract class FlinkCatalogITCase {
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder().setNumOfTabletServers(1).build();
+            FlussClusterExtension.builder()
+                    .setNumOfTabletServers(1)
+                    .setClusterConf(initClusterConf())
+                    .build();
+
+    static Configuration initClusterConf() {
+        Configuration clusterConf = new Configuration();
+        // use a small check interval to cleanup partitions quickly
+        clusterConf.set(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL, Duration.ofSeconds(3));
+        return clusterConf;
+    }
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
@@ -194,27 +208,32 @@ abstract class FlinkCatalogITCase {
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_partitioned_table");
 
         // 1. first create.
-        tEnv.executeSql("create table test_partitioned_table (a int, b string) partitioned by (b)");
+        tEnv.executeSql(
+                "create table test_partitioned_table (a int, b string, dt string) partitioned by (b,dt)");
         Schema.Builder schemaBuilder = Schema.newBuilder();
-        schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
+        schemaBuilder
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("dt", DataTypes.STRING());
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         List<String> partitionKeys = table.getPartitionKeys();
-        assertThat(partitionKeys).isEqualTo(Collections.singletonList("b"));
+        assertThat(partitionKeys).isEqualTo(Arrays.asList("b", "dt"));
 
         // 2. add partitions.
-        tEnv.executeSql("alter table test_partitioned_table add partition (b = 1)");
-        tEnv.executeSql("alter table test_partitioned_table add partition (b = 2)");
-        tEnv.executeSql("alter table test_partitioned_table add partition (b = 3)");
-        List<String> expectedShowPartitionsResult = Arrays.asList("+I[b=1]", "+I[b=2]", "+I[b=3]");
+        tEnv.executeSql("alter table test_partitioned_table add partition (b = 1,dt = 1)");
+        tEnv.executeSql("alter table test_partitioned_table add partition (b = 2,dt = 1)");
+        tEnv.executeSql("alter table test_partitioned_table add partition (b = 3,dt = 1)");
+        List<String> expectedShowPartitionsResult =
+                Arrays.asList("+I[b=1/dt=1]", "+I[b=2/dt=1]", "+I[b=3/dt=1]");
         CloseableIterator<Row> showPartitionIterator =
                 tEnv.executeSql("show partitions test_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
         // 3. drop partitions.
-        tEnv.executeSql("alter table test_partitioned_table drop partition (b = 1)");
-        expectedShowPartitionsResult = Arrays.asList("+I[b=2]", "+I[b=3]");
+        tEnv.executeSql("alter table test_partitioned_table drop partition (b = 1,dt = 1)");
+        expectedShowPartitionsResult = Arrays.asList("+I[b=2/dt=1]", "+I[b=3/dt=1]");
         showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
@@ -222,7 +241,7 @@ abstract class FlinkCatalogITCase {
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
-                                                "show partitions test_partitioned_table partition (b=2)")
+                                                "show partitions test_partitioned_table partition (b=2,dt=1)")
                                         .collect())
                 .rootCause()
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -246,7 +265,7 @@ abstract class FlinkCatalogITCase {
         assertThat(partitionKeys).isEqualTo(Collections.singletonList("b"));
 
         TablePath tablePath = new TablePath(DEFAULT_DB, "test_auto_partitioned_table");
-        FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
         int currentYear = LocalDate.now().getYear();
         List<String> expectedShowPartitionsResult =
                 Arrays.asList("+I[b=" + currentYear + "]", "+I[b=" + (currentYear + 1) + "]");
@@ -280,6 +299,129 @@ abstract class FlinkCatalogITCase {
         expectedShowPartitionsResult = Collections.singletonList("+I[b=" + currentYear + "]");
         showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+    }
+
+    @Test
+    void testInvalidAutoPartitionedTableWithMultiPartitionKeys() {
+        // 1. test invalid auto partition table.
+        // not specify auto partition key
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
+                                                + "with ('table.auto-partition.enabled' = 'true',"
+                                                + " 'table.auto-partition.time-unit' = 'day'"
+                                                + ")"))
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "Currently, auto partitioned table must set one auto partition key when it has multiple partition keys. Please set table property 'table.auto-partition.key'.");
+
+        // specified auto partition key not in partition keys
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
+                                                + "with ('table.auto-partition.enabled' = 'true',"
+                                                + " 'table.auto-partition.time-unit' = 'day',"
+                                                + " 'table.auto-partition.key' = 'a'"
+                                                + ")"))
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "The specified key for auto partitioned table is not a partition key. Your key 'a' is not in key list [b, c, dt]");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
+                                                + "with ('table.auto-partition.enabled' = 'true',"
+                                                + " 'table.auto-partition.time-unit' = 'day',"
+                                                + " 'table.auto-partition.key' = 'dt',"
+                                                + " 'table.auto-partition.num-precreate' = '2'"
+                                                + ")"))
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "For a partitioned table with multiple partition keys, auto pre-create is unsupported and this value must be set to 0, but is 2");
+    }
+
+    @Test
+    void testAutoPartitionedTableWithMultiPartitionKeys() throws Exception {
+        String tblName = "test_auto_partitioned_table_with_multi_partition_keys";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
+
+        // 1. test add table.
+        tEnv.executeSql(
+                "create table "
+                        + tblName
+                        + " (a int, b string, c string, hh string) partitioned by (b,c,hh) "
+                        + "with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.key' = 'hh',"
+                        + " 'table.auto-partition.num-retention' = '2',"
+                        + " 'table.auto-partition.time-unit' = 'hour')");
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        schemaBuilder
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.STRING())
+                .column("hh", DataTypes.STRING());
+        Schema expectedSchema = schemaBuilder.build();
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        List<String> partitionKeys = table.getPartitionKeys();
+        assertThat(partitionKeys).isEqualTo(Arrays.asList("b", "c", "hh"));
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key()))
+                .isEqualTo("0");
+        TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
+        String datetimePattern = "yyyyMMddHH";
+        String minus3hour =
+                LocalDateTime.now()
+                        .minusHours(3)
+                        .format(DateTimeFormatter.ofPattern(datetimePattern));
+        String minus2hour =
+                LocalDateTime.now()
+                        .minusHours(2)
+                        .format(DateTimeFormatter.ofPattern(datetimePattern));
+        String minus1hour =
+                LocalDateTime.now()
+                        .minusHours(1)
+                        .format(DateTimeFormatter.ofPattern(datetimePattern));
+
+        // 2. test add partitions.
+        tEnv.executeSql(
+                String.format(
+                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus3hour));
+        tEnv.executeSql(
+                String.format(
+                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus3hour));
+        tEnv.executeSql(
+                String.format(
+                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus2hour));
+        tEnv.executeSql(
+                String.format(
+                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus2hour));
+        tEnv.executeSql(
+                String.format(
+                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus1hour));
+        tEnv.executeSql(
+                String.format(
+                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus1hour));
+        List<String> expectDroppedPartitions =
+                Arrays.asList(
+                        String.format("1$1$%s", minus3hour), String.format("1$2$%s", minus3hour));
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsDropped(tablePath, expectDroppedPartitions);
+
+        List<String> expectedShowPartitionsResult =
+                Arrays.asList(
+                        "+I[b=1/c=1/hh=" + minus1hour + "]",
+                        "+I[b=1/c=2/hh=" + minus1hour + "]",
+                        "+I[b=1/c=1/hh=" + minus2hour + "]",
+                        "+I[b=1/c=2/hh=" + minus2hour + "]");
+
+        CloseableIterator<Row> showPartitionIterator =
+                tEnv.executeSql("show partitions " + tblName).collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
     }
 

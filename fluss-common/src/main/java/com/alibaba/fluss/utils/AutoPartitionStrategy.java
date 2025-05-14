@@ -27,6 +27,7 @@ import java.util.TimeZone;
 public class AutoPartitionStrategy {
 
     private final boolean autoPartitionEnable;
+    private final String key;
     private final AutoPartitionTimeUnit timeUnit;
     private final int numPreCreate;
     private final int numToRetain;
@@ -34,11 +35,13 @@ public class AutoPartitionStrategy {
 
     private AutoPartitionStrategy(
             boolean autoPartitionEnable,
+            String key,
             AutoPartitionTimeUnit autoPartitionTimeUnit,
             int numPreCreate,
             int numToRetain,
             TimeZone timeZone) {
         this.autoPartitionEnable = autoPartitionEnable;
+        this.key = key;
         this.timeUnit = autoPartitionTimeUnit;
         this.numPreCreate = numPreCreate;
         this.numToRetain = numToRetain;
@@ -52,6 +55,7 @@ public class AutoPartitionStrategy {
     public static AutoPartitionStrategy from(Configuration conf) {
         return new AutoPartitionStrategy(
                 conf.getBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED),
+                conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_KEY),
                 conf.get(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION),
@@ -60,6 +64,10 @@ public class AutoPartitionStrategy {
 
     public boolean isAutoPartitionEnabled() {
         return autoPartitionEnable;
+    }
+
+    public String key() {
+        return key;
     }
 
     public AutoPartitionTimeUnit timeUnit() {

@@ -99,6 +99,13 @@ public class PartitionUtils {
             ZonedDateTime current,
             int offset,
             AutoPartitionTimeUnit timeUnit) {
+        String autoPartitionFieldSpec = generateAutoPartitionTime(current, offset, timeUnit);
+
+        return ResolvedPartitionSpec.fromPartitionName(partitionKeys, autoPartitionFieldSpec);
+    }
+
+    public static String generateAutoPartitionTime(
+            ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
         String autoPartitionFieldSpec;
         switch (timeUnit) {
             case YEAR:
@@ -120,8 +127,7 @@ public class PartitionUtils {
             default:
                 throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
         }
-
-        return ResolvedPartitionSpec.fromPartitionName(partitionKeys, autoPartitionFieldSpec);
+        return autoPartitionFieldSpec;
     }
 
     private static String getFormattedTime(ZonedDateTime zonedDateTime, String format) {

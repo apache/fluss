@@ -578,11 +578,11 @@ abstract class FlinkTableSinkITCase {
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // create two partitions, write data to the new partitions
-        List<String> newPartitions = Arrays.asList("2000", "2001");
+        List<String> newPartitions = Arrays.asList("2030", "2031");
         tEnv.executeSql(
-                String.format("alter table %s add partition (c = '%s')", tableName, "2000"));
+                String.format("alter table %s add partition (c = '%s')", tableName, "2030"));
         tEnv.executeSql(
-                String.format("alter table %s add partition (c = '%s')", tableName, "2001"));
+                String.format("alter table %s add partition (c = '%s')", tableName, "2031"));
 
         // insert into the new partition again, check we can read the data
         // in new partitions
@@ -599,11 +599,11 @@ abstract class FlinkTableSinkITCase {
         // test insert new added partitions
         tEnv.executeSql(
                         String.format(
-                                "INSERT INTO %s PARTITION (c = 2000) values (22, 2222), (33, 3333)",
+                                "INSERT INTO %s PARTITION (c = 2030) values (22, 2222), (33, 3333)",
                                 tableName))
                 .await();
         assertResultsIgnoreOrder(
-                rowIter, Arrays.asList("+I[22, 2222, 2000]", "+I[33, 3333, 2000]"), true);
+                rowIter, Arrays.asList("+I[22, 2222, 2030]", "+I[33, 3333, 2030]"), true);
     }
 
     @Test

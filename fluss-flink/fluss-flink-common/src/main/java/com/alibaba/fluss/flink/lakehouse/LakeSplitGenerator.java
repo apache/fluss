@@ -223,7 +223,7 @@ public class LakeSplitGenerator {
                 "Must only one partition key for paimon table %, but got %s, the partition keys are: ",
                 tableInfo.getTablePath(),
                 partitionKeys.size(),
-                partitionKeys.size());
+                partitionKeys);
         return Collections.singletonMap(partitionKeys.get(0), partitionName);
     }
 

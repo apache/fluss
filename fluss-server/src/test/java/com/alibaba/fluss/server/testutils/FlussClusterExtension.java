@@ -87,6 +87,7 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopBucke
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.zk.ZooKeeperTestUtils.createZooKeeperClient;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static com.alibaba.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -690,13 +691,13 @@ public final class FlussClusterExtension
         }
     }
 
-    public Map<String, Long> waitUtilPartitionAllReady(TablePath tablePath) {
+    public Map<String, Long> waitUntilPartitionAllReady(TablePath tablePath) {
         int preCreatePartitions = ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue();
         // wait util table partition is created
         return waitUntilPartitionsCreated(tablePath, preCreatePartitions);
     }
 
-    public Map<String, Long> waitUtilPartitionAllReady(TablePath tablePath, int expectCount) {
+    public Map<String, Long> waitUntilPartitionAllReady(TablePath tablePath, int expectCount) {
         return waitUntilPartitionsCreated(tablePath, expectCount);
     }
 
@@ -713,6 +714,22 @@ public final class FlussClusterExtension
                 },
                 Duration.ofMinutes(1),
                 "Fail to wait " + expectCount + " partitions created");
+    }
+
+    public void waitUntilPartitionsDropped(TablePath tablePath, List<String> droppedPartitions) {
+        waitUtil(
+                () -> {
+                    Map<String, Long> partitions =
+                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                    for (String droppedPartition : droppedPartitions) {
+                        if (partitions.containsKey(droppedPartition)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait partitions dropped");
     }
 
     public int waitAndGetLeader(TableBucket tb) {

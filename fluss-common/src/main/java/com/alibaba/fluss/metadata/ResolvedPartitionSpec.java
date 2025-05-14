@@ -21,7 +21,7 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -76,7 +76,7 @@ public class ResolvedPartitionSpec {
     }
 
     public PartitionSpec toPartitionSpec() {
-        Map<String, String> specMap = new HashMap<>();
+        Map<String, String> specMap = new LinkedHashMap<>();
         for (int i = 0; i < partitionKeys.size(); i++) {
             specMap.put(partitionKeys.get(i), partitionValues.get(i));
         }
@@ -94,13 +94,6 @@ public class ResolvedPartitionSpec {
      *
      * <p>For example, if the partition keys are [a, b, c], and the partition values are [1, 2, 3],
      * the partition name is "1$2$3".
-     *
-     * <p>Currently, we only support one partition key. So the partition name is in the following
-     * format:
-     *
-     * <pre>
-     * value
-     * </pre>
      *
      * <p>For example, if the partition keys are [a], and the partition value is [1], the partition
      * name will be "1".

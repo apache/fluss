@@ -290,7 +290,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
         } else {
             Map<String, Long> partitionNameAndIds =
-                    FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
             // just pick one partition
             Map.Entry<String, Long> partitionNameAndIdEntry =
                     partitionNameAndIds.entrySet().iterator().next();
@@ -392,7 +392,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
         } else {
             Map<String, Long> partitionNameAndIds =
-                    FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
             // just pick one partition
             partitionName = partitionNameAndIds.keySet().iterator().next();
             partitionId = partitionNameAndIds.get(partitionName);

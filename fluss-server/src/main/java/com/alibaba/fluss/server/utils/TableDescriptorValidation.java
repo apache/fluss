@@ -31,6 +31,7 @@ import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
+import com.alibaba.fluss.utils.StringUtils;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -192,15 +193,6 @@ public class TableDescriptorValidation {
         }
 
         if (isPartitioned) {
-            // TODO Currently, we only support one partition key, multi-partition keys will be
-            // supported in next pr.
-            if (partitionKeys.size() > 1) {
-                throw new InvalidTableException(
-                        String.format(
-                                "Currently, partitioned table only supports one partition key, but got partition keys %s.",
-                                partitionKeys));
-            }
-
             for (String partitionKey : partitionKeys) {
                 int partitionIndex = rowType.getFieldIndex(partitionKey);
                 DataType partitionDataType = rowType.getTypeAt(partitionIndex);
@@ -216,6 +208,32 @@ public class TableDescriptorValidation {
             }
 
             if (autoPartition.isAutoPartitionEnabled()) {
+                if (partitionKeys.size() > 1) {
+                    // must specify auto partition key for auto partition table when optional keys
+                    // size > 1
+                    if (StringUtils.isNullOrWhitespaceOnly(autoPartition.key())) {
+                        throw new InvalidTableException(
+                                String.format(
+                                        "Currently, auto partitioned table must set one auto partition key when it "
+                                                + "has multiple partition keys. Please set table property '%s'.",
+                                        ConfigOptions.TABLE_AUTO_PARTITION_KEY.key()));
+                    }
+
+                    if (!partitionKeys.contains(autoPartition.key())) {
+                        throw new InvalidTableException(
+                                String.format(
+                                        "The specified key for auto partitioned table is not a partition key. "
+                                                + "Your key '%s' is not in key list %s",
+                                        autoPartition.key(), partitionKeys));
+                    }
+
+                    if (autoPartition.numPreCreate() > 0) {
+                        throw new InvalidTableException(
+                                "For a partitioned table with multiple partition keys, auto pre-create is unsupported and this value must be set to 0, but is "
+                                        + autoPartition.numPreCreate());
+                    }
+                }
+
                 if (autoPartition.timeUnit() == null) {
                     throw new InvalidTableException(
                             String.format(

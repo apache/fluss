@@ -21,6 +21,7 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
@@ -29,39 +30,38 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 /** A getter to get partition name from a row. */
 public class PartitionGetter {
 
-    // TODO currently, only support one partition key.
-    private final String partitionKey;
-    private final InternalRow.FieldGetter partitionFieldGetter;
+    private final List<String> partitionKeys;
+    private final List<InternalRow.FieldGetter> partitionFieldGetters;
 
     public PartitionGetter(RowType rowType, List<String> partitionKeys) {
-        if (partitionKeys.size() != 1) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Currently, partitioned table only supports one partition key, but got partition keys %s.",
-                            partitionKeys));
-        }
-
         // check the partition column
         List<String> fieldNames = rowType.getFieldNames();
-        this.partitionKey = partitionKeys.get(0);
-        int partitionColumnIndex = fieldNames.indexOf(partitionKey);
-        checkArgument(
-                partitionColumnIndex >= 0,
-                "The partition column %s is not in the row %s.",
-                partitionKey,
-                rowType);
+        this.partitionKeys = partitionKeys;
+        partitionFieldGetters = new ArrayList<>();
+        for (String partitionKey : partitionKeys) {
+            int partitionColumnIndex = fieldNames.indexOf(partitionKey);
+            checkArgument(
+                    partitionColumnIndex >= 0,
+                    "The partition column %s is not in the row %s.",
+                    partitionKey,
+                    rowType);
 
-        // check the data type of the partition column
-        DataType partitionColumnDataType = rowType.getTypeAt(partitionColumnIndex);
-        this.partitionFieldGetter =
-                InternalRow.createFieldGetter(partitionColumnDataType, partitionColumnIndex);
+            // check the data type of the partition column
+            DataType partitionColumnDataType = rowType.getTypeAt(partitionColumnIndex);
+            partitionFieldGetters.add(
+                    InternalRow.createFieldGetter(partitionColumnDataType, partitionColumnIndex));
+        }
     }
 
     public String getPartition(InternalRow row) {
-        Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
-        checkNotNull(partitionValue, "Partition value shouldn't be null.");
+        List<String> partitionValues = new ArrayList<>();
+        for (InternalRow.FieldGetter partitionFieldGetter : partitionFieldGetters) {
+            Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
+            checkNotNull(partitionValue, "Partition value shouldn't be null.");
+            partitionValues.add(partitionValue.toString());
+        }
         ResolvedPartitionSpec resolvedPartitionSpec =
-                ResolvedPartitionSpec.fromPartitionValue(partitionKey, partitionValue.toString());
+                new ResolvedPartitionSpec(partitionKeys, partitionValues);
         return resolvedPartitionSpec.getPartitionName();
     }
 }

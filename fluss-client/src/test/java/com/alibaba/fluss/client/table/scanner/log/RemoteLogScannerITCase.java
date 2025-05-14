@@ -220,7 +220,7 @@ public class RemoteLogScannerITCase {
                         .build();
         long tableId = createTable(tablePath, partitionTableDescriptor);
         Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUtilPartitionAllReady(tablePath);
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
         Table table = conn.getTable(tablePath);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;

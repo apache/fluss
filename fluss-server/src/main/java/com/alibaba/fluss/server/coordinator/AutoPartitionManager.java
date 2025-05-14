@@ -49,7 +49,6 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
@@ -64,6 +63,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;
+import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartitionTime;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -371,43 +371,56 @@ public class AutoPartitionManager implements AutoCloseable {
         if (numToRetain < 0) {
             return;
         }
+        String autoPartitionKey =
+                partitionKeys.size() == 1 ? partitionKeys.get(0) : autoPartitionStrategy.key();
 
         ZonedDateTime currentZonedDateTime =
                 ZonedDateTime.ofInstant(
                         currentInstant, autoPartitionStrategy.timeZone().toZoneId());
 
-        // get the earliest one partition that need to retain
-        ResolvedPartitionSpec lastRetainPartition =
-                generateAutoPartition(
-                        partitionKeys,
-                        currentZonedDateTime,
-                        -numToRetain,
-                        autoPartitionStrategy.timeUnit());
+        // Get the earliest one partition time that need to retain.
+        String lastRetainPartitionTime =
+                generateAutoPartitionTime(
+                        currentZonedDateTime, -numToRetain, autoPartitionStrategy.timeUnit());
 
-        Iterator<String> partitionsToExpire =
-                currentPartitions.headSet(lastRetainPartition.getPartitionName(), false).iterator();
+        // For partition table with a single partition key, for example dt(yyyyMMdd)
+        // assuming now is 20250508, and table.auto-partition.num-retention=2 then partition
+        // 20250506 and 20250507 will be retained.
+        //
+        // For partition table with multiple partition keys, for example a,dt(yyyyMMdd),b
+        // which means dt is a partition time key and a,b are normal partition key,
+        // assuming now is 20250508, and table.auto-partition.num-retention=2.
+        // assuming we have the following partitions:
+        // (a=1,dt=20250505,b=1) (a=1,dt=20250506,b=1) (a=1,dt=20250507,b=1)
+        // (a=2,dt=20250505,b=1) (a=2,dt=20250506,b=1) (a=2,dt=20250507,b=1)
+        // then partition of pattern:
+        // (a=?,dt=20250506,b=?) (a=?,dt=20250507,b=?) will be retained.
+        int timePartitionKeyIndex = partitionKeys.indexOf(autoPartitionKey);
+        // Todo: refactoring currentPartitions to sort by the partition time key, then it is
+        // efficient to handle large partition set.
+        for (String partitionName : new ArrayList<>(currentPartitions)) {
+            String currentTime = partitionName.split("\\$")[timePartitionKeyIndex];
+            if (currentTime.compareTo(lastRetainPartitionTime) < 0) {
+                // drop the partition
+                try {
+                    metadataManager.dropPartition(
+                            tablePath,
+                            ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
+                            false);
+                } catch (PartitionNotExistException e) {
+                    LOG.info(
+                            "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
+                            partitionName,
+                            tablePath);
+                }
 
-        while (partitionsToExpire.hasNext()) {
-            String partitionName = partitionsToExpire.next();
-            // drop the partition
-            try {
-                metadataManager.dropPartition(
-                        tablePath,
-                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
-                        false);
-            } catch (PartitionNotExistException e) {
+                // only remove when zk success, this reflects to the partitionsByTable
+                currentPartitions.remove(partitionName);
                 LOG.info(
-                        "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
+                        "Auto partitioning deleted partition {} for table [{}].",
                         partitionName,
                         tablePath);
             }
-
-            // only remove when zk success, this reflects to the partitionsByTable
-            partitionsToExpire.remove();
-            LOG.info(
-                    "Auto partitioning deleted partition {} for table [{}].",
-                    partitionName,
-                    tablePath);
         }
     }
 

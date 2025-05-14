@@ -1104,6 +1104,15 @@ public class ConfigOptions {
                             "Whether enable auto partition for the table. Disable by default."
                                     + " When auto partition is enabled, the partitions of the table will be created automatically.");
 
+    public static final ConfigOption<String> TABLE_AUTO_PARTITION_KEY =
+            key("table.auto-partition.key")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The singe time partition key to execute auto partition on when the table has multiple partition keys."
+                                    + " If the table has only one partition key, this config is not necessary."
+                                    + " If the table has multiple partition keys, must specify one.");
+
     public static final ConfigOption<AutoPartitionTimeUnit> TABLE_AUTO_PARTITION_TIME_UNIT =
             key("table.auto-partition.time-unit")
                     .enumType(AutoPartitionTimeUnit.class)
@@ -1140,7 +1149,8 @@ public class ConfigOptions {
                                     + "configured as 3, then partitions 20241111, 20241112, 20241113 will be pre-created. "
                                     + "If any one partition exists, it'll skip creating the partition. "
                                     + "The default value is 2, which means 2 partitions will be pre-created. "
-                                    + "If the 'table.auto-partition.time-unit' is 'DAY'(default), one precreated partition is for today and another one is for tomorrow.");
+                                    + "If the 'table.auto-partition.time-unit' is 'DAY'(default), one precreated partition is for today and another one is for tomorrow."
+                                    + "For a partition table with multiple partition keys, pre-create is unsupported and will be set to 0 automatically when creating table if it is not explicitly specified.");
 
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_RETENTION =
             key("table.auto-partition.num-retention")

@@ -425,22 +425,6 @@ class TableManagerITCase {
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
 
-        TableDescriptor tableWithMultiPartKey =
-                newPartitionedTableBuilder(new Schema.Column("tttt", DataTypes.INT()))
-                        .partitionedBy("id", "dt")
-                        .build();
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableWithMultiPartKey, false))
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table only supports one partition key, but got partition keys [id, dt].");
-
         TableDescriptor tableWithIntPartKey =
                 newPartitionedTableBuilder(null).partitionedBy("id").build();
         assertThatThrownBy(
