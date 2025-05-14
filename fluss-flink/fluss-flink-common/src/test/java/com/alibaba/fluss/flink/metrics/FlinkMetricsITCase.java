@@ -39,6 +39,7 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,6 +99,10 @@ abstract class FlinkMetricsITCase extends FlinkTestBase {
     void afterEach() {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
+    }
+
+    @AfterAll
+    public static void afterAll() {
         MINI_CLUSTER_EXTENSION.after();
     }
 

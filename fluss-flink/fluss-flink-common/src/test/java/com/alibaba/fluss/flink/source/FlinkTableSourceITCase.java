@@ -80,11 +80,15 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
     @BeforeAll
     protected static void beforeAll() {
         FlinkTestBase.beforeAll();
+    }
 
-        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+    @BeforeEach
+    void before() {
+        // create database
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         // create table environment
         tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // crate catalog using sql
         tEnv.executeSql(
                 String.format(
@@ -93,11 +97,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         tEnv.executeSql("use catalog " + CATALOG_NAME);
 
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
-    }
-
-    @BeforeEach
-    void before() {
-        // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
     }
@@ -106,30 +105,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
     void after() {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
-    }
-
-    @AfterEach
-    void cleanupAfterTest() {
-        try {
-            // Cancel any running jobs in the environment
-            if (execEnv != null) {
-                try {
-                    execEnv.close();
-                } catch (Exception e) {
-                    // Log and continue
-                    System.err.println(
-                            "Error during execution environment cleanup: " + e.getMessage());
-                }
-            }
-
-            // Force garbage collection to help clean up lingering connections
-            System.gc();
-
-            // Add a small delay to allow resources to be released
-            Thread.sleep(500);
-        } catch (Exception e) {
-            System.err.println("Error during test cleanup: " + e.getMessage());
-        }
     }
 
     @Test
