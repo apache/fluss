@@ -18,7 +18,6 @@ package com.alibaba.fluss.security.auth;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 
 import javax.annotation.Nullable;
 
@@ -81,7 +80,5 @@ public interface ClientAuthenticator {
     boolean isCompleted();
 
     /** The context of the authentication process. */
-    interface AuthenticateContext {
-        Channel channel();
-    }
+    interface AuthenticateContext {}
 }

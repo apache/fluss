@@ -33,7 +33,6 @@ import com.alibaba.fluss.rpc.protocol.MessageCodec;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
@@ -366,10 +365,6 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private class DefaultAuthenticateContext implements ServerAuthenticator.AuthenticateContext {
-        @Override
-        public Channel channel() {
-            return ctx.channel();
-        }
-    }
+    private static class DefaultAuthenticateContext
+            implements ServerAuthenticator.AuthenticateContext {}
 }

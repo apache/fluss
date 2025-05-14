@@ -19,7 +19,6 @@ package com.alibaba.fluss.security.auth;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 
 /**
  * Authenticator for server side.
@@ -85,7 +84,5 @@ public interface ServerAuthenticator {
     FlussPrincipal createPrincipal();
 
     /** The context of the authentication process. */
-    interface AuthenticateContext {
-        Channel channel();
-    }
+    interface AuthenticateContext {}
 }

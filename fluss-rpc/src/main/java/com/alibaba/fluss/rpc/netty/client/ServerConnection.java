@@ -416,25 +416,25 @@ final class ServerConnection {
     }
 
     private void handleAuthenticateResponse(ApiMessage response, Throwable cause) {
-        if (cause != null) {
-            if (cause instanceof RetriableAuthenticationException) {
-                LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
-                channel.eventLoop()
-                        .schedule(
-                                this::sendInitialToken,
-                                backoff.backoff(retryAuthCount++),
-                                TimeUnit.MILLISECONDS);
-            } else {
-                close(cause);
-            }
-            return;
-        }
-        if (!(response instanceof AuthenticateResponse)) {
-            close(new IllegalStateException("Unexpected response type " + response.getClass()));
-            return;
-        }
-
         synchronized (lock) {
+            if (cause != null) {
+                if (cause instanceof RetriableAuthenticationException) {
+                    LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
+                    channel.eventLoop()
+                            .schedule(
+                                    this::sendInitialToken,
+                                    backoff.backoff(retryAuthCount++),
+                                    TimeUnit.MILLISECONDS);
+                } else {
+                    close(cause);
+                }
+                return;
+            }
+            if (!(response instanceof AuthenticateResponse)) {
+                close(new IllegalStateException("Unexpected response type " + response.getClass()));
+                return;
+            }
+
             AuthenticateResponse authenticateResponse = (AuthenticateResponse) response;
             if (authenticateResponse.hasChallenge()) {
                 sendAuthenticateRequest(((AuthenticateResponse) response).getChallenge());
@@ -544,10 +544,6 @@ final class ServerConnection {
         }
     }
 
-    private class DefaultAuthenticateContext implements ClientAuthenticator.AuthenticateContext {
-        @Override
-        public Channel channel() {
-            return channel;
-        }
-    }
+    private static class DefaultAuthenticateContext
+            implements ClientAuthenticator.AuthenticateContext {}
 }
