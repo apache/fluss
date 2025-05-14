@@ -45,6 +45,7 @@ jobs:
         timeout-minutes: 60
         run: |
           TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }})
+          echo "github ref: ${{ github.ref }}"
           echo "Start testing modules: $TEST_MODULES"
           mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
         env:
@@ -62,3 +63,9 @@ jobs:
         with:
           name: logs-test-${{ matrix.module }}-${{ github.run_number}}#${{ github.run_attempt }}
           path: ${{ runner.temp }}/fluss-logs/*
+      - name: Upload JaCoCo coverage report
+        uses: actions/upload-artifact@v4
+        if: ${{ success() && github.ref == 'refs/heads/main' }}
+        with:
+          name: jacoco-report-${{ matrix.module }}-${{ github.run_number}}#${{ github.run_attempt }}
+          path: ${{ github.workspace }}/fluss-test-coverage/target/site/jacoco-aggregate/*
