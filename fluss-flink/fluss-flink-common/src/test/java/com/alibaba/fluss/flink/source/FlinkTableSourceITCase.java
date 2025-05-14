@@ -80,10 +80,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
     @BeforeAll
     protected static void beforeAll() {
         FlinkTestBase.beforeAll();
-    }
-
-    @BeforeEach
-    void before() {
         // create database
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         // create table environment
@@ -97,6 +93,10 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         tEnv.executeSql("use catalog " + CATALOG_NAME);
 
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
+    }
+
+    @BeforeEach
+    void before() {
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
     }
