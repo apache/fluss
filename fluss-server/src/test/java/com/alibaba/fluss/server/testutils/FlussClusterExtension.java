@@ -273,6 +273,11 @@ public final class FlussClusterExtension
                         "Tablet server " + serverId + " already exists.");
             }
         }
+        startTabletServer(serverId, null);
+    }
+
+    private void startTabletServer(int serverId, @Nullable Configuration overwriteConfig)
+            throws Exception {
         String dataDir = getDataDir(serverId);
         Configuration tabletServerConf = new Configuration(clusterConf);
         tabletServerConf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
@@ -280,6 +285,9 @@ public final class FlussClusterExtension
         tabletServerConf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
         tabletServerConf.setString(ConfigOptions.BIND_LISTENERS, tabletServerListeners);
+        if (overwriteConfig != null) {
+            tabletServerConf.addAll(overwriteConfig);
+        }
 
         setRemoteDataDir(tabletServerConf);
 
@@ -293,6 +301,11 @@ public final class FlussClusterExtension
 
         tabletServers.put(serverId, tabletServer);
         tabletServerInfos.put(serverId, serverInfo);
+    }
+
+    public void restartTabletServer(int serverId, Configuration overwriteConfig) throws Exception {
+        stopTabletServer(serverId);
+        startTabletServer(serverId, overwriteConfig);
     }
 
     public void assertHasTabletServerNumber(int tabletServerNumber) {

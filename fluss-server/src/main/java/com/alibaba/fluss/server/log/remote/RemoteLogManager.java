@@ -52,6 +52,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -283,7 +284,10 @@ public class RemoteLogManager implements Closeable {
                     LOG.info("Created a new remote log task: {} and getting scheduled", task);
                     ScheduledFuture<?> future =
                             rlManagerScheduledThreadPool.scheduleWithFixedDelay(
-                                    task, 0, taskInterval, TimeUnit.MILLISECONDS);
+                                    task,
+                                    Math.abs(ThreadLocalRandom.current().nextLong(taskInterval)),
+                                    taskInterval,
+                                    TimeUnit.MILLISECONDS);
                     return new TaskWithFuture(task, future);
                 });
     }

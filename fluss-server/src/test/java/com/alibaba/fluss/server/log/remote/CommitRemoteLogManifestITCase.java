@@ -28,8 +28,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
-import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
@@ -78,32 +79,44 @@ class CommitRemoteLogManifestITCase {
                     i * 10L);
         }
 
-        // stop a replica to mock follower is out of sync
-        int stopFollower = Stream.of(0, 1, 2).filter(i -> i != leader).findFirst().get();
-        FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, 1);
+        // stop replicas to mock followers are out of sync
+        List<Integer> stopFollowers =
+                Stream.of(0, 1, 2).filter(i -> i != leader).collect(Collectors.toList());
+        for (int stopFollower : stopFollowers) {
+            FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, 1);
+        }
         leaderGateWay
                 .produceLog(
                         newProduceLogRequest(tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                 .get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilReplicaShrinkFromIsr(tb, stopFollower);
+        for (int stopFollower : stopFollowers) {
+            FLUSS_CLUSTER_EXTENSION.waitUtilReplicaShrinkFromIsr(tb, stopFollower);
+            LogTablet stopfollowerLogTablet =
+                    FLUSS_CLUSTER_EXTENSION
+                            .waitAndGetFollowerReplica(tb, stopFollower)
+                            .getLogTablet();
+            assertThat(stopfollowerLogTablet.logSegments()).hasSize(3);
+        }
 
-        LogTablet stopfollowerLogTablet =
-                FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, stopFollower).getLogTablet();
-        assertThat(stopfollowerLogTablet.logSegments()).hasSize(3);
-
-        // send notify leader to make remote log tier happen immediately
-        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
+        // restart the leader server with a small log tiering interval
+        FLUSS_CLUSTER_EXTENSION.restartTabletServer(
                 leader,
-                DATA1_TABLE_PATH,
-                tb,
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getLeaderAndIsr(tb).get(),
-                Arrays.asList(0, 1, 2));
+                new Configuration()
+                        .set(
+                                ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION,
+                                Duration.ofMillis(1)));
         FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(tb);
 
-        // check has two remote log segments for the stopped replica
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(stopfollowerLogTablet.logSegments()).hasSize(2));
+        // check only has two remote log segments for the stopped replicas
+        for (int stopFollower : stopFollowers) {
+            LogTablet stopfollowerLogTablet =
+                    FLUSS_CLUSTER_EXTENSION
+                            .waitAndGetFollowerReplica(tb, stopFollower)
+                            .getLogTablet();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(stopfollowerLogTablet.logSegments()).hasSize(2));
+        }
     }
 
     private static Configuration initConfig() {
