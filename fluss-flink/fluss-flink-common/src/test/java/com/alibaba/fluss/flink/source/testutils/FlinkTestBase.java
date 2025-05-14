@@ -166,29 +166,6 @@ public class FlinkTestBase extends AbstractTestBase {
         return admin.getTableInfo(tablePath).get().getTableId();
     }
 
-    public static void assertResultsIgnoreOrder(
-            org.apache.flink.util.CloseableIterator<Row> iterator,
-            List<String> expected,
-            boolean closeIterator)
-            throws Exception {
-        try {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                actual.add(iterator.next().toString());
-            }
-            assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
-        } finally {
-            if (closeIterator) {
-                try {
-                    iterator.close();
-                } catch (Exception e) {
-                    System.err.println("Error closing iterator: " + e.getMessage());
-                }
-            }
-        }
-    }
-
     public static List<String> assertAndCollectRecords(
             org.apache.flink.util.CloseableIterator<Row> iterator, int expectedNum)
             throws Exception {
