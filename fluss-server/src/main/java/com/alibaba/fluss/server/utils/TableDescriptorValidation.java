@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.utils;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -81,8 +80,7 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema);
     }
 
-    @VisibleForTesting
-    static void checkSystemColumns(RowType schema) {
+    private static void checkSystemColumns(RowType schema) {
         List<String> fieldNames = schema.getFieldNames();
         List<String> systemColumns =
                 Arrays.asList(OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME, BUCKET_COLUMN_NAME);
@@ -97,6 +95,7 @@ public class TableDescriptorValidation {
                                     + "The reserved system columns are: %s",
                             String.join(", ", unsupportedColumns),
                             String.join(", ", systemColumns)));
+        }
     }
 
     private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {

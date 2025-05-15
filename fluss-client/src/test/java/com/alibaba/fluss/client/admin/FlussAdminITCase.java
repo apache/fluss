@@ -940,4 +940,35 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(TooManyBucketsException.class)
                 .hasMessageContaining("exceeds the maximum limit");
     }
+
+    /** Test that creating a table with system columns throws InvalidTableException. */
+    @Test
+    public void testSystemsColumns() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("f0", DataTypes.STRING())
+                                        .column("f1", DataTypes.BIGINT())
+                                        .column("f3", DataTypes.STRING())
+                                        .column("__offset", DataTypes.STRING())
+                                        .column("__timestamp", DataTypes.STRING())
+                                        .column("__bucket", DataTypes.STRING())
+                                        .build())
+                        .build();
+
+        TablePath tablePath = TablePath.of(dbName, "test_system_columns");
+
+        // Creating this table should throw InvalidTableException
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "__offset, __timestamp, __bucket cannot be used as column names, "
+                                + "because they are reserved system columns in Fluss. "
+                                + "Please use other names for these columns. "
+                                + "The reserved system columns are: __offset, __timestamp, __bucket");
+    }
 }
