@@ -60,7 +60,7 @@ One of Fluss's standout features is the unification of stream and Lakehouse. In 
 
 At its core, Fluss incorporates a `compaction service` that ensures seamless integration between stream and lake storage. This service automatically and continuously converts Fluss data into the data lake format.
 A key feature here is called "Shared Data". The Lakehouse storage serves as the historical data layer for the streaming storage, which is optimized for storing long-term data with minute-level latencies. On the other hand, streaming storage serves as the real-time data layer for Lakehouse storage, which is optimized for storing short-term data with millisecond-level latencies.
-The data is shared with each other, and is exposed as a singe table.
+The data is shared with each other, and is exposed as a single table.
 For streaming queries on the table, it firstly uses the Lakehouse storage as historical data to have efficient catch-up read performance, and then seamlessly transitions to the streaming storage for real-time data, ensuring no duplicate data is read.
 For batch queries on the table, streaming storage supplements real-time data for Lakehouse storage, enabling second-level freshness for Lakehouse analytics.
 This capability, termed **Union Read**, allows both layers to work in tandem for highly efficient and accurate data access.

@@ -1109,7 +1109,7 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The singe time partition key to execute auto partition on when the table has multiple partition keys."
+                            "The single time partition key which is used as the partition key for auto create partitions."
                                     + " If the table has only one partition key, this config is not necessary."
                                     + " If the table has multiple partition keys, must specify one.");
 
