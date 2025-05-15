@@ -31,7 +31,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
@@ -91,7 +90,11 @@ class CoordinatorChannelManagerTest {
         AtomicInteger sendFlag = new AtomicInteger(0);
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
-                makeUpdateMetadataRequest(Optional.empty(), Collections.emptySet());
+                makeUpdateMetadataRequest(
+                        null,
+                        Collections.emptySet(),
+                        Collections.emptyList(),
+                        Collections.emptyList());
         coordinatorChannelManager.sendRequest(
                 targetServerId,
                 updateMetadataRequest,

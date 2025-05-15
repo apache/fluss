@@ -19,6 +19,9 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
+import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
@@ -35,21 +38,31 @@ import com.alibaba.fluss.server.coordinator.event.EventManager;
 import com.alibaba.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import com.alibaba.fluss.server.entity.DeleteReplicaResultForBucket;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
-import com.alibaba.fluss.server.metadata.ServerInfo;
+import com.alibaba.fluss.server.metadata.BucketMetadata;
+import com.alibaba.fluss.server.metadata.PartitionMetadata;
+import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_ID;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_NAME;
+import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_ID;
+import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_PATH;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyKvSnapshotOffsetRequest;
@@ -59,6 +72,8 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyRem
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
+import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
+import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER_EPOCH;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
 public class CoordinatorRequestBatch {
@@ -71,9 +86,15 @@ public class CoordinatorRequestBatch {
     // a map from tablet server to stop replica for each bucket.
     private final Map<Integer, Map<TableBucket, PbStopReplicaReqForBucket>> stopReplicaRequestMap =
             new HashMap<>();
-    // a map from tablet server to update metadata request
-    private final Map<Integer, UpdateMetadataRequest> updateMetadataRequestTabletServerSet =
+
+    // a set of tabletServers to send update metadata request.
+    private final Set<Integer> updateMetadataRequestTabletServerSet = new HashSet<>();
+    // a map from tableId to bucket metadata to update.
+    private final Map<Long, List<BucketMetadata>> updateMetadataRequestBucketMap = new HashMap<>();
+    // a map from tableId to (a map from partitionId to bucket metadata) to update.
+    private final Map<Long, Map<Long, List<BucketMetadata>>> updateMetadataRequestPartitionMap =
             new HashMap<>();
+
     // a map from tablet server to notify remote log offsets request.
     private final Map<Integer, NotifyRemoteLogOffsetsRequest> notifyRemoteLogOffsetsRequestMap =
             new HashMap<>();
@@ -86,11 +107,15 @@ public class CoordinatorRequestBatch {
 
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
+    private final CoordinatorContext coordinatorContext;
 
     public CoordinatorRequestBatch(
-            CoordinatorChannelManager coordinatorChannelManager, EventManager eventManager) {
+            CoordinatorChannelManager coordinatorChannelManager,
+            EventManager eventManager,
+            CoordinatorContext coordinatorContext) {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.eventManager = eventManager;
+        this.coordinatorContext = coordinatorContext;
     }
 
     public void newBatch() {
@@ -198,6 +223,12 @@ public class CoordinatorRequestBatch {
                                                     leaderAndIsr));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
+
+        addUpdateMetadataRequestForTabletServers(
+                coordinatorContext.getLiveTabletServers().keySet(),
+                null,
+                null,
+                Collections.singleton(tableBucket));
     }
 
     public void addStopReplicaRequestForTabletServers(
@@ -223,19 +254,87 @@ public class CoordinatorRequestBatch {
                         });
     }
 
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    /**
+     * Add updateMetadata request for tabletServers when these cases happen:
+     *
+     * <ol>
+     *   <li>case1: coordinatorServer re-start to re-initial coordinatorContext
+     *   <li>case2: Table create and bucketAssignment generated, case will happen for new created
+     *       none-partitioned table
+     *   <li>case3: Table create and bucketAssignment don't generated, case will happen for new
+     *       created partitioned table
+     *   <li>case4: Table is queued for deletion, in this case we will set a empty tableBucket set
+     *       and tableId set to {@link TableMetadata#TABLE_DURATION_DELETE_ID} to avoid send unless
+     *       info to tabletServer
+     *   <li>case5: Partition create and bucketAssignment of this partition generated.
+     *   <li>case6: Partition is queued for deletion, in this case we will set a empty tableBucket
+     *       set and partitionId set to {@link PartitionMetadata#PARTITION_DURATION_DELETE_ID } to
+     *       avoid send unless info to tabletServer
+     *   <li>case7: Leader and isr is changed for these input tableBuckets
+     *   <li>case8: One newly tabletServer added into cluster
+     *   <li>case9: One tabletServer is removed from cluster
+     * </ol>
+     */
     public void addUpdateMetadataRequestForTabletServers(
             Set<Integer> tabletServers,
-            Optional<ServerInfo> coordinatorServer,
-            Set<ServerInfo> aliveTabletServers) {
+            @Nullable Long tableId,
+            @Nullable Long partitionId,
+            Set<TableBucket> tableBuckets) {
+        // case9:
         tabletServers.stream()
                 .filter(s -> s >= 0)
-                .forEach(
-                        id ->
-                                updateMetadataRequestTabletServerSet.put(
-                                        id,
-                                        makeUpdateMetadataRequest(
-                                                coordinatorServer, aliveTabletServers)));
+                .forEach(updateMetadataRequestTabletServerSet::add);
+
+        if (tableId != null) {
+            if (partitionId != null) {
+                // case6
+                updateMetadataRequestPartitionMap
+                        .computeIfAbsent(tableId, k -> new HashMap<>())
+                        .put(partitionId, Collections.emptyList());
+            } else {
+                // case3, case4
+                updateMetadataRequestBucketMap.put(tableId, Collections.emptyList());
+            }
+        } else {
+            // case1, case2, case5, case7, case8
+            for (TableBucket tableBucket : tableBuckets) {
+                long currentTableId = tableBucket.getTableId();
+                Long currentPartitionId = tableBucket.getPartitionId();
+                Optional<LeaderAndIsr> bucketLeaderAndIsr =
+                        coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+                int leaderEpoch =
+                        bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(NO_LEADER_EPOCH);
+                int leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(NO_LEADER);
+                if (currentPartitionId == null) {
+                    Map<Integer, List<Integer>> tableAssignment =
+                            coordinatorContext.getTableAssignment(currentTableId);
+                    BucketMetadata bucketMetadata =
+                            new BucketMetadata(
+                                    tableBucket.getBucket(),
+                                    leader,
+                                    leaderEpoch,
+                                    tableAssignment.get(tableBucket.getBucket()));
+                    updateMetadataRequestBucketMap
+                            .computeIfAbsent(currentTableId, k -> new ArrayList<>())
+                            .add(bucketMetadata);
+                } else {
+                    TablePartition tablePartition =
+                            new TablePartition(currentTableId, currentPartitionId);
+                    Map<Integer, List<Integer>> partitionAssignment =
+                            coordinatorContext.getPartitionAssignment(tablePartition);
+                    BucketMetadata bucketMetadata =
+                            new BucketMetadata(
+                                    tableBucket.getBucket(),
+                                    leader,
+                                    leaderEpoch,
+                                    partitionAssignment.get(tableBucket.getBucket()));
+                    updateMetadataRequestPartitionMap
+                            .computeIfAbsent(currentTableId, k -> new HashMap<>())
+                            .computeIfAbsent(tableBucket.getPartitionId(), k -> new ArrayList<>())
+                            .add(bucketMetadata);
+                }
+            }
+        }
     }
 
     public void addNotifyRemoteLogOffsetsRequestForTabletServers(
@@ -419,10 +518,9 @@ public class CoordinatorRequestBatch {
     }
 
     public void sendUpdateMetadataRequest() {
-        for (Map.Entry<Integer, UpdateMetadataRequest> updateMetadataRequestEntry :
-                updateMetadataRequestTabletServerSet.entrySet()) {
-            Integer serverId = updateMetadataRequestEntry.getKey();
-            UpdateMetadataRequest updateMetadataRequest = updateMetadataRequestEntry.getValue();
+        // Build updateMetadataRequest.
+        UpdateMetadataRequest updateMetadataRequest = buildUpdateMetadataRequest();
+        for (Integer serverId : updateMetadataRequestTabletServerSet) {
             coordinatorChannelManager.sendUpdateMetadataRequest(
                     serverId,
                     updateMetadataRequest,
@@ -435,6 +533,8 @@ public class CoordinatorRequestBatch {
                     });
         }
         updateMetadataRequestTabletServerSet.clear();
+        updateMetadataRequestBucketMap.clear();
+        updateMetadataRequestPartitionMap.clear();
     }
 
     public void sendNotifyRemoteLogOffsetsRequest(int coordinatorEpoch) {
@@ -504,5 +604,86 @@ public class CoordinatorRequestBatch {
                     });
         }
         notifyLakeTableOffsetRequestMap.clear();
+    }
+
+    private UpdateMetadataRequest buildUpdateMetadataRequest() {
+        List<TableMetadata> tableMetadataList = new ArrayList<>();
+        updateMetadataRequestBucketMap.forEach(
+                (tableId, bucketMetadataList) -> {
+                    TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+                    boolean tableQueuedForDeletion =
+                            coordinatorContext.isTableQueuedForDeletion(tableId);
+                    TableInfo newTableInfo;
+                    if (tableInfo == null) {
+                        if (tableQueuedForDeletion) {
+                            newTableInfo =
+                                    TableInfo.of(
+                                            TABLE_DURATION_DELETE_PATH,
+                                            tableId,
+                                            0,
+                                            TableDescriptor.EMPTY,
+                                            -1L,
+                                            -1L);
+                        } else {
+                            throw new IllegalStateException(
+                                    "Table info is null for table " + tableId);
+                        }
+                    } else {
+                        newTableInfo =
+                                tableQueuedForDeletion
+                                        ? TableInfo.of(
+                                                tableInfo.getTablePath(),
+                                                TABLE_DURATION_DELETE_ID,
+                                                0,
+                                                TableDescriptor.EMPTY,
+                                                -1L,
+                                                -1L)
+                                        : tableInfo;
+                    }
+
+                    tableMetadataList.add(new TableMetadata(newTableInfo, bucketMetadataList));
+                });
+
+        List<PartitionMetadata> partitionMetadataList = new ArrayList<>();
+        updateMetadataRequestPartitionMap.forEach(
+                (tableId, partitionIdToBucketMetadataMap) -> {
+                    for (Map.Entry<Long, List<BucketMetadata>> kvEntry :
+                            partitionIdToBucketMetadataMap.entrySet()) {
+                        Long partitionId = kvEntry.getKey();
+                        boolean partitionQueuedForDeletion =
+                                coordinatorContext.isPartitionQueuedForDeletion(
+                                        new TablePartition(tableId, partitionId));
+                        String partitionName = coordinatorContext.getPartitionName(partitionId);
+                        PartitionMetadata partitionMetadata;
+                        if (partitionName == null) {
+                            if (partitionQueuedForDeletion) {
+                                partitionMetadata =
+                                        new PartitionMetadata(
+                                                tableId,
+                                                PARTITION_DURATION_DELETE_NAME,
+                                                partitionId,
+                                                kvEntry.getValue());
+                            } else {
+                                throw new IllegalStateException(
+                                        "Partition name is null for partition " + partitionId);
+                            }
+                        } else {
+                            partitionMetadata =
+                                    new PartitionMetadata(
+                                            tableId,
+                                            partitionName,
+                                            partitionQueuedForDeletion
+                                                    ? PARTITION_DURATION_DELETE_ID
+                                                    : partitionId,
+                                            kvEntry.getValue());
+                        }
+                        partitionMetadataList.add(partitionMetadata);
+                    }
+                });
+        return makeUpdateMetadataRequest(
+                coordinatorContext.getCoordinatorServerInfo(),
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                tableMetadataList,
+                partitionMetadataList);
     }
 }

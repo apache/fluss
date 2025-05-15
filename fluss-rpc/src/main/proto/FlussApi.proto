@@ -170,6 +170,8 @@ message UpdateMetadataRequest {
   optional PbServerNode coordinator_server = 1;
   repeated PbServerNode tablet_servers = 2;
   repeated PbTableMetadata table_metadata = 3;
+  repeated PbPartitionMetadata partition_metadata = 4;
+  optional int32 coordinator_epoch = 5;
 }
 
 message UpdateMetadataResponse {
@@ -581,6 +583,7 @@ message PbBucketMetadata {
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
   // TODO: Add isr here.
+  optional int32 leader_epoch = 4;
 }
 
 message PbProduceLogReqForBucket {

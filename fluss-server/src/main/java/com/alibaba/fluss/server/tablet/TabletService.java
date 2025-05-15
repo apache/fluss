@@ -20,7 +20,6 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.KvRecordBatch;
@@ -56,6 +55,8 @@ import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
+import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
+import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.security.acl.OperationType;
@@ -78,6 +79,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
@@ -85,6 +87,7 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.security.acl.OperationType.READ;
 import static com.alibaba.fluss.security.acl.OperationType.WRITE;
+import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
@@ -96,6 +99,7 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getProduceLog
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPutKvData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeLimitScanResponse;
@@ -281,9 +285,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         replicaManager.becomeLeaderOrFollower(
                 notifyLeaderAndIsrRequest.getCoordinatorEpoch(),
                 notifyLeaderAndIsrRequestData,
-                result -> response.complete(makeNotifyLeaderAndIsrResponse(result)),
-                metadataCache::upsertTableBucketMetadata);
+                result -> response.complete(makeNotifyLeaderAndIsrResponse(result)));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request) {
+        UpdateMetadataResponse updateMetadataResponse = new UpdateMetadataResponse();
+        int coordinatorEpoch =
+                request.hasCoordinatorEpoch()
+                        ? request.getCoordinatorEpoch()
+                        : INITIAL_COORDINATOR_EPOCH;
+        replicaManager.maybeUpdateMetadataCache(
+                coordinatorEpoch, getUpdateMetadataRequestData(request));
+        return CompletableFuture.completedFuture(updateMetadataResponse);
     }
 
     @Override
@@ -351,7 +366,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     private void authorizeTable(OperationType operationType, long tableId) {
-        PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
+        TablePath tablePath =
+                metadataCache
+                        .getTablePath(tableId)
+                        .orElseThrow(
+                                () ->
+                                        new UnknownTableOrBucketException(
+                                                String.format(
+                                                        "This server does not host this table ID %s.",
+                                                        tableId)));
         if (tablePath == null) {
             throw new UnknownTableOrBucketException(
                     String.format(
@@ -360,9 +383,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         }
         if (authorizer != null
                 && !authorizer.isAuthorized(
-                        currentSession(),
-                        operationType,
-                        Resource.table(tablePath.getTablePath()))) {
+                        currentSession(), operationType, Resource.table(tablePath))) {
             throw new AuthorizationException(
                     String.format(
                             "No permission to %s table %s in database %s",
@@ -410,8 +431,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         requestData.forEach(
                 (tableBucket, bucketData) -> {
                     long tableId = tableBucket.getTableId();
-                    PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
-                    if (tablePath == null) {
+                    Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
+                    if (!tablePathOpt.isPresent()) {
                         errorResponseMap.put(
                                 tableBucket,
                                 resultCreator.apply(
@@ -423,6 +444,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                                                 + "This may happen when the table metadata cache in the server is not updated yet.",
                                                         serviceName, tableId))));
                     } else if (!filteredTableIds.contains(tableId)) {
+                        TablePath tablePath = tablePathOpt.get();
                         errorResponseMap.put(
                                 tableBucket,
                                 resultCreator.apply(
@@ -448,13 +470,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 .distinct()
                 .filter(
                         tableId -> {
-                            PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
-                            return tablePath != null
+                            Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
+                            return tablePathOpt.isPresent()
                                     && authorizer != null
                                     && authorizer.isAuthorized(
                                             currentSession(),
                                             operationType,
-                                            Resource.table(tablePath.getTablePath()));
+                                            Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
     }

@@ -44,9 +44,9 @@ import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import com.alibaba.fluss.server.metadata.CoordinatorServerMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.tablet.TestTabletServerGateway;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
@@ -130,7 +130,6 @@ class CoordinatorEventProcessorTest {
 
     private CoordinatorEventProcessor eventProcessor;
     private final String defaultDatabase = "db";
-    private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
@@ -157,7 +156,8 @@ class CoordinatorEventProcessorTest {
 
     @BeforeEach
     void beforeEach() throws IOException {
-        serverMetadataCache = new ServerMetadataCacheImpl();
+        ServerMetadataCache serverMetadataCache =
+                new CoordinatorServerMetadataCache(new CoordinatorContext());
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
@@ -757,8 +757,8 @@ class CoordinatorEventProcessorTest {
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
-                serverMetadataCache,
                 testCoordinatorChannelManager,
+                new CoordinatorContext(),
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,

@@ -468,8 +468,9 @@ public final class FlussClusterExtension
     }
 
     /**
-     * Wait until coordinator server and all the tablet servers have the same metadata. This method
-     * needs to be called in advance for those ITCase which need to get metadata from server.
+     * Wait until coordinator server and all the tablet servers have the same metadata (Only need to
+     * make sure same server info not to make sure table metadata). This method needs to be called
+     * in advance for those ITCase which need to get metadata from server.
      */
     public void waitUtilAllGatewayHasSameMetadata() {
         for (AdminReadOnlyGateway gateway : collectAllRpcGateways()) {

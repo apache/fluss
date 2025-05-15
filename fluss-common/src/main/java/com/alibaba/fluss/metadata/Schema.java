@@ -55,7 +55,7 @@ public final class Schema implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private static final Schema EMPTY = Schema.newBuilder().build();
+    public static final Schema EMPTY = Schema.newBuilder().build();
 
     private final List<Column> columns;
     private final @Nullable PrimaryKey primaryKey;

@@ -77,7 +77,8 @@ import com.alibaba.fluss.server.log.LogReadInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
+import com.alibaba.fluss.server.metadata.ClusterMetadata;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -117,7 +118,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -144,7 +144,7 @@ public class ReplicaManager {
     @GuardedBy("replicaStateChangeLock")
     private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
-    private final ServerMetadataCache metadataCache;
+    private final TabletServerMetadataCache metadataCache;
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
     /**
@@ -189,7 +189,7 @@ public class ReplicaManager {
             KvManager kvManager,
             ZooKeeperClient zkClient,
             int serverId,
-            ServerMetadataCache metadataCache,
+            TabletServerMetadataCache metadataCache,
             RpcClient rpcClient,
             CoordinatorGateway coordinatorGateway,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -222,7 +222,7 @@ public class ReplicaManager {
             KvManager kvManager,
             ZooKeeperClient zkClient,
             int serverId,
-            ServerMetadataCache metadataCache,
+            TabletServerMetadataCache metadataCache,
             RpcClient rpcClient,
             CoordinatorGateway coordinatorGateway,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -328,8 +328,7 @@ public class ReplicaManager {
     public void becomeLeaderOrFollower(
             int requestCoordinatorEpoch,
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
-            Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback,
-            BiConsumer<Long, PhysicalTablePath> leaderBucketCallback) {
+            Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
         inLock(
                 replicaStateChangeLock,
@@ -345,8 +344,6 @@ public class ReplicaManager {
                             boolean becomeLeader = validateAndGetIsBecomeLeader(data);
                             if (becomeLeader) {
                                 replicasToBeLeader.add(data);
-                                leaderBucketCallback.accept(
-                                        tb.getTableId(), data.getPhysicalTablePath());
                             } else {
                                 replicasToBeFollower.add(data);
                             }
@@ -369,6 +366,16 @@ public class ReplicaManager {
                 });
 
         responseCallback.accept(new ArrayList<>(result.values()));
+    }
+
+    public void maybeUpdateMetadataCache(int coordinatorEpoch, ClusterMetadata clusterMetadata) {
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    // check or apply coordinator epoch.
+                    validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
+                    metadataCache.updateClusterMetadata(clusterMetadata);
+                });
     }
 
     /**

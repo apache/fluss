@@ -17,7 +17,6 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
@@ -29,6 +28,7 @@ import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
@@ -80,7 +80,7 @@ public class AutoPartitionManager implements AutoCloseable {
     /** scheduled executor, periodically trigger auto partition. */
     private final ScheduledExecutorService periodicExecutor;
 
-    private final MetadataCache metadataCache;
+    private final ServerMetadataCache metadataCache;
     private final MetadataManager metadataManager;
     private final Clock clock;
 
@@ -101,7 +101,9 @@ public class AutoPartitionManager implements AutoCloseable {
     private final Lock lock = new ReentrantLock();
 
     public AutoPartitionManager(
-            MetadataCache metadataCache, MetadataManager metadataManager, Configuration conf) {
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager,
+            Configuration conf) {
         this(
                 metadataCache,
                 metadataManager,
@@ -113,7 +115,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
     @VisibleForTesting
     AutoPartitionManager(
-            MetadataCache metadataCache,
+            ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             Configuration conf,
             Clock clock,

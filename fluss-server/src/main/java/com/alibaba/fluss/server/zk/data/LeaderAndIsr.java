@@ -29,6 +29,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
  */
 public class LeaderAndIsr {
 
+    public static final int NO_LEADER_EPOCH = -1;
     public static final int INITIAL_LEADER_EPOCH = 0;
     public static final int INITIAL_BUCKET_EPOCH = 0;
     public static final int NO_LEADER = -1;
