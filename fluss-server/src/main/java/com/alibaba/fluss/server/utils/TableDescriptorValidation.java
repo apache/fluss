@@ -91,10 +91,12 @@ public class TableDescriptorValidation {
         if (!unsupportedColumns.isEmpty()) {
             throw new InvalidTableException(
                     String.format(
-                            "Unsupported columns: %s. %s are system columns, please don't use them.",
+                            "%s cannot be used as column names, "
+                                    + "because they are reserved system columns in Fluss. "
+                                    + "Please use other names for these columns. "
+                                    + "The reserved system columns are: %s",
                             String.join(", ", unsupportedColumns),
                             String.join(", ", systemColumns)));
-        }
     }
 
     private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {
