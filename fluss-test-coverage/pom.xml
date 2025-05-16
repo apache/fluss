@@ -265,7 +265,7 @@
                                         <exclude>com.alibaba.fluss.utils.crc.Crc32C</exclude>
                                         <exclude>com.alibaba.fluss.config.FlussConfigUtils</exclude>
                                         <exclude>com.alibaba.fluss.table.*</exclude>
-                                        <exclude>com.alibaba.fluss.record.*</exclude>
+<!--                                        <exclude>com.alibaba.fluss.record.*</exclude>-->
                                         <exclude>com.alibaba.fluss.kv.*</exclude>
                                         <exclude>com.alibaba.fluss.io.*</exclude>
                                         <exclude>com.alibaba.fluss.bucketing.BucketingFunction</exclude>
