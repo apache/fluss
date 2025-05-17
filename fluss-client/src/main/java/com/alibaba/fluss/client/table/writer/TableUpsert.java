@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.client.table.writer;
 
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -35,13 +36,15 @@ public class TableUpsert implements Upsert {
     private final MetadataUpdater metadataUpdater;
 
     private final @Nullable int[] targetColumns;
+    private final Admin admin;
 
     public TableUpsert(
             TablePath tablePath,
             TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
-            WriterClient writerClient) {
-        this(tablePath, tableInfo, metadataUpdater, writerClient, null);
+            WriterClient writerClient,
+            Admin admin) {
+        this(tablePath, tableInfo, metadataUpdater, writerClient, null, admin);
     }
 
     private TableUpsert(
@@ -49,12 +52,14 @@ public class TableUpsert implements Upsert {
             TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             WriterClient writerClient,
-            @Nullable int[] targetColumns) {
+            @Nullable int[] targetColumns,
+            Admin admin) {
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.writerClient = writerClient;
         this.metadataUpdater = metadataUpdater;
         this.targetColumns = targetColumns;
+        this.admin = admin;
     }
 
     @Override
@@ -75,7 +80,8 @@ public class TableUpsert implements Upsert {
                 }
             }
         }
-        return new TableUpsert(tablePath, tableInfo, metadataUpdater, writerClient, targetColumns);
+        return new TableUpsert(
+                tablePath, tableInfo, metadataUpdater, writerClient, targetColumns, admin);
     }
 
     @Override
@@ -101,6 +107,6 @@ public class TableUpsert implements Upsert {
     @Override
     public UpsertWriter createWriter() {
         return new UpsertWriterImpl(
-                tablePath, tableInfo, targetColumns, writerClient, metadataUpdater);
+                tablePath, tableInfo, targetColumns, writerClient, metadataUpdater, admin);
     }
 }

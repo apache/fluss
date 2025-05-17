@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.client.table.writer;
 
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
@@ -45,12 +46,15 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private final LogFormat logFormat;
     private final IndexedRowEncoder indexedRowEncoder;
     private final FieldGetter[] fieldGetters;
+    private final Admin admin;
+    private final boolean isDynamicPartitionEnabled;
 
     AppendWriterImpl(
             TablePath tablePath,
             TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
-            WriterClient writerClient) {
+            WriterClient writerClient,
+            Admin admin) {
         super(tablePath, tableInfo, metadataUpdater, writerClient);
         List<String> bucketKeys = tableInfo.getBucketKeys();
         if (bucketKeys.isEmpty()) {
@@ -64,6 +68,8 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         this.logFormat = tableInfo.getTableConfig().getLogFormat();
         this.indexedRowEncoder = new IndexedRowEncoder(tableInfo.getRowType());
         this.fieldGetters = InternalRow.createFieldGetters(tableInfo.getRowType());
+        this.admin = admin;
+        this.isDynamicPartitionEnabled = tableInfo.getTableConfig().isDynamicPartitionEnabled();
     }
 
     /**
@@ -75,7 +81,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     public CompletableFuture<AppendResult> append(InternalRow row) {
         checkFieldCount(row);
 
-        PhysicalTablePath physicalPath = getPhysicalPath(row);
+        PhysicalTablePath physicalPath = getPhysicalPath(row, admin, isDynamicPartitionEnabled);
         byte[] bucketKey = bucketKeyEncoder != null ? bucketKeyEncoder.encodeKey(row) : null;
 
         final WriteRecord record;

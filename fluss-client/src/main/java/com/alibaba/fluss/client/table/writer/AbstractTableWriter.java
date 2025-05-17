@@ -16,15 +16,20 @@
 
 package com.alibaba.fluss.client.table.writer;
 
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.utils.ExceptionUtils;
 
 import javax.annotation.Nullable;
 
@@ -80,7 +85,8 @@ public abstract class AbstractTableWriter implements TableWriter {
         return future;
     }
 
-    protected PhysicalTablePath getPhysicalPath(InternalRow row) {
+    protected PhysicalTablePath getPhysicalPath(
+            InternalRow row, Admin admin, boolean isDynamicCreatePartition) {
         // not partitioned table, return the original physical path
         if (partitionFieldGetter == null) {
             return PhysicalTablePath.of(tablePath);
@@ -89,7 +95,32 @@ public abstract class AbstractTableWriter implements TableWriter {
             String partition = partitionFieldGetter.getPartition(row);
             PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partition);
             // may update partition info
-            metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+            boolean isExists;
+            try {
+                isExists = metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+            } catch (Exception e) {
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                if (t.getCause() instanceof PartitionNotExistException) {
+                    if (!isDynamicCreatePartition) {
+                        throw new FlussRuntimeException(e);
+                    }
+                    isExists = false;
+                } else {
+                    throw new FlussRuntimeException(e);
+                }
+            }
+            if (!isExists && isDynamicCreatePartition) {
+                ResolvedPartitionSpec resolvedPartitionSpec =
+                        partitionFieldGetter.getResolvedPartitionSpec(row);
+                try {
+                    admin.createPartition(tablePath, resolvedPartitionSpec.toPartitionSpec(), true)
+                            .get();
+                    // after create partition, update partition metadata
+                    metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+                } catch (Exception e) {
+                    throw new FlussRuntimeException(e);
+                }
+            }
             return partitionPath;
         }
     }

@@ -64,4 +64,16 @@ public class PartitionGetter {
                 new ResolvedPartitionSpec(partitionKeys, partitionValues);
         return resolvedPartitionSpec.getPartitionName();
     }
+
+    public ResolvedPartitionSpec getResolvedPartitionSpec(InternalRow row) {
+        List<String> partitionValues = new ArrayList<>();
+        for (InternalRow.FieldGetter partitionFieldGetter : partitionFieldGetters) {
+            Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
+            checkNotNull(partitionValue, "Partition value shouldn't be null.");
+            partitionValues.add(partitionValue.toString());
+        }
+        ResolvedPartitionSpec resolvedPartitionSpec =
+                new ResolvedPartitionSpec(partitionKeys, partitionValues);
+        return resolvedPartitionSpec;
+    }
 }

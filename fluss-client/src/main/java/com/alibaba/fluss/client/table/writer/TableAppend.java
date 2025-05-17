@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.client.table.writer;
 
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -28,20 +29,23 @@ public class TableAppend implements Append {
     private final TableInfo tableInfo;
     private final MetadataUpdater metadataUpdater;
     private final WriterClient writerClient;
+    private final Admin admin;
 
     public TableAppend(
             TablePath tablePath,
             TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
-            WriterClient writerClient) {
+            WriterClient writerClient,
+            Admin admin) {
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.metadataUpdater = metadataUpdater;
         this.writerClient = writerClient;
+        this.admin = admin;
     }
 
     @Override
     public AppendWriter createWriter() {
-        return new AppendWriterImpl(tablePath, tableInfo, metadataUpdater, writerClient);
+        return new AppendWriterImpl(tablePath, tableInfo, metadataUpdater, writerClient, admin);
     }
 }
