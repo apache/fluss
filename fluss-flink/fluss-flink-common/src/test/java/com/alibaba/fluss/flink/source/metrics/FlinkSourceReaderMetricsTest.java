@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.flink.source.metrics;
 
+import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import org.apache.flink.metrics.Gauge;
@@ -32,7 +33,7 @@ import static com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics.RE
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit test for {@link com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics}. */
-class FlinkSourceReaderMetricsTest {
+class FlinkSourceReaderMetricsTest extends FlinkTestBase {
 
     @Test
     void testCurrentOffsetTracking() {

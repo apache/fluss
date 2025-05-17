@@ -80,8 +80,8 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     @BeforeAll
     protected static void beforeAll() {
+        // create fluss connection
         FlinkTestBase.beforeAll();
-        // create database
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         // create table environment
         tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
@@ -910,8 +910,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                         "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
                                 + " ON src.b = h.name AND h.address = 'address5'",
                         dim);
-
-        waitUtilAllBucketFinishSnapshot(admin, TablePath.of(DEFAULT_DB, dim));
         CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
         List<String> expected = Collections.singletonList("+I[1, name1, address5]");
         assertResultsIgnoreOrder(collected, expected, true);
