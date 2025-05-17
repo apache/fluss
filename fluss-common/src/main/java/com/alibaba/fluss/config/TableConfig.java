@@ -114,4 +114,9 @@ public class TableConfig {
     public AutoPartitionStrategy getAutoPartitionStrategy() {
         return AutoPartitionStrategy.from(config);
     }
+
+    /** Whether dynamic partition enable. */
+    public boolean isDynamicPartitionEnabled() {
+        return config.get(ConfigOptions.TABLE_DYNAMIC_PARTITION_ENABLED);
+    }
 }

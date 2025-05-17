@@ -186,10 +186,11 @@ public class MetadataUpdater {
      *
      * <p>and update partition metadata .
      */
-    public void checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
+    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
         if (!cluster.getPartitionId(physicalTablePath).isPresent()) {
             updateMetadata(null, Collections.singleton(physicalTablePath), null);
         }
+        return cluster.getPartitionId(physicalTablePath).isPresent();
     }
 
     /**
