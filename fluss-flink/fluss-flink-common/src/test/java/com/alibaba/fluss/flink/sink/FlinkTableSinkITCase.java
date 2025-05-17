@@ -72,7 +72,7 @@ import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_D
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link FlinkTableSink}. */
+/** Test for {@link FlinkTableSink} inherit AbstractTestBase for resource cleanup. */
 abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
