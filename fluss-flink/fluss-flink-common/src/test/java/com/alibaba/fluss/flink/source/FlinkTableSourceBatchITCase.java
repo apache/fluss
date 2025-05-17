@@ -45,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;

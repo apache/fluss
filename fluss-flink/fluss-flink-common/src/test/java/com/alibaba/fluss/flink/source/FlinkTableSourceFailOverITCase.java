@@ -54,7 +54,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.createPartitions;
 import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.dropPartitions;
 import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.waitUntilPartitions;

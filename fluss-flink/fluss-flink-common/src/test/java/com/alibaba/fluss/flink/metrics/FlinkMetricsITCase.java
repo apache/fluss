@@ -16,13 +16,16 @@
 
 package com.alibaba.fluss.flink.metrics;
 
+import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.apache.flink.api.common.JobID;
@@ -39,20 +42,38 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for fluss reporting metrics to Flink. */
-abstract class FlinkMetricsITCase extends FlinkTestBase {
+abstract class FlinkMetricsITCase {
+
+    @RegisterExtension
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+            FlussClusterExtension.builder()
+                    .setClusterConf(
+                            new com.alibaba.fluss.config.Configuration()
+                                    // set snapshot interval to 1s for testing purposes
+                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+                                    // not to clean snapshots for test purpose
+                                    .set(
+                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
+                                            Integer.MAX_VALUE))
+                    .setNumOfTabletServers(3)
+                    .build();
 
     private static final int DEFAULT_PARALLELISM = 4;
     private static final InMemoryReporter reporter = InMemoryReporter.createWithRetainedMetrics();
@@ -67,11 +88,19 @@ abstract class FlinkMetricsITCase extends FlinkTestBase {
 
     private static final String CATALOG_NAME = "testcatalog";
     private static final String DEFAULT_DB = "defaultdb";
+
+    protected static Connection conn;
+    protected static Admin admin;
+    protected static com.alibaba.fluss.config.Configuration clientConf;
+
     static TableEnvironment tEnv;
 
     @BeforeAll
     protected static void beforeAll() {
-        FlinkTestBase.beforeAll();
+        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+
         try {
             MINI_CLUSTER_EXTENSION.before();
         } catch (Exception e) {
@@ -88,7 +117,7 @@ abstract class FlinkMetricsITCase extends FlinkTestBase {
     }
 
     @BeforeEach
-    void beforeEach() {
+    void beforeEach() throws Exception {
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
@@ -98,7 +127,27 @@ abstract class FlinkMetricsITCase extends FlinkTestBase {
     void afterEach() {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
+    }
+
+    @AfterAll
+    static void afterAll() throws Exception {
+        if (admin != null) {
+            admin.close();
+            admin = null;
+        }
+
+        if (conn != null) {
+            conn.close();
+            conn = null;
+        }
+
         MINI_CLUSTER_EXTENSION.after();
+    }
+
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+            throws Exception {
+        admin.createTable(tablePath, tableDescriptor, true).get();
+        return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     @Test

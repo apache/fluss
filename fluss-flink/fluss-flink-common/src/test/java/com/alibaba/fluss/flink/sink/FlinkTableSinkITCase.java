@@ -39,6 +39,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
@@ -65,14 +66,14 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
-import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.waitUntilPartitions;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link FlinkTableSink}. */
-abstract class FlinkTableSinkITCase {
+/** Test for {@link FlinkTableSink} inherit AbstractTestBase for resource cleanup. */
+abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();

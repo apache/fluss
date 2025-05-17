@@ -56,7 +56,7 @@ import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
-import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.assertResultsIgnoreOrder;
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

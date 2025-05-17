@@ -63,6 +63,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
@@ -79,12 +80,12 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     @BeforeAll
     protected static void beforeAll() {
+        // create fluss connection
         FlinkTestBase.beforeAll();
-
-        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         // create table environment
         tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // crate catalog using sql
         tEnv.executeSql(
                 String.format(
@@ -97,7 +98,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     @BeforeEach
     void before() {
-        // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
     }
@@ -910,7 +910,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                         "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
                                 + " ON src.b = h.name AND h.address = 'address5'",
                         dim);
-
         CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
         List<String> expected = Collections.singletonList("+I[1, name1, address5]");
         assertResultsIgnoreOrder(collected, expected, true);
