@@ -16,7 +16,9 @@
 
 package com.alibaba.fluss.flink.sink.serializer;
 
+import com.alibaba.fluss.flink.row.RowWithOp;
 import com.alibaba.fluss.flink.source.testutils.Order;
+import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.IntType;
@@ -90,25 +92,24 @@ public class OrderSerializationSchemaTest {
 
         Order order = new Order(1001L, 5001L, 10, "A-12 Mumbai");
 
-        RowData result = serializer.serialize(order);
+        RowWithOp rowWithOp = serializer.serialize(order);
+        InternalRow row = rowWithOp.getRow();
 
-        assertThat(result.getArity()).isEqualTo(4);
-        assertThat(result.getLong(0)).isEqualTo(1001L);
-        assertThat(result.getLong(1)).isEqualTo(5001L);
-        assertThat(result.getInt(2)).isEqualTo(10);
-        assertThat(result.getString(3).toString()).isEqualTo("A-12 Mumbai");
+        assertThat(row.getFieldCount()).isEqualTo(4);
+        assertThat(row.getLong(0)).isEqualTo(1001L);
+        assertThat(row.getLong(1)).isEqualTo(5001L);
+        assertThat(row.getInt(2)).isEqualTo(10);
+        assertThat(row.getString(3).toString()).isEqualTo("A-12 Mumbai");
     }
 
     // Test null input
     @Test
     public void testNullHandling() throws Exception {
-
-        RowData nullResult = serializer.serialize(null);
-        assertThat(nullResult).isNull();
-
         Order order = new Order(1002L, 5002L, 5, null);
 
-        RowData result = serializer.serialize(order);
+        RowWithOp rowWithOp2 = serializer.serialize(order);
+
+        InternalRow result = rowWithOp2.getRow();
         assertThat(result.getLong(0)).isEqualTo(1002L);
         assertThat(result.getLong(1)).isEqualTo(5002L);
         assertThat(result.getInt(2)).isEqualTo(5);
@@ -126,9 +127,10 @@ public class OrderSerializationSchemaTest {
 
         Order order = new Order(1003L, 5003L, 15, "1124 Rohtak");
 
-        RowData result = extendedSerializer.serialize(order);
+        RowWithOp rowWithOp = extendedSerializer.serialize(order);
+        InternalRow result = rowWithOp.getRow();
 
-        assertThat(result.getArity()).isEqualTo(5);
+        assertThat(result.getFieldCount()).isEqualTo(5);
         assertThat(result.getLong(0)).isEqualTo(1003L);
         assertThat(result.getLong(1)).isEqualTo(5003L);
         assertThat(result.getInt(2)).isEqualTo(15);

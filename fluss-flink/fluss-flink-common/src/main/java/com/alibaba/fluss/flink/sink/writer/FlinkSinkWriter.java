@@ -22,8 +22,12 @@ import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
-import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
+import com.alibaba.fluss.flink.row.OperationType;
+import com.alibaba.fluss.flink.row.RowWithOp;
+import com.alibaba.fluss.flink.sink.serializer.FlussSerializationSchema;
+import com.alibaba.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -37,9 +41,7 @@ import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.table.api.ValidationException;
-import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.types.RowKind;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,7 +52,7 @@ import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 /** Base class for Flink {@link SinkWriter} implementations in Fluss. */
-public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
+public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
 
     protected static final Logger LOG = LoggerFactory.getLogger(FlinkSinkWriter.class);
 
@@ -58,10 +60,9 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
     private final Configuration flussConfig;
     protected final RowType tableRowType;
     protected final @Nullable int[] targetColumnIndexes;
-    private final boolean ignoreDelete;
     private final MailboxExecutor mailboxExecutor;
+    private final FlussSerializationSchema<InputT> serializationSchema;
 
-    private transient FlinkAsFlussRow sinkRow;
     private transient Connection connection;
     protected transient Table table;
     protected transient FlinkMetricRegistry flinkMetricRegistry;
@@ -76,9 +77,9 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
-            boolean ignoreDelete,
-            MailboxExecutor mailboxExecutor) {
-        this(tablePath, flussConfig, tableRowType, null, ignoreDelete, mailboxExecutor);
+            MailboxExecutor mailboxExecutor,
+            FlussSerializationSchema<InputT> serializationSchema) {
+        this(tablePath, flussConfig, tableRowType, null, mailboxExecutor, serializationSchema);
     }
 
     public FlinkSinkWriter(
@@ -86,14 +87,14 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
             Configuration flussConfig,
             RowType tableRowType,
             @Nullable int[] targetColumns,
-            boolean ignoreDelete,
-            MailboxExecutor mailboxExecutor) {
+            MailboxExecutor mailboxExecutor,
+            FlussSerializationSchema<InputT> serializationSchema) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.targetColumnIndexes = targetColumns;
         this.tableRowType = tableRowType;
-        this.ignoreDelete = ignoreDelete;
         this.mailboxExecutor = mailboxExecutor;
+        this.serializationSchema = serializationSchema;
     }
 
     public void initialize(SinkWriterMetricGroup metricGroup) {
@@ -109,7 +110,14 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
         connection = ConnectionFactory.createConnection(flussConfig, flinkMetricRegistry);
         table = connection.getTable(tablePath);
         sanityCheck(table.getTableInfo());
-        sinkRow = new FlinkAsFlussRow();
+
+        try {
+            this.serializationSchema.open(
+                    new SerializerInitContextImpl(table.getTableInfo().getRowType()));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(e);
+        }
+
         initMetrics();
     }
 
@@ -120,35 +128,41 @@ public abstract class FlinkSinkWriter implements SinkWriter<RowData> {
     }
 
     @Override
-    public void write(RowData value, Context context) throws IOException, InterruptedException {
+    public void write(InputT inputValue, Context context) throws IOException, InterruptedException {
         checkAsyncException();
-        if (ignoreDelete
-                && (value.getRowKind() == RowKind.UPDATE_BEFORE
-                        || value.getRowKind() == RowKind.DELETE)) {
-            return;
-        }
 
-        InternalRow internalRow = sinkRow.replace(value);
-        CompletableFuture<?> writeFuture = writeRow(value.getRowKind(), internalRow);
-        writeFuture.whenComplete(
-                (ignored, throwable) -> {
-                    if (throwable != null) {
-                        if (this.asyncWriterException == null) {
-                            this.asyncWriterException = throwable;
+        try {
+            RowWithOp rowWithOp = serializationSchema.serialize(inputValue);
+            OperationType opType = rowWithOp.getOperationType();
+            InternalRow row = rowWithOp.getRow();
+            if (opType == OperationType.IGNORE) {
+                // skip writing the row
+                return;
+            }
+            CompletableFuture<?> writeFuture = writeRow(opType, row);
+            writeFuture.whenComplete(
+                    (ignored, throwable) -> {
+                        if (throwable != null) {
+                            if (this.asyncWriterException == null) {
+                                this.asyncWriterException = throwable;
+                            }
+
+                            // Checking for exceptions from previous writes
+                            mailboxExecutor.execute(
+                                    this::checkAsyncException, "Update error metric");
                         }
+                    });
 
-                        // Checking for exceptions from previous writes
-                        mailboxExecutor.execute(this::checkAsyncException, "Update error metric");
-                    }
-                });
-
-        numRecordsOutCounter.inc();
+            numRecordsOutCounter.inc();
+        } catch (Exception e) {
+            throw new IOException(e.getMessage(), e);
+        }
     }
 
     @Override
     public abstract void flush(boolean endOfInput) throws IOException, InterruptedException;
 
-    abstract CompletableFuture<?> writeRow(RowKind rowKind, InternalRow internalRow);
+    abstract CompletableFuture<?> writeRow(OperationType opType, InternalRow internalRow);
 
     @Override
     public void close() throws Exception {

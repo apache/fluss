@@ -173,7 +173,7 @@ public class FlussDeserializationSchemaTest {
         // Create deserializer
         JsonStringDeserializationSchema deserializer = new JsonStringDeserializationSchema();
         // Test deserialization
-        deserializer.open(new InitializationContextImpl(null, null, rowType));
+        deserializer.open(new DeserializerInitContextImpl(null, null, rowType));
         String result = deserializer.deserialize(scanRecord);
 
         String rowJson =

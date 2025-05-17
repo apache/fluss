@@ -17,7 +17,7 @@
 package com.alibaba.fluss.flink.source.reader;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.source.deserializer.InitializationContextImpl;
+import com.alibaba.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter;
 import com.alibaba.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
@@ -165,7 +165,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
         RowDataDeserializationSchema deserializationSchema = new RowDataDeserializationSchema();
         deserializationSchema.open(
-                new InitializationContextImpl(
+                new DeserializerInitContextImpl(
                         context.metricGroup().addGroup("deserializer"),
                         context.getUserCodeClassLoader(),
                         sourceOutputType));

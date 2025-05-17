@@ -25,13 +25,14 @@ import org.apache.flink.util.UserCodeClassLoader;
  * Contextual information that can be used during initialization of {@link
  * FlussDeserializationSchema}.
  */
-public class InitializationContextImpl implements FlussDeserializationSchema.InitializationContext {
+public class DeserializerInitContextImpl
+        implements FlussDeserializationSchema.InitializationContext {
 
     private final MetricGroup metricGroup;
     private final UserCodeClassLoader userCodeClassLoader;
     private final RowType rowSchema;
 
-    public InitializationContextImpl(
+    public DeserializerInitContextImpl(
             MetricGroup metricGroup, UserCodeClassLoader userCodeClassLoader, RowType rowSchema) {
         this.metricGroup = metricGroup;
         this.userCodeClassLoader = userCodeClassLoader;

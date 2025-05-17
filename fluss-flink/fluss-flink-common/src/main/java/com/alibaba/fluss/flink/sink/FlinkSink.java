@@ -18,6 +18,7 @@ package com.alibaba.fluss.flink.sink;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.flink.sink.serializer.FlussSerializationSchema;
 import com.alibaba.fluss.flink.sink.writer.AppendSinkWriter;
 import com.alibaba.fluss.flink.sink.writer.FlinkSinkWriter;
 import com.alibaba.fluss.flink.sink.writer.UpsertSinkWriter;
@@ -31,7 +32,6 @@ import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.runtime.metrics.groups.InternalSinkWriterMetricGroup;
 import org.apache.flink.streaming.api.connector.sink2.SupportsPreWriteTopology;
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
@@ -44,98 +44,106 @@ import static com.alibaba.fluss.flink.sink.FlinkStreamPartitioner.partition;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussRowType;
 
 /** Flink sink for Fluss. */
-class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
+/** Flink sink for Fluss. */
+class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT> {
 
     private static final long serialVersionUID = 1L;
 
-    private final SinkWriterBuilder<? extends FlinkSinkWriter> builder;
+    private final SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder;
 
-    FlinkSink(SinkWriterBuilder<? extends FlinkSinkWriter> builder) {
+    FlinkSink(SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder) {
         this.builder = builder;
     }
 
     @Deprecated
     @Override
-    public SinkWriter<RowData> createWriter(InitContext context) throws IOException {
-
-        FlinkSinkWriter flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
+    public SinkWriter<InputT> createWriter(InitContext context) throws IOException {
+        FlinkSinkWriter<InputT> flinkSinkWriter =
+                builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
     @Override
-    public SinkWriter<RowData> createWriter(WriterInitContext context) throws IOException {
-        FlinkSinkWriter flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
+    public SinkWriter<InputT> createWriter(WriterInitContext context) throws IOException {
+        FlinkSinkWriter<InputT> flinkSinkWriter =
+                builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
     @Override
-    public DataStream<RowData> addPreWriteTopology(DataStream<RowData> input) {
+    public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
         return builder.addPreWriteTopology(input);
     }
 
     @Internal
-    interface SinkWriterBuilder<W extends FlinkSinkWriter> extends Serializable {
+    interface SinkWriterBuilder<W extends FlinkSinkWriter<InputT>, InputT> extends Serializable {
         W createWriter(MailboxExecutor mailboxExecutor);
 
-        DataStream<RowData> addPreWriteTopology(DataStream<RowData> input);
+        DataStream<InputT> addPreWriteTopology(DataStream<InputT> input);
     }
 
     @Internal
-    static class AppendSinkWriterBuilder implements SinkWriterBuilder<AppendSinkWriter> {
+    static class AppendSinkWriterBuilder<InputT>
+            implements SinkWriterBuilder<AppendSinkWriter<InputT>, InputT> {
 
         private static final long serialVersionUID = 1L;
 
         private final TablePath tablePath;
         private final Configuration flussConfig;
         private final RowType tableRowType;
-        private final boolean ignoreDelete;
         private final int numBucket;
         private final List<String> bucketKeys;
         private final List<String> partitionKeys;
         private final @Nullable DataLakeFormat lakeFormat;
         private final boolean shuffleByBucketId;
+        private final FlussSerializationSchema<InputT> flussSerializationSchema;
 
         public AppendSinkWriterBuilder(
                 TablePath tablePath,
                 Configuration flussConfig,
                 RowType tableRowType,
-                boolean ignoreDelete,
                 int numBucket,
                 List<String> bucketKeys,
                 List<String> partitionKeys,
                 @Nullable DataLakeFormat lakeFormat,
-                boolean shuffleByBucketId) {
+                boolean shuffleByBucketId,
+                FlussSerializationSchema<InputT> flussSerializationSchema) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
-            this.ignoreDelete = ignoreDelete;
             this.numBucket = numBucket;
             this.bucketKeys = bucketKeys;
             this.partitionKeys = partitionKeys;
             this.lakeFormat = lakeFormat;
             this.shuffleByBucketId = shuffleByBucketId;
+            this.flussSerializationSchema = flussSerializationSchema;
         }
 
         @Override
-        public AppendSinkWriter createWriter(MailboxExecutor mailboxExecutor) {
-            return new AppendSinkWriter(
-                    tablePath, flussConfig, tableRowType, ignoreDelete, mailboxExecutor);
+        public AppendSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+            return new AppendSinkWriter<>(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    mailboxExecutor,
+                    flussSerializationSchema);
         }
 
         @Override
-        public DataStream<RowData> addPreWriteTopology(DataStream<RowData> input) {
+        public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
             // For append only sink, we will do bucket shuffle only if bucket keys are not empty.
             if (!bucketKeys.isEmpty() && shuffleByBucketId) {
                 return partition(
                         input,
-                        new FlinkRowDataChannelComputer(
+                        new FlinkRowDataChannelComputer<>(
                                 toFlussRowType(tableRowType),
                                 bucketKeys,
                                 partitionKeys,
                                 lakeFormat,
-                                numBucket),
+                                numBucket,
+                                flussSerializationSchema),
                         input.getParallelism());
             } else {
                 return input;
@@ -144,7 +152,8 @@ class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
     }
 
     @Internal
-    static class UpsertSinkWriterBuilder implements SinkWriterBuilder<UpsertSinkWriter> {
+    static class UpsertSinkWriterBuilder<InputT>
+            implements SinkWriterBuilder<UpsertSinkWriter<InputT>, InputT> {
 
         private static final long serialVersionUID = 1L;
 
@@ -152,58 +161,59 @@ class FlinkSink implements Sink<RowData>, SupportsPreWriteTopology<RowData> {
         private final Configuration flussConfig;
         private final RowType tableRowType;
         private final @Nullable int[] targetColumnIndexes;
-        private final boolean ignoreDelete;
         private final int numBucket;
         private final List<String> bucketKeys;
         private final List<String> partitionKeys;
         private final @Nullable DataLakeFormat lakeFormat;
         private final boolean shuffleByBucketId;
+        private final FlussSerializationSchema<InputT> flussSerializationSchema;
 
         UpsertSinkWriterBuilder(
                 TablePath tablePath,
                 Configuration flussConfig,
                 RowType tableRowType,
                 @Nullable int[] targetColumnIndexes,
-                boolean ignoreDelete,
                 int numBucket,
                 List<String> bucketKeys,
                 List<String> partitionKeys,
                 @Nullable DataLakeFormat lakeFormat,
-                boolean shuffleByBucketId) {
+                boolean shuffleByBucketId,
+                FlussSerializationSchema<InputT> flussSerializationSchema) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
             this.targetColumnIndexes = targetColumnIndexes;
-            this.ignoreDelete = ignoreDelete;
             this.numBucket = numBucket;
             this.bucketKeys = bucketKeys;
             this.partitionKeys = partitionKeys;
             this.lakeFormat = lakeFormat;
             this.shuffleByBucketId = shuffleByBucketId;
+            this.flussSerializationSchema = flussSerializationSchema;
         }
 
         @Override
-        public UpsertSinkWriter createWriter(MailboxExecutor mailboxExecutor) {
-            return new UpsertSinkWriter(
+        public UpsertSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+            return new UpsertSinkWriter<>(
                     tablePath,
                     flussConfig,
                     tableRowType,
                     targetColumnIndexes,
-                    ignoreDelete,
-                    mailboxExecutor);
+                    mailboxExecutor,
+                    flussSerializationSchema);
         }
 
         @Override
-        public DataStream<RowData> addPreWriteTopology(DataStream<RowData> input) {
+        public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
             return shuffleByBucketId
                     ? partition(
                             input,
-                            new FlinkRowDataChannelComputer(
+                            new FlinkRowDataChannelComputer<>(
                                     toFlussRowType(tableRowType),
                                     bucketKeys,
                                     partitionKeys,
                                     lakeFormat,
-                                    numBucket),
+                                    numBucket,
+                                    flussSerializationSchema),
                             input.getParallelism())
                     : input;
         }

@@ -17,8 +17,8 @@
 package com.alibaba.fluss.flink.source;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import com.alibaba.fluss.flink.source.deserializer.InitializationContextImpl;
 import com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter;
 import com.alibaba.fluss.flink.source.enumerator.FlinkSourceEnumerator;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
@@ -140,7 +140,7 @@ public class FlinkSource<OUT>
                 new FlinkSourceReaderMetrics(context.metricGroup());
 
         deserializationSchema.open(
-                new InitializationContextImpl(
+                new DeserializerInitContextImpl(
                         context.metricGroup().addGroup("deserializer"),
                         context.getUserCodeClassLoader(),
                         sourceOutputType));

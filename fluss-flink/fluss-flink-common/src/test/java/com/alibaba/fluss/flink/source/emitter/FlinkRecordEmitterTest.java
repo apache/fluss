@@ -17,7 +17,7 @@
 package com.alibaba.fluss.flink.source.emitter;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.flink.source.deserializer.InitializationContextImpl;
+import com.alibaba.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -72,7 +72,7 @@ public class FlinkRecordEmitterTest extends FlinkTestBase {
 
         FlussRowToFlinkRowConverter converter = new FlussRowToFlinkRowConverter(sourceOutputType);
         RowDataDeserializationSchema deserializationSchema = new RowDataDeserializationSchema();
-        deserializationSchema.open(new InitializationContextImpl(null, null, sourceOutputType));
+        deserializationSchema.open(new DeserializerInitContextImpl(null, null, sourceOutputType));
 
         FlinkRecordEmitter<RowData> emitter = new FlinkRecordEmitter<>(deserializationSchema);
 
@@ -125,7 +125,7 @@ public class FlinkRecordEmitterTest extends FlinkTestBase {
 
         OrderDeserializationSchema deserializationSchema = new OrderDeserializationSchema();
         deserializationSchema.open(
-                new InitializationContextImpl(null, null, tableSchema.getRowType()));
+                new DeserializerInitContextImpl(null, null, tableSchema.getRowType()));
         FlinkRecordEmitter<Order> emitter = new FlinkRecordEmitter<>(deserializationSchema);
 
         TestSourceOutput<Order> sourceOutput = new TestSourceOutput<>();

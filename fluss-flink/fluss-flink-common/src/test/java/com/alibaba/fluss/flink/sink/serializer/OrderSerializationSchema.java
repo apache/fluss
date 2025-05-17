@@ -17,12 +17,14 @@
 package com.alibaba.fluss.flink.sink.serializer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.flink.row.OperationType;
+import com.alibaba.fluss.flink.row.RowWithOp;
 import com.alibaba.fluss.flink.source.testutils.Order;
+import com.alibaba.fluss.row.BinaryString;
+import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.types.RowType;
 
-import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.StringData;
 
 /**
  * A serialization schema that converts {@link Order} objects to {@link RowData} for writing to
@@ -63,32 +65,28 @@ public class OrderSerializationSchema implements FlussSerializationSchema<Order>
     }
 
     @Override
-    public RowData serialize(Order order) throws Exception {
-        if (order == null) {
-            return null;
-        }
-
+    public RowWithOp serialize(Order order) throws Exception {
         // Create a new row with the same number of fields as the schema
-        GenericRowData rowData = new GenericRowData(rowType.getFieldCount());
+        GenericRow row = new GenericRow(rowType.getFieldCount());
 
         // Set order fields directly, knowing their exact position and type
-        rowData.setField(0, order.getOrderId());
-        rowData.setField(1, order.getItemId());
-        rowData.setField(2, order.getAmount());
+        row.setField(0, order.getOrderId());
+        row.setField(1, order.getItemId());
+        row.setField(2, order.getAmount());
 
         // Convert String to StringData for Flink internal representation
         String address = order.getAddress();
         if (address != null) {
-            rowData.setField(3, StringData.fromString(address));
+            row.setField(3, BinaryString.fromString(address));
         } else {
-            rowData.setField(3, null);
+            row.setField(3, null);
         }
 
         // If the schema has more fields than the Order class, set them to null
         for (int i = 4; i < rowType.getFieldCount(); i++) {
-            rowData.setField(i, null);
+            row.setField(i, null);
         }
 
-        return rowData;
+        return new RowWithOp(row, OperationType.APPEND);
     }
 }

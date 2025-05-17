@@ -22,6 +22,8 @@ import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.NetworkException;
+import com.alibaba.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import com.alibaba.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
@@ -37,6 +39,7 @@ import org.apache.flink.metrics.Metric;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.util.InterceptingOperatorMetricGroup;
 import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.IntType;
@@ -48,6 +51,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.function.BiConsumer;
 
+import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussRowType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -81,7 +85,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                 new InterceptingOperatorMetricGroup();
         MockWriterInitContext mockWriterInitContext =
                 new MockWriterInitContext(interceptingOperatorMetricGroup);
-        FlinkSinkWriter flinkSinkWriter =
+        FlinkSinkWriter<RowData> flinkSinkWriter =
                 createSinkWriter(flussConf, mockWriterInitContext.getMailboxExecutor());
 
         flinkSinkWriter.initialize(mockWriterInitContext.metricGroup());
@@ -159,7 +163,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     }
 
     private void testExceptionWhenFlussUnavailable(
-            BiConsumer<FlinkSinkWriter, MailboxExecutor> actionAfterFlussUnavailable)
+            BiConsumer<FlinkSinkWriter<RowData>, MailboxExecutor> actionAfterFlussUnavailable)
             throws Exception {
         FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder().build();
         try {
@@ -182,7 +186,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             MockWriterInitContext mockWriterInitContext =
                     new MockWriterInitContext(new InterceptingOperatorMetricGroup());
             // test fluss unavailable.
-            try (FlinkSinkWriter writer =
+            try (FlinkSinkWriter<RowData> writer =
                     createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor())) {
                 writer.initialize(mockWriterInitContext.metricGroup());
                 flussClusterExtension.close();
@@ -197,16 +201,21 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
         }
     }
 
-    private FlinkSinkWriter createSinkWriter(
-            Configuration configuration, MailboxExecutor mailboxExecutor) {
-        return new AppendSinkWriter(
-                DEFAULT_SINK_TABLE_PATH,
-                configuration,
+    private FlinkSinkWriter<RowData> createSinkWriter(
+            Configuration configuration, MailboxExecutor mailboxExecutor) throws Exception {
+        RowType tableRowType =
                 RowType.of(
                         new LogicalType[] {new IntType(), new CharType(10)},
-                        new String[] {"id", "name"}),
-                false,
-                mailboxExecutor);
+                        new String[] {"id", "name"});
+        RowDataSerializationSchema serializationSchema =
+                new RowDataSerializationSchema(true, false);
+        serializationSchema.open(new SerializerInitContextImpl(toFlussRowType(tableRowType)));
+        return new AppendSinkWriter<>(
+                DEFAULT_SINK_TABLE_PATH,
+                configuration,
+                tableRowType,
+                mailboxExecutor,
+                serializationSchema);
     }
 
     static class MockSinkWriterContext implements SinkWriter.Context {
