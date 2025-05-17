@@ -41,9 +41,25 @@ function HomepageHeader() {
           </Link>
 
           <Link
-            className="source_code_button button button--secondary button--lg"
-            to="https://github.com/alibaba/fluss">
+              className={clsx("button button--secondary button--lg", styles.github_button)}
+              to="https://github.com/alibaba/fluss">
+            <img
+                src="img/github_icon.svg"
+                alt="GitHub"
+                className={styles.buttonIcon}
+            />
             GitHub
+          </Link>
+
+          <Link
+              className={clsx("button button--secondary button--lg", styles.join_slack_button)}
+              to="https://join.slack.com/t/fluss/shared_invite/zt-your-invite-link">
+            <img
+                src="img/slack_icon.svg"
+                alt="Slack"
+                className={styles.buttonIcon}
+            />
+            Join Slack
           </Link>
         </div>
       </div>
