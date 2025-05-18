@@ -32,10 +32,7 @@ import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 
-import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
@@ -46,6 +43,14 @@ import static com.alibaba.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYP
 
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
+
+    private static final Set<String> SYSTEM_COLUMNS =
+            Collections.unmodifiableSet(
+                    new HashSet<>(
+                            Arrays.asList(
+                                    OFFSET_COLUMN_NAME,
+                                    TIMESTAMP_COLUMN_NAME,
+                                    BUCKET_COLUMN_NAME)));
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
     public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
@@ -82,10 +87,8 @@ public class TableDescriptorValidation {
 
     private static void checkSystemColumns(RowType schema) {
         List<String> fieldNames = schema.getFieldNames();
-        List<String> systemColumns =
-                Arrays.asList(OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME, BUCKET_COLUMN_NAME);
         List<String> unsupportedColumns =
-                fieldNames.stream().filter(systemColumns::contains).collect(Collectors.toList());
+                fieldNames.stream().filter(SYSTEM_COLUMNS::contains).collect(Collectors.toList());
         if (!unsupportedColumns.isEmpty()) {
             throw new InvalidTableException(
                     String.format(
@@ -94,7 +97,7 @@ public class TableDescriptorValidation {
                                     + "Please use other names for these columns. "
                                     + "The reserved system columns are: %s",
                             String.join(", ", unsupportedColumns),
-                            String.join(", ", systemColumns)));
+                            String.join(", ", SYSTEM_COLUMNS)));
         }
     }
 
