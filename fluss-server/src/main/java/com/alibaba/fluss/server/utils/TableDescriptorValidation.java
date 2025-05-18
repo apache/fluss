@@ -35,7 +35,7 @@ import com.alibaba.fluss.utils.AutoPartitionStrategy;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -52,7 +52,7 @@ public class TableDescriptorValidation {
 
     private static final Set<String> SYSTEM_COLUMNS =
             Collections.unmodifiableSet(
-                    new HashSet<>(
+                    new LinkedHashSet<>(
                             Arrays.asList(
                                     OFFSET_COLUMN_NAME,
                                     TIMESTAMP_COLUMN_NAME,
