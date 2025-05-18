@@ -49,3 +49,22 @@
   justify-content: center;
 }
 
+.join_slack_button {
+  margin-left: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.github_button {
+  margin-left: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.buttonIcon {
+  margin-right: 8px;
+  width: 20px;
+  height: 20px;
+}
