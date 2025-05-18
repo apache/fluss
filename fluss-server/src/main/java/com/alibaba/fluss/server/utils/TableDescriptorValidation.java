@@ -32,7 +32,13 @@ import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
