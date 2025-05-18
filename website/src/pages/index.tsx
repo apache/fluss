@@ -53,13 +53,13 @@ function HomepageHeader() {
 
           <Link
               className={clsx("button button--secondary button--lg", styles.join_slack_button)}
-              to="https://join.slack.com/t/fluss/shared_invite/zt-your-invite-link">
+              to="https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw">
             <img
                 src="img/slack_icon.svg"
                 alt="Slack"
                 className={styles.buttonIcon}
             />
-            Join Slack
+            Slack
           </Link>
         </div>
       </div>
