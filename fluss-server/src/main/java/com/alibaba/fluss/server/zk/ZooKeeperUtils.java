@@ -25,12 +25,15 @@ import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFra
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.SessionConnectionStateErrorPolicy;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerConfig;
 
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -95,6 +98,22 @@ public class ZooKeeperUtils {
         if (configuration.get(ConfigOptions.ZOOKEEPER_TOLERATE_SUSPENDED_CONNECTIONS)) {
             curatorFrameworkBuilder.connectionStateErrorPolicy(
                     new SessionConnectionStateErrorPolicy());
+        }
+
+        Optional<String> configPath =
+                configuration.getOptional(ConfigOptions.ZOOKEEPER_CONFIG_PATH);
+        if (configPath.isPresent()) {
+            try {
+                ZKClientConfig zkClientConfig = new ZKClientConfig(configPath.get());
+                curatorFrameworkBuilder.zkClientConfig(zkClientConfig);
+            } catch (QuorumPeerConfig.ConfigException e) {
+                LOG.warn("Fail to load zookeeper client config from path {}", configPath.get(), e);
+                throw new RuntimeException(
+                        String.format(
+                                "Fail to load zookeeper client config from path %s",
+                                configPath.get()),
+                        e);
+            }
         }
         return new ZooKeeperClient(
                 startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler));
