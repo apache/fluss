@@ -318,9 +318,6 @@
                                         <exclude>
                                             com.alibaba.fluss.flink.source.reader.FlinkSourceReader
                                         </exclude>
-                                        <exlucde>
-                                            com.alibaba.fluss.flink.source.reader.RecordAndPos
-                                        </exlucde>
                                         <exclude>com.alibaba.fluss.flink.sink.*</exclude>
                                         <exclude>
                                             com.alibaba.fluss.flink.metrics.*
