@@ -105,6 +105,8 @@ import static com.alibaba.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static com.alibaba.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
+import static com.alibaba.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordBatchEqualsWithRowKind;
@@ -1420,11 +1422,16 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @Test
     void testUpdateMetadata() {
         // check the server metadata before update.
+        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
         long partitionTableId = 150002L;
         long partitionId1 = 15L;
         String partitionName1 = "p1";
+        PhysicalTablePath physicalTablePath1 =
+                PhysicalTablePath.of(partitionTablePath, partitionName1);
         long partitionId2 = 16L;
         String partitionName2 = "p2";
+        PhysicalTablePath physicalTablePath2 =
+                PhysicalTablePath.of(partitionTablePath, partitionName2);
 
         Map<String, ServerNode> expectedCoordinatorServer = new HashMap<>();
         expectedCoordinatorServer.put(
@@ -1435,12 +1442,30 @@ class ReplicaManagerTest extends ReplicaTestBase {
         expectedTablePathById.put(DATA1_TABLE_ID, null);
         expectedTablePathById.put(partitionTableId, null);
 
+        Map<Long, TableInfo> expectedTableInfoById = new HashMap<>();
+        expectedTableInfoById.put(DATA1_TABLE_ID, null);
+        expectedTableInfoById.put(partitionTableId, null);
+
+        Map<TablePath, TableMetadata> expectedTableMetadataById = new HashMap<>();
+        expectedTableMetadataById.put(DATA1_TABLE_PATH, null);
+        expectedTableMetadataById.put(partitionTablePath, null);
+
         Map<Long, String> expectedPartitionNameById = new HashMap<>();
         expectedPartitionNameById.put(partitionId1, null);
         expectedPartitionNameById.put(partitionId2, null);
 
+        Map<PhysicalTablePath, PartitionMetadata> expectedPartitionMetadataById = new HashMap<>();
+        expectedPartitionMetadataById.put(physicalTablePath1, null);
+        expectedPartitionMetadataById.put(physicalTablePath2, null);
+
         assertUpdateMetadataEquals(
-                expectedCoordinatorServer, 3, expectedTablePathById, expectedPartitionNameById);
+                expectedCoordinatorServer,
+                3,
+                expectedTablePathById,
+                expectedTableInfoById,
+                expectedTableMetadataById,
+                expectedPartitionNameById,
+                expectedPartitionMetadataById);
 
         // 1. test update metadata with coordinatorEpoch = 2, with new coordinatorServer address,
         // with one new tabletServer, with one new table and one new partition table.
@@ -1474,87 +1499,110 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         "rack3",
                                         Endpoint.fromListenersString("CLIENT://localhost:93"),
                                         ServerType.TABLET_SERVER)));
-        List<TableMetadata> tableMetadataList =
-                Arrays.asList(
-                        new TableMetadata(DATA1_TABLE_INFO, Collections.emptyList()),
-                        new TableMetadata(
-                                TableInfo.of(
-                                        TablePath.of("test_db_1", "test_partition_table_1"),
-                                        partitionTableId,
-                                        0,
-                                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
-                                        System.currentTimeMillis(),
-                                        System.currentTimeMillis()),
-                                Collections.emptyList()));
+        TableInfo partitionTableInfo =
+                TableInfo.of(
+                        partitionTablePath,
+                        partitionTableId,
+                        0,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        TableMetadata tableMetadata1 = new TableMetadata(DATA1_TABLE_INFO, Collections.emptyList());
+        TableMetadata tableMetadata2 =
+                new TableMetadata(partitionTableInfo, Collections.emptyList());
 
-        List<PartitionMetadata> partitionMetadataList =
-                Arrays.asList(
-                        new PartitionMetadata(
-                                partitionTableId,
-                                partitionName1,
-                                partitionId1,
-                                Collections.emptyList()),
-                        new PartitionMetadata(
-                                partitionTableId,
-                                partitionName2,
-                                partitionId2,
-                                Collections.emptyList()));
-        replicaManager.maybeUpdateMetadataCache(
-                2,
-                buildClusterMetadata(
-                        csServerInfo, tsServerInfoList, tableMetadataList, partitionMetadataList));
-
-        expectedCoordinatorServer.put(
-                "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
-        expectedTablePathById.put(DATA1_TABLE_ID, DATA1_TABLE_PATH);
-        expectedTablePathById.put(
-                partitionTableId, TablePath.of("test_db_1", "test_partition_table_1"));
-        expectedPartitionNameById.put(partitionId1, partitionName1);
-        expectedPartitionNameById.put(partitionId2, partitionName2);
-        assertUpdateMetadataEquals(
-                expectedCoordinatorServer, 4, expectedTablePathById, expectedPartitionNameById);
-
-        // 3. test drop one table.
-        tableMetadataList =
-                Collections.singletonList(
-                        new TableMetadata(
-                                TableInfo.of(
-                                        DATA1_TABLE_INFO.getTablePath(),
-                                        DELETED_TABLE_ID, // mark as deleted.
-                                        DATA1_TABLE_INFO.getSchemaId(),
-                                        DATA1_TABLE_INFO.toTableDescriptor(),
-                                        System.currentTimeMillis(),
-                                        System.currentTimeMillis()),
-                                Collections.emptyList()));
+        PartitionMetadata partitionMetadata1 =
+                new PartitionMetadata(
+                        partitionTableId, partitionName1, partitionId1, Collections.emptyList());
+        PartitionMetadata partitionMetadata2 =
+                new PartitionMetadata(
+                        partitionTableId, partitionName2, partitionId2, Collections.emptyList());
         replicaManager.maybeUpdateMetadataCache(
                 2,
                 buildClusterMetadata(
                         csServerInfo,
                         tsServerInfoList,
-                        tableMetadataList,
+                        Arrays.asList(tableMetadata1, tableMetadata2),
+                        Arrays.asList(partitionMetadata1, partitionMetadata2)));
+
+        expectedCoordinatorServer.put(
+                "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
+        expectedTablePathById.put(DATA1_TABLE_ID, DATA1_TABLE_PATH);
+        expectedTablePathById.put(partitionTableId, partitionTablePath);
+
+        expectedTableInfoById.put(DATA1_TABLE_ID, DATA1_TABLE_INFO);
+        expectedTableInfoById.put(partitionTableId, partitionTableInfo);
+
+        expectedTableMetadataById.put(DATA1_TABLE_PATH, tableMetadata1);
+        expectedTableMetadataById.put(partitionTablePath, tableMetadata2);
+
+        expectedPartitionNameById.put(partitionId1, partitionName1);
+        expectedPartitionNameById.put(partitionId2, partitionName2);
+
+        expectedPartitionMetadataById.put(physicalTablePath1, partitionMetadata1);
+        expectedPartitionMetadataById.put(physicalTablePath2, partitionMetadata2);
+
+        assertUpdateMetadataEquals(
+                expectedCoordinatorServer,
+                4,
+                expectedTablePathById,
+                expectedTableInfoById,
+                expectedTableMetadataById,
+                expectedPartitionNameById,
+                expectedPartitionMetadataById);
+
+        // 3. test drop one table.
+        replicaManager.maybeUpdateMetadataCache(
+                2,
+                buildClusterMetadata(
+                        csServerInfo,
+                        tsServerInfoList,
+                        Collections.singletonList(
+                                new TableMetadata(
+                                        TableInfo.of(
+                                                DATA1_TABLE_INFO.getTablePath(),
+                                                DELETED_TABLE_ID, // mark as deleted.
+                                                DATA1_TABLE_INFO.getSchemaId(),
+                                                DATA1_TABLE_INFO.toTableDescriptor(),
+                                                System.currentTimeMillis(),
+                                                System.currentTimeMillis()),
+                                        Collections.emptyList())),
                         Collections.emptyList()));
         expectedTablePathById.put(DATA1_TABLE_ID, null);
+        expectedTableInfoById.put(DATA1_TABLE_ID, null);
+        expectedTableMetadataById.put(DATA1_TABLE_PATH, null);
         assertUpdateMetadataEquals(
-                expectedCoordinatorServer, 4, expectedTablePathById, expectedPartitionNameById);
+                expectedCoordinatorServer,
+                4,
+                expectedTablePathById,
+                expectedTableInfoById,
+                expectedTableMetadataById,
+                expectedPartitionNameById,
+                expectedPartitionMetadataById);
 
         // 4. test drop one partition.
-        partitionMetadataList =
-                Collections.singletonList(
-                        new PartitionMetadata(
-                                partitionTableId,
-                                partitionName1,
-                                DELETED_PARTITION_ID, // mark as deleted.
-                                Collections.emptyList()));
         replicaManager.maybeUpdateMetadataCache(
                 2,
                 buildClusterMetadata(
                         csServerInfo,
                         tsServerInfoList,
                         Collections.emptyList(),
-                        partitionMetadataList));
+                        Collections.singletonList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        partitionName1,
+                                        DELETED_PARTITION_ID, // mark as deleted.
+                                        Collections.emptyList()))));
         expectedPartitionNameById.put(partitionId1, null);
+        expectedPartitionMetadataById.put(physicalTablePath1, null);
         assertUpdateMetadataEquals(
-                expectedCoordinatorServer, 4, expectedTablePathById, expectedPartitionNameById);
+                expectedCoordinatorServer,
+                4,
+                expectedTablePathById,
+                expectedTableInfoById,
+                expectedTableMetadataById,
+                expectedPartitionNameById,
+                expectedPartitionMetadataById);
 
         // 5. check fenced coordinatorEpoch
         assertThatThrownBy(
@@ -1677,7 +1725,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
             Map<String, ServerNode> expectedCoordinatorServer,
             int expectedTabletServerSize,
             Map<Long, TablePath> expectedTablePathById,
-            Map<Long, String> expectedPartitionNameById) {
+            Map<Long, TableInfo> expectedTableInfoById,
+            Map<TablePath, TableMetadata> expectedTableMetadataById,
+            Map<Long, String> expectedPartitionNameById,
+            Map<PhysicalTablePath, PartitionMetadata> expectedPartitionMetadataById) {
         expectedCoordinatorServer.forEach(
                 (k, v) -> {
                     if (v != null) {
@@ -1696,12 +1747,42 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         assertThat(serverMetadataCache.getTablePath(k)).isEmpty();
                     }
                 });
+
+        expectedTableInfoById.forEach(
+                (k, v) -> {
+                    if (v != null) {
+                        assertThat(serverMetadataCache.getTableInfo(k).get()).isEqualTo(v);
+                    } else {
+                        assertThat(serverMetadataCache.getTableInfo(k)).isEmpty();
+                    }
+                });
+
+        expectedTableMetadataById.forEach(
+                (k, v) -> {
+                    if (v != null) {
+                        assertTableMetadata(serverMetadataCache.getTableMetadata(k).get())
+                                .isEqualTo(v);
+                    } else {
+                        assertThat(serverMetadataCache.getTableMetadata(k)).isEmpty();
+                    }
+                });
+
         expectedPartitionNameById.forEach(
                 (k, v) -> {
                     if (v != null) {
                         assertThat(serverMetadataCache.getPartitionName(k).get()).isEqualTo(v);
                     } else {
                         assertThat(serverMetadataCache.getPartitionName(k)).isEmpty();
+                    }
+                });
+
+        expectedPartitionMetadataById.forEach(
+                (k, v) -> {
+                    if (v != null) {
+                        assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k).get())
+                                .isEqualTo(v);
+                    } else {
+                        assertThat(serverMetadataCache.getPartitionMetadata(k)).isEmpty();
                     }
                 });
     }

@@ -134,7 +134,8 @@ public class TableManager {
             // put the bucket of the partition to context
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, replicas);
-            coordinatorContext.putPartition(partitionId, partitionName);
+            coordinatorContext.putPartition(
+                    partitionId, PhysicalTablePath.of(tablePath, partitionName));
             newTableBuckets.add(tableBucket);
         }
         onCreateNewTableBucket(tableId, newTableBuckets);
