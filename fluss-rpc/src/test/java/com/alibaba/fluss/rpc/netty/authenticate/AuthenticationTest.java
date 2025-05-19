@@ -123,6 +123,17 @@ public class AuthenticationTest {
     }
 
     @Test
+    void testRetirableAuthenticateException() throws Exception {
+        Configuration clientConfig = new Configuration();
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
+        clientConfig.setString("client.security.mutual.error-type", "RETRIABLE_EXCEPTION");
+        try (NettyClient nettyClient =
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+            verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
+        }
+    }
+
+    @Test
     void testClientLackAuthenticateProtocol() throws Exception {
         Configuration clientConfig = new Configuration();
         try (NettyClient nettyClient =

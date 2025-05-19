@@ -54,6 +54,7 @@ import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RecordTooLargeException;
+import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.SecurityTokenException;
@@ -202,7 +203,11 @@ public enum Errors {
     BUCKET_MAX_NUM_EXCEPTION(
             49, "Exceed the maximum number of buckets", TooManyBucketsException::new),
     FENCED_TIERING_EPOCH_EXCEPTION(
-            50, "The tiering epoch is invalid.", FencedTieringEpochException::new);
+            50, "The tiering epoch is invalid.", FencedTieringEpochException::new),
+    RETRIABLE_AUTHENTICATE_EXCEPTION(
+            51,
+            "Authentication failed with retriable exception. ",
+            RetriableAuthenticationException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

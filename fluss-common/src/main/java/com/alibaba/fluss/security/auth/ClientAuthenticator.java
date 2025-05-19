@@ -28,6 +28,9 @@ public interface ClientAuthenticator {
     /** The protocol name of the authenticator, which will send in the AuthenticateRequest. */
     String protocol();
 
+    /** Initialize the authenticator. */
+    default void initialize(AuthenticateContext context) {}
+
     /**
      * * Generates the initial token or calculates a token based on the server's challenge, then
      * sends it back to the server. This method sets the client authentication status as complete if
@@ -75,4 +78,7 @@ public interface ClientAuthenticator {
 
     /** Checks if the authentication from client side is completed. */
     boolean isCompleted();
+
+    /** The context of the authentication process. */
+    interface AuthenticateContext {}
 }

@@ -30,6 +30,9 @@ public interface ServerAuthenticator {
 
     String protocol();
 
+    /** Initialize the authenticator. */
+    default void initialize(AuthenticateContext context) {}
+
     /**
      * * Generates the challenge based on the client's token, then sends it back to the client. This
      * method sets the server authentication status as complete if the authentication succeeds.
@@ -79,4 +82,7 @@ public interface ServerAuthenticator {
      * complete).
      */
     FlussPrincipal createPrincipal();
+
+    /** The context of the authentication process. */
+    interface AuthenticateContext {}
 }

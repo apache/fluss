@@ -311,6 +311,7 @@ Apache Kafka
 ./fluss-common/src/main/java/com/alibaba/fluss/utils/crc/PureJavaCrc32C.java
 ./fluss-common/src/main/java/com/alibaba/fluss/utils/log/ByteBufferUnmapper.java
 ./fluss-common/src/main/java/com/alibaba/fluss/utils/log/FairBucketStatusMap.java
+./fluss-common/src/main/java/com/alibaba/fluss/utils/ExponentialBackoff.java
 ./fluss-server/src/main/java/com/alibaba/fluss/server/coordinator/statemachine/ReplicaStateMachine.java
 ./fluss-server/src/main/java/com/alibaba/fluss/server/coordinator/statemachine/TableBucketStateMachine.java
 ./fluss-server/src/main/java/com/alibaba/fluss/server/log/AbstractIndex.java

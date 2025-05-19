@@ -20,6 +20,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.DisconnectException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.NetworkException;
+import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
@@ -38,6 +39,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
+import com.alibaba.fluss.utils.ExponentialBackoff;
 import com.alibaba.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
@@ -52,6 +54,7 @@ import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
@@ -66,6 +69,7 @@ final class ServerConnection {
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
     private final ClientAuthenticator authenticator;
+    private final ExponentialBackoff backoff;
 
     private final Object lock = new Object();
 
@@ -87,6 +91,9 @@ final class ServerConnection {
     @GuardedBy("lock")
     private ServerApiVersions serverApiVersions;
 
+    @GuardedBy("lock")
+    private int retryAuthCount = 0;
+
     ServerConnection(
             Bootstrap bootstrap,
             ServerNode node,
@@ -99,6 +106,7 @@ final class ServerConnection {
                 .connect(node.host(), node.port())
                 .addListener((ChannelFutureListener) this::establishConnection);
         this.authenticator = authenticator;
+        this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
 
     public ServerNode getServerNode() {
@@ -366,13 +374,18 @@ final class ServerConnection {
         synchronized (lock) {
             serverApiVersions =
                     new ServerApiVersions(((ApiVersionsResponse) response).getApiVersionsList());
-            LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
             // send initial token
-            sendAuthenticate(new byte[0]);
+            sendInitialToken();
         }
     }
 
-    private void sendAuthenticate(byte[] challenge) {
+    private void sendInitialToken() {
+        authenticator.initialize(new DefaultAuthenticateContext());
+        LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
+        sendAuthenticateRequest(new byte[0]);
+    }
+
+    private void sendAuthenticateRequest(byte[] challenge) {
         try {
             if (!authenticator.isCompleted()) {
                 byte[] token = authenticator.authenticate(challenge);
@@ -403,19 +416,28 @@ final class ServerConnection {
     }
 
     private void handleAuthenticateResponse(ApiMessage response, Throwable cause) {
-        if (cause != null) {
-            close(cause);
-            return;
-        }
-        if (!(response instanceof AuthenticateResponse)) {
-            close(new IllegalStateException("Unexpected response type " + response.getClass()));
-            return;
-        }
-
         synchronized (lock) {
+            if (cause != null) {
+                if (cause instanceof RetriableAuthenticationException) {
+                    LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
+                    channel.eventLoop()
+                            .schedule(
+                                    this::sendInitialToken,
+                                    backoff.backoff(retryAuthCount++),
+                                    TimeUnit.MILLISECONDS);
+                } else {
+                    close(cause);
+                }
+                return;
+            }
+            if (!(response instanceof AuthenticateResponse)) {
+                close(new IllegalStateException("Unexpected response type " + response.getClass()));
+                return;
+            }
+
             AuthenticateResponse authenticateResponse = (AuthenticateResponse) response;
             if (authenticateResponse.hasChallenge()) {
-                sendAuthenticate(((AuthenticateResponse) response).getChallenge());
+                sendAuthenticateRequest(((AuthenticateResponse) response).getChallenge());
             } else if (authenticator.isCompleted()) {
                 switchState(ConnectionState.READY);
             } else {
@@ -521,4 +543,7 @@ final class ServerConnection {
             return MessageCodec.encodeRequest(allocator, apiKey, apiVersion, requestId, request);
         }
     }
+
+    private static class DefaultAuthenticateContext
+            implements ClientAuthenticator.AuthenticateContext {}
 }
