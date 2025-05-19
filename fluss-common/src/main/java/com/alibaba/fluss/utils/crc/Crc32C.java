@@ -127,7 +127,8 @@ public final class Crc32C {
         Checksum create();
     }
 
-    private static class Java9ChecksumFactory implements ChecksumFactory {
+    /** A ChecksumFactory for Java 9+. */
+    static class Java9ChecksumFactory implements ChecksumFactory {
         private static final MethodHandle CONSTRUCTOR;
 
         static {
