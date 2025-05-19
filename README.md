@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="website/static/img/logo/svg/colored_logo.svg" alt="Fluss - Streaming Storage for Real-Time Analytics" />
+  <img src="website/static/img/logo/svg/colored_logo.svg"/>
 </p>
 
 <p align="center">
