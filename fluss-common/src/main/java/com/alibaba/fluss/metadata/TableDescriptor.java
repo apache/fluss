@@ -55,6 +55,10 @@ import static java.util.Collections.unmodifiableMap;
 public final class TableDescriptor implements Serializable {
     private static final long serialVersionUID = 1L;
 
+    public static final String OFFSET_COLUMN_NAME = "__offset";
+    public static final String TIMESTAMP_COLUMN_NAME = "__timestamp";
+    public static final String BUCKET_COLUMN_NAME = "__bucket";
+
     private final Schema schema;
     private final @Nullable String comment;
     private final List<String> partitionKeys;

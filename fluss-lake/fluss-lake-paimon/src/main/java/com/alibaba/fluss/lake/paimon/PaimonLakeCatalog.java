@@ -37,12 +37,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
-
-    public static final String OFFSET_COLUMN_NAME = "__offset";
-    public static final String TIMESTAMP_COLUMN_NAME = "__timestamp";
-    public static final String BUCKET_COLUMN_NAME = "__bucket";
 
     private final Catalog paimonCatalog;
 
