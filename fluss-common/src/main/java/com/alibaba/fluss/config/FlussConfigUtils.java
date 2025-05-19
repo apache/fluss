@@ -17,6 +17,7 @@
 package com.alibaba.fluss.config;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.annotation.VisibleForTesting;
 
 import java.lang.reflect.Field;
 import java.util.HashMap;
@@ -36,7 +37,8 @@ public class FlussConfigUtils {
         CLIENT_OPTIONS = extractConfigOptions("client.");
     }
 
-    private static Map<String, ConfigOption<?>> extractConfigOptions(String prefix) {
+    @VisibleForTesting
+    static Map<String, ConfigOption<?>> extractConfigOptions(String prefix) {
         Map<String, ConfigOption<?>> options = new HashMap<>();
         Field[] fields = ConfigOptions.class.getFields();
         // use Java reflection to collect all options matches the prefix
