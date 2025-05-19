@@ -1109,9 +1109,12 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The singe time partition key to execute auto partition on when the table has multiple partition keys."
-                                    + " If the table has only one partition key, this config is not necessary."
-                                    + " If the table has multiple partition keys, must specify one.");
+                            "This configuration defines the time-based partition key to be used for auto-partitioning when a table is partitioned with multiple keys. "
+                                    + "Auto-partitioning utilizes a time-based partition key to handle partitions automatically, including creating new ones and removing outdated ones, "
+                                    + "by comparing the time value of the partition with the current system time. "
+                                    + "In the case of a table using multiple partition keys (such as a composite partitioning strategy), "
+                                    + "this feature determines which key should serve as the primary time dimension for making auto-partitioning decisions."
+                                    + "And If the table has only one partition key, this config is not necessary. Otherwise, it must be specified.");
 
     public static final ConfigOption<AutoPartitionTimeUnit> TABLE_AUTO_PARTITION_TIME_UNIT =
             key("table.auto-partition.time-unit")
