@@ -17,6 +17,8 @@
 package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -30,6 +32,10 @@ import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.utils.types.Tuple2;
@@ -49,6 +55,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ZooKeeperClient}. */
 class ZooKeeperClientTest {
@@ -370,5 +377,35 @@ class ZooKeeperClientTest {
         zookeeperClient.deletePartition(tablePath, "p1");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
+    }
+
+    @Test
+    void testZookeeperConfigPath() throws Exception {
+        final Configuration config = new Configuration();
+        config.setString(
+                ConfigOptions.ZOOKEEPER_ADDRESS,
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
+        config.setString(ConfigOptions.ZOOKEEPER_CONFIG_PATH, "./no-file.properties");
+        assertThatThrownBy(
+                        () -> ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE))
+                .isExactlyInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Fail to load zookeeper client config from path");
+
+        config.setString(
+                ConfigOptions.ZOOKEEPER_CONFIG_PATH,
+                getClass().getClassLoader().getResource("zk.properties").getPath());
+        try (ZooKeeperClient zookeeperClient =
+                        ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE);
+                CuratorFramework curatorClient = zookeeperClient.getCuratorClient();
+                CuratorZookeeperClient curatorZookeeperClient = curatorClient.getZookeeperClient();
+                ZooKeeper zooKeeper = curatorZookeeperClient.getZooKeeper()) {
+            ZKClientConfig clientConfig = zooKeeper.getClientConfig();
+            assertThat(clientConfig.getProperty(ZKClientConfig.ENABLE_CLIENT_SASL_KEY))
+                    .isEqualTo("true");
+            assertThat(clientConfig.getProperty(ZKClientConfig.LOGIN_CONTEXT_NAME_KEY))
+                    .isEqualTo("ZookeeperClient");
+            assertThat(clientConfig.getProperty(ZKClientConfig.ZK_SASL_CLIENT_USERNAME))
+                    .isEqualTo("zookeeper2");
+        }
     }
 }
