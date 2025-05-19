@@ -22,7 +22,7 @@ import versionReplace from './src/plugins/remark-version-replace/index';
 const config: Config = {
   title: 'Fluss',
   tagline: 'Streaming Storage for Real-Time Analytics',
-  favicon: 'img/logo.svg',
+  favicon: 'img/logo/fluss_favicon.svg',
 
   // Set the production url of your site here
   url: 'https://alibaba.github.io/',
@@ -115,11 +115,11 @@ const config: Config = {
       disableSwitch: true,
     },
     navbar: {
-      title: 'Fluss',
-      // logo: {
-      //   alt: 'My Site Logo',
-      //   src: 'img/logo.svg',
-      // },
+      title: '',
+      logo: {
+        alt: 'Fluss',
+        src: 'img/logo/svg/colored_logo.svg',
+      },
       items: [
         {
           type: 'docSidebar',
