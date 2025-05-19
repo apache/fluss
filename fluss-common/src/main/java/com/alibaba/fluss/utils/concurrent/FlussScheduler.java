@@ -121,7 +121,7 @@ public class FlussScheduler implements Scheduler {
                             }
                         };
                 if (periodMs > 0) {
-                    return executor.scheduleAtFixedRate(
+                    return executor.scheduleWithFixedDelay(
                             runnable, delayMs, periodMs, TimeUnit.MILLISECONDS);
                 } else {
                     return executor.schedule(runnable, delayMs, TimeUnit.MILLISECONDS);
