@@ -23,5 +23,10 @@ import org.apache.flink.configuration.ConfigOptions;
 public class FlinkCatalogOptions {
 
     public static final ConfigOption<String> DEFAULT_DATABASE =
-            ConfigOptions.key("default-database").stringType().defaultValue("fluss");
+            ConfigOptions.key("default-database")
+                    .stringType()
+                    .defaultValue("fluss")
+                    .withDescription("Default database name used when none is specified.");
+
+    private FlinkCatalogOptions() {}
 }
