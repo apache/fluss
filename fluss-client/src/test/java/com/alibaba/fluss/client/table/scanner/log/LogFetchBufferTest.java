@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.client.table.scanner.log;
 
+import com.alibaba.fluss.exception.WakeupException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
@@ -35,6 +36,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -168,20 +170,22 @@ public class LogFetchBufferTest {
     @Test
     void testWakeup() throws Exception {
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            AtomicReference<Exception> exception = new AtomicReference<>();
             final Thread waitingThread =
                     new Thread(
                             () -> {
                                 try {
                                     logFetchBuffer.awaitNotEmpty(
                                             System.nanoTime() + Duration.ofMinutes(1).toNanos());
-                                } catch (InterruptedException e) {
-                                    throw new RuntimeException(e);
+                                } catch (Exception e) {
+                                    exception.set(e);
                                 }
                             });
             waitingThread.start();
             logFetchBuffer.wakeup();
             waitingThread.join(Duration.ofSeconds(30).toMillis());
             assertThat(waitingThread.isAlive()).isFalse();
+            assertThat(exception.get()).isInstanceOf(WakeupException.class);
         }
     }
 

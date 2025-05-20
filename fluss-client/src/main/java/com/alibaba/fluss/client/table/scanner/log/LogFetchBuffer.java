@@ -17,6 +17,7 @@
 package com.alibaba.fluss.client.table.scanner.log;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.exception.WakeupException;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import org.slf4j.Logger;
@@ -180,7 +181,10 @@ public class LogFetchBuffer implements AutoCloseable {
         return inLock(
                 lock,
                 () -> {
-                    while (isEmpty() && !wokenup.compareAndSet(true, false)) {
+                    while (isEmpty()) {
+                        if (wokenup.compareAndSet(true, false)) {
+                            throw new WakeupException("The await is wakeup.");
+                        }
                         long remainingNanos = deadlineNanos - System.nanoTime();
                         if (remainingNanos <= 0) {
                             // false for timeout
