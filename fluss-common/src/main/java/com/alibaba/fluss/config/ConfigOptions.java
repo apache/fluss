@@ -486,6 +486,15 @@ public class ConfigOptions {
                                     + "Under certain configurations EnsembleTracking can lead to setting of ZooKeeper connection string "
                                     + "with unresolvable hostnames.");
 
+    public static final ConfigOption<String> ZOOKEEPER_CONFIG_PATH =
+            key("zookeeper.client.config-path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The file path from which the ZooKeeper client reads its configuration. "
+                                    + "This allows each ZooKeeper client instance to load its own configuration file, "
+                                    + "instead of relying on shared JVM-level environment settings. "
+                                    + "This enables fine-grained control over ZooKeeper client behavior.");
     // ------------------------------------------------------------------------
     //  ConfigOptions for Log
     // ------------------------------------------------------------------------
