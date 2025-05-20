@@ -35,6 +35,7 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
@@ -281,23 +282,13 @@ public class IdempotenceManager {
         return false;
     }
 
-    void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) {
+    void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths)
+            throws ExecutionException, InterruptedException {
         if (!isWriterIdValid()) {
-            try {
-                tabletServerGateway
-                        .initWriter(prepareInitWriterRequest(tablePaths))
-                        .thenAccept(response -> setWriterId(response.getWriterId()))
-                        .exceptionally(
-                                e -> {
-                                    LOG.error("Failed to get writer id from tablet server.", e);
-                                    return null;
-                                })
-                        .get(); // TODO: can optimize into async response handling.
-            } catch (Exception e) {
-                LOG.error(
-                        "Received an exception while trying to get writer id from tablet server.",
-                        e);
-            }
+            tabletServerGateway
+                    .initWriter(prepareInitWriterRequest(tablePaths))
+                    .thenAccept(response -> setWriterId(response.getWriterId()))
+                    .get(); // TODO: can optimize into async response handling.
         }
     }
 

@@ -60,6 +60,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     private int currentRecordNumber;
     private int sizeInBytes;
     private boolean isClosed;
+    private boolean aborted = false;
 
     private MemoryLogRecordsIndexedBuilder(
             long baseLogOffset,
@@ -125,6 +126,11 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     }
 
     private void appendRecord(ChangeType changeType, IndexedRow row) throws IOException {
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Tried to append a record, but MemoryLogRecordsIndexedBuilder has already been aborted");
+        }
+
         if (isClosed) {
             throw new IllegalStateException(
                     "Tried to append a record, but MemoryLogRecordsBuilder is closed for record appends");
@@ -141,6 +147,10 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     }
 
     public BytesView build() throws IOException {
+        if (aborted) {
+            throw new IllegalStateException("Attempting to build an aborted record batch");
+        }
+
         if (builtBuffer != null) {
             return builtBuffer;
         }
@@ -177,8 +187,17 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
         return isClosed;
     }
 
+    public void abort() {
+        aborted = true;
+    }
+
     @Override
     public void close() throws IOException {
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Cannot close MemoryLogRecordsIndexedBuilder as it has already been aborted");
+        }
+
         isClosed = true;
     }
 

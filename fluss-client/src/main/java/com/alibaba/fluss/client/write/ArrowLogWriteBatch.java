@@ -131,4 +131,9 @@ public class ArrowLogWriteBatch extends WriteBatch {
     public int batchSequence() {
         return recordsBuilder.batchSequence();
     }
+
+    @Override
+    public void abortRecordAppends() {
+        recordsBuilder.abort();
+    }
 }

@@ -20,6 +20,7 @@ import com.alibaba.fluss.annotation.Internal;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -50,6 +51,12 @@ final class IncompleteBatches {
                 throw new IllegalStateException(
                         "Remove from the incomplete set failed. This should be impossible.");
             }
+        }
+    }
+
+    public Iterable<WriteBatch> copyAll() {
+        synchronized (incomplete) {
+            return new ArrayList<>(this.incomplete);
         }
     }
 

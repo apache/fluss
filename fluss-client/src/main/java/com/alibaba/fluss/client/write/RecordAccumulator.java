@@ -294,6 +294,19 @@ public final class RecordAccumulator {
         }
     }
 
+    /** Abort all incomplete batches (whether they have been sent or not). */
+    public void abortBatches(final Exception reason) {
+        for (WriteBatch batch : incomplete.copyAll()) {
+            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.tableBucket());
+            synchronized (dq) {
+                batch.abortRecordAppends();
+                dq.remove(batch);
+            }
+            batch.abort(reason);
+            deallocate(batch);
+        }
+    }
+
     /** Get the deque for the given table-bucket, creating it if necessary. */
     private Deque<WriteBatch> getOrCreateDeque(
             TableBucket tableBucket, PhysicalTablePath physicalTablePath) {
