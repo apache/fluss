@@ -106,15 +106,12 @@ public class Endpoint {
         }
 
         Optional<String> maybeHost = getHost(conf, serverType);
-        Optional<String> maybePort = getPort(conf, serverType);
 
         // backward compatibility
-        if (maybeHost.isPresent() && maybePort.isPresent()) {
+        if (maybeHost.isPresent()) {
+            String port = getPort(conf, serverType);
             return Collections.singletonList(
-                    new Endpoint(
-                            maybeHost.get(),
-                            Integer.parseInt(maybePort.get()),
-                            DEFAULT_LISTENER_NAME));
+                    new Endpoint(maybeHost.get(), Integer.parseInt(port), DEFAULT_LISTENER_NAME));
         }
 
         throw new IllegalArgumentException(
@@ -195,10 +192,10 @@ public class Endpoint {
                 : conf.getOptional(ConfigOptions.TABLET_SERVER_HOST);
     }
 
-    private static Optional<String> getPort(Configuration conf, ServerType serverType) {
+    private static String getPort(Configuration conf, ServerType serverType) {
         return serverType == ServerType.COORDINATOR
-                ? conf.getOptional(ConfigOptions.COORDINATOR_PORT)
-                : conf.getOptional(ConfigOptions.TABLET_SERVER_PORT);
+                ? conf.get(ConfigOptions.COORDINATOR_PORT)
+                : conf.get(ConfigOptions.TABLET_SERVER_PORT);
     }
 
     /**

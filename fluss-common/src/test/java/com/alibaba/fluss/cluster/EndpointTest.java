@@ -125,12 +125,23 @@ public class EndpointTest {
         Configuration configuration = new Configuration();
         assertThatThrownBy(() -> Endpoint.loadBindEndpoints(configuration, serverType))
                 .hasMessageContaining("The 'bind.listeners' is not configured.");
-        configuration.setString(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+
+        // if bind.listeners is not set, use deprecated [coordinator|tablet.server].host config
+        // options even though [coordinator|tablet.server].port is not set.
         configuration.setString(
                 serverType == ServerType.COORDINATOR
                         ? ConfigOptions.COORDINATOR_HOST
                         : ConfigOptions.TABLET_SERVER_HOST,
                 "my_host");
+        assertThat(Endpoint.loadBindEndpoints(configuration, serverType))
+                .containsExactlyElementsOf(
+                        Collections.singletonList(
+                                new Endpoint(
+                                        "my_host",
+                                        serverType == ServerType.COORDINATOR ? 9123 : 0,
+                                        "FLUSS")));
+
+        configuration.setString(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
         configuration.setString(
                 serverType == ServerType.COORDINATOR
                         ? ConfigOptions.COORDINATOR_PORT
