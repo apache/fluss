@@ -62,6 +62,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private boolean isClosed;
     private boolean reCalculateSizeInBytes = false;
     private boolean resetBatchHeader = false;
+    private boolean aborted = false;
 
     private MemoryLogRecordsArrowBuilder(
             long baseLogOffset,
@@ -122,6 +123,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     }
 
     public MultiBytesView build() throws IOException {
+        if (aborted) {
+            throw new IllegalStateException("Attempting to build an aborted record batch");
+        }
+
         if (bytesView != null) {
             if (resetBatchHeader) {
                 writeBatchHeader();
@@ -154,6 +159,11 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
      * false if the builder is full.
      */
     public void append(ChangeType changeType, InternalRow row) throws Exception {
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Tried to append a record, but MemoryLogRecordsArrowBuilder has already been aborted");
+        }
+
         if (isClosed) {
             throw new IllegalStateException(
                     "Tried to append a record, but MemoryLogRecordsArrowBuilder is closed for record appends");
@@ -191,12 +201,22 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         this.batchSequence = batchSequence;
     }
 
+    public void abort() {
+        arrowWriter.recycle(writerEpoch);
+        aborted = true;
+    }
+
     public boolean isClosed() {
         return isClosed;
     }
 
     @Override
     public void close() throws Exception {
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Cannot close MemoryLogRecordsArrowBuilder as it has already been aborted");
+        }
+
         if (isClosed) {
             return;
         }

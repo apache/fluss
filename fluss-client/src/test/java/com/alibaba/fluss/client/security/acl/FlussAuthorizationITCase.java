@@ -509,6 +509,85 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testProduceWithNoWriteAuthorization() throws Exception {
+        TablePath writeAclTable = TablePath.of("test_db_1", "write_acl_table_1");
+        TablePath noWriteAclTable = TablePath.of("test_db_1", "no_write_acl_table_1");
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
+        rootAdmin.createTable(writeAclTable, descriptor, false).get();
+        rootAdmin.createTable(noWriteAclTable, descriptor, false).get();
+
+        // create acl to allow guest write for writeAclTable.
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.table(writeAclTable),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.WRITE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.table(noWriteAclTable),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.READ,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId());
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(noWriteAclTable).get().getTableId());
+
+        // 1. Try to write data to noWriteAclTable. It should throw AuthorizationException because
+        // of request writeId failed.
+        try (Table table = guestConn.getTable(noWriteAclTable)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            assertThatThrownBy(() -> appendWriter.append(row(1, "a")).get())
+                    .hasRootCauseInstanceOf(AuthorizationException.class)
+                    .rootCause()
+                    .hasMessageContaining(
+                            String.format(
+                                    "No WRITE permission among all the tables: %s",
+                                    Collections.singletonList(noWriteAclTable)));
+        }
+
+        // 2. Try to write data to writeAclTable. It will success and writeId will be set.
+        try (Table table = guestConn.getTable(writeAclTable)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            appendWriter.append(row(1, "a")).get();
+        }
+
+        // 3. Try to write data to writeAclTable again. It will throw AuthorizationException because
+        // of no write permission.
+        // Note: If guestUser have permission for table lists: [writeAclTable, noWriteAclTable].
+        // When we give WRITE permission to writeAclTable for guestUser, guestUser will have
+        // INIT_WRITER permission for both writeAclTable and noWriteAclTable.
+        // In this case, when guestUser try to write noWriteAclTable, Fluss client can get writerId
+        // but can not to write to noWriteAclTable because of no WRITE permission.
+        try (Table table = guestConn.getTable(noWriteAclTable)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            assertThatThrownBy(() -> appendWriter.append(row(1, "a")).get())
+                    .hasRootCauseInstanceOf(AuthorizationException.class)
+                    .rootCause()
+                    .hasMessageContaining(
+                            String.format(
+                                    "No permission to WRITE table %s in database %s",
+                                    noWriteAclTable.getTableName(),
+                                    noWriteAclTable.getDatabaseName()));
+        }
+    }
+
+    @Test
     void testProduceAndConsumer() throws Exception {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();

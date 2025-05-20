@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
@@ -49,6 +50,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ArrowLogWriteBatch}. */
 public class ArrowLogWriteBatchTest {
@@ -229,6 +231,59 @@ public class ArrowLogWriteBatchTest {
                 .isGreaterThan((int) (maxSizeInBytes * ArrowWriter.BUFFER_USAGE_RATIO))
                 .isLessThan(maxSizeInBytes);
         assertThat(currentRatio).isLessThan(1.0f);
+    }
+
+    @Test
+    void testBatchAborted() throws Exception {
+        int bucketId = 0;
+        int maxSizeInBytes = 10240;
+        ArrowLogWriteBatch arrowLogWriteBatch =
+                createArrowLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), maxSizeInBytes);
+        int recordCount = 5;
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < recordCount; i++) {
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            arrowLogWriteBatch.tryAppend(
+                    createWriteRecord(row(i, "a" + i)),
+                    exception -> {
+                        if (exception != null) {
+                            future.completeExceptionally(exception);
+                        } else {
+                            future.complete(null);
+                        }
+                    });
+            futures.add(future);
+        }
+
+        assertThat(writerProvider.freeWriters()).isEmpty();
+        arrowLogWriteBatch.abortRecordAppends();
+        arrowLogWriteBatch.abort(new RuntimeException("close with record batch abort"));
+
+        // first try to append.
+        assertThatThrownBy(
+                        () ->
+                                arrowLogWriteBatch.tryAppend(
+                                        createWriteRecord(row(1, "a")), newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Tried to append a record, but MemoryLogRecordsArrowBuilder has already been aborted");
+
+        // try to build.
+        assertThatThrownBy(arrowLogWriteBatch::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Attempting to build an aborted record batch");
+
+        // verify arrow writer have recycled.
+        assertThat(writerProvider.freeWriters()).hasSize(1);
+        assertThat(writerProvider.freeWriters().get("150001-1-ZSTD-3")).isNotNull();
+
+        // verify record append future is completed with exception.
+        for (CompletableFuture<Void> future : futures) {
+            assertThatThrownBy(future::join)
+                    .rootCause()
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("close with record batch abort");
+        }
     }
 
     private WriteRecord createWriteRecord(GenericRow row) {

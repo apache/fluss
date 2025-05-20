@@ -111,6 +111,8 @@ public abstract class WriteBatch {
 
     public abstract int batchSequence();
 
+    public abstract void abortRecordAppends();
+
     public boolean hasBatchSequence() {
         return batchSequence() != LogRecordBatch.NO_BATCH_SEQUENCE;
     }
@@ -122,6 +124,17 @@ public abstract class WriteBatch {
                 tableBucket,
                 batchSequence);
         reopened = true;
+    }
+
+    /** Abort the batch and complete the future and callbacks. */
+    public void abort(Exception exception) {
+        if (!finalState.compareAndSet(null, FinalState.ABORTED)) {
+            throw new IllegalStateException(
+                    "Batch has already been completed in final stata " + finalState.get());
+        }
+
+        LOG.trace("Abort batch for tableBucket {}", tableBucket, exception);
+        completeFutureAndFireCallbacks(exception);
     }
 
     public boolean sequenceHasBeenReset() {
@@ -251,14 +264,8 @@ public abstract class WriteBatch {
 
     private enum FinalState {
         FAILED,
-        SUCCEEDED
-    }
-
-    /** The type of write batch. */
-    public enum WriteBatchType {
-        ARROW_LOG,
-        INDEXED_LOG,
-        KV
+        SUCCEEDED,
+        ABORTED
     }
 
     /** The future for this batch. */

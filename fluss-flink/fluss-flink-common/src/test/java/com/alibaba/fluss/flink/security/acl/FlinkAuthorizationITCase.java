@@ -320,8 +320,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "No permission to WRITE table %s in database %s",
-                                tablePath.getTableName(), tablePath.getDatabaseName()));
+                                "No WRITE permission among all the tables: %s",
+                                Collections.singletonList(tablePath)));
         addAcl(Resource.table(tablePath), WRITE);
         tEnv.executeSql(insertDML).await();
 
@@ -364,8 +364,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "No permission to WRITE table %s in database %s",
-                                tablePath.getTableName(), tablePath.getDatabaseName()));
+                                "No WRITE permission among all the tables: %s",
+                                Collections.singletonList(tablePath)));
         addAcl(Resource.table(tablePath), WRITE);
         tBatchEnv.executeSql(insertDML).await();
 

@@ -36,8 +36,11 @@ import com.alibaba.fluss.types.DataType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -144,6 +147,54 @@ class KvWriteBatchTest {
 
         appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isFalse();
+    }
+
+    @Test
+    void testBatchAborted() throws Exception {
+        int writeLimit = 10240;
+        KvWriteBatch kvProducerBatch =
+                createKvWriteBatch(
+                        new TableBucket(DATA1_TABLE_ID_PK, 0),
+                        writeLimit,
+                        MemorySegment.allocateHeapMemory(writeLimit));
+
+        int recordCount = 5;
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < recordCount; i++) {
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            kvProducerBatch.tryAppend(
+                    createWriteRecord(),
+                    exception -> {
+                        if (exception != null) {
+                            future.completeExceptionally(exception);
+                        } else {
+                            future.complete(null);
+                        }
+                    });
+            futures.add(future);
+        }
+
+        kvProducerBatch.abortRecordAppends();
+        kvProducerBatch.abort(new RuntimeException("close with record batch abort"));
+
+        // first try to append.
+        assertThatThrownBy(() -> kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Tried to append a record, but KvRecordBatchBuilder has already been aborted");
+
+        // try to build.
+        assertThatThrownBy(kvProducerBatch::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Attempting to build an aborted record batch");
+
+        // verify record append future is completed with exception.
+        for (CompletableFuture<Void> future : futures) {
+            assertThatThrownBy(future::join)
+                    .rootCause()
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("close with record batch abort");
+        }
     }
 
     protected WriteRecord createWriteRecord() {

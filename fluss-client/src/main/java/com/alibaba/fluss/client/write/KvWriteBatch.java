@@ -144,6 +144,11 @@ public class KvWriteBatch extends WriteBatch {
         return recordsBuilder.batchSequence();
     }
 
+    @Override
+    public void abortRecordAppends() {
+        recordsBuilder.abort();
+    }
+
     public void resetWriterState(long writerId, int batchSequence) {
         super.resetWriterState(writerId, batchSequence);
         recordsBuilder.resetWriterState(writerId, batchSequence);
