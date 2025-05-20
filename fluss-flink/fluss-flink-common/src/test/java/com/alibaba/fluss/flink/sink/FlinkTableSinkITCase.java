@@ -22,7 +22,6 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -44,7 +43,6 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -80,9 +78,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
-    static StreamExecutionEnvironment env;
-    static StreamTableEnvironment tEnv;
-    static TableEnvironment tBatchEnv;
+
+    private StreamExecutionEnvironment env;
+    private StreamTableEnvironment tEnv;
+    private TableEnvironment tBatchEnv;
 
     static Stream<Arguments> writePartitionedTableParams() {
         return Stream.of(
@@ -92,11 +91,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 Arguments.of(true, true));
     }
 
-    @BeforeAll
-    static void beforeAll() {
+    @BeforeEach
+    void before() {
         // open a catalog so that we can get table from the catalog
-        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        String bootstrapServers = String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        String bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         // create table environment
         env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
@@ -108,7 +106,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
 
         // create batch table environment
         tBatchEnv =
@@ -120,11 +118,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tBatchEnv.executeSql("use catalog " + CATALOG_NAME);
         tBatchEnv
                 .getConfig()
-                .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
-    }
-
-    @BeforeEach
-    void before() {
+                .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);

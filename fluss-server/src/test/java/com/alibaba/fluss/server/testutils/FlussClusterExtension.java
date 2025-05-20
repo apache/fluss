@@ -352,6 +352,10 @@ public final class FlussClusterExtension
         return getClientConfig(null);
     }
 
+    public String getBootstrapServers() {
+        return String.join(",", getClientConfig().get(ConfigOptions.BOOTSTRAP_SERVERS));
+    }
+
     public Configuration getClientConfig(@Nullable String listenerName) {
         Configuration flussConf = new Configuration();
         // now, just use the coordinator server as the bootstrap server

@@ -36,6 +36,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,7 +81,8 @@ abstract class FlinkCatalogITCase {
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static Catalog catalog;
-    static TableEnvironment tEnv;
+
+    private TableEnvironment tEnv;
 
     @BeforeAll
     static void beforeAll() {
@@ -95,19 +97,10 @@ abstract class FlinkCatalogITCase {
                         Thread.currentThread().getContextClassLoader(),
                         Collections.emptyMap());
         catalog.open();
-        // create table environment
-        tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
-        // crate catalog using sql
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
     }
 
     @AfterAll
     static void afterAll() {
-        tEnv.executeSql("use catalog " + TableConfigOptions.TABLE_CATALOG_NAME.defaultValue());
-        tEnv.executeSql("DROP CATALOG IF EXISTS " + CATALOG_NAME);
         if (catalog != null) {
             catalog.close();
         }
@@ -115,8 +108,23 @@ abstract class FlinkCatalogITCase {
 
     @BeforeEach
     void before() {
+        // create table environment
+        tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+        // crate catalog using sql
+        tEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                        CATALOG_NAME,
+                        BOOTSTRAP_SERVERS.key(),
+                        FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         // we don't need to "USE fluss" explicitly as it is the default database
+    }
+
+    @AfterEach
+    void after() {
+        tEnv.executeSql("use catalog " + TableConfigOptions.TABLE_CATALOG_NAME.defaultValue());
+        tEnv.executeSql("DROP CATALOG IF EXISTS " + CATALOG_NAME);
     }
 
     @Test

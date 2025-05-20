@@ -134,10 +134,12 @@ public class FlinkTestBase extends AbstractTestBase {
     protected static Admin admin;
 
     protected static Configuration clientConf;
+    protected static String bootstrapServers;
 
     @BeforeAll
     protected static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
     }
