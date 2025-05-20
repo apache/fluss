@@ -54,7 +54,7 @@ remote.data.dir: /tmp/fluss-remote-data
 #==============================================================================
 
 # The network address and port to which the server binds for accepting connections.
-# The format is `listener_name://host:port`, and multiple addresses can be specified, separated by commas.
+# The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas.
 bind.listeners: FLUSS://localhost:9123
 
 

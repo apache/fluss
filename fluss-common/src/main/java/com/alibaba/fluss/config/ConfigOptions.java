@@ -634,14 +634,14 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(1)
                     .withDescription(
-                            "When a producer set acks to all (-1), this configuration specifies the "
+                            "When a writer set `client.writer.acks` to all (-1), this configuration specifies the "
                                     + "minimum number of replicas that must acknowledge a write for "
                                     + "the write to be considered successful. If this minimum cannot be met, "
-                                    + "then the producer will raise an exception(NotEnoughReplicas). "
-                                    + "when used together, this config and `acks` allow you to "
+                                    + "then the writer will raise an exception (NotEnoughReplicas). "
+                                    + "when used together, this config and `client.writer.acks` allow you to "
                                     + "enforce greater durability guarantees. A typical scenario would be "
                                     + "to create a table with a replication factor of 3. set this conf to 2, and "
-                                    + "produce with acks = -1. This will ensure that the producer raises an "
+                                    + "write with acks = -1. This will ensure that the writer raises an "
                                     + "exception if a majority of replicas don't receive a write.");
 
     // ------------------------------------------------------------------------
