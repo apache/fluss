@@ -261,7 +261,6 @@
                                             com.alibaba.fluss.row.columnar.VectorizedColumnBatch
                                         </exclude>
                                         <exclude>com.alibaba.fluss.row.encode.RowEncoder</exclude>
-                                        <exclude>com.alibaba.fluss.cluster.ServerNode</exclude>
                                         <exclude>com.alibaba.fluss.table.*</exclude>
                                         <exclude>com.alibaba.fluss.record.*</exclude>
                                         <exclude>com.alibaba.fluss.kv.*</exclude>
