@@ -14,31 +14,33 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.source.split;
+package com.alibaba.fluss.flink.tiering.source.state;
 
-/** The state of a {@link TieringSplit}. */
-public class TieringSplitState {
+import com.alibaba.fluss.flink.tiering.source.split.TieringLogSplit;
 
-    private final TieringSplit tieringSplit;
+/** The state for {@link TieringLogSplit}. */
+public class TieringLogSplitState extends TieringSplitState {
 
     /** The next log offset to sync(tier) to lake, should only be monotonically increasing. */
     private long nextOffset;
 
-    public TieringSplitState(TieringSplit tieringSplit) {
-        this.tieringSplit = tieringSplit;
-        this.nextOffset = tieringSplit.getStartingOffset();
-    }
-
-    public void setNextOffset(long nextOffset) {
+    public TieringLogSplitState(TieringLogSplit tieringSplit, long nextOffset) {
+        super(tieringSplit);
         this.nextOffset = nextOffset;
     }
 
-    public TieringSplit toSplit() {
-        return new TieringSplit(
-                tieringSplit.getTablePath(),
-                tieringSplit.getTableBucket(),
-                tieringSplit.getPartitionName(),
+    public void nextOffset(long nextOffset) {
+        this.nextOffset = nextOffset;
+    }
+
+    @Override
+    public TieringLogSplit toSourceSplit() {
+        final TieringLogSplit split = (TieringLogSplit) tieringSplit;
+        return new TieringLogSplit(
+                split.getTablePath(),
+                split.getTableBucket(),
+                split.getPartitionName(),
                 nextOffset,
-                tieringSplit.getStoppingOffset());
+                split.getStoppingOffset());
     }
 }

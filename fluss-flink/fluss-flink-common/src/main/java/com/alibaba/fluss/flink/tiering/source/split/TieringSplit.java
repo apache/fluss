@@ -16,37 +16,28 @@
 
 package com.alibaba.fluss.flink.tiering.source.split;
 
+import org.apache.flink.api.connector.source.SourceSplit;
+
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
-import org.apache.flink.api.connector.source.SourceSplit;
-
 import javax.annotation.Nullable;
 
-import java.util.Objects;
+/** The base table split for tiering service. */
+public abstract class TieringSplit implements SourceSplit {
 
-/** The table split for tiering service. It's used to describe the log data of a table bucket. */
-public class TieringSplit implements SourceSplit {
+    public static final byte TIERING_KV_SPLIT_FLAG = 1;
+    public static final byte TIERING_LOG_SPLIT_FLAG = 2;
 
-    private static final String TIERING_SPLIT_PREFIX = "tiering-split-";
-
-    private final TablePath tablePath;
+    protected final TablePath tablePath;
     protected final TableBucket tableBucket;
     @Nullable protected final String partitionName;
-    private final long startingOffset;
-    private final long stoppingOffset;
 
     public TieringSplit(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            long startingOffset,
-            long stoppingOffset) {
+            TablePath tablePath, TableBucket tableBucket, @Nullable String partitionName) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
-        this.startingOffset = startingOffset;
-        this.stoppingOffset = stoppingOffset;
         if ((tableBucket.getPartitionId() == null && partitionName != null)
                 || (tableBucket.getPartitionId() != null && partitionName == null)) {
             throw new IllegalArgumentException(
@@ -54,12 +45,47 @@ public class TieringSplit implements SourceSplit {
         }
     }
 
-    public long getStartingOffset() {
-        return startingOffset;
+    /** Checks whether this split is a kv split to tier. */
+    public final boolean isTieringKvSplit() {
+        return getClass() == TieringKvSplit.class;
     }
 
-    public long getStoppingOffset() {
-        return stoppingOffset;
+    /** Casts this split into a {@link TieringKvSplit}. */
+    public TieringKvSplit asTieringKvSplit() {
+        return (TieringKvSplit) this;
+    }
+
+    /** Checks whether this split is a log split to tier. */
+    public final boolean isTieringLogSplit() {
+        return getClass() == TieringLogSplit.class;
+    }
+
+    /** Casts this split into a {@link TieringLogSplit}. */
+    public TieringLogSplit asTieringLogSplit() {
+        return (TieringLogSplit) this;
+    }
+
+    protected byte splitKind() {
+        if (isTieringKvSplit()) {
+            return TIERING_KV_SPLIT_FLAG;
+        } else if (isTieringLogSplit()) {
+            return TIERING_LOG_SPLIT_FLAG;
+        } else {
+            throw new IllegalArgumentException("Unsupported split kind for " + getClass());
+        }
+    }
+
+    protected static String toSplitId(String splitPrefix, TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() != null) {
+            return splitPrefix
+                    + tableBucket.getTableId()
+                    + "-p"
+                    + tableBucket.getPartitionId()
+                    + "-"
+                    + tableBucket.getBucket();
+        } else {
+            return splitPrefix + tableBucket.getTableId() + "-" + tableBucket.getBucket();
+        }
     }
 
     public TablePath getTablePath() {
@@ -73,53 +99,5 @@ public class TieringSplit implements SourceSplit {
     @Nullable
     public String getPartitionName() {
         return partitionName;
-    }
-
-    public String splitId() {
-        if (tableBucket.getPartitionId() != null) {
-            return TIERING_SPLIT_PREFIX
-                    + tableBucket.getTableId()
-                    + "-p"
-                    + tableBucket.getPartitionId()
-                    + "-"
-                    + tableBucket.getBucket();
-        } else {
-            return TIERING_SPLIT_PREFIX + tableBucket.getTableId() + "-" + tableBucket.getBucket();
-        }
-    }
-
-    @Override
-    public String toString() {
-        return "TieringSplit{"
-                + "tablePath="
-                + tablePath
-                + ", tableBucket="
-                + tableBucket
-                + ", partitionName='"
-                + partitionName
-                + '\''
-                + ", startingOffset="
-                + startingOffset
-                + ", stoppingOffset="
-                + stoppingOffset
-                + '}';
-    }
-
-    @Override
-    public boolean equals(Object object) {
-        if (!(object instanceof TieringSplit)) {
-            return false;
-        }
-        TieringSplit that = (TieringSplit) object;
-        return startingOffset == that.startingOffset
-                && stoppingOffset == that.stoppingOffset
-                && Objects.equals(tablePath, that.tablePath)
-                && Objects.equals(tableBucket, that.tableBucket)
-                && Objects.equals(partitionName, that.partitionName);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(tablePath, tableBucket, partitionName, startingOffset, stoppingOffset);
     }
 }
