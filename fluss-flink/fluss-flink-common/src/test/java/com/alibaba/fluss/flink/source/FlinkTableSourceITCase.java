@@ -41,7 +41,6 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -75,29 +74,23 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
-    static StreamExecutionEnvironment execEnv;
-    static StreamTableEnvironment tEnv;
+    private StreamExecutionEnvironment execEnv;
+    private StreamTableEnvironment tEnv;
 
-    @BeforeAll
-    protected static void beforeAll() {
-        // create fluss connection
-        FlinkTestBase.beforeAll();
+    @BeforeEach
+    void before() {
+        // initialize env and table env
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        // create table environment
         tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+
+        // initialize catalog and database
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
-        // crate catalog using sql
         tEnv.executeSql(
                 String.format(
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
-    }
-
-    @BeforeEach
-    void before() {
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
     }

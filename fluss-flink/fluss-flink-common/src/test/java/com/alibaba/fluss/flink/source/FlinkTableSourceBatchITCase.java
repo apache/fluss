@@ -19,7 +19,6 @@ package com.alibaba.fluss.flink.source;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -31,7 +30,6 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -56,15 +54,11 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
-    static StreamExecutionEnvironment execEnv;
-    static StreamTableEnvironment tEnv;
+    private StreamTableEnvironment tEnv;
 
-    @BeforeAll
-    protected static void beforeAll() {
-        FlinkTestBase.beforeAll();
-
-        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
-        execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+    @BeforeEach
+    void before() {
+        StreamExecutionEnvironment execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         // create table environment
         tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inBatchMode());
         // crate catalog using sql
@@ -75,10 +69,6 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         tEnv.executeSql("use catalog " + CATALOG_NAME);
 
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
-    }
-
-    @BeforeEach
-    void before() {
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
