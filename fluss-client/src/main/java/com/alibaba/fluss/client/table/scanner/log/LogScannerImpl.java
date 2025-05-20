@@ -22,6 +22,7 @@ import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.WakeupException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -141,9 +142,14 @@ public class LogScannerImpl implements LogScanner {
             do {
                 Map<TableBucket, List<ScanRecord>> fetchRecords = pollForFetches();
                 if (fetchRecords.isEmpty()) {
-                    if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
-                        // logFetcher waits for the timeout and no data in buffer,
-                        // so we return empty
+                    try {
+                        if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
+                            // logFetcher waits for the timeout and no data in buffer,
+                            // so we return empty
+                            return new ScanRecords(fetchRecords);
+                        }
+                    } catch (WakeupException e) {
+                        // wakeup() is called, we need to return empty
                         return new ScanRecords(fetchRecords);
                     }
                 } else {
