@@ -695,5 +695,10 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
         boolean exists() {
             return zkVersion != UNKNOWN_VERSION;
         }
+
+        @Override
+        public String toString() {
+            return "VersionedAcls{" + "acls=" + acls + ", zkVersion=" + zkVersion + '}';
+        }
     }
 }

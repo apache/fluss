@@ -100,7 +100,6 @@ public class ZkNodeChangeNotificationWatcher {
                 List<String> notifications = zooKeeperClient.getChildren(seqNodeRoot);
                 Collections.sort(notifications);
                 if (!notifications.isEmpty()) {
-                    LOG.info("Processing notifications for path = {}", seqNodeRoot);
                     long now = clock.milliseconds();
                     for (String notification : notifications) {
                         long changeId = changeNumber(notification);
