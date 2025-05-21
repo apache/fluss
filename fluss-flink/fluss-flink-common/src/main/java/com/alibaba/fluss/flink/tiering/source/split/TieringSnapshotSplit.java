@@ -24,38 +24,33 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 
 /**
- * The table split for tiering service. It's used to describe the snapshot data of a KV table
- * bucket.
+ * The table split for tiering service. It's used to describe the snapshot data of a primary key
+ * table bucket.
  */
-public class TieringKvSplit extends TieringSplit {
+public class TieringSnapshotSplit extends TieringSplit {
 
-    private static final String TIERING_KV_SPLIT_PREFIX = "tiering-kv-split-";
+    private static final String TIERING_SNAPSHOT_SPLIT_PREFIX = "tiering-snapshot-split-";
 
-    /** The snapshot id. It's used to identify the snapshot for a kv bucket. */
+    /** The snapshot id. It's used to identify the snapshot for a primary key table bucket. */
     private final long snapshotId;
 
-    /** The log offset corresponding to the KV table bucket snapshot finished. */
+    /** The log offset corresponding to the primary key table bucket snapshot finished. */
     private final long logOffsetOfSnapshot;
 
-    /** The records to skip when reading the snapshot. */
-    private final long recordsToSkip;
-
-    public TieringKvSplit(
+    public TieringSnapshotSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
             long snapshotId,
-            long logOffsetOfSnapshot,
-            long recordsToSkip) {
+            long logOffsetOfSnapshot) {
         super(tablePath, tableBucket, partitionName);
         this.snapshotId = snapshotId;
         this.logOffsetOfSnapshot = logOffsetOfSnapshot;
-        this.recordsToSkip = recordsToSkip;
     }
 
     @Override
     public String splitId() {
-        return toSplitId(TIERING_KV_SPLIT_PREFIX, this.tableBucket);
+        return toSplitId(TIERING_SNAPSHOT_SPLIT_PREFIX, this.tableBucket);
     }
 
     public long getSnapshotId() {
@@ -66,13 +61,9 @@ public class TieringKvSplit extends TieringSplit {
         return logOffsetOfSnapshot;
     }
 
-    public long getRecordsToSkip() {
-        return recordsToSkip;
-    }
-
     @Override
     public String toString() {
-        return "TieringKvSplit{"
+        return "TieringSnapshotSplit{"
                 + "tablePath="
                 + tablePath
                 + ", tableBucket="
@@ -84,24 +75,23 @@ public class TieringKvSplit extends TieringSplit {
                 + snapshotId
                 + ", logOffsetOfSnapshot="
                 + logOffsetOfSnapshot
-                + ", recordsToSkip="
-                + recordsToSkip
                 + '}';
     }
 
     @Override
     public boolean equals(Object object) {
-        if (!(object instanceof TieringKvSplit)) {
+        if (!(object instanceof TieringSnapshotSplit)) {
             return false;
         }
-        TieringKvSplit that = (TieringKvSplit) object;
-        return snapshotId == that.snapshotId
-                && logOffsetOfSnapshot == that.logOffsetOfSnapshot
-                && recordsToSkip == that.recordsToSkip;
+        if (!super.equals(object)) {
+            return false;
+        }
+        TieringSnapshotSplit that = (TieringSnapshotSplit) object;
+        return snapshotId == that.snapshotId && logOffsetOfSnapshot == that.logOffsetOfSnapshot;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(snapshotId, logOffsetOfSnapshot, recordsToSkip);
+        return Objects.hash(super.hashCode(), snapshotId, logOffsetOfSnapshot);
     }
 }

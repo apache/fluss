@@ -16,17 +16,19 @@
 
 package com.alibaba.fluss.flink.tiering.source.split;
 
-import org.apache.flink.api.connector.source.SourceSplit;
-
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.flink.api.connector.source.SourceSplit;
+
 import javax.annotation.Nullable;
+
+import java.util.Objects;
 
 /** The base table split for tiering service. */
 public abstract class TieringSplit implements SourceSplit {
 
-    public static final byte TIERING_KV_SPLIT_FLAG = 1;
+    public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte TIERING_LOG_SPLIT_FLAG = 2;
 
     protected final TablePath tablePath;
@@ -45,14 +47,14 @@ public abstract class TieringSplit implements SourceSplit {
         }
     }
 
-    /** Checks whether this split is a kv split to tier. */
-    public final boolean isTieringKvSplit() {
-        return getClass() == TieringKvSplit.class;
+    /** Checks whether this split is a primary key table split to tier. */
+    public final boolean isTieringSnapshotSplit() {
+        return getClass() == TieringSnapshotSplit.class;
     }
 
-    /** Casts this split into a {@link TieringKvSplit}. */
-    public TieringKvSplit asTieringKvSplit() {
-        return (TieringKvSplit) this;
+    /** Casts this split into a {@link TieringSnapshotSplit}. */
+    public TieringSnapshotSplit asTieringSnapshotSplit() {
+        return (TieringSnapshotSplit) this;
     }
 
     /** Checks whether this split is a log split to tier. */
@@ -66,8 +68,8 @@ public abstract class TieringSplit implements SourceSplit {
     }
 
     protected byte splitKind() {
-        if (isTieringKvSplit()) {
-            return TIERING_KV_SPLIT_FLAG;
+        if (isTieringSnapshotSplit()) {
+            return TIERING_SNAPSHOT_SPLIT_FLAG;
         } else if (isTieringLogSplit()) {
             return TIERING_LOG_SPLIT_FLAG;
         } else {
@@ -99,5 +101,21 @@ public abstract class TieringSplit implements SourceSplit {
     @Nullable
     public String getPartitionName() {
         return partitionName;
+    }
+
+    @Override
+    public boolean equals(Object object) {
+        if (!(object instanceof TieringSplit)) {
+            return false;
+        }
+        TieringSplit that = (TieringSplit) object;
+        return Objects.equals(tablePath, that.tablePath)
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(partitionName, that.partitionName);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(tablePath, tableBucket, partitionName);
     }
 }

@@ -16,8 +16,8 @@
 
 package com.alibaba.fluss.flink.tiering.source.state;
 
-import com.alibaba.fluss.flink.tiering.source.split.TieringKvSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringLogSplit;
+import com.alibaba.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -25,42 +25,30 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Unit tests for {@link TieringKvSplitState} and {@link TieringLogSplitState}. */
+/** Unit tests for {@link TieringSplitState} . */
 class TieringSplitStateTest {
 
     @Test
-    void testTieringKvSplitState() {
+    void testTieringSnapshotSplit() {
         TablePath tablePath = TablePath.of("test_db_1", "test_table_1");
         TableBucket tableBucket = new TableBucket(1, 1024L, 2);
 
-        // verify with records to skip
-        TieringKvSplit tieringKvSplit =
-                new TieringKvSplit(tablePath, tableBucket, "partition1", 0L, 200L, 5L);
-        TieringKvSplitState tieringKvSplitState = new TieringKvSplitState(tieringKvSplit, 5L);
-        assertThat(tieringKvSplitState.toSourceSplit()).isEqualTo(tieringKvSplit);
-
-        // advance records to skip of tiering kv split state
-        tieringKvSplitState.setRecordsToSkip(10L);
-        TieringKvSplit expectedTieringKvSplit =
-                new TieringKvSplit(tablePath, tableBucket, "partition1", 0L, 200L, 10L);
-        assertThat(tieringKvSplitState.toSourceSplit()).isEqualTo(expectedTieringKvSplit);
+        // verify conversion between TieringSnapshotSplitState and TieringSnapshotSplit
+        TieringSnapshotSplit tieringSnapshotSplit =
+                new TieringSnapshotSplit(tablePath, tableBucket, "partition1", 0L, 200L);
+        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
+        assertThat(tieringSnapshotSplitState.toSourceSplit()).isEqualTo(tieringSnapshotSplit);
     }
 
     @Test
-    void testTieringLogSplitState() {
+    void testTieringLogSplit() {
         TablePath tablePath = TablePath.of("test_db_1", "test_table_1");
         TableBucket tableBucket = new TableBucket(1, 1024L, 2);
 
-        // verify with starting offset
+        // verify conversion between TieringLogSplitState and TieringLogSplit
         TieringLogSplit tieringLogSplit =
                 new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L);
-        TieringLogSplitState tieringLogSplitState = new TieringLogSplitState(tieringLogSplit, 100L);
+        TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
         assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(tieringLogSplit);
-
-        // advance next offset of tiering log split state
-        tieringLogSplitState.nextOffset(105L);
-        TieringLogSplit expectedTieringLogSplit =
-                new TieringLogSplit(tablePath, tableBucket, "partition1", 105L, 200L);
-        assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(expectedTieringLogSplit);
     }
 }

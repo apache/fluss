@@ -16,10 +16,18 @@
 
 package com.alibaba.fluss.flink.tiering.source.state;
 
+import com.alibaba.fluss.flink.tiering.source.split.TieringLogSplit;
+import com.alibaba.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
 
-/** The base state of a {@link TieringSplit}. */
-public abstract class TieringSplitState {
+/**
+ * The state of a {@link TieringSplit}.
+ *
+ * <p>Note: The tiering service adopts a stateless design and does not store any progress
+ * information in state during checkpoints. All splits are re-requested from the Fluss cluster in
+ * case of failover.
+ */
+public class TieringSplitState {
 
     protected final TieringSplit tieringSplit;
 
@@ -27,5 +35,23 @@ public abstract class TieringSplitState {
         this.tieringSplit = tieringSplit;
     }
 
-    public abstract TieringSplit toSourceSplit();
+    public TieringSplit toSourceSplit() {
+        if (tieringSplit.isTieringSnapshotSplit()) {
+            final TieringSnapshotSplit split = (TieringSnapshotSplit) this.tieringSplit;
+            return new TieringSnapshotSplit(
+                    split.getTablePath(),
+                    split.getTableBucket(),
+                    split.getPartitionName(),
+                    split.getSnapshotId(),
+                    split.getLogOffsetOfSnapshot());
+        } else {
+            final TieringLogSplit split = (TieringLogSplit) tieringSplit;
+            return new TieringLogSplit(
+                    split.getTablePath(),
+                    split.getTableBucket(),
+                    split.getPartitionName(),
+                    split.getStartingOffset(),
+                    split.getStoppingOffset());
+        }
+    }
 }

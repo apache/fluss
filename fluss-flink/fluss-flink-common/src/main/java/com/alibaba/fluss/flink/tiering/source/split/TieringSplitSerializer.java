@@ -35,7 +35,7 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final byte TIERING_KV_SPLIT_FLAG = 1;
+    private static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     private static final byte TIERING_LOG_SPLIT_FLAG = 2;
 
     private static final int CURRENT_VERSION = VERSION_0;
@@ -73,15 +73,13 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
             out.writeBoolean(false);
         }
 
-        if (split.isTieringKvSplit()) {
-            // KV split
-            TieringKvSplit tieringKvSplit = split.asTieringKvSplit();
+        if (split.isTieringSnapshotSplit()) {
+            // Snapshot split
+            TieringSnapshotSplit tieringSnapshotSplit = split.asTieringSnapshotSplit();
             // write snapshot id
-            out.writeLong(tieringKvSplit.getSnapshotId());
+            out.writeLong(tieringSnapshotSplit.getSnapshotId());
             // write log offset of snapshot
-            out.writeLong(tieringKvSplit.getLogOffsetOfSnapshot());
-            // write records to skip
-            out.writeLong(tieringKvSplit.getRecordsToSkip());
+            out.writeLong(tieringSnapshotSplit.getLogOffsetOfSnapshot());
         } else {
             // Log split
             TieringLogSplit tieringLogSplit = split.asTieringLogSplit();
@@ -125,20 +123,13 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         }
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
-        if (splitKind == TIERING_KV_SPLIT_FLAG) {
+        if (splitKind == TIERING_SNAPSHOT_SPLIT_FLAG) {
             // deserialize snapshot id
             long snapshotId = in.readLong();
             // deserialize log offset of snapshot
             long logOffsetOfSnapshot = in.readLong();
-            // deserialize records to skip
-            long recordsToSkip = in.readLong();
-            return new TieringKvSplit(
-                    tablePath,
-                    tableBucket,
-                    partitionName,
-                    snapshotId,
-                    logOffsetOfSnapshot,
-                    recordsToSkip);
+            return new TieringSnapshotSplit(
+                    tablePath, tableBucket, partitionName, snapshotId, logOffsetOfSnapshot);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();

@@ -77,12 +77,15 @@ public class TieringLogSplit extends TieringSplit {
         if (!(object instanceof TieringLogSplit)) {
             return false;
         }
+        if (!super.equals(object)) {
+            return false;
+        }
         TieringLogSplit that = (TieringLogSplit) object;
         return startingOffset == that.startingOffset && stoppingOffset == that.stoppingOffset;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(startingOffset, stoppingOffset);
+        return Objects.hash(super.hashCode(), startingOffset, stoppingOffset);
     }
 }
