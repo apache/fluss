@@ -938,18 +938,16 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
         tEnv.executeSql(
                 "create table partitioned_table"
-                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) "
-                        + "with ('table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year')");
+                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table");
+        tEnv.executeSql("alter table partitioned_table add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table add partition (c=2026)");
 
-        // write data into partitions and wait snapshot is done
-        Map<Long, String> partitionNameById =
-                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
         List<String> expectedRowValues =
-                writeRowsToPartition(tablePath, partitionNameById.values()).stream()
+                writeRowsToPartition(tablePath, Arrays.asList("2025", "2026")).stream()
                         .filter(s -> s.contains("2025"))
                         .collect(Collectors.toList());
-        waitUtilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
+        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from partitioned_table where c ='2025'").collect();

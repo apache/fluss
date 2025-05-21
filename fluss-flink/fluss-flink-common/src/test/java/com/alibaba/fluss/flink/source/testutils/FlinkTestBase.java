@@ -282,7 +282,6 @@ public class FlinkTestBase extends AbstractTestBase {
             }
         }
 
-        // 写入记录
         writeRows(tablePath, rows, false);
 
         return expectedRowValues;
