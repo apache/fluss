@@ -388,26 +388,19 @@ public class FlinkCatalog implements Catalog {
         throw new UnsupportedOperationException();
     }
 
+    @SuppressWarnings("checkstyle:WhitespaceAround")
     @Override
     public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
-
+        List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
         try {
-            return listPartitions(objectPath, null);
-        } catch (Exception e) {
-            Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (isTableNotExist(t)) {
-                throw new TableNotExistException(getName(), objectPath);
-            } else if (isTableNotPartitioned(t)) {
-                throw new TableNotPartitionedException(getName(), objectPath);
-            } else {
-                throw new CatalogException(
-                        String.format(
-                                "Failed to list partitions of table %s in %s",
-                                objectPath, getName()),
-                        t);
-            }
+            catalogPartitionSpecs = listPartitions(objectPath, null);
+        } catch (TableNotExistException | TableNotPartitionedException | CatalogException e) {
+            throw e;
+        } catch (PartitionSpecInvalidException t) {
+            // do nothing
         }
+        return catalogPartitionSpecs;
     }
 
     @Override
