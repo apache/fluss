@@ -160,14 +160,7 @@ public class MetadataManager {
      */
     public Map<String, Long> listPartitions(TablePath tablePath)
             throws TableNotExistException, TableNotPartitionedException {
-        TableInfo tableInfo = getTable(tablePath);
-        if (!tableInfo.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Table '" + tablePath + "' is not a partitioned table.");
-        }
-        return uncheck(
-                () -> zookeeperClient.getPartitionNameAndIds(tablePath),
-                "Fail to list partitions for table: " + tablePath);
+        return listPartitions(tablePath, null);
     }
 
     /**
@@ -183,13 +176,19 @@ public class MetadataManager {
             throw new TableNotPartitionedException(
                     "Table '" + tablePath + "' is not a partitioned table.");
         }
-        return uncheck(
-                () ->
-                        zookeeperClient.getPartitionNameAndIdsBySpec(
-                                tablePath, tableInfo.getPartitionKeys(), partitionSpecFromRequest),
-                String.format(
-                        "Fail to list partitions for table: %s, partitionSpec: %s.",
-                        tablePath, partitionSpecFromRequest));
+        return partitionSpecFromRequest == null
+                ? uncheck(
+                        () -> zookeeperClient.getPartitionNameAndIds(tablePath),
+                        "Fail to list partitions for table: " + tablePath)
+                : uncheck(
+                        () ->
+                                zookeeperClient.getPartitionNameAndIds(
+                                        tablePath,
+                                        tableInfo.getPartitionKeys(),
+                                        partitionSpecFromRequest),
+                        String.format(
+                                "Fail to list partitions for table: %s, partitionSpec: %s.",
+                                tablePath, partitionSpecFromRequest));
     }
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)

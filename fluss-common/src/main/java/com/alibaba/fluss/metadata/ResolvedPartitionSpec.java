@@ -158,14 +158,13 @@ public class ResolvedPartitionSpec {
         List<String> otherPartitionValues = other.getPartitionValues();
 
         List<String> expectedPartitionValues = new ArrayList<>();
-        for (int i = 0; i < otherPartitionKeys.size(); i++) {
-            if (!partitionKeys.contains(otherPartitionKeys.get(i))) {
+        for (String otherPartitionKey : otherPartitionKeys) {
+            if (!partitionKeys.contains(otherPartitionKey)) {
                 throw new InvalidPartitionException(
                         String.format(
-                                "table don't contains this partitionKey: %s",
-                                otherPartitionKeys.get(i)));
+                                "table don't contains this partitionKey: %s", otherPartitionKey));
             }
-            int keyIndex = partitionKeys.indexOf(otherPartitionKeys.get(i));
+            int keyIndex = partitionKeys.indexOf(otherPartitionKey);
             expectedPartitionValues.add(partitionValues.get(keyIndex));
         }
 

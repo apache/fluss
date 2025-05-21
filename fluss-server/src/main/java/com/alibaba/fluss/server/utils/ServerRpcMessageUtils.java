@@ -1418,16 +1418,6 @@ public class ServerRpcMessageUtils {
         return pbPartitionSpec;
     }
 
-    public static ResolvedPartitionSpec toResolvedPartitionSpec(PbPartitionSpec pbPartitionSpec) {
-        List<String> partitionKeys = new ArrayList<>();
-        List<String> partitionValues = new ArrayList<>();
-        for (PbKeyValue pbKeyValue : pbPartitionSpec.getPartitionKeyValuesList()) {
-            partitionKeys.add(pbKeyValue.getKey());
-            partitionValues.add(pbKeyValue.getValue());
-        }
-        return new ResolvedPartitionSpec(partitionKeys, partitionValues);
-    }
-
     public static CommitLakeTableSnapshotData getCommitLakeTableSnapshotData(
             CommitLakeTableSnapshotRequest request) {
         Map<Long, LakeTableSnapshot> lakeTableInfoByTableId = new HashMap<>();

@@ -86,6 +86,8 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 
+import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
+
 /**
  * This class includes methods for write/read various metadata (leader address, tablet server
  * registration, table assignment, table, schema) in Zookeeper.
@@ -439,37 +441,34 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Get the partition and the id for the partitions of a table in ZK. */
     public Map<String, Long> getPartitionNameAndIds(TablePath tablePath) throws Exception {
-        Map<String, Long> partitions = new HashMap<>();
-        for (String partitionName : getPartitions(tablePath)) {
-            Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(
-                    partition -> partitions.put(partitionName, partition.getPartitionId()));
-        }
-        return partitions;
+        return getPartitionNameAndIds(tablePath, Collections.emptyList(), null);
     }
 
     /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
-    public Map<String, Long> getPartitionNameAndIdsBySpec(
+    public Map<String, Long> getPartitionNameAndIds(
             TablePath tablePath,
             List<String> partitionKeys,
             ResolvedPartitionSpec partitionSpecFromRequest)
             throws Exception {
-        Map<String, Long> matchPartitions = new HashMap<>();
-        Set<String> partitions = getPartitions(tablePath);
+        Map<String, Long> partitions = new HashMap<>();
 
-        for (String partitionName : partitions) {
-            ResolvedPartitionSpec resolvedPartitionSpecFromZK =
-                    ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
-            boolean contains = resolvedPartitionSpecFromZK.contains(partitionSpecFromRequest);
-            if (contains) {
-                Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+        for (String partitionName : getPartitions(tablePath)) {
+            Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+            if (partitionKeys.size() > 0 && partitionSpecFromRequest != null) {
+                ResolvedPartitionSpec resolvedPartitionSpecFromZK =
+                        fromPartitionName(partitionKeys, partitionName);
+                boolean contains = resolvedPartitionSpecFromZK.contains(partitionSpecFromRequest);
+                if (contains) {
+                    optPartition.ifPresent(
+                            partition -> partitions.put(partitionName, partition.getPartitionId()));
+                }
+            } else {
                 optPartition.ifPresent(
-                        partition ->
-                                matchPartitions.put(partitionName, partition.getPartitionId()));
+                        partition -> partitions.put(partitionName, partition.getPartitionId()));
             }
         }
 
-        return matchPartitions;
+        return partitions;
     }
 
     /** Get the id and name for the partitions of a table in ZK. */

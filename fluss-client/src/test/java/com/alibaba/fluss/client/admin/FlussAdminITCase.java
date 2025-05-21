@@ -29,6 +29,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
@@ -573,6 +574,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         () ->
                                 admin.listPartitionInfos(partitionedTablePath, invalidPartitionSpec)
                                         .get())
+                .cause()
+                .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining(
                         "Fail to list partitions for table: test_db.test_partitioned_table, partitionSpec: pt1=2025.");
     }

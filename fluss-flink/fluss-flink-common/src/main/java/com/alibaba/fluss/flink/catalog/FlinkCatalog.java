@@ -391,20 +391,9 @@ public class FlinkCatalog implements Catalog {
     @Override
     public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
-        // TODO lake table should support.
-        if (objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
-            return Collections.emptyList();
-        }
 
         try {
-            TablePath tablePath = toTablePath(objectPath);
-            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
-            List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
-            for (PartitionInfo partitionInfo : partitionInfos) {
-                catalogPartitionSpecs.add(
-                        new CatalogPartitionSpec(partitionInfo.getPartitionSpec().getSpecMap()));
-            }
-            return catalogPartitionSpecs;
+            return listPartitions(objectPath, null);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (isTableNotExist(t)) {
@@ -426,7 +415,6 @@ public class FlinkCatalog implements Catalog {
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, CatalogException {
-        Map<String, String> partitionSpec = catalogPartitionSpec.getPartitionSpec();
 
         // TODO lake table should support.
         if (objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
@@ -435,8 +423,14 @@ public class FlinkCatalog implements Catalog {
 
         try {
             TablePath tablePath = toTablePath(objectPath);
-            List<PartitionInfo> partitionInfos =
-                    admin.listPartitionInfos(tablePath, new PartitionSpec(partitionSpec)).get();
+            List<PartitionInfo> partitionInfos;
+            if (catalogPartitionSpec != null) {
+                Map<String, String> partitionSpec = catalogPartitionSpec.getPartitionSpec();
+                partitionInfos =
+                        admin.listPartitionInfos(tablePath, new PartitionSpec(partitionSpec)).get();
+            } else {
+                partitionInfos = admin.listPartitionInfos(tablePath).get();
+            }
             List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
                 catalogPartitionSpecs.add(
@@ -449,14 +443,14 @@ public class FlinkCatalog implements Catalog {
                 throw new TableNotExistException(getName(), objectPath);
             } else if (isTableNotPartitioned(t)) {
                 throw new TableNotPartitionedException(getName(), objectPath);
-            } else if (isPartitionInvalid(t)) {
+            } else if (isPartitionInvalid(t) && catalogPartitionSpec != null) {
                 throw new PartitionSpecInvalidException(
                         getName(), new ArrayList<>(), objectPath, catalogPartitionSpec);
             } else {
                 throw new CatalogException(
                         String.format(
                                 "Failed to list partitions of table %s in %s, by partitionSpec %s",
-                                objectPath, getName(), partitionSpec),
+                                objectPath, getName(), catalogPartitionSpec.getPartitionSpec()),
                         t);
             }
         }

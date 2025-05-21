@@ -245,6 +245,7 @@ public interface Admin extends AutoCloseable {
      *
      * @param tablePath The path of the table.
      */
+    @Deprecated
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath);
 
     /**
@@ -255,6 +256,7 @@ public interface Admin extends AutoCloseable {
      * <ul>
      *   <li>{@link TableNotExistException} if the table does not exist.
      *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link InvalidPartitionException} if the input partition spec is invalid.
      * </ul>
      *
      * @param tablePath The path of the table.

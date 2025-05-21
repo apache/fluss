@@ -85,7 +85,6 @@ import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.tablet.TabletService;
-import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
@@ -110,6 +109,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static com.alibaba.fluss.security.acl.Resource.TABLE_SPLITTER;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestKvSnapshotsResponse;
@@ -405,7 +405,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         Map<String, Long> partitionNameAndIds;
         if (request.hasPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
-                    ServerRpcMessageUtils.toResolvedPartitionSpec(request.getPartitionSpec());
+                    toResolvedPartitionSpec(request.getPartitionSpec());
             partitionNameAndIds =
                     metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
