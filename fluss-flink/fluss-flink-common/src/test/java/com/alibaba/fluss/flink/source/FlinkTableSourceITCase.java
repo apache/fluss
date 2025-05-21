@@ -935,7 +935,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     @Test
     void testStreamingReadSinglePartitionPushDown() throws Exception {
-
         tEnv.executeSql(
                 "create table partitioned_table"
                         + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
