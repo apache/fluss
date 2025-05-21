@@ -348,7 +348,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         PhysicalTablePath tablePath = metadataCache.getTablePath(tableId);
         if (tablePath == null) {
             throw new UnknownTableOrBucketException(
-                    String.format("This server does not host this table ID %s.", tableId));
+                    String.format(
+                            "This server %s does not host this table ID %s. This may happen when the table metadata cache in the server is not updated yet.",
+                            serviceName, tableId));
         }
         if (authorizer != null
                 && !authorizer.isAuthorized(
@@ -390,8 +392,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                         new ApiError(
                                                 Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
                                                 String.format(
-                                                        "This server does not host this table ID %s.",
-                                                        tableId))));
+                                                        "This server %s does not host this table ID %s. "
+                                                                + "This may happen when the table metadata cache in the server is not updated yet.",
+                                                        serviceName, tableId))));
                     } else if (!filteredTableIds.contains(tableId)) {
                         errorResponseMap.put(
                                 tableBucket,
