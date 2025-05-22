@@ -18,9 +18,9 @@ package com.alibaba.fluss.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.IllegalConfigurationException;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.ExceptionUtils;
-
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
@@ -41,6 +41,8 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
+import org.apache.flink.table.catalog.stats.CatalogColumnStatistics;
+import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
 import org.apache.flink.table.factories.FactoryUtil;
@@ -442,6 +444,96 @@ class FlinkCatalogTest {
         catalog.createTable(tablePath, table, false);
         CatalogBaseTable tableCreated = catalog.getTable(tablePath);
         checkEqualsRespectSchema((CatalogTable) tableCreated, table);
+        catalog.dropTable(tablePath, false);
+    }
+
+    @Test
+    void testConnectionFailureHandling() {
+        // Create a catalog with invalid connection settings
+        Catalog badCatalog =
+                new FlinkCatalog(
+                        "bad-catalog",
+                        "default",
+                        "invalid-bootstrap-server:9092",
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
+
+        // Test open() throws proper exception
+        assertThatThrownBy(() -> badCatalog.open())
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("No resolvable bootstrap urls");
+    }
+
+    @Test
+    void testStatisticsOperations() throws Exception {
+        // Create a regular table for statistics testing
+        CatalogTable table = newCatalogTable(Collections.emptyMap());
+        ObjectPath tablePath = new ObjectPath(DEFAULT_DB, "statsTable");
+        catalog.createTable(tablePath, table, false);
+
+        // Test table statistics - should return UNKNOWN for existing tables
+        CatalogTableStatistics tableStats = catalog.getTableStatistics(tablePath);
+        assertThat(tableStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
+
+        CatalogColumnStatistics columnStats = catalog.getTableColumnStatistics(tablePath);
+        assertThat(columnStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
+
+        // Test that statistics methods return UNKNOWN even for non-existent tables
+        ObjectPath nonExistent = new ObjectPath(DEFAULT_DB, "nonexistent");
+        CatalogTableStatistics nonExistentStats = catalog.getTableStatistics(nonExistent);
+        assertThat(nonExistentStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
+
+        CatalogColumnStatistics nonExistentColStats = catalog.getTableColumnStatistics(nonExistent);
+        assertThat(nonExistentColStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
+
+        // Create partitioned table for partition statistics testing
+        ResolvedSchema schema = createSchema();
+        CatalogTable partTable =
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(schema).build(),
+                                "partitioned table for stats",
+                                Collections.singletonList("first"),
+                                Collections.emptyMap()),
+                        schema);
+
+        ObjectPath partTablePath = new ObjectPath(DEFAULT_DB, "partStatsTable");
+        catalog.createTable(partTablePath, partTable, false);
+
+        CatalogPartitionSpec partSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "value"));
+        catalog.createPartition(partTablePath, partSpec, null, false);
+
+        // Test partition statistics - should return UNKNOWN
+        CatalogTableStatistics partStats = catalog.getPartitionStatistics(partTablePath, partSpec);
+        assertThat(partStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
+
+        CatalogColumnStatistics partColStats =
+                catalog.getPartitionColumnStatistics(partTablePath, partSpec);
+        assertThat(partColStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
+
+        // Test unsupported statistics operations
+        assertThatThrownBy(() -> catalog.alterTableStatistics(tablePath, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.alterTableColumnStatistics(tablePath, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.alterPartitionStatistics(
+                                        partTablePath, partSpec, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.alterPartitionColumnStatistics(
+                                        partTablePath, partSpec, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        // Clean up
+        catalog.dropPartition(partTablePath, partSpec, false);
+        catalog.dropTable(partTablePath, false);
         catalog.dropTable(tablePath, false);
     }
 }
