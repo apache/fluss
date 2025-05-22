@@ -994,8 +994,8 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
-    private List<String> writeRowsToTwoPartition(
-            TablePath tablePath, Collection<String> partitions) throws Exception {
+    private List<String> writeRowsToTwoPartition(TablePath tablePath, Collection<String> partitions)
+            throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
 
