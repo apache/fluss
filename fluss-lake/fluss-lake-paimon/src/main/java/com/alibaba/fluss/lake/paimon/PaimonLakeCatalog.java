@@ -22,6 +22,7 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.utils.IOUtils;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
@@ -175,8 +176,6 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     @Override
     public void close() throws Exception {
-        if (paimonCatalog != null) {
-            paimonCatalog.close();
-        }
+        IOUtils.closeQuietly(paimonCatalog, "paimon catalog");
     }
 }
