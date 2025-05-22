@@ -126,3 +126,5 @@ The following content shows the mapping between [Fluss data type](table-design/d
 | TIME                          | TIME                          |
 | TIMESTAMP                     | TIMESTAMP                     |
 | TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP WITH LOCAL TIMEZONE |
+| BINARY                        | BINARY                        |
+| BYTES                         | BYTES                         |
