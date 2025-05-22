@@ -176,19 +176,20 @@ public class MetadataManager {
             throw new TableNotPartitionedException(
                     "Table '" + tablePath + "' is not a partitioned table.");
         }
-        return partitionSpecFromRequest == null
-                ? uncheck(
-                        () -> zookeeperClient.getPartitionNameAndIds(tablePath),
-                        "Fail to list partitions for table: " + tablePath)
-                : uncheck(
-                        () ->
-                                zookeeperClient.getPartitionNameAndIds(
-                                        tablePath,
-                                        tableInfo.getPartitionKeys(),
-                                        partitionSpecFromRequest),
+        try {
+            return zookeeperClient.getPartitionNameAndIds(
+                    tablePath, tableInfo.getPartitionKeys(), partitionSpecFromRequest);
+        } catch (Exception e) {
+            if (e instanceof InvalidPartitionException) {
+                throw new InvalidPartitionException(tablePath + e.getMessage());
+            } else {
+                throw new FlussRuntimeException(
                         String.format(
                                 "Fail to list partitions for table: %s, partitionSpec: %s.",
-                                tablePath, partitionSpecFromRequest));
+                                tablePath, partitionSpecFromRequest),
+                        e);
+            }
+        }
     }
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)
