@@ -929,10 +929,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                 .hasMessage("Full lookup caching is not supported yet.");
     }
 
-    // -------------------------------------------------------------------------------------
-    // Fluss partition push down tests
-    // -------------------------------------------------------------------------------------
-
     @Test
     void testStreamingReadSinglePartitionPushDown() throws Exception {
         tEnv.executeSql(
@@ -996,6 +992,28 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                 tEnv.executeSql("select * from multi_partitioned_table where c ='2025' and d ='3' ")
                         .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    private List<String> writeRowsToTwoPartition(
+            TablePath tablePath, Collection<String> partitions) throws Exception {
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+
+        for (String partition : partitions) {
+            String[] keyValuePairs = partition.split(",");
+            String[] values = new String[2];
+            values[0] = keyValuePairs[0].split("=")[1];
+            values[1] = keyValuePairs[1].split("=")[1];
+
+            for (int i = 0; i < 10; i++) {
+                rows.add(row(i, "v1", values[0], values[1]));
+                expectedRowValues.add(String.format("+I[%d, v1, %s, %s]", i, values[0], values[1]));
+            }
+        }
+
+        writeRows(tablePath, rows, false);
+
+        return expectedRowValues;
     }
 
     private enum Caching {

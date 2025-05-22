@@ -34,7 +34,7 @@ import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
 import com.alibaba.fluss.flink.source.split.LogSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
-import com.alibaba.fluss.flink.utils.PushdownUtils;
+import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -126,7 +126,7 @@ public class FlinkSourceEnumerator
 
     private volatile boolean closed = false;
 
-    @Nullable private final List<PushdownUtils.FieldEqual> partitionFilters;
+    @Nullable private final List<FieldEqual> partitionFilters;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -137,7 +137,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            @Nullable List<PushdownUtils.FieldEqual> partitionFilters) {
+            @Nullable List<FieldEqual> partitionFilters) {
         this(
                 tablePath,
                 flussConf,
@@ -163,7 +163,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            @Nullable List<PushdownUtils.FieldEqual> partitionFilters) {
+            @Nullable List<FieldEqual> partitionFilters) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -279,13 +279,10 @@ public class FlinkSourceEnumerator
                             partitionInfo -> {
                                 Map<String, String> specMap =
                                         partitionInfo.getPartitionSpec().getSpecMap();
-                                for (PushdownUtils.FieldEqual filter : partitionFilters) {
+                                List<String> fieldNames = tableInfo.getRowType().getFieldNames();
+                                for (FieldEqual filter : partitionFilters) {
                                     String partitionValue =
-                                            specMap.get(
-                                                    tableInfo
-                                                            .getRowType()
-                                                            .getFieldNames()
-                                                            .get(filter.fieldIndex));
+                                            specMap.get(fieldNames.get(filter.fieldIndex));
                                     if (partitionValue == null
                                             || !filter.equalValue
                                                     .toString()

@@ -265,28 +265,6 @@ public class FlinkTestBase extends AbstractTestBase {
         return expectedRowValues;
     }
 
-    protected List<String> writeRowsToTwoPartition(
-            TablePath tablePath, Collection<String> partitions) throws Exception {
-        List<InternalRow> rows = new ArrayList<>();
-        List<String> expectedRowValues = new ArrayList<>();
-
-        for (String partition : partitions) {
-            String[] keyValuePairs = partition.split(",");
-            String[] values = new String[2];
-            values[0] = keyValuePairs[0].split("=")[1];
-            values[1] = keyValuePairs[1].split("=")[1];
-
-            for (int i = 0; i < 10; i++) {
-                rows.add(row(i, "v1", values[0], values[1]));
-                expectedRowValues.add(String.format("+I[%d, v1, %s, %s]", i, values[0], values[1]));
-            }
-        }
-
-        writeRows(tablePath, rows, false);
-
-        return expectedRowValues;
-    }
-
     protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)
             throws Exception {
         try (Table table = conn.getTable(tablePath)) {

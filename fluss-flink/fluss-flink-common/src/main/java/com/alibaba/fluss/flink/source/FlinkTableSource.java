@@ -26,6 +26,7 @@ import com.alibaba.fluss.flink.source.lookup.LookupNormalizer;
 import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.flink.utils.PushdownUtils;
+import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
@@ -125,7 +126,7 @@ public class FlinkTableSource
 
     private long limit = -1;
 
-    @Nullable private List<PushdownUtils.FieldEqual> partitionFilters;
+    @Nullable private List<FieldEqual> partitionFilters;
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -396,7 +397,7 @@ public class FlinkTableSource
                 && hasPrimaryKey()
                 && filters.size() == primaryKeyIndexes.length) {
             Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
-            List<PushdownUtils.FieldEqual> fieldEquals =
+            List<FieldEqual> fieldEquals =
                     PushdownUtils.extractFieldEquals(
                             filters,
                             primaryKeyTypes,
@@ -406,7 +407,7 @@ public class FlinkTableSource
             int[] keyRowProjection = getKeyRowProjection();
             HashSet<Integer> visitedPkFields = new HashSet<>();
             GenericRowData lookupRow = new GenericRowData(primaryKeyIndexes.length);
-            for (PushdownUtils.FieldEqual fieldEqual : fieldEquals) {
+            for (FieldEqual fieldEqual : fieldEquals) {
                 lookupRow.setField(keyRowProjection[fieldEqual.fieldIndex], fieldEqual.equalValue);
                 visitedPkFields.add(fieldEqual.fieldIndex);
             }
@@ -418,7 +419,7 @@ public class FlinkTableSource
             return Result.of(acceptedFilters, remainingFilters);
         } else if (isPartitioned()) {
             Map<Integer, LogicalType> partitionKeyTypes = getPartitionKeyTypes();
-            List<PushdownUtils.FieldEqual> fieldEquals =
+            List<FieldEqual> fieldEquals =
                     PushdownUtils.extractFieldEquals(
                             filters,
                             partitionKeyTypes,
@@ -495,15 +496,12 @@ public class FlinkTableSource
         return partitionKeyTypes;
     }
 
-    private List<PushdownUtils.FieldEqual> serializeFieldEquals(
-            List<PushdownUtils.FieldEqual> fieldEquals) {
-        List<PushdownUtils.FieldEqual> serialize = new ArrayList<>();
-        for (PushdownUtils.FieldEqual fieldEqual : fieldEquals) {
+    private List<FieldEqual> serializeFieldEquals(List<FieldEqual> fieldEquals) {
+        List<FieldEqual> serialize = new ArrayList<>();
+        for (FieldEqual fieldEqual : fieldEquals) {
             if (fieldEqual.equalValue instanceof BinaryStringData) {
                 serialize.add(
-                        new PushdownUtils.FieldEqual(
-                                fieldEqual.fieldIndex,
-                                ((BinaryStringData) fieldEqual.equalValue).toString()));
+                        new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
             } else {
                 serialize.add(fieldEqual);
             }

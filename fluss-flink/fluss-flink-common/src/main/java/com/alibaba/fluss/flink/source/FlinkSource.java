@@ -29,7 +29,7 @@ import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitSerializer;
 import com.alibaba.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
 import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
-import com.alibaba.fluss.flink.utils.PushdownUtils;
+import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
@@ -65,32 +65,7 @@ public class FlinkSource<OUT>
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
 
-    @Nullable private final List<PushdownUtils.FieldEqual> partitionFilters;
-
-    public FlinkSource(
-            Configuration flussConf,
-            TablePath tablePath,
-            boolean hasPrimaryKey,
-            boolean isPartitioned,
-            RowType sourceOutputType,
-            @Nullable int[] projectedFields,
-            OffsetsInitializer offsetsInitializer,
-            long scanPartitionDiscoveryIntervalMs,
-            FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming) {
-        this(
-                flussConf,
-                tablePath,
-                hasPrimaryKey,
-                isPartitioned,
-                sourceOutputType,
-                projectedFields,
-                offsetsInitializer,
-                scanPartitionDiscoveryIntervalMs,
-                deserializationSchema,
-                streaming,
-                null);
-    }
+    @Nullable private final List<FieldEqual> partitionFilters;
 
     public FlinkSource(
             Configuration flussConf,
@@ -103,7 +78,7 @@ public class FlinkSource<OUT>
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
-            @Nullable List<PushdownUtils.FieldEqual> partitionFilters) {
+            List<FieldEqual> partitionFilters) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;

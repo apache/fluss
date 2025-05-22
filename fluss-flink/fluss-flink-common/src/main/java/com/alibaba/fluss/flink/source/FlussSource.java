@@ -25,6 +25,8 @@ import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+
 /**
  * A Flink DataStream source implementation for reading data from Fluss tables.
  *
@@ -67,6 +69,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming) {
+        // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
                 tablePath,
@@ -77,7 +80,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
-                streaming);
+                streaming,
+                Collections.emptyList());
     }
 
     /**
