@@ -82,7 +82,7 @@ abstract class FlinkCatalogITCase {
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static Catalog catalog;
 
-    private TableEnvironment tEnv;
+    protected TableEnvironment tEnv;
 
     @BeforeAll
     static void beforeAll() {

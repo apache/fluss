@@ -70,7 +70,7 @@ public class FlussSourceITCase extends FlinkTestBase {
     private final TableDescriptor pkTableDescriptor =
             TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1, "orderId").build();
 
-    private StreamExecutionEnvironment env;
+    protected StreamExecutionEnvironment env;
 
     @BeforeEach
     public void before() {
