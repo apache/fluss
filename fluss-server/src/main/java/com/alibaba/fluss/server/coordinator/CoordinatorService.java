@@ -164,7 +164,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         try {
             TablePath.validateDatabaseName(request.getDatabaseName());
         } catch (InvalidDatabaseException e) {
-            return FutureUtils.failedFuture(e);
+            return FutureUtils.completedExceptionally(e);
         }
 
         DatabaseDescriptor databaseDescriptor;

@@ -507,12 +507,6 @@ public class FutureUtils {
         }
     }
 
-    public static <T> CompletableFuture<T> failedFuture(Throwable t) {
-        CompletableFuture<T> future = new CompletableFuture<>();
-        future.completeExceptionally(t);
-        return future;
-    }
-
     /**
      * Implementation of the {@link ConjunctFuture} interface which waits only for the completion of
      * its futures and does not return their values.
