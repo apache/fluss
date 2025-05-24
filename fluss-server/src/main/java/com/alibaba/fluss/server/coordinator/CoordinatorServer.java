@@ -314,7 +314,7 @@ public class CoordinatorServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
-            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(2);
+            final Collection<CompletableFuture<Void>> terminationFutures = new ArrayList<>(3);
             try {
                 if (metricRegistry != null) {
                     terminationFutures.add(metricRegistry.closeAsync());
