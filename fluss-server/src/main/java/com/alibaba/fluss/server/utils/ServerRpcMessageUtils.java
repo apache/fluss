@@ -157,7 +157,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
