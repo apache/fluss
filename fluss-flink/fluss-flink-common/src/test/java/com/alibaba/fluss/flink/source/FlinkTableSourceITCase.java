@@ -74,8 +74,8 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
-    private StreamExecutionEnvironment execEnv;
-    private StreamTableEnvironment tEnv;
+    protected StreamExecutionEnvironment execEnv;
+    protected StreamTableEnvironment tEnv;
 
     @BeforeEach
     void before() {

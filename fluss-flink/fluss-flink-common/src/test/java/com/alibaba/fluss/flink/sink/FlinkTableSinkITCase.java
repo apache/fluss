@@ -79,9 +79,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
 
-    private StreamExecutionEnvironment env;
-    private StreamTableEnvironment tEnv;
-    private TableEnvironment tBatchEnv;
+    protected StreamExecutionEnvironment env;
+    protected StreamTableEnvironment tEnv;
+    protected TableEnvironment tBatchEnv;
 
     static Stream<Arguments> writePartitionedTableParams() {
         return Stream.of(
