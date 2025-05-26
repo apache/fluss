@@ -259,7 +259,21 @@ public class LogFetchCollector {
                     "Error in fetch for bucket {}: {}:{}", tb, error.exceptionName(), errorMessage);
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
-            LOG.warn("Received unknown table or bucket error in fetch for bucket {}", tb);
+            // ADD: Check if bucket should be removed from scanner status to stop repeated fetch
+            // attempts
+            Long currentOffset = logScannerStatus.getBucketOffset(tb);
+            if (currentOffset != null) {
+                LOG.warn(
+                        "Received unknown table or bucket error in fetch for bucket {}, removing from scanner status",
+                        tb);
+                // Remove the bucket from scanner status to prevent repeated fetch attempts
+                logScannerStatus.unassignScanBuckets(Collections.singletonList(tb));
+            } else {
+                // Bucket already unassigned, just log at debug level to reduce noise
+                LOG.debug(
+                        "Received unknown table or bucket error for already unassigned bucket {}",
+                        tb);
+            }
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION) {
             throw new FetchException(
