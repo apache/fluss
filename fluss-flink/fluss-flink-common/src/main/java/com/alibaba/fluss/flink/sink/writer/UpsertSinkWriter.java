@@ -35,7 +35,6 @@ import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
 /** An upsert sink writer or fluss primary key table. */
-/** An upsert sink writer or fluss primary key table. */
 public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     private transient UpsertWriter upsertWriter;
