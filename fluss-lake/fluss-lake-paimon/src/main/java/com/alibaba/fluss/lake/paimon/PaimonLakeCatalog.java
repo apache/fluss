@@ -41,11 +41,17 @@ import java.util.Map;
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
     private final Catalog paimonCatalog;
+
+    // for fluss source config
+    private static final String FLUSS_CONF_PREFIX = "fluss.";
+    // for paimon config
+    private static final String PAIMON_CONF_PREFIX = "paimon.";
 
     public PaimonLakeCatalog(Configuration configuration) {
         this.paimonCatalog =
@@ -164,14 +170,18 @@ public class PaimonLakeCatalog implements LakeCatalog {
         schemaBuilder.partitionKeys(tableDescriptor.getPartitionKeys());
 
         // set properties to paimon schema
-        tableDescriptor.getProperties().forEach((k, v) -> setFlussProperty(k, v, options));
-        tableDescriptor.getCustomProperties().forEach((k, v) -> setFlussProperty(k, v, options));
+        tableDescriptor.getProperties().forEach((k, v) -> setFlussAndPaimonProperty(k, v, options));
+        tableDescriptor.getCustomProperties().forEach((k, v) -> setFlussAndPaimonProperty(k, v, options));
         schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }
 
-    private void setFlussProperty(String key, String value, Options options) {
-        options.set("fluss." + key, value);
+    private void setFlussAndPaimonProperty(String key, String value, Options options) {
+        if (key.startsWith(PAIMON_CONF_PREFIX)) {
+            options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
+        } else {
+            options.set(FLUSS_CONF_PREFIX + key, value);
+        }
     }
 
     @Override
