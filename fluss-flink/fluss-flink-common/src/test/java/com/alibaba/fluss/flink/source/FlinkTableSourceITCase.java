@@ -1045,7 +1045,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from partitioned_table").collect();
-
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
