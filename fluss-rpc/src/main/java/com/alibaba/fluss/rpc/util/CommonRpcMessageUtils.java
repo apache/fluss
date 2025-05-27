@@ -16,8 +16,20 @@
 
 package com.alibaba.fluss.rpc.util;
 
+import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.LogRecords;
+import com.alibaba.fluss.record.MemoryLogRecords;
+import com.alibaba.fluss.remote.RemoteLogFetchInfo;
+import com.alibaba.fluss.remote.RemoteLogSegment;
+import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.messages.PbAclFilter;
 import com.alibaba.fluss.rpc.messages.PbAclInfo;
+import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
+import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.AccessControlEntryFilter;
 import com.alibaba.fluss.security.acl.AclBinding;
@@ -28,9 +40,13 @@ import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceFilter;
 import com.alibaba.fluss.security.acl.ResourceType;
+import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -132,5 +148,72 @@ public class CommonRpcMessageUtils {
                         pbAclFilter.hasHost() ? pbAclFilter.getHost() : null,
                         OperationType.fromCode((byte) pbAclFilter.getOperationType()),
                         PermissionType.fromCode((byte) pbAclFilter.getPermissionType())));
+    }
+
+    public static FetchLogResultForBucket getFetchLogResultForBucket(
+            TableBucket tb, TablePath tp, PbFetchLogRespForBucket respForBucket) {
+        FetchLogResultForBucket fetchLogResultForBucket;
+        if (respForBucket.hasErrorCode()) {
+            fetchLogResultForBucket =
+                    new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
+        } else {
+            if (respForBucket.hasRemoteLogFetchInfo()) {
+                PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
+                String partitionName =
+                        pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
+                PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
+                List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
+                for (PbRemoteLogSegment pbRemoteLogSegment : pbRlfInfo.getRemoteLogSegmentsList()) {
+                    RemoteLogSegment remoteLogSegment =
+                            RemoteLogSegment.Builder.builder()
+                                    .tableBucket(tb)
+                                    .physicalTablePath(physicalTablePath)
+                                    .remoteLogSegmentId(
+                                            UUID.fromString(
+                                                    pbRemoteLogSegment.getRemoteLogSegmentId()))
+                                    .remoteLogEndOffset(pbRemoteLogSegment.getRemoteLogEndOffset())
+                                    .remoteLogStartOffset(
+                                            pbRemoteLogSegment.getRemoteLogStartOffset())
+                                    .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
+                                    .maxTimestamp(-1L) // not use.
+                                    .build();
+                    remoteLogSegmentList.add(remoteLogSegment);
+                }
+                RemoteLogFetchInfo rlFetchInfo =
+                        new RemoteLogFetchInfo(
+                                pbRlfInfo.getRemoteLogTabletDir(),
+                                pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null,
+                                remoteLogSegmentList,
+                                pbRlfInfo.getFirstStartPos());
+                fetchLogResultForBucket =
+                        new FetchLogResultForBucket(
+                                tb, rlFetchInfo, respForBucket.getHighWatermark());
+            } else {
+                ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
+                LogRecords records =
+                        respForBucket.hasRecords()
+                                ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
+                                : MemoryLogRecords.EMPTY;
+                fetchLogResultForBucket =
+                        new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
+            }
+        }
+
+        return fetchLogResultForBucket;
+    }
+
+    public static ByteBuffer toByteBuffer(ByteBuf buf) {
+        if (buf.isDirect()) {
+            return buf.nioBuffer();
+        } else if (buf.hasArray()) {
+            int offset = buf.arrayOffset() + buf.readerIndex();
+            int length = buf.readableBytes();
+            return ByteBuffer.wrap(buf.array(), offset, length);
+        } else {
+            // fallback to deep copy
+            byte[] bytes = new byte[buf.readableBytes()];
+            buf.getBytes(buf.readerIndex(), bytes);
+            return ByteBuffer.wrap(bytes);
+        }
     }
 }

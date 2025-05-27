@@ -54,7 +54,7 @@ import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA2_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
-import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.toByteBuffer;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
 

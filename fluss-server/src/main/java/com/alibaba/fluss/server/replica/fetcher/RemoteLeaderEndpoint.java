@@ -37,7 +37,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.getFetchLogResultForBucket;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
