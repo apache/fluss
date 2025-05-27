@@ -41,14 +41,13 @@ import java.util.Map;
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
     private final Catalog paimonCatalog;
 
-    // for fluss source config
+    // for fluss config
     private static final String FLUSS_CONF_PREFIX = "fluss.";
     // for paimon config
     private static final String PAIMON_CONF_PREFIX = "paimon.";
@@ -171,7 +170,9 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
         // set properties to paimon schema
         tableDescriptor.getProperties().forEach((k, v) -> setFlussAndPaimonProperty(k, v, options));
-        tableDescriptor.getCustomProperties().forEach((k, v) -> setFlussAndPaimonProperty(k, v, options));
+        tableDescriptor
+                .getCustomProperties()
+                .forEach((k, v) -> setFlussAndPaimonProperty(k, v, options));
         schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }
