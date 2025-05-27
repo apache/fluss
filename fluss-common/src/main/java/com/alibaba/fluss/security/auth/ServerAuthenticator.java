@@ -20,13 +20,16 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 
+import java.io.Closeable;
+import java.io.IOException;
+
 /**
  * Authenticator for server side.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface ServerAuthenticator {
+public interface ServerAuthenticator extends Closeable {
 
     String protocol();
 
@@ -83,6 +86,30 @@ public interface ServerAuthenticator {
      */
     FlussPrincipal createPrincipal();
 
+    /**
+     * Performs a lightweight authentication check during each RPC invocation.
+     *
+     * <p>For example, this method serves some purposes:
+     *
+     * <ul>
+     *   <li>Verifies that the current authentication state remains valid (e.g., session not
+     *       expired, token still active).
+     *   <li>Optionally refreshes or extends the session to prevent expiration.
+     * </ul>
+     *
+     * <p>Implementations should ensure this method is non-blocking and efficient, as it may be
+     * invoked on every RPC call. A caching strategy is recommended if remote or expensive
+     * operations are involved.
+     *
+     * @throws AuthenticationException if the authentication has expired or become invalid
+     */
+    default void keepAlive(short apiKey) throws AuthenticationException {}
+
+    /** Close the authenticator. */
+    default void close() throws IOException {}
+
     /** The context of the authentication process. */
-    interface AuthenticateContext {}
+    interface AuthenticateContext {
+        String ipAddress();
+    }
 }
