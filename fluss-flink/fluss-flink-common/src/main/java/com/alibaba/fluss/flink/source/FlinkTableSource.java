@@ -27,7 +27,6 @@ import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.flink.utils.PushdownUtils;
 import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
-import com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
@@ -76,6 +75,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
@@ -403,7 +403,7 @@ public class FlinkTableSource
                             primaryKeyTypes,
                             acceptedFilters,
                             remainingFilters,
-                            ValueConversion.FLINK_INTERNAL_VALUE);
+                            FLINK_INTERNAL_VALUE);
             int[] keyRowProjection = getKeyRowProjection();
             HashSet<Integer> visitedPkFields = new HashSet<>();
             GenericRowData lookupRow = new GenericRowData(primaryKeyIndexes.length);
@@ -425,7 +425,7 @@ public class FlinkTableSource
                             partitionKeyTypes,
                             acceptedFilters,
                             remainingFilters,
-                            ValueConversion.FLINK_INTERNAL_VALUE);
+                            FLINK_INTERNAL_VALUE);
             fieldEquals = serializeFieldEquals(fieldEquals);
 
             this.partitionFilters = fieldEquals;

@@ -994,6 +994,61 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
+    @Test
+    void testStreamingReadWithCombinedFilters() throws Exception {
+        tEnv.executeSql(
+                "create table combined_filters_table"
+                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
+        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
+        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2025", i * 100));
+            if (i % 2 == 0) {
+                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+            }
+        }
+        writeRows(tablePath, rows, false);
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2026", i * 100));
+        }
+
+        writeRows(tablePath, rows, false);
+        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+
+        // test column filter、partition filter and flink runtime filter
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testNonPartitionPushDown() throws Exception {
+        tEnv.executeSql(
+                "create table partitioned_table"
+                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table");
+        tEnv.executeSql("alter table partitioned_table add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table add partition (c=2026)");
+
+        List<String> expectedRowValues =
+                writeRowsToPartition(tablePath, Arrays.asList("2025", "2026"));
+        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from partitioned_table").collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
     private List<String> writeRowsToTwoPartition(TablePath tablePath, Collection<String> partitions)
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();
