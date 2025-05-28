@@ -61,6 +61,8 @@ import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaResponse;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import com.alibaba.fluss.rpc.messages.ListAclsRequest;
 import com.alibaba.fluss.rpc.messages.ListAclsResponse;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
@@ -291,6 +293,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     @Override
     public CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(
             CommitLakeTableSnapshotRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
+            LakeTieringHeartbeatRequest request) {
         throw new UnsupportedOperationException();
     }
 

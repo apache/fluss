@@ -57,6 +57,7 @@ import com.alibaba.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import com.alibaba.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import com.alibaba.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.InitWriterResponse;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
 import com.alibaba.fluss.rpc.messages.ListAclsResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
@@ -187,6 +188,12 @@ public class ServerRpcMessageUtils {
             pbPath.setPartitionName(physicalPath.getPartitionName());
         }
         return pbPath;
+    }
+
+    public static PbTablePath fromTablePath(TablePath tablePath) {
+        return new PbTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
     }
 
     public static TableBucket toTableBucket(PbTableBucket protoTableBucket) {
@@ -1362,6 +1369,11 @@ public class ServerRpcMessageUtils {
                     new PbDropAclsFilterResult().addAllMatchingAcls(dropAclsMatchingAcls));
         }
         return new DropAclsResponse().addAllFilterResults(dropAclsFilterResults);
+    }
+
+    public static LakeTieringHeartbeatResponse makeLakeTieringHeartbeatResponse(
+            int coordinatorEpoch) {
+        return new LakeTieringHeartbeatResponse().setCoordinatorEpoch(coordinatorEpoch);
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

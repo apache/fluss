@@ -506,6 +506,25 @@ message DropAclsResponse{
   repeated PbDropAclsFilterResult filter_results = 1;
 }
 
+message LakeTieringHeartbeatRequest {
+  repeated PbHeartbeatReqForTable tiering_tables = 1;
+  repeated PbHeartbeatReqForTable finished_tables = 2;
+  repeated PbHeartbeatReqForTable failed_tables = 3;
+  // whether to request a table
+  optional bool request_table = 4;
+}
+
+message LakeTieringHeartbeatResponse {
+  // coordinator epoch
+  required int32 coordinator_epoch = 1;
+  // the returned table to tier, empty when no table is needed by the lake tiering service
+  optional PbLakeTieringTableInfo tiering_table = 2;
+  repeated PbHeartbeatRespForTable tiering_table_resp = 3;
+  repeated PbHeartbeatRespForTable finished_table_resp = 4;
+  repeated PbHeartbeatRespForTable failed_table_resp = 5;
+}
+
+
 // --------------- Inner classes ----------------
 message PbApiVersion {
   required int32 api_key = 1;
@@ -815,4 +834,23 @@ message PbDropAclsMatchingAcl {
   required PbAclInfo acl = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
+}
+
+message PbLakeTieringTableInfo {
+  required int64 table_id = 1;
+  required PbTablePath table_path = 2;
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatReqForTable {
+  required int64 table_id = 1;
+  // the coordinator epoch when the table is assigned to be tiering service
+  required int32 coordinator_epoch = 2;
+  // the tiering epoch when the table is assigned to be tiering service
+  required int32 tiering_epoch = 3;
+}
+
+message PbHeartbeatRespForTable {
+  required int64 table_id = 1;
+  optional ErrorResponse error = 2;
 }

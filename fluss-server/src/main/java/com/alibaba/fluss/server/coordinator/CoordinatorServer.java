@@ -35,7 +35,6 @@ import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
-import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
@@ -183,11 +182,12 @@ public class CoordinatorServer extends ServerBase {
                             conf,
                             remoteFileSystem,
                             zkClient,
-                            this::getCoordinatorEventManager,
+                            this::getCoordinatorEventProcessor,
                             metadataCache,
                             metadataManager,
                             authorizer,
-                            createLakeCatalog());
+                            createLakeCatalog(),
+                            lakeTableTieringManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -294,9 +294,9 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
-    private CoordinatorEventManager getCoordinatorEventManager() {
+    private CoordinatorEventProcessor getCoordinatorEventProcessor() {
         if (coordinatorEventProcessor != null) {
-            return coordinatorEventProcessor.getCoordinatorEventManager();
+            return coordinatorEventProcessor;
         } else {
             throw new IllegalStateException("CoordinatorEventProcessor is not initialized yet.");
         }

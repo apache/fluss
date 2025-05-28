@@ -297,6 +297,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
+    public int getCoordinatorEpoch() {
+        return coordinatorContext.getCoordinatorEpoch();
+    }
+
     private void initCoordinatorContext() throws Exception {
         long start = System.currentTimeMillis();
         // get all tablet server's

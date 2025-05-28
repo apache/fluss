@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.coordinator;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.SecurityDisabledException;
@@ -57,6 +58,11 @@ import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import com.alibaba.fluss.rpc.messages.PbHeartbeatReqForTable;
+import com.alibaba.fluss.rpc.messages.PbHeartbeatRespForTable;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
 import com.alibaba.fluss.security.acl.OperationType;
@@ -71,6 +77,7 @@ import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import com.alibaba.fluss.server.coordinator.event.EventManager;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
+import com.alibaba.fluss.server.entity.LakeTieringTableInfo;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
@@ -94,6 +101,7 @@ import java.util.function.Supplier;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
@@ -111,20 +119,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
+    private final Supplier<Integer> coordinatorEpochSupplier;
 
     // null if the cluster hasn't configured datalake format
     private final @Nullable DataLakeFormat dataLakeFormat;
     private final @Nullable LakeCatalog lakeCatalog;
+    private final LakeTableTieringManager lakeTableTieringManager;
 
     public CoordinatorService(
             Configuration conf,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
-            Supplier<EventManager> eventManagerSupplier,
+            Supplier<CoordinatorEventProcessor> coordinatorEventProcessorSupplier,
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            @Nullable LakeCatalog lakeCatalog) {
+            @Nullable LakeCatalog lakeCatalog,
+            LakeTableTieringManager lakeTableTieringManager) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
@@ -134,9 +145,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
-        this.eventManagerSupplier = eventManagerSupplier;
+        this.eventManagerSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
+        this.coordinatorEpochSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
         this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
         this.lakeCatalog = lakeCatalog;
+        this.lakeTableTieringManager = lakeTableTieringManager;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
                 "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
@@ -458,5 +473,76 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new CommitLakeTableSnapshotEvent(
                                 getCommitLakeTableSnapshotData(request), response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
+            LakeTieringHeartbeatRequest request) {
+        LakeTieringHeartbeatResponse heartbeatResponse = new LakeTieringHeartbeatResponse();
+        int currentCoordinatorEpoch = coordinatorEpochSupplier.get();
+        heartbeatResponse.setCoordinatorEpoch(currentCoordinatorEpoch);
+
+        // process failed tables
+        for (PbHeartbeatReqForTable failedTable : request.getFailedTablesList()) {
+            PbHeartbeatRespForTable pbHeartbeatRespForTable =
+                    heartbeatResponse.addFailedTableResp().setTableId(failedTable.getTableId());
+            try {
+                validateHeartbeatRequest(failedTable, currentCoordinatorEpoch);
+                lakeTableTieringManager.reportTieringFail(
+                        failedTable.getTableId(), failedTable.getTieringEpoch());
+            } catch (Throwable e) {
+                pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
+            }
+        }
+
+        // process tiering tables
+        for (PbHeartbeatReqForTable tieringTable : request.getTieringTablesList()) {
+            PbHeartbeatRespForTable pbHeartbeatRespForTable =
+                    heartbeatResponse.addTieringTableResp().setTableId(tieringTable.getTableId());
+            try {
+                validateHeartbeatRequest(tieringTable, currentCoordinatorEpoch);
+                lakeTableTieringManager.renewTieringHeartbeat(
+                        tieringTable.getTableId(), tieringTable.getTieringEpoch());
+            } catch (Throwable t) {
+                pbHeartbeatRespForTable.setError(ApiError.fromThrowable(t).toErrorResponse());
+            }
+        }
+
+        // process finished tables
+        for (PbHeartbeatReqForTable finishTable : request.getFinishedTablesList()) {
+            PbHeartbeatRespForTable pbHeartbeatRespForTable =
+                    heartbeatResponse.addFinishedTableResp().setTableId(finishTable.getTableId());
+            try {
+                validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
+                lakeTableTieringManager.finishTableTiering(
+                        finishTable.getTableId(), finishTable.getTieringEpoch());
+            } catch (Throwable e) {
+                pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
+            }
+        }
+
+        if (request.hasRequestTable() && request.isRequestTable()) {
+            LakeTieringTableInfo lakeTieringTableInfo = lakeTableTieringManager.requestTable();
+            if (lakeTieringTableInfo != null) {
+                heartbeatResponse
+                        .setTieringTable()
+                        .setTableId(lakeTieringTableInfo.tableId())
+                        .setTablePath(fromTablePath(lakeTieringTableInfo.tablePath()))
+                        .setTieringEpoch(lakeTieringTableInfo.tieringEpoch());
+            }
+        }
+        return CompletableFuture.completedFuture(heartbeatResponse);
+    }
+
+    private void validateHeartbeatRequest(
+            PbHeartbeatReqForTable heartbeatReqForTable, int currentEpoch) {
+        if (heartbeatReqForTable.getCoordinatorEpoch() != currentEpoch) {
+            throw new InvalidCoordinatorException(
+                    String.format(
+                            "The coordinator epoch %s in request is not match current coordinator epoch %d for table %d.",
+                            heartbeatReqForTable.getCoordinatorEpoch(),
+                            currentEpoch,
+                            heartbeatReqForTable.getTableId()));
+        }
     }
 }

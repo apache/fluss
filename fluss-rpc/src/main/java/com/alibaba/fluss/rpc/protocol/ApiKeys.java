@@ -68,7 +68,8 @@ public enum ApiKeys {
     AUTHENTICATE(1038, 0, 0, PUBLIC),
     CREATE_ACLS(1039, 0, 0, PUBLIC),
     LIST_ACLS(1040, 0, 0, PUBLIC),
-    DROP_ACLS(1041, 0, 0, PUBLIC);
+    DROP_ACLS(1041, 0, 0, PUBLIC),
+    LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())
