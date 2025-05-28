@@ -30,7 +30,7 @@
   --ifm-color-primary-lighter: #0682ff;
   --ifm-color-primary-lightest: #2893ff;
   --ifm-code-font-size: 90%;
-  --ifm-font-family-base: "PingFang SC",Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,sans-serif,Apple Color Emoji,Segoe UI Emoji,Android Emoji,EmojiSymbols,EmojiOne Mozilla,Twemoji Mozilla,Segoe UI Symbol,Noto Color Emoji;
+  --ifm-font-family-base: "Roboto",Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,sans-serif,Apple Color Emoji,Segoe UI Emoji,Android Emoji,EmojiSymbols,EmojiOne Mozilla,Twemoji Mozilla,Segoe UI Symbol,Noto Color Emoji;
   --docusaurus-highlighted-code-line-bg: #E2E9F3;
 
   --ifm-menu-color-background-active: #edeefa99;
@@ -89,7 +89,7 @@
     h6 {
         color: #1d1d1d;
         margin-bottom: 0.3125rem;
-        font-weight: 500;
+        font-weight: 700;
     }
 
     b,
