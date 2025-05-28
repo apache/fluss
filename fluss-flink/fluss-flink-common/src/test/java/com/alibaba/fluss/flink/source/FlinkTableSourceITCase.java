@@ -1034,18 +1034,18 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
     @Test
     void testNonPartitionPushDown() throws Exception {
         tEnv.executeSql(
-                "create table partitioned_table"
+                "create table partitioned_table_no_filter"
                         + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table");
-        tEnv.executeSql("alter table partitioned_table add partition (c=2025)");
-        tEnv.executeSql("alter table partitioned_table add partition (c=2026)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_no_filter");
+        tEnv.executeSql("alter table partitioned_table_no_filter add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table_no_filter add partition (c=2026)");
 
         List<String> expectedRowValues =
                 writeRowsToPartition(tablePath, Arrays.asList("2025", "2026"));
         waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from partitioned_table").collect();
+                tEnv.executeSql("select * from partitioned_table_no_filter").collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
