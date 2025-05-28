@@ -83,7 +83,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         final ReadableConfig tableOptions = helper.getOptions();
         Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
         if (datalakeFormat.isPresent()) {
-            helper.validateExcept("table.", "client.", datalakeFormat.get().getPrefix());
+            helper.validateExcept("table.", "client.", datalakeFormat.get() + ".");
         } else {
             helper.validateExcept("table.", "client.");
         }
@@ -152,7 +152,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         final ReadableConfig tableOptions = helper.getOptions();
         Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
         if (datalakeFormat.isPresent()) {
-            helper.validateExcept("table.", "client.", datalakeFormat.get().getPrefix());
+            helper.validateExcept("table.", "client.", datalakeFormat.get() + ".");
         } else {
             helper.validateExcept("table.", "client.");
         }

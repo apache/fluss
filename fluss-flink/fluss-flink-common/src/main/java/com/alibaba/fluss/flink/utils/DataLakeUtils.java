@@ -25,7 +25,6 @@ import org.apache.flink.configuration.ReadableConfig;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.alibaba.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static com.alibaba.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
 import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
@@ -59,12 +58,6 @@ public class DataLakeUtils {
                 tableOptions.getOptional(toFlinkOption(TABLE_DATALAKE_FORMAT));
         if (tableOptional.isPresent()) {
             return tableOptional;
-        } else {
-            Optional<DataLakeFormat> clusterOptional =
-                    tableOptions.getOptional(toFlinkOption(DATALAKE_FORMAT));
-            if (clusterOptional.isPresent()) {
-                return clusterOptional;
-            }
         }
         return Optional.empty();
     }
