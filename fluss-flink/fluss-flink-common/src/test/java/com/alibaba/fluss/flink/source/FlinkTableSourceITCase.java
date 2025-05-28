@@ -996,6 +996,7 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     @Test
     void testStreamingReadWithCombinedFilters() throws Exception {
+
         tEnv.executeSql(
                 "create table combined_filters_table"
                         + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
