@@ -49,6 +49,7 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -119,7 +120,7 @@ class LakeEnabledTableCreateITCase {
     void testCreateLakeEnabledTable() throws Exception {
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put("k1", "v1");
-        customProperties.put("k2", "v2");
+        customProperties.put("paimon.file.format", "parquet");
 
         // test bucket key log table
         TableDescriptor logTable =
@@ -160,7 +161,6 @@ class LakeEnabledTableCreateITCase {
                 "log_c1,log_c2",
                 BUCKET_NUM);
 
-        // test log no bucket key table
         TableDescriptor logNoBucketKeyTable =
                 TableDescriptor.builder()
                         .schema(
@@ -393,8 +393,20 @@ class LakeEnabledTableCreateITCase {
 
         // check table properties
         Map<String, String> expectedProperties = new HashMap<>();
-        flussTable.getProperties().forEach((k, v) -> expectedProperties.put("fluss." + k, v));
-        flussTable.getCustomProperties().forEach((k, v) -> expectedProperties.put("fluss." + k, v));
+
+        Stream.concat(
+                        flussTable.getProperties().entrySet().stream(),
+                        flussTable.getCustomProperties().entrySet().stream())
+                .forEach(
+                        e -> {
+                            String k = e.getKey();
+                            String v = e.getValue();
+                            if (k.startsWith("paimon.")) {
+                                expectedProperties.put(k.substring("paimon.".length()), v);
+                            } else {
+                                expectedProperties.put("fluss." + k, v);
+                            }
+                        });
         assertThat(paimonTable.options()).containsAllEntriesOf(expectedProperties);
 
         // now, check schema

@@ -30,4 +30,8 @@ public enum DataLakeFormat {
     public String toString() {
         return value;
     }
+
+    public String getPrefix() {
+        return value + ".";
+    }
 }
