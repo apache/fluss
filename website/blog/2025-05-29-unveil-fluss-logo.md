@@ -1,6 +1,6 @@
 ---
 slug: unveil-fluss-logo
-title: "Introducing the Little Otter — The Story of Fluss Logo"
+title: "The Story of Fluss Logo"
 authors: [jark]
 ---
 
@@ -21,6 +21,8 @@ authors: [jark]
 -->
 
 ![](@site/static/img/logo/png/colored_logo.png)
+
+## Introducing the Little Otter
 
 In the "[Open Source Data Engineering Landscape 2025](https://www.pracdata.io/p/open-source-data-engineering-landscape-2025)", released at the beginning of the year, we were honored to have Fluss featured as one of the projects on the list. However, at that time, Fluss was the only project in the landscape that didn't yet have a logo. Since then, many community members and friends have asked us:
 "When will Fluss get a logo?" After more than a month of careful design work and over 30 iterations, we’re excited to finally unveil the official Fluss logo — a surfing otter! 🦦🌊
