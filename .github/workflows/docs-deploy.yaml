@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Build website
-        run: npm run build -- --no-minify
+        run: npm run build
       - uses: webfactory/ssh-agent@v0.5.0
         with:
           ssh-private-key: ${{ secrets.GH_PAGES_DEPLOY }}
