@@ -53,12 +53,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.ExecutionException;
 
+import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static com.alibaba.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static com.alibaba.fluss.security.acl.OperationType.CREATE;
 import static com.alibaba.fluss.security.acl.OperationType.DESCRIBE;
@@ -335,7 +334,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 "No permission to READ table %s in database %s",
                                 tablePath.getTableName(), tablePath.getDatabaseName()));
         addAcl(Resource.table(tablePath), READ);
-        assertQueryResult(
+        assertQueryResultExactOrder(
                 tEnv, selectDML, Collections.singletonList("+I[1, beijing, zhangsan, 2022-01-01]"));
     }
 
@@ -380,7 +379,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 "No permission to READ table %s in database %s",
                                 tablePath.getTableName(), tablePath.getDatabaseName()));
         addAcl(Resource.table(tablePath), READ);
-        assertQueryResult(tBatchEnv, lookupSql, Collections.singletonList("+I[2, shanghai, lisi]"));
+        assertQueryResultExactOrder(
+                tBatchEnv, lookupSql, Collections.singletonList("+I[2, shanghai, lisi]"));
 
         // test limit scan
         dropAcl(Resource.table(tablePath), READ);
@@ -393,7 +393,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 "No permission to READ table %s in database %s",
                                 tablePath.getTableName(), tablePath.getDatabaseName()));
         addAcl(Resource.database(tablePath.getDatabaseName()), READ);
-        assertQueryResult(
+        assertQueryResultExactOrder(
                 tBatchEnv,
                 limitScanSql,
                 Arrays.asList("+I[1, beijing, zhangsan]", "+I[2, shanghai, lisi]"));
@@ -423,21 +423,6 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                                 guest, null, operationType, PermissionType.ALLOW))))
                 .all()
                 .get();
-    }
-
-    void assertQueryResult(TableEnvironment env, String query, List<String> expected)
-            throws Exception {
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                env.executeSql(query).collect()) {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                Row r = rowIter.next();
-                String row = r.toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
     }
 
     private static Configuration initConfig() {
