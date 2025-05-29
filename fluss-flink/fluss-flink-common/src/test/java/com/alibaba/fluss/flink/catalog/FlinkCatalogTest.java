@@ -38,6 +38,9 @@ import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
+import org.apache.flink.table.catalog.exceptions.PartitionAlreadyExistsException;
+import org.apache.flink.table.catalog.exceptions.PartitionNotExistException;
+import org.apache.flink.table.catalog.exceptions.PartitionSpecInvalidException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
@@ -342,6 +345,12 @@ class FlinkCatalogTest {
         assertThat(db2.getComment()).isEqualTo("test comment");
         assertThat(db2.getProperties())
                 .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
+        // test DatabaseNotExistException when get db
+        String notExistDb = "db3";
+        assertThatThrownBy(() -> catalog.getDatabase(notExistDb))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage("Database %s does not exist in Catalog %s.", notExistDb, CATALOG_NAME);
+
         // create the database again should throw exception with ignore if exist = false
         assertThatThrownBy(
                 () ->
@@ -433,6 +442,112 @@ class FlinkCatalogTest {
         List<CatalogPartitionSpec> catalogPartitionSpecs = catalog.listPartitions(path2);
         assertThat(catalogPartitionSpecs).hasSize(1);
         assertThat(catalogPartitionSpecs.get(0).getPartitionSpec()).containsEntry("first", "1");
+    }
+
+    @Test
+    void testAddAndDropPartitions() throws Exception {
+
+        ObjectPath nonPartitionedPath = new ObjectPath(DEFAULT_DB, "non_partitioned_table1");
+        ResolvedSchema resolvedSchema = this.createSchema();
+        // test TableNotExistException
+        assertThatThrownBy(
+                        () ->
+                                catalog.createPartition(
+                                        nonPartitionedPath,
+                                        new CatalogPartitionSpec(
+                                                Collections.singletonMap("first", "1")),
+                                        null,
+                                        false))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        "Table (or view) %s does not exist in Catalog %s.",
+                        nonPartitionedPath, CATALOG_NAME);
+
+        // create non-partition table
+        CatalogTable nonPartitionedTable = this.newCatalogTable(Collections.emptyMap());
+        catalog.createTable(nonPartitionedPath, nonPartitionedTable, false);
+
+        // test TableNotPartitionedException
+        assertThatThrownBy(
+                        () ->
+                                catalog.createPartition(
+                                        nonPartitionedPath,
+                                        new CatalogPartitionSpec(
+                                                Collections.singletonMap("first", "1")),
+                                        null,
+                                        false))
+                .isInstanceOf(TableNotPartitionedException.class)
+                .hasMessage(
+                        "Table %s in catalog %s is not partitioned.",
+                        nonPartitionedPath, CATALOG_NAME);
+
+        // create partition table
+        ObjectPath partitionedPath = new ObjectPath(DEFAULT_DB, "partitioned_table1");
+        CatalogTable partitionedTable =
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                                "test comment",
+                                Collections.singletonList("first"),
+                                Collections.emptyMap()),
+                        resolvedSchema);
+        catalog.createTable(partitionedPath, partitionedTable, false);
+
+        // test TableNotPartitionedException
+        assertThatThrownBy(
+                        () ->
+                                catalog.createPartition(
+                                        partitionedPath,
+                                        new CatalogPartitionSpec(
+                                                Collections.singletonMap("first", "")),
+                                        null,
+                                        false))
+                .isInstanceOf(PartitionSpecInvalidException.class)
+                .hasMessage(
+                        "PartitionSpec CatalogPartitionSpec{{%s}} does not match partition keys [first] of table %s in catalog %s.",
+                        "first=", partitionedPath, CATALOG_NAME);
+
+        // create partition success
+        catalog.createPartition(
+                partitionedPath,
+                new CatalogPartitionSpec(Collections.singletonMap("first", "success")),
+                null,
+                false);
+
+        // test PartitionAlreadyExistsException
+        assertThatThrownBy(
+                        () ->
+                                catalog.createPartition(
+                                        partitionedPath,
+                                        new CatalogPartitionSpec(
+                                                Collections.singletonMap("first", "success")),
+                                        null,
+                                        false))
+                .isInstanceOf(PartitionAlreadyExistsException.class)
+                .hasMessage(
+                        "Partition CatalogPartitionSpec{{%s}} of table %s in catalog %s already exists.",
+                        "first=success", partitionedPath, CATALOG_NAME);
+
+        // test drop partition
+        catalog.dropPartition(
+                partitionedPath,
+                new CatalogPartitionSpec(Collections.singletonMap("first", "success")),
+                false);
+        List<CatalogPartitionSpec> catalogPartitionSpecs = catalog.listPartitions(partitionedPath);
+        assertThat(catalogPartitionSpecs).hasSize(0);
+        // test PartitionNotExistException when drop partition
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.dropPartition(
+                                        partitionedPath,
+                                        new CatalogPartitionSpec(
+                                                Collections.singletonMap("first", "success")),
+                                        false))
+                .isInstanceOf(PartitionNotExistException.class)
+                .hasMessage(
+                        "Partition CatalogPartitionSpec{{%s}} of table %s in catalog %s does not exist.",
+                        "first=success", partitionedPath, CATALOG_NAME);
     }
 
     private void createAndCheckAndDropTable(
