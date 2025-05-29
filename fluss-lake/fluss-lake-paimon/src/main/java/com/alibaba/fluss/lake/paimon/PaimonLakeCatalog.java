@@ -45,6 +45,19 @@ import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
+    private static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
+
+    static {
+        // We need __bucket system column to filter out the given bucket
+        // for paimon bucket-unaware append only table.
+        // It's not required for paimon bucket-aware table like primary key table
+        // and bucket-aware append only table, but we always add the system column
+        // for consistent behavior
+        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, DataTypes.INT());
+        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
+    }
+
     private final Catalog paimonCatalog;
 
     // for fluss config
@@ -127,20 +140,11 @@ public class PaimonLakeCatalog implements LakeCatalog {
             options.set(CoreOptions.BUCKET, CoreOptions.BUCKET.defaultValue());
         }
 
-        Map<String, DataType> systemColumns = new LinkedHashMap<>();
-        if (!tableDescriptor.hasPrimaryKey()) {
-            // for log table, need to set bucket, offset and timestamp as system metadata columns
-            systemColumns.put(BUCKET_COLUMN_NAME, DataTypes.INT());
-            systemColumns.put(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-            // we use timestamp_ltz type
-            systemColumns.put(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
-        }
-
         // set schema
         for (com.alibaba.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
             String columnName = column.getName();
-            if (systemColumns.containsKey(columnName)) {
+            if (SYSTEM_COLUMNS.containsKey(columnName)) {
                 throw new InvalidTableException(
                         "Column "
                                 + columnName
@@ -153,7 +157,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
 
         // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : systemColumns.entrySet()) {
+        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
             schemaBuilder.column(systemColumn.getKey(), systemColumn.getValue());
         }
 
@@ -186,7 +190,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         IOUtils.closeQuietly(paimonCatalog, "paimon catalog");
     }
 }

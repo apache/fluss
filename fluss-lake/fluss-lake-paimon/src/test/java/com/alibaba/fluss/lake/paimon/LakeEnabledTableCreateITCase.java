@@ -223,8 +223,18 @@ class LakeEnabledTableCreateITCase {
                         new DataType[] {
                             org.apache.paimon.types.DataTypes.INT().notNull(),
                             org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {"pk_c1", "pk_c2"}),
+                        new String[] {
+                            "pk_c1",
+                            "pk_c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
                 "pk_c1",
                 BUCKET_NUM);
 
@@ -256,8 +266,19 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.INT().notNull(),
                             org.apache.paimon.types.DataTypes.STRING(),
                             org.apache.paimon.types.DataTypes.STRING().notNull(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {"c1", "c2", "c3"}),
+                        new String[] {
+                            "c1",
+                            "c2",
+                            "c3",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
                 "c1",
                 BUCKET_NUM);
     }
