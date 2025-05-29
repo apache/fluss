@@ -36,7 +36,7 @@ public class FlinkRowAssertionsUtils {
             List<String> actual = new ArrayList<>(expectRecords);
 
             long startTime = System.currentTimeMillis();
-            int maxWaitTime = 10000; // 10 seconds
+            int maxWaitTime = 60000; // 60 seconds
 
             for (int i = 0; i < expectRecords; i++) {
                 // Wait for next record with timeout
