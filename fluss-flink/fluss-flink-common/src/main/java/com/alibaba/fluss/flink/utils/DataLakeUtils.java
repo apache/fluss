@@ -20,8 +20,13 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 
-import java.util.Map;
+import org.apache.flink.configuration.ReadableConfig;
 
+import java.util.Map;
+import java.util.Optional;
+
+import static com.alibaba.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
 import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** Utility class for accessing data lake related configurations. */
@@ -46,5 +51,14 @@ public class DataLakeUtils {
         // currently, extract datalake catalog config
         String dataLakePrefix = "table.datalake." + datalakeFormat + ".";
         return extractAndRemovePrefix(tableOptions.toMap(), dataLakePrefix);
+    }
+
+    public static Optional<DataLakeFormat> getDatalakeFormat(ReadableConfig tableOptions) {
+        Optional<DataLakeFormat> tableOptional =
+                tableOptions.getOptional(toFlinkOption(TABLE_DATALAKE_FORMAT));
+        if (tableOptional.isPresent()) {
+            return tableOptional;
+        }
+        return Optional.empty();
     }
 }

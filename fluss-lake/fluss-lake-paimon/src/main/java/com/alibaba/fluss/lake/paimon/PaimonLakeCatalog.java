@@ -47,6 +47,11 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     private final Catalog paimonCatalog;
 
+    // for fluss config
+    private static final String FLUSS_CONF_PREFIX = "fluss.";
+    // for paimon config
+    private static final String PAIMON_CONF_PREFIX = "paimon.";
+
     public PaimonLakeCatalog(Configuration configuration) {
         this.paimonCatalog =
                 CatalogFactory.createCatalog(
@@ -164,14 +169,20 @@ public class PaimonLakeCatalog implements LakeCatalog {
         schemaBuilder.partitionKeys(tableDescriptor.getPartitionKeys());
 
         // set properties to paimon schema
-        tableDescriptor.getProperties().forEach((k, v) -> setFlussProperty(k, v, options));
-        tableDescriptor.getCustomProperties().forEach((k, v) -> setFlussProperty(k, v, options));
+        tableDescriptor.getProperties().forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
+        tableDescriptor
+                .getCustomProperties()
+                .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }
 
-    private void setFlussProperty(String key, String value, Options options) {
-        options.set("fluss." + key, value);
+    private void setFlussPropertyToPaimon(String key, String value, Options options) {
+        if (key.startsWith(PAIMON_CONF_PREFIX)) {
+            options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
+        } else {
+            options.set(FLUSS_CONF_PREFIX + key, value);
+        }
     }
 
     @Override
