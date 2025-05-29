@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.rpc.netty.authenticate;
 
-import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.RetriableAuthenticationException;
@@ -26,9 +25,8 @@ import com.alibaba.fluss.security.auth.ClientAuthenticator;
 import com.alibaba.fluss.security.auth.ServerAuthenticationPlugin;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
 
+import java.io.IOException;
 import java.util.concurrent.ThreadLocalRandom;
-
-import static com.alibaba.fluss.config.ConfigBuilder.key;
 
 /**
  * An {@link com.alibaba.fluss.security.auth.AuthenticationPlugin} to mock mutual authentication.
@@ -37,14 +35,12 @@ public class MutualAuthenticationPlugin
         implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
 
     private static final String MUTUAL_AUTH_PROTOCOL = "mutual";
-    private static final ConfigOption<ErrorType> ERROR_TYPE =
-            key("client.security.mutual.error-type")
-                    .enumType(ErrorType.class)
-                    .defaultValue(ErrorType.NONE);
+
+    public static ErrorType errorType = ErrorType.NONE;
 
     @Override
     public ClientAuthenticator createClientAuthenticator(Configuration configuration) {
-        return new ClientAuthenticatorImpl(configuration);
+        return new ClientAuthenticatorImpl();
     }
 
     @Override
@@ -67,11 +63,6 @@ public class MutualAuthenticationPlugin
 
         private Status status;
         Integer initialSalt;
-        private final int errorType;
-
-        public ClientAuthenticatorImpl(Configuration configuration) {
-            this.errorType = configuration.get(ERROR_TYPE).code;
-        }
 
         @Override
         public String protocol() {
@@ -88,14 +79,7 @@ public class MutualAuthenticationPlugin
         public byte[] authenticate(byte[] data) throws AuthenticationException {
             switch (status) {
                 case SEND_CLIENT_FIRST_MESSAGE:
-                    initialSalt =
-                            isError(
-                                            errorType,
-                                            ErrorType.SERVER_NO_CHALLENGE,
-                                            ErrorType.SERVER_ERROR_CHALLENGE,
-                                            ErrorType.RETRIABLE_EXCEPTION)
-                                    ? errorType
-                                    : generateInitialSalt();
+                    initialSalt = generateInitialSalt();
                     status = Status.RECEIVE_SERVER_FIRST_MESSAGE;
                     return String.valueOf(initialSalt).getBytes();
                 case RECEIVE_SERVER_FIRST_MESSAGE:
@@ -103,8 +87,8 @@ public class MutualAuthenticationPlugin
                     if (challenge == initialSalt + 1) {
                         status = Status.RECEIVE_SERVER_FINAL_MESSAGE;
                         return String.valueOf(
-                                        isError(errorType, ErrorType.CLIENT_ERROR_SECOND_TOKEN)
-                                                ? errorType
+                                        errorType == ErrorType.CLIENT_ERROR_SECOND_TOKE
+                                                ? -1
                                                 : challenge + 1)
                                 .getBytes();
                     } else {
@@ -138,12 +122,14 @@ public class MutualAuthenticationPlugin
         private enum Status {
             RECEIVE_CLIENT_FIRST_MESSAGE,
             RECEIVE_CLIENT_FINAL_MESSAGE,
-            COMPLETED
+            COMPLETED,
+            CLOSED
         }
 
         private Integer initialSalt;
         private int retryNumber = 0;
         private Status status = Status.RECEIVE_CLIENT_FIRST_MESSAGE;
+        private String ip;
 
         @Override
         public String protocol() {
@@ -153,6 +139,7 @@ public class MutualAuthenticationPlugin
         @Override
         public void initialize(AuthenticateContext context) {
             this.status = Status.RECEIVE_CLIENT_FIRST_MESSAGE;
+            this.ip = context.ipAddress();
             this.initialSalt = null;
         }
 
@@ -161,14 +148,14 @@ public class MutualAuthenticationPlugin
             int tokenValue = parseToken(token);
             switch (status) {
                 case RECEIVE_CLIENT_FIRST_MESSAGE:
-                    if (isError(tokenValue, ErrorType.SERVER_NO_CHALLENGE)) {
+                    if (errorType == ErrorType.SERVER_NO_CHALLENGE) {
                         return null;
                     }
-                    if (isError(tokenValue, ErrorType.SERVER_ERROR_CHALLENGE)) {
+                    if (errorType == ErrorType.SERVER_ERROR_CHALLENGE) {
                         return "-1".getBytes();
                     }
-                    if (isError(tokenValue, ErrorType.RETRIABLE_EXCEPTION) && retryNumber++ < 3) {
-                        throw new RetriableAuthenticationException("Retriable exception");
+                    if (errorType == ErrorType.RETRIABLE_EXCEPTION && retryNumber++ < 3) {
+                        throw new RetriableAuthenticationException("Retriable exception " + ip);
                     }
 
                     initialSalt = tokenValue + 1;
@@ -199,6 +186,18 @@ public class MutualAuthenticationPlugin
         public boolean isCompleted() {
             return status == Status.COMPLETED;
         }
+
+        @Override
+        public void keepAlive(short apiKey) throws AuthenticationException {
+            if (errorType == ErrorType.KEEP_ALIVE_ERROR) {
+                throw new AuthenticationException("Keep alive error");
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            status = Status.CLOSED;
+        }
     }
 
     private static int parseToken(byte[] token) {
@@ -212,26 +211,13 @@ public class MutualAuthenticationPlugin
         return ThreadLocalRandom.current().nextInt(0, Integer.MAX_VALUE);
     }
 
-    private static boolean isError(int errorType, ErrorType... errorTypes) {
-        for (ErrorType type : errorTypes) {
-            if (errorType == type.code) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    enum ErrorType {
-        NONE(-1),
-        SERVER_NO_CHALLENGE(-2),
-        SERVER_ERROR_CHALLENGE(-3),
-        CLIENT_ERROR_SECOND_TOKEN(-4),
-        RETRIABLE_EXCEPTION(-5);
-
-        final int code;
-
-        ErrorType(int code) {
-            this.code = code;
-        }
+    /** Error types for testing. */
+    public enum ErrorType {
+        NONE,
+        SERVER_NO_CHALLENGE,
+        SERVER_ERROR_CHALLENGE,
+        CLIENT_ERROR_SECOND_TOKE,
+        RETRIABLE_EXCEPTION,
+        KEEP_ALIVE_ERROR
     }
 }

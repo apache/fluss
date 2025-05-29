@@ -62,6 +62,7 @@ public class AuthenticationTest {
         if (nettyServer != null) {
             nettyServer.close();
         }
+        MutualAuthenticationPlugin.errorType = MutualAuthenticationPlugin.ErrorType.NONE;
     }
 
     @Test
@@ -88,7 +89,8 @@ public class AuthenticationTest {
         }
 
         // test invalid challenge from server
-        clientConfig.setString("client.security.mutual.error-type", "SERVER_ERROR_CHALLENGE");
+        MutualAuthenticationPlugin.errorType =
+                MutualAuthenticationPlugin.ErrorType.SERVER_ERROR_CHALLENGE;
         try (NettyClient nettyClient =
                 new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
@@ -98,7 +100,8 @@ public class AuthenticationTest {
         }
 
         // test invalid token from client
-        clientConfig.setString("client.security.mutual.error-type", "CLIENT_ERROR_SECOND_TOKEN");
+        MutualAuthenticationPlugin.errorType =
+                MutualAuthenticationPlugin.ErrorType.CLIENT_ERROR_SECOND_TOKE;
         try (NettyClient nettyClient =
                 new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
@@ -111,7 +114,8 @@ public class AuthenticationTest {
     void testNoChallengeBeforeClientComplete() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
-        clientConfig.setString("client.security.mutual.error-type", "SERVER_NO_CHALLENGE");
+        MutualAuthenticationPlugin.errorType =
+                MutualAuthenticationPlugin.ErrorType.SERVER_NO_CHALLENGE;
         try (NettyClient nettyClient =
                 new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
 
@@ -126,7 +130,8 @@ public class AuthenticationTest {
     void testRetirableAuthenticateException() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
-        clientConfig.setString("client.security.mutual.error-type", "RETRIABLE_EXCEPTION");
+        MutualAuthenticationPlugin.errorType =
+                MutualAuthenticationPlugin.ErrorType.RETRIABLE_EXCEPTION;
         try (NettyClient nettyClient =
                 new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
@@ -200,6 +205,22 @@ public class AuthenticationTest {
                         .isExactlyInstanceOf(AuthenticationException.class)
                         .hasMessageContaining("username or password is incorrect");
             }
+        }
+    }
+
+    @Test
+    void testKeepAliveError() throws Exception {
+        Configuration clientConfig = new Configuration();
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
+        try (NettyClient nettyClient =
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+            verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
+            MutualAuthenticationPlugin.errorType =
+                    MutualAuthenticationPlugin.ErrorType.KEEP_ALIVE_ERROR;
+            assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
+                    .hasRootCauseExactlyInstanceOf(AuthenticationException.class)
+                    .rootCause()
+                    .hasMessageContaining("Keep alive error");
         }
     }
 

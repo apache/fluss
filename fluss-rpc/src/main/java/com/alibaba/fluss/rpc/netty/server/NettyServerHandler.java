@@ -39,6 +39,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAda
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.IOUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -139,6 +140,9 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
             } else {
+                if (state.isReady()) {
+                    authenticator.keepAlive(apiKey);
+                }
                 requestChannel.putRequest(request);
             }
 
@@ -175,6 +179,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
+        close();
     }
 
     @Override
@@ -183,7 +188,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             IdleStateEvent event = (IdleStateEvent) evt;
             if (event.state().equals(IdleState.ALL_IDLE)) {
                 LOG.warn("Connection {} is idle, closing...", ctx.channel().remoteAddress());
-                ctx.close();
+                close();
             }
         }
     }
@@ -207,6 +212,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     private void close() {
         switchState(ConnectionState.CLOSE);
+        IOUtils.closeQuietly(authenticator);
         ctx.close();
     }
 
@@ -363,8 +369,18 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         public boolean isAuthenticating() {
             return this == AUTHENTICATING;
         }
+
+        public boolean isReady() {
+            return this == READY;
+        }
     }
 
-    private static class DefaultAuthenticateContext
-            implements ServerAuthenticator.AuthenticateContext {}
+    private class DefaultAuthenticateContext implements ServerAuthenticator.AuthenticateContext {
+        @Override
+        public String ipAddress() {
+            return ((InetSocketAddress) ctx.channel().remoteAddress())
+                    .getAddress()
+                    .getHostAddress();
+        }
+    }
 }
