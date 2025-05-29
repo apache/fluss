@@ -270,7 +270,6 @@ public class FlussAdmin implements Admin {
         return gateway.listTables(request).thenApply(ListTablesResponse::getTableNamesList);
     }
 
-    @Deprecated
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath) {
         return listPartitionInfos(tablePath, null);
