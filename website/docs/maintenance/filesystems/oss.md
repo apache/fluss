@@ -35,16 +35,34 @@ To enabled OSS as remote storage, there are some required configurations that mu
 remote.data.dir: oss://<your-bucket>/path/to/remote/storage
 # Aliyun OSS endpoint to connect to, such as: oss-cn-hangzhou.aliyuncs.com
 fs.oss.endpoint: <your-endpoint>
+# Aliyun STS endpoint to connect to obtain a STS token, such as: sts.cn-hangzhou.aliyuncs.com
+fs.oss.sts.endpoint: <your-sts-endpoint>
+# For the role of the STS token obtained from the STS endpoint, such as: acs:ram::123456789012:role/testrole
+fs.oss.roleArn: <your-role-arn>
+
+# Authentication (choose one option below)
+
+# Option 1: Direct credentials
 # Aliyun access key ID
 fs.oss.accessKeyId: <your-access-key>
 # Aliyun access key secret
 fs.oss.accessKeySecret: <your-secret-key>
 
-# Aliyun STS endpoint to connect to obtain a STS token, such as: sts.cn-hangzhou.aliyuncs.com
-fs.oss.sts.endpoint: <your-sts-endpoint>
-# For the role of the STS token obtained from the STS endpoint, such as: acs:ram::123456789012:role/testrole
-fs.oss.roleArn: <your-role-arn>
+# Option 2: Secure credential provider
+fs.oss.credentials.provider: <your-credentials-provider>
 ```
+To avoid exposing sensitive access key information directly in the `server.yaml`, you can choose option2 to use a credential provider by setting the `fs.oss.credentials.provider` property.
+
+For example, to use environment variables for credential management:
+```yaml
+fs.oss.credentials.provider: com.aliyun.oss.common.auth.EnvironmentVariableCredentialsProvider
+```
+Then, set the following environment variables before starting the Fluss service:
+```bash
+export OSS_ACCESS_KEY_ID=<your-access-key>
+export OSS_ACCESS_KEY_SECRET=<your-secret-key>
+```
+This approach enhances security by keeping sensitive credentials out of configuration files.
 
 ## Token-based Authentication
 
