@@ -199,7 +199,7 @@ public class ProtobufMessage {
             if (f.isRepeated()) {
                 f.copy(w);
             } else {
-                w.format("    if (_other.%s()) {\n", ProtoGenUtil.camelCase("has", f.ccName));
+                w.format("    if (_other.%s()) {\n", ProtoGenUtils.camelCase("has", f.ccName));
                 f.copy(w);
                 w.format("    }\n");
             }
@@ -235,7 +235,7 @@ public class ProtobufMessage {
             } else {
                 w.format(
                         "            if (%s()) {\n",
-                        ProtoGenUtil.camelCase("has", f.field.getName()));
+                        ProtoGenUtils.camelCase("has", f.field.getName()));
                 f.serialize(w);
                 w.format("            }\n");
             }
@@ -263,7 +263,7 @@ public class ProtobufMessage {
                     } else {
                         w.format(
                                 "        if (%s()) {\n",
-                                ProtoGenUtil.camelCase("has", field.field.getName()));
+                                ProtoGenUtils.camelCase("has", field.field.getName()));
                         field.totalSize(w);
                         w.format("        }\n");
                     }

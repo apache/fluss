@@ -25,7 +25,7 @@ import java.util.Objects;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link InstantiationUtils}. */
-public class InstantiationUtilTest {
+public class InstantiationUtilsTest {
 
     @Test
     void testSerDeserializeObject() throws Exception {

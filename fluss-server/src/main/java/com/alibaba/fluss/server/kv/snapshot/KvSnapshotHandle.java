@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
-import com.alibaba.fluss.server.utils.SnapshotUtil;
+import com.alibaba.fluss.server.utils.SnapshotUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,7 +101,7 @@ public class KvSnapshotHandle {
         final boolean isRegistered = (registry != null);
 
         try {
-            SnapshotUtil.bestEffortDiscardAllKvFiles(
+            SnapshotUtils.bestEffortDiscardAllKvFiles(
                     privateFileHandles.stream()
                             .map(KvFileHandleAndLocalPath::getKvFileHandle)
                             .collect(Collectors.toList()));
@@ -111,7 +111,7 @@ public class KvSnapshotHandle {
 
         if (!isRegistered) {
             try {
-                SnapshotUtil.bestEffortDiscardAllKvFiles(
+                SnapshotUtils.bestEffortDiscardAllKvFiles(
                         sharedFileHandles.stream()
                                 .map(KvFileHandleAndLocalPath::getKvFileHandle)
                                 .collect(Collectors.toSet()));

@@ -34,7 +34,7 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
 
     @Override
     public void setter(PrintWriter w, String enclosingType) {
-        w.format("public %s %s() {\n", field.getJavaType(), ProtoGenUtil.camelCase("set", ccName));
+        w.format("public %s %s() {\n", field.getJavaType(), ProtoGenUtils.camelCase("set", ccName));
         w.format("    if (%s == null) {\n", ccName);
         w.format("        %s = new %s();\n", ccName, field.getJavaType());
         w.format("    }\n");
@@ -45,7 +45,7 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
 
         w.format(
                 "public %s %s(%s %s) {\n",
-                enclosingType, ProtoGenUtil.camelCase("set", ccName), field.getJavaType(), ccName);
+                enclosingType, ProtoGenUtils.camelCase("set", ccName), field.getJavaType(), ccName);
         w.format("    this.%s = %s;", ccName, ccName);
         w.format("    _bitField%d |= %s;\n", bitFieldIndex(), fieldMask());
         w.format("    _cachedSize = -1;\n");
@@ -55,14 +55,14 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
 
     @Override
     public void copy(PrintWriter w) {
-        w.format("%s().copyFrom(_other.%s);\n", ProtoGenUtil.camelCase("set", ccName), ccName);
+        w.format("%s().copyFrom(_other.%s);\n", ProtoGenUtils.camelCase("set", ccName), ccName);
     }
 
     public void getter(PrintWriter w) {
         w.format(
                 "public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
-        w.format("    if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
+                field.getJavaType(), ProtoGenUtils.camelCase("get", field.getName()));
+        w.format("    if (!%s()) {\n", ProtoGenUtils.camelCase("has", ccName));
         w.format(
                 "        throw new IllegalStateException(\"Field '%s' is not set\");\n",
                 field.getName());
@@ -76,12 +76,12 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
         w.format("int %sSize = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
         w.format(
                 "%s().parseFrom(_buffer, %sSize);\n",
-                ProtoGenUtil.camelCase("set", ccName), ccName);
+                ProtoGenUtils.camelCase("set", ccName), ccName);
     }
 
     @Override
     public void totalSize(PrintWriter w) {
-        String tmpName = ProtoGenUtil.camelCase("_msgSize", ccName);
+        String tmpName = ProtoGenUtils.camelCase("_msgSize", ccName);
         w.format("_size += ProtoCodecUtils.computeVarIntSize(%s);\n", tagName());
         w.format("int %s = %s.totalSize();\n", tmpName, ccName);
         w.format("_size += ProtoCodecUtils.computeVarIntSize(%s) + %s;\n", tmpName, tmpName);
@@ -89,7 +89,7 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
 
     @Override
     public void zeroCopySize(PrintWriter w) {
-        w.format("if (%s()){\n", ProtoGenUtil.camelCase("has", ccName));
+        w.format("if (%s()){\n", ProtoGenUtils.camelCase("has", ccName));
         w.format("    _size += %s.zeroCopySize();\n", ccName);
         w.format("}\n");
     }
@@ -103,7 +103,7 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
 
     @Override
     public void clear(PrintWriter w) {
-        w.format("if (%s()){\n", ProtoGenUtil.camelCase("has", ccName));
+        w.format("if (%s()){\n", ProtoGenUtils.camelCase("has", ccName));
         w.format("    %s.clear();\n", ccName);
         w.format("}\n");
     }

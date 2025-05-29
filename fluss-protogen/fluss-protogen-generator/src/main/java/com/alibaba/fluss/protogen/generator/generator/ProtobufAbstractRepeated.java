@@ -29,8 +29,8 @@ public abstract class ProtobufAbstractRepeated<FieldType extends Field<?>>
 
     public ProtobufAbstractRepeated(FieldType field, int index) {
         super(field, index, false);
-        this.pluralName = ProtoGenUtil.plural(ccName);
-        this.singularName = ProtoGenUtil.singular(ccName);
+        this.pluralName = ProtoGenUtils.plural(ccName);
+        this.singularName = ProtoGenUtils.singular(ccName);
     }
 
     public void has(PrintWriter w) {}
@@ -38,7 +38,7 @@ public abstract class ProtobufAbstractRepeated<FieldType extends Field<?>>
     public void fieldClear(PrintWriter w, String enclosingType) {
         w.format(
                 "        public %s %s() {\n",
-                enclosingType, ProtoGenUtil.camelCase("clear", field.getName()));
+                enclosingType, ProtoGenUtils.camelCase("clear", field.getName()));
         clear(w);
         w.format("            return this;\n");
         w.format("        }\n");

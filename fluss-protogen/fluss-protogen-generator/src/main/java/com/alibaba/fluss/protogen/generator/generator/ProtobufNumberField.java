@@ -172,9 +172,9 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
         }
         w.format(
                 "        public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
+                field.getJavaType(), ProtoGenUtils.camelCase("get", field.getName()));
         if (!field.isDefaultValueSet()) {
-            w.format("            if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
+            w.format("            if (!%s()) {\n", ProtoGenUtils.camelCase("has", ccName));
             w.format(
                     "                throw new IllegalStateException(\"Field '%s' is not set\");\n",
                     field.getName());
@@ -203,12 +203,12 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
         w.format(
                 "public %s %s(%s %s) {\n",
                 enclosingType,
-                ProtoGenUtil.camelCase("set", field.getName()),
+                ProtoGenUtils.camelCase("set", field.getName()),
                 field.getJavaType(),
-                ProtoGenUtil.camelCase(field.getName()));
+                ProtoGenUtils.camelCase(field.getName()));
         w.format(
                 "    this.%s = %s;\n",
-                ProtoGenUtil.camelCase(field.getName()), ProtoGenUtil.camelCase(field.getName()));
+                ProtoGenUtils.camelCase(field.getName()), ProtoGenUtils.camelCase(field.getName()));
         w.format("    _bitField%d |= %s;\n", bitFieldIndex(), fieldMask());
         w.format("    _cachedSize = -1;\n");
         w.format("    return this;\n");
@@ -228,7 +228,7 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
 
     @Override
     public void copy(PrintWriter w) {
-        w.format("%s(_other.%s);\n", ProtoGenUtil.camelCase("set", ccName), ccName);
+        w.format("%s(_other.%s);\n", ProtoGenUtils.camelCase("set", ccName), ccName);
     }
 
     @Override

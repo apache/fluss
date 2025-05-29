@@ -24,9 +24,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Helpers for snapshot related code. */
-public class SnapshotUtil {
+public class SnapshotUtils {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SnapshotUtil.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SnapshotUtils.class);
 
     /**
      * Iterates through the passed kv file handles and calls discard() on each handle that is not

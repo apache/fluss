@@ -25,7 +25,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
  * additional information regarding copyright ownership. */
 
 /** Utils class for dealing with JVM shutdown hooks. */
-public class ShutdownHookUtil {
+public class ShutdownHookUtils {
 
     /** Adds a shutdown hook to the JVM and returns the Thread, which has been registered. */
     public static Thread addShutdownHook(
@@ -102,7 +102,7 @@ public class ShutdownHookUtil {
         }
     }
 
-    private ShutdownHookUtil() {
+    private ShutdownHookUtils() {
         throw new AssertionError();
     }
 }

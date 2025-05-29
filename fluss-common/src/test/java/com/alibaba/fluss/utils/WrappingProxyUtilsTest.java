@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Fail.fail;
 
 /** Tests for {@link WrappingProxyUtils}. */
-public class WrappingProxyUtilTest {
+public class WrappingProxyUtilsTest {
 
     @Test
     void testThrowsExceptionIfTooManyProxies() {

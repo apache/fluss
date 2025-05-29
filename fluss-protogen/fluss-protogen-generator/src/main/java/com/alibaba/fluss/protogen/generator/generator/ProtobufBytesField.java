@@ -44,7 +44,7 @@ public class ProtobufBytesField extends ProtobufField<Field.Bytes> {
     public void copy(PrintWriter w) {
         w.format(
                 "%s(_other.%s());\n",
-                ProtoGenUtil.camelCase("set", ccName), ProtoGenUtil.camelCase("get", ccName));
+                ProtoGenUtils.camelCase("set", ccName), ProtoGenUtils.camelCase("get", ccName));
     }
 
     @Override
@@ -52,7 +52,7 @@ public class ProtobufBytesField extends ProtobufField<Field.Bytes> {
         // set byte[]
         w.format(
                 "public %s %s(byte[] %s) {\n",
-                enclosingType, ProtoGenUtil.camelCase("set", ccName), ccName);
+                enclosingType, ProtoGenUtils.camelCase("set", ccName), ccName);
         w.format("    this.%s = %s;\n", ccName, ccName);
         w.format("    _bitField%d |= %s;\n", bitFieldIndex(), fieldMask());
         w.format("    _%sLen = %s.length;\n", ccName, ccName);
@@ -64,8 +64,8 @@ public class ProtobufBytesField extends ProtobufField<Field.Bytes> {
     @Override
     public void getter(PrintWriter w) {
         // get size
-        w.format("public int %s() {\n", ProtoGenUtil.camelCase("get", ccName, "size"));
-        w.format("    if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
+        w.format("public int %s() {\n", ProtoGenUtils.camelCase("get", ccName, "size"));
+        w.format("    if (!%s()) {\n", ProtoGenUtils.camelCase("has", ccName));
         w.format(
                 "        throw new IllegalStateException(\"Field '%s' is not set\");\n",
                 field.getName());
@@ -74,7 +74,7 @@ public class ProtobufBytesField extends ProtobufField<Field.Bytes> {
         w.format("}\n");
 
         // get byte[]
-        w.format("public byte[] %s() {\n", ProtoGenUtil.camelCase("get", ccName));
+        w.format("public byte[] %s() {\n", ProtoGenUtils.camelCase("get", ccName));
         w.format("    return %s;\n", ccName);
         w.format("}\n");
     }
