@@ -194,6 +194,30 @@ public class LazyMemorySegmentPoolTest {
     }
 
     @Test
+    void testComplexDelayedAllocation() throws Exception {
+        LazyMemorySegmentPool pool = buildLazyMemorySegmentSource(8, 1024, Long.MAX_VALUE, 1024);
+        // allocate all segments
+        List<MemorySegment> segments1 = pool.allocatePages(4);
+        List<MemorySegment> segments2 = pool.allocatePages(4);
+
+        CountDownLatch doDealloc1 = asyncReturnAll(pool, segments1);
+        CountDownLatch doDealloc2 = asyncReturnAll(pool, segments2);
+
+        // should block until all memory is returned
+        CountDownLatch allocation = asyncAllocatePages(pool, 8);
+        assertThat(allocation.getCount()).isEqualTo(1);
+        // return a part of memory
+        doDealloc1.countDown();
+
+        // no enough memory allocate
+        assertThat(allocation.await(1, TimeUnit.SECONDS)).isFalse();
+
+        doDealloc2.countDown();
+        // have enough memory to allocate
+        assertThat(allocation.await(1, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
     void testDelayedAllocation() throws Exception {
         LazyMemorySegmentPool pool = buildLazyMemorySegmentSource(5, 1024, Long.MAX_VALUE, 1024);
         MemorySegment segment = pool.nextSegment();

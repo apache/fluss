@@ -231,7 +231,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                     pageUsage = newPageUsage;
                     cachePages.addAll(memory);
                     for (int i = 0; i < memory.size() && !waiters.isEmpty(); i++) {
-                        waiters.pollFirst().signal();
+                        waiters.peekFirst().signal();
                     }
                 });
     }
