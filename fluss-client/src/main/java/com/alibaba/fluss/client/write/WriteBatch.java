@@ -44,8 +44,8 @@ public abstract class WriteBatch {
 
     private final long createdMs;
     private final PhysicalTablePath physicalTablePath;
-    private final TableBucket tableBucket;
     private final RequestFuture requestFuture;
+    private final boolean isPartitionedTable;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
@@ -53,12 +53,17 @@ public abstract class WriteBatch {
     protected boolean reopened;
     protected int recordCount;
     private long drainedMs;
+    private TableBucket tableBucket;
 
     public WriteBatch(
-            TableBucket tableBucket, PhysicalTablePath physicalTablePath, long createdMs) {
+            TableBucket tableBucket,
+            PhysicalTablePath physicalTablePath,
+            long createdMs,
+            boolean isPartitionedTable) {
         this.physicalTablePath = physicalTablePath;
         this.createdMs = createdMs;
         this.tableBucket = tableBucket;
+        this.isPartitionedTable = isPartitionedTable;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
@@ -117,11 +122,20 @@ public abstract class WriteBatch {
         return batchSequence() != LogRecordBatch.NO_BATCH_SEQUENCE;
     }
 
+    public @Nullable Long getPartitionId() {
+        return tableBucket.getPartitionId();
+    }
+
+    public void setPartitionId(long partitionId) {
+        this.tableBucket =
+                new TableBucket(tableBucket.getTableId(), partitionId, tableBucket.getBucket());
+    }
+
     public void resetWriterState(long writerId, int batchSequence) {
         LOG.info(
-                "Resetting batch sequence of batch with current batch sequence {} for table bucket {} to {}",
+                "Resetting batch sequence of batch with current batch sequence {} for table path {} to {}",
                 batchSequence(),
-                tableBucket,
+                physicalTablePath,
                 batchSequence);
         reopened = true;
     }
@@ -141,8 +155,21 @@ public abstract class WriteBatch {
         return reopened;
     }
 
+    public boolean isPartitionedTable() {
+        return isPartitionedTable;
+    }
+
     public TableBucket tableBucket() {
-        return tableBucket;
+        if (isPartitionedTable) {
+            if (tableBucket.getPartitionId() == null) {
+                throw new IllegalStateException(
+                        "Partition id is not set for partitioned table when writeBatch ready.");
+            } else {
+                return tableBucket;
+            }
+        } else {
+            return tableBucket;
+        }
     }
 
     public PhysicalTablePath physicalTablePath() {
@@ -187,8 +214,8 @@ public abstract class WriteBatch {
                         callback.onCompletion(exception);
                     } catch (Exception e) {
                         LOG.error(
-                                "Error executing user-provided callback on message for table-bucket '{}'",
-                                tableBucket,
+                                "Error executing user-provided callback on message for table path '{}'",
+                                physicalTablePath,
                                 e);
                     }
                 });
@@ -226,9 +253,9 @@ public abstract class WriteBatch {
         final FinalState tryFinalState =
                 (batchException == null) ? FinalState.SUCCEEDED : FinalState.FAILED;
         if (tryFinalState == FinalState.SUCCEEDED) {
-            LOG.trace("Successfully produced messages to {}.", tableBucket);
+            LOG.trace("Successfully produced messages to {}.", physicalTablePath);
         } else {
-            LOG.trace("Failed to produce messages to {}.", tableBucket, batchException);
+            LOG.trace("Failed to produce messages to {}.", physicalTablePath, batchException);
         }
 
         if (finalState.compareAndSet(null, tryFinalState)) {
@@ -242,7 +269,7 @@ public abstract class WriteBatch {
                 LOG.debug(
                         "ProduceLogResponse returned {} for {} after batch has already been {}.",
                         tryFinalState,
-                        tableBucket,
+                        physicalTablePath,
                         finalState.get());
             } else {
                 // FAILED --> FAILED transitions are ignored.

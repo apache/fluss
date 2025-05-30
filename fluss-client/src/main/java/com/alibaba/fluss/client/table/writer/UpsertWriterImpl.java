@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.client.table.writer;
 
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.metadata.DataLakeFormat;
@@ -53,17 +51,13 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final KvFormat kvFormat;
     private final RowEncoder rowEncoder;
     private final FieldGetter[] fieldGetters;
-    private final Admin admin;
-    private final boolean isDynamicPartitionEnabled;
 
     UpsertWriterImpl(
             TablePath tablePath,
             TableInfo tableInfo,
             @Nullable int[] partialUpdateColumns,
-            WriterClient writerClient,
-            MetadataUpdater metadataUpdater,
-            Admin admin) {
-        super(tablePath, tableInfo, metadataUpdater, writerClient);
+            WriterClient writerClient) {
+        super(tablePath, tableInfo, writerClient);
         RowType rowType = tableInfo.getRowType();
         sanityCheck(rowType, tableInfo.getPrimaryKeys(), partialUpdateColumns);
 
@@ -80,8 +74,6 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.rowEncoder = RowEncoder.create(kvFormat, rowType);
         this.fieldGetters = InternalRow.createFieldGetters(rowType);
-        this.admin = admin;
-        this.isDynamicPartitionEnabled = tableInfo.getTableConfig().isDynamicPartitionEnabled();
     }
 
     private static void sanityCheck(
@@ -136,11 +128,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
         WriteRecord record =
                 WriteRecord.forUpsert(
-                        getPhysicalPath(row, admin, isDynamicPartitionEnabled),
-                        encodeRow(row),
-                        key,
-                        bucketKey,
-                        targetColumns);
+                        getPhysicalPath(row), encodeRow(row), key, bucketKey, targetColumns);
         return send(record).thenApply(ignored -> UPSERT_SUCCESS);
     }
 
@@ -157,8 +145,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
         WriteRecord record =
-                WriteRecord.forDelete(
-                        getPhysicalPath(row, admin, false), key, bucketKey, targetColumns);
+                WriteRecord.forDelete(getPhysicalPath(row), key, bucketKey, targetColumns);
         return send(record).thenApply(ignored -> DELETE_SUCCESS);
     }
 

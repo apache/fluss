@@ -59,8 +59,9 @@ public class KvWriteBatch extends WriteBatch {
             int writeLimit,
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
-            long createdMs) {
-        super(tableBucket, physicalTablePath, createdMs);
+            long createdMs,
+            boolean isPartitionedTable) {
+        super(tableBucket, physicalTablePath, createdMs, isPartitionedTable);
         this.outputView = outputView;
         this.recordsBuilder =
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
