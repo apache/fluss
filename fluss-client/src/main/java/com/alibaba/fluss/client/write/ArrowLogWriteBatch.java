@@ -119,7 +119,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     @Override
     public void resetWriterState(long writerId, int batchSequence) {
         super.resetWriterState(writerId, batchSequence);
-        recordsBuilder.resetWriterState(writerId, batchSequence);
+        recordsBuilder.setWriterState(writerId, batchSequence);
     }
 
     @Override

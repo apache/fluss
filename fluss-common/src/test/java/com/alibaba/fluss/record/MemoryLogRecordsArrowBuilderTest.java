@@ -327,7 +327,7 @@ public class MemoryLogRecordsArrowBuilderTest {
 
         // test reset writer state and build (This situation will happen when the produceLog request
         // failed and the batch is re-enqueue to send with different write state).
-        builder.resetWriterState(1L, 1);
+        builder.setWriterState(1L, 1);
         records = MemoryLogRecords.pointToBytesView(builder.build());
         assertLogRecordsEquals(DATA1_ROW_TYPE, records, expectedResult);
         recordBatch = records.batches().iterator().next();
