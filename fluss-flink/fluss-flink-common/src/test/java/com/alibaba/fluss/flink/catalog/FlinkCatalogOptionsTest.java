@@ -39,7 +39,7 @@ public class FlinkCatalogOptionsTest {
 
         Assertions.assertThat(FlinkCatalogOptions.DEFAULT_DATABASE.description()).isNotNull();
 
-        // Test that the option works with Configuration
+        // Test that the catalog option works with Configuration
         Configuration config = new Configuration();
         Assertions.assertThat(config.get(FlinkCatalogOptions.DEFAULT_DATABASE)).isEqualTo("fluss");
 
