@@ -44,7 +44,6 @@ import static com.alibaba.fluss.flink.sink.FlinkStreamPartitioner.partition;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussRowType;
 
 /** Flink sink for Fluss. */
-/** Flink sink for Fluss. */
 class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT> {
 
     private static final long serialVersionUID = 1L;
