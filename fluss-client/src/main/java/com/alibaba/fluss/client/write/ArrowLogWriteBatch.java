@@ -55,8 +55,9 @@ public class ArrowLogWriteBatch extends WriteBatch {
             int schemaId,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
-            long createdMs) {
-        super(tableBucket, physicalTablePath, createdMs);
+            long createdMs,
+            boolean isPartitionedTable) {
+        super(tableBucket, physicalTablePath, createdMs, isPartitionedTable);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);

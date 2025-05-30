@@ -86,12 +86,12 @@ public class MetadataUpdater {
         return cluster.getTableId(tablePath);
     }
 
-    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
-        return cluster.getPartitionIdOrElseThrow(physicalTablePath);
+    public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
+        return cluster.getPartitionId(physicalTablePath);
     }
 
-    public String getPartitionNameOrElseThrow(long partitionId) {
-        return cluster.getPartitionNameOrElseThrow(partitionId);
+    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
+        return cluster.getPartitionIdOrElseThrow(physicalTablePath);
     }
 
     public TableInfo getTableInfoOrElseThrow(TablePath tablePath) {

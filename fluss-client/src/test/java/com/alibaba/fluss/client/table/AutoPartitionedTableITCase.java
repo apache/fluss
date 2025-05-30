@@ -26,7 +26,6 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -297,26 +296,27 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testOperateNotExistPartitionShouldThrowException() throws Exception {
-        createPartitionedTable(DATA1_TABLE_PATH_PK, true);
+        Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-        String partitionName = "notExistPartition";
         Lookuper lookuper = table.newLookup().createLookuper();
 
         // test get for a not exist partition
-        assertThatThrownBy(() -> lookuper.lookup(row(1, partitionName)).get())
+        assertThatThrownBy(() -> lookuper.lookup(row(1, "notExistPartition")).get())
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining(
                         "Table partition '%s' does not exist.",
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, partitionName));
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
 
-        // test write to not exist partition when enable dynamic create partition
-        // will create a new partition
+        // test write to not exist partition
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
         GenericRow row = row(1, "a", "notExistPartition");
-        upsertWriter.upsert(row).get();
-        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
-        assertThat(partitionInfos.get(0).getPartitionName()).isEqualTo(partitionName);
+        assertThatThrownBy(() -> upsertWriter.upsert(row).get())
+                .cause()
+                .isInstanceOf(PartitionNotExistException.class)
+                .hasMessageContaining(
+                        "Table partition '%s' does not exist.",
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
 
         // test scan a not exist partition's log
         LogScanner logScanner = table.newScan().createLogScanner();
@@ -329,24 +329,6 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         // todo: test the case that client produce to a partition to a server, but
         // the server delete the partition at the time, the client should receive the
         // exception and won't retry again and again
-    }
-
-    @Test
-    void testCreateNotExistPartitionByDisabledDynamicPartition() throws Exception {
-        createPartitionedTable(DATA1_TABLE_PATH_PK, true, false);
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
-
-        // test write to not exist partition when enable dynamic create partition
-        UpsertWriter upsertWriter = table.newUpsert().createWriter();
-        GenericRow row = row(1, "a", "notExistPartition");
-        assertThatThrownBy(() -> upsertWriter.upsert(row).get())
-                .cause()
-                .isInstanceOf(FlussRuntimeException.class)
-                .cause()
-                .isInstanceOf(PartitionNotExistException.class)
-                .hasMessageContaining(
-                        "Table partition '%s' does not exist.",
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
     }
 
     @Test
@@ -392,12 +374,6 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
             throws Exception {
-        return createPartitionedTable(tablePath, isPrimaryTable, true);
-    }
-
-    private Schema createPartitionedTable(
-            TablePath tablePath, boolean isPrimaryTable, boolean isDynamicPartition)
-            throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -418,7 +394,10 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                         .schema(schema)
                         .partitionedBy("c")
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(ConfigOptions.TABLE_DYNAMIC_PARTITION_ENABLED, isDynamicPartition)
+                        .property(
+                                ConfigOptions.TABLE_DYNAMIC_PARTITION_ENABLED,
+                                false) // for auto partition test, we will close dynamic partition
+                        // creation.
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.YEAR)

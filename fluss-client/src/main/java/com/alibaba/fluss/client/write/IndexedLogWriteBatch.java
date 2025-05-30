@@ -54,8 +54,9 @@ public final class IndexedLogWriteBatch extends WriteBatch {
             int schemaId,
             int writeLimit,
             AbstractPagedOutputView outputView,
-            long createdMs) {
-        super(tableBucket, physicalTablePath, createdMs);
+            long createdMs,
+            boolean isPartitionedTable) {
+        super(tableBucket, physicalTablePath, createdMs, isPartitionedTable);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);

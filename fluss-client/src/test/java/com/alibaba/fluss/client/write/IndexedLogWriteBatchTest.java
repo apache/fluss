@@ -160,7 +160,8 @@ public class IndexedLogWriteBatchTest {
                 DATA1_TABLE_INFO.getSchemaId(),
                 writeLimit,
                 new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment)),
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                false);
     }
 
     private void assertDefaultLogRecordBatchEquals(LogRecordBatch recordBatch) {
