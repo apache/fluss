@@ -82,6 +82,7 @@ public class FlinkRowAssertionsUtils {
         }
     }
 
+    // expects exact order
     public static void assertQueryResultExactOrder(
             TableEnvironment env, String query, List<String> expected) throws Exception {
         try (CloseableIterator<Row> rowIter = env.executeSql(query).collect()) {
