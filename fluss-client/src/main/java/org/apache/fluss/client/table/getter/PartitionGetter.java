@@ -21,6 +21,7 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,12 +34,14 @@ public class PartitionGetter {
 
     private final List<String> partitionKeys;
     private final List<InternalRow.FieldGetter> partitionFieldGetters;
+    private final List<DataType> partitionTypes;
 
     public PartitionGetter(RowType rowType, List<String> partitionKeys) {
         // check the partition column
         List<String> fieldNames = rowType.getFieldNames();
         this.partitionKeys = partitionKeys;
         partitionFieldGetters = new ArrayList<>();
+        partitionTypes = new ArrayList<>();
         for (String partitionKey : partitionKeys) {
             int partitionColumnIndex = fieldNames.indexOf(partitionKey);
             checkArgument(
@@ -49,6 +52,7 @@ public class PartitionGetter {
 
             // check the data type of the partition column
             DataType partitionColumnDataType = rowType.getTypeAt(partitionColumnIndex);
+            partitionTypes.add(partitionColumnDataType);
             partitionFieldGetters.add(
                     InternalRow.createFieldGetter(partitionColumnDataType, partitionColumnIndex));
         }
@@ -56,10 +60,13 @@ public class PartitionGetter {
 
     public String getPartition(InternalRow row) {
         List<String> partitionValues = new ArrayList<>();
-        for (InternalRow.FieldGetter partitionFieldGetter : partitionFieldGetters) {
+        for (int i = 0; i < partitionFieldGetters.size(); i++) {
+            InternalRow.FieldGetter partitionFieldGetter = partitionFieldGetters.get(i);
+            DataType dataType = partitionTypes.get(i);
             Object partitionValue = partitionFieldGetter.getFieldOrNull(row);
             checkNotNull(partitionValue, "Partition value shouldn't be null.");
-            partitionValues.add(partitionValue.toString());
+            partitionValues.add(
+                    PartitionUtils.convertValueOfType(partitionValue, dataType.getTypeRoot()));
         }
         ResolvedPartitionSpec resolvedPartitionSpec =
                 new ResolvedPartitionSpec(partitionKeys, partitionValues);
