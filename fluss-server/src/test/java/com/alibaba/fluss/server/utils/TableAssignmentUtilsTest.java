@@ -246,7 +246,7 @@ class TableAssignmentUtilsTest {
     void testAssignmentWithRackAwareWithUnevenRacks() {
         Map<Integer, String> rackMap = new HashMap<>();
         rackMap.put(0, "rack1");
-        rackMap.put(1, "rack2");
+        rackMap.put(1, "rack1");
         rackMap.put(2, "rack2");
         rackMap.put(3, "rack3");
         rackMap.put(4, "rack3");
