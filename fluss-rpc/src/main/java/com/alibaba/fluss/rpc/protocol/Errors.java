@@ -34,6 +34,7 @@ import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.InvalidReplicationFactorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
+import com.alibaba.fluss.exception.InvalidServerRackInfoException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.InvalidTargetColumnException;
 import com.alibaba.fluss.exception.InvalidTimestampException;
@@ -207,7 +208,9 @@ public enum Errors {
     RETRIABLE_AUTHENTICATE_EXCEPTION(
             51,
             "Authentication failed with retriable exception. ",
-            RetriableAuthenticationException::new);
+            RetriableAuthenticationException::new),
+    INVALID_SERVER_RACK_INFO_EXCEPTION(
+            52, "The server rack info is invalid.", InvalidServerRackInfoException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

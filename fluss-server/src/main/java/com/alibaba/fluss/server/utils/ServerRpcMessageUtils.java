@@ -208,7 +208,8 @@ public class ServerRpcMessageUtils {
                 pbServerNode.getNodeId(),
                 pbServerNode.getHost(),
                 pbServerNode.getPort(),
-                serverType);
+                serverType,
+                pbServerNode.hasRack() ? pbServerNode.getRack() : null);
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
@@ -218,13 +219,17 @@ public class ServerRpcMessageUtils {
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
             List<Endpoint> endpoints = serverInfo.endpoints();
-            aliveTableServerNodes.add(
+            PbServerNode pbTabletServerNode =
                     new PbServerNode()
                             .setNodeId(serverInfo.id())
                             .setListeners(Endpoint.toListenersString(endpoints))
                             // for backward compatibility for versions <= 0.6
                             .setHost(endpoints.get(0).getHost())
-                            .setPort(endpoints.get(0).getPort()));
+                            .setPort(endpoints.get(0).getPort());
+            if (serverInfo.rack() != null) {
+                pbTabletServerNode.setRack(serverInfo.rack());
+            }
+            aliveTableServerNodes.add(pbTabletServerNode);
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         coordinatorServer.map(

@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator.event.watcher;
 
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
@@ -31,7 +32,6 @@ import com.alibaba.fluss.server.coordinator.event.CreateTableEvent;
 import com.alibaba.fluss.server.coordinator.event.DropPartitionEvent;
 import com.alibaba.fluss.server.coordinator.event.DropTableEvent;
 import com.alibaba.fluss.server.coordinator.event.TestingEventManager;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -50,6 +50,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -105,7 +106,14 @@ class TableChangeWatcherTest {
         for (int i = 0; i < 10; i++) {
             TablePath tablePath = TablePath.of(DEFAULT_DB, "table_" + i);
             TableAssignment tableAssignment =
-                    TableAssignmentUtils.generateAssignment(3, 3, new int[] {0, 1, 2});
+                    generateAssignment(
+                            3,
+                            3,
+                            new TabletServerInfo[] {
+                                new TabletServerInfo(0, "rack0"),
+                                new TabletServerInfo(1, "rack1"),
+                                new TabletServerInfo(2, "rack2")
+                            });
             long tableId =
                     metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
@@ -183,7 +191,14 @@ class TableChangeWatcherTest {
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(
                         tableId,
-                        TableAssignmentUtils.generateAssignment(3, 3, new int[] {0, 1, 2})
+                        generateAssignment(
+                                        3,
+                                        3,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
                                 .getBucketAssignments());
         // register assignment
         zookeeperClient.registerPartitionAssignment(1L, partitionAssignment);

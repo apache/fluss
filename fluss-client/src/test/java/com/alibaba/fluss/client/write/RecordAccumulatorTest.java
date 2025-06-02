@@ -95,9 +95,9 @@ class RecordAccumulatorTest {
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
 
-    ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER);
-    ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER);
-    ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER);
+    ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
+    ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
+    ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
     private final ServerNode[] serverNodes = new ServerNode[] {node1, node2, node3};
     private final TableBucket tb1 = new TableBucket(DATA1_TABLE_ID, 0);
     private final TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1);

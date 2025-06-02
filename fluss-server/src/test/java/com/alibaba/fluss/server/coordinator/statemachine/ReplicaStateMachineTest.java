@@ -282,6 +282,7 @@ class ReplicaStateMachineTest {
             servers.add(
                     new ServerInfo(
                             serverId,
+                            "RACK" + serverId,
                             Endpoint.fromListenersString("CLIENT://host:23"),
                             ServerType.TABLET_SERVER));
         }

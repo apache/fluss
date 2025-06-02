@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -24,7 +25,6 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.TestingMetadataCache;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -54,6 +54,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link AutoPartitionManager}. */
@@ -207,8 +208,14 @@ class AutoPartitionManagerTest {
         // manually create a partition.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(
-                                table.getNumBuckets(), replicaFactor, new int[] {0, 1, 2})
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
                         .getBucketAssignments();
         long tableId = table.getTableId();
         PartitionAssignment partitionAssignment =
@@ -286,8 +293,14 @@ class AutoPartitionManagerTest {
         // manually create 4 future partitions.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(
-                                table.getNumBuckets(), replicaFactor, new int[] {0, 1, 2})
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
                         .getBucketAssignments();
         long tableId = table.getTableId();
         PartitionAssignment partitionAssignment =

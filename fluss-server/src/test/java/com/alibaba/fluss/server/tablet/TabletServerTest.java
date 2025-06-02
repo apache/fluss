@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TabletServerTest extends ServerTestBase {
 
     private static final int SERVER_ID = 0;
+    private static final String RACK = "cn-hangzhou-server10";
 
     private static @TempDir File tempDirForLog;
 
@@ -70,6 +71,7 @@ class TabletServerTest extends ServerTestBase {
     private static Configuration createTabletServerConfiguration() {
         Configuration configuration = createConfiguration();
         configuration.set(ConfigOptions.TABLET_SERVER_ID, SERVER_ID);
+        configuration.set(ConfigOptions.TABLET_SERVER_RACK, RACK);
         configuration.setString(ConfigOptions.DATA_DIR, tempDirForLog.getAbsolutePath());
         return configuration;
     }
@@ -82,6 +84,7 @@ class TabletServerTest extends ServerTestBase {
         assertThat(optionalTabletServerRegistration).isPresent();
 
         TabletServerRegistration tabletServerRegistration = optionalTabletServerRegistration.get();
+        assertThat(tabletServerRegistration.getRack()).isEqualTo(RACK);
         verifyEndpoint(
                 tabletServerRegistration.getEndpoints(), server.getRpcServer().getBindEndpoints());
     }

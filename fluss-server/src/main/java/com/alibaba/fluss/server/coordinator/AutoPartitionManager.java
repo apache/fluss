@@ -18,6 +18,7 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.MetadataCache;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -28,7 +29,6 @@ import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
@@ -62,6 +62,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;
 import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartitionTime;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -293,15 +294,14 @@ public class AutoPartitionManager implements AutoCloseable {
         for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
             long tableId = tableInfo.getTableId();
             int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
-            int[] servers = metadataCache.getLiveServerIds();
-            Map<Integer, BucketAssignment> bucketAssignments =
-                    TableAssignmentUtils.generateAssignment(
-                                    tableInfo.getNumBuckets(), replicaFactor, servers)
-                            .getBucketAssignments();
-            PartitionAssignment partitionAssignment =
-                    new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
-
+            TabletServerInfo[] servers = metadataCache.getLiveServers();
             try {
+                Map<Integer, BucketAssignment> bucketAssignments =
+                        generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
+                                .getBucketAssignments();
+                PartitionAssignment partitionAssignment =
+                        new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+
                 metadataManager.createPartition(
                         tablePath, tableId, partitionAssignment, partition, false);
                 currentPartitions.add(partition.getPartitionName());

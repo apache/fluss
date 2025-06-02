@@ -107,10 +107,12 @@ class ZooKeeperClientTest {
         // register two table servers
         TabletServerRegistration registration1 =
                 new TabletServerRegistration(
+                        "rack1",
                         Endpoint.fromListenersString("CLIENT://host1:3456"),
                         System.currentTimeMillis());
         TabletServerRegistration registration2 =
                 new TabletServerRegistration(
+                        "rack2",
                         Endpoint.fromListenersString("CLIENT://host2:3454"),
                         System.currentTimeMillis());
         zookeeperClient.registerTabletServer(2, registration2);

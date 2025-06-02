@@ -44,11 +44,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     private static final ServerNode COORDINATOR =
             new ServerNode(0, "localhost", 90, ServerType.COORDINATOR);
     private static final ServerNode NODE1 =
-            new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER);
+            new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
     private static final ServerNode NODE2 =
-            new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER);
+            new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
     private static final ServerNode NODE3 =
-            new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER);
+            new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
 
     private final TestCoordinatorGateway coordinatorGateway;
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;

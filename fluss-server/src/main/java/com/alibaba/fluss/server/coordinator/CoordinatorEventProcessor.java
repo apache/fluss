@@ -285,6 +285,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                     // CoordinatorServer id to avoid node drift.
                                     new ServerInfo(
                                             0,
+                                            null, // For coordinatorServer, no rack info
                                             coordinatorAddress.getEndpoints(),
                                             ServerType.COORDINATOR))
                     .orElseGet(
@@ -310,7 +311,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         for (int server : currentServers) {
             TabletServerRegistration registration = zooKeeperClient.getTabletServer(server).get();
             ServerInfo serverInfo =
-                    new ServerInfo(server, registration.getEndpoints(), ServerType.TABLET_SERVER);
+                    new ServerInfo(
+                            server,
+                            registration.getRack(),
+                            registration.getEndpoints(),
+                            ServerType.TABLET_SERVER);
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {

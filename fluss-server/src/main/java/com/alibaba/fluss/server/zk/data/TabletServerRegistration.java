@@ -18,6 +18,8 @@ package com.alibaba.fluss.server.zk.data;
 
 import com.alibaba.fluss.cluster.Endpoint;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -27,10 +29,13 @@ import java.util.Objects;
  * @see TabletServerRegistrationJsonSerde for json serialization and deserialization.
  */
 public class TabletServerRegistration {
+    private final @Nullable String rack;
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
 
-    public TabletServerRegistration(List<Endpoint> endpoints, long registerTimestamp) {
+    public TabletServerRegistration(
+            @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
+        this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
     }
@@ -43,6 +48,10 @@ public class TabletServerRegistration {
         return registerTimestamp;
     }
 
+    public @Nullable String getRack() {
+        return rack;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -53,12 +62,13 @@ public class TabletServerRegistration {
         }
         TabletServerRegistration that = (TabletServerRegistration) o;
         return registerTimestamp == that.registerTimestamp
-                && Objects.equals(endpoints, that.endpoints);
+                && Objects.equals(endpoints, that.endpoints)
+                && Objects.equals(rack, that.rack);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp);
+        return Objects.hash(endpoints, registerTimestamp, rack);
     }
 
     @Override
@@ -68,6 +78,8 @@ public class TabletServerRegistration {
                 + endpoints
                 + ", registerTimestamp="
                 + registerTimestamp
+                + ", rack='"
+                + rack
                 + '}';
     }
 }

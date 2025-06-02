@@ -22,6 +22,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
+import com.alibaba.fluss.exception.InvalidServerRackInfoException;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -82,6 +83,17 @@ public class TabletServer extends ServerBase {
 
     private final int serverId;
 
+    /**
+     * The rack info of the tabletServer. If not configured, the value will be null, and the
+     * tabletServer will not be able to perceive the underlying rack it resides in. In some
+     * rack-aware scenarios, this may lead to an inability to guarantee proper awareness
+     * capabilities.
+     *
+     * <p>Note: Either all tabletServers are configured with rack, or none of them are configured;
+     * otherwise, an {@link InvalidServerRackInfoException} will be thrown.
+     */
+    private final @Nullable String rack;
+
     /** The lock to guard startup / shutdown / manipulation methods. */
     private final Object lock = new Object();
 
@@ -138,6 +150,7 @@ public class TabletServer extends ServerBase {
         validateConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
+        this.rack = conf.getString(ConfigOptions.TABLET_SERVER_RACK);
         this.interListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
     }
 
@@ -265,7 +278,7 @@ public class TabletServer extends ServerBase {
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
+                        rack, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
 
         while (true) {
             try {

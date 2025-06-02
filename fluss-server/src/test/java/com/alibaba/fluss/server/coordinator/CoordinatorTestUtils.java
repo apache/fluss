@@ -88,6 +88,7 @@ public class CoordinatorTestUtils {
             tabletServes.add(
                     new ServerInfo(
                             server,
+                            "RACK" + server,
                             Endpoint.fromListenersString("CLIENT://host:100"),
                             ServerType.TABLET_SERVER));
         }

@@ -39,12 +39,13 @@ public class TabletServerRegistrationJsonSerde
             new TabletServerRegistrationJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     @Deprecated private static final String HOST = "host";
     @Deprecated private static final String PORT = "port";
     private static final String REGISTER_TIMESTAMP = "register_timestamp";
     private static final String LISTENERS = "listeners";
+    private static final String RACK = "rack";
 
     @Override
     public void serialize(
@@ -56,6 +57,9 @@ public class TabletServerRegistrationJsonSerde
                 LISTENERS, Endpoint.toListenersString(tabletServerRegistration.getEndpoints()));
         generator.writeNumberField(
                 REGISTER_TIMESTAMP, tabletServerRegistration.getRegisterTimestamp());
+        if (tabletServerRegistration.getRack() != null) {
+            generator.writeStringField(RACK, tabletServerRegistration.getRack());
+        }
         generator.writeEndObject();
     }
 
@@ -63,15 +67,21 @@ public class TabletServerRegistrationJsonSerde
     public TabletServerRegistration deserialize(JsonNode node) {
         int version = node.get(VERSION_KEY).asInt();
         List<Endpoint> endpoints;
+        String rack = null;
         if (version == 1) {
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
             endpoints = Collections.singletonList(new Endpoint(host, port, DEFAULT_LISTENER_NAME));
+        } else if (version == 2) {
+            endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         } else {
             endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
+            if (node.has(RACK)) {
+                rack = node.get(RACK).asText();
+            }
         }
 
         long registerTimestamp = node.get(REGISTER_TIMESTAMP).asLong();
-        return new TabletServerRegistration(endpoints, registerTimestamp);
+        return new TabletServerRegistration(rack, endpoints, registerTimestamp);
     }
 }

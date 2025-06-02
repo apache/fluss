@@ -763,11 +763,15 @@ class TableManagerITCase {
         for (ServerInfo serverInfo : aliveTableServers) {
             // Legacy only support one endpoint
             Endpoint endpoint = serverInfo.endpoints().get(0);
-            aliveTableServerNodes.add(
+            PbServerNode pbServerNode =
                     new PbServerNode()
                             .setNodeId(serverInfo.id())
                             .setHost(endpoint.getHost())
-                            .setPort(endpoint.getPort()));
+                            .setPort(endpoint.getPort());
+            if (serverInfo.rack() != null) {
+                pbServerNode.setRack(serverInfo.rack());
+            }
+            aliveTableServerNodes.add(pbServerNode);
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         // Legacy only support one endpoint

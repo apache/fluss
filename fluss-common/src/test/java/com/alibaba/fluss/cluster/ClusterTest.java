@@ -49,10 +49,10 @@ class ClusterTest {
             new ServerNode(0, "localhost", 98, ServerType.COORDINATOR);
     private static final ServerNode[] NODES =
             new ServerNode[] {
-                new ServerNode(0, "localhost", 99, ServerType.TABLET_SERVER),
-                new ServerNode(1, "localhost", 100, ServerType.TABLET_SERVER),
-                new ServerNode(2, "localhost", 101, ServerType.TABLET_SERVER),
-                new ServerNode(11, "localhost", 102, ServerType.TABLET_SERVER)
+                new ServerNode(0, "localhost", 99, ServerType.TABLET_SERVER, "rack0"),
+                new ServerNode(1, "localhost", 100, ServerType.TABLET_SERVER, "rack1"),
+                new ServerNode(2, "localhost", 101, ServerType.TABLET_SERVER, "rack2"),
+                new ServerNode(11, "localhost", 102, ServerType.TABLET_SERVER, "rack11")
             };
 
     private Configuration conf;

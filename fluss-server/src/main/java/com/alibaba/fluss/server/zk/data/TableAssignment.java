@@ -30,7 +30,7 @@ import java.util.Set;
  */
 public class TableAssignment {
     // a mapping from bucket id to assignment something like "{0: [0, 1, 3]}".
-    // the assignment is represented as a list of replica id (tabletserver id) where the first
+    // the assignment is represented as a list of replica id (tabletServer id) where the first
     // replica id will be considered as the replica leader.
     private final Map<Integer, BucketAssignment> assignments;
 
