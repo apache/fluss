@@ -190,15 +190,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     }
 
     public void setWriterState(long writerId, int batchBaseSequence) {
-        this.writerId = writerId;
-        this.batchSequence = batchBaseSequence;
-    }
-
-    public void resetWriterState(long writerId, int batchSequence) {
         // trigger to rewrite batch header when next build.
         this.resetBatchHeader = true;
         this.writerId = writerId;
-        this.batchSequence = batchSequence;
+        this.batchSequence = batchBaseSequence;
     }
 
     public void abort() {
@@ -220,6 +215,9 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         if (isClosed) {
             return;
         }
+
+        // Build arrowBatch when batch close to recycle arrow writer.
+        build();
 
         isClosed = true;
     }
