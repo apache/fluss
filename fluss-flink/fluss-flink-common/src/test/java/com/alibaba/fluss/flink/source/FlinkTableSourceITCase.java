@@ -944,6 +944,13 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                         .collect(Collectors.toList());
         waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
 
+        String plan = tEnv.explainSql("select * from partitioned_table where c ='2025'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table, "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
+                                + "project=[a, b]]], fields=[a, b])");
+
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from partitioned_table where c ='2025'").collect();
 
@@ -952,7 +959,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
     @Test
     void testStreamingReadMultiPartitionPushDown() throws Exception {
-
         tEnv.executeSql(
                 "create table multi_partitioned_table"
                         + " (a int not null, b varchar, c string,d string, primary key (a, c, d) NOT ENFORCED) partitioned by (c,d) "
@@ -971,6 +977,13 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         waitUtilAllBucketFinishSnapshot(
                 admin, tablePath, Arrays.asList("2025$1", "2025$2", "2025$2"));
 
+        String plan = tEnv.explainSql("select * from multi_partitioned_table where c ='2025'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_partitioned_table, "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
+                                + "project=[a, b, d]]], fields=[a, b, d])");
+
         // test partition key prefix match
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from multi_partitioned_table where c ='2025'").collect();
@@ -987,16 +1000,24 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025$3", "2026$2"));
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
 
+        String plan2 =
+                tEnv.explainSql("select * from multi_partitioned_table where c ='2025' and d ='3'");
+        assertThat(plan2)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_partitioned_table, "
+                                + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), "
+                                + "=(d, _UTF-16LE'3':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
+                                + "project=[a, b]]], fields=[a, b])");
+
         // test all partition key match
         rowIter =
-                tEnv.executeSql("select * from multi_partitioned_table where c ='2025' and d ='3' ")
+                tEnv.executeSql("select * from multi_partitioned_table where c ='2025' and d ='3'")
                         .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
     @Test
     void testStreamingReadWithCombinedFilters() throws Exception {
-
         tEnv.executeSql(
                 "create table combined_filters_table"
                         + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
@@ -1021,6 +1042,15 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
 
         writeRows(tablePath, rows, false);
         waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+
+        String plan =
+                tEnv.explainSql(
+                        "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
+                                + "project=[a, d]]], fields=[a, d])");
 
         // test column filter、partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =

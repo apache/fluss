@@ -49,6 +49,8 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>
         implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
@@ -65,7 +67,7 @@ public class FlinkSource<OUT>
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
 
-    @Nullable private final List<FieldEqual> partitionFilters;
+    private final List<FieldEqual> partitionFilters;
 
     public FlinkSource(
             Configuration flussConf,
@@ -89,7 +91,7 @@ public class FlinkSource<OUT>
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
-        this.partitionFilters = partitionFilters;
+        this.partitionFilters = checkNotNull(partitionFilters);
     }
 
     @Override

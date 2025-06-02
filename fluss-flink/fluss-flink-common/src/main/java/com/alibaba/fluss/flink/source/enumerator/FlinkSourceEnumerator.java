@@ -39,6 +39,7 @@ import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -126,7 +127,7 @@ public class FlinkSourceEnumerator
 
     private volatile boolean closed = false;
 
-    @Nullable private final List<FieldEqual> partitionFilters;
+    private final List<FieldEqual> partitionFilters;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -137,7 +138,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            @Nullable List<FieldEqual> partitionFilters) {
+            List<FieldEqual> partitionFilters) {
         this(
                 tablePath,
                 flussConf,
@@ -163,7 +164,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            @Nullable List<FieldEqual> partitionFilters) {
+            List<FieldEqual> partitionFilters) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -175,7 +176,7 @@ public class FlinkSourceEnumerator
         this.assignedPartitions = new HashMap<>(assignedPartitions);
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
-        this.partitionFilters = partitionFilters;
+        this.partitionFilters = checkNotNull(partitionFilters);
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
     }
@@ -273,16 +274,18 @@ public class FlinkSourceEnumerator
 
     /** Apply partition filter. */
     private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
-        if (partitionFilters != null && !partitionFilters.isEmpty()) {
+        if (!partitionFilters.isEmpty()) {
             return partitionInfos.stream()
                     .filter(
                             partitionInfo -> {
                                 Map<String, String> specMap =
                                         partitionInfo.getPartitionSpec().getSpecMap();
-                                List<String> fieldNames = tableInfo.getRowType().getFieldNames();
+                                // use getFields() instead of getFieldNames() to
+                                // avoid collection construction
+                                List<DataField> fields = tableInfo.getRowType().getFields();
                                 for (FieldEqual filter : partitionFilters) {
-                                    String partitionValue =
-                                            specMap.get(fieldNames.get(filter.fieldIndex));
+                                    String fieldName = fields.get(filter.fieldIndex).getName();
+                                    String partitionValue = specMap.get(fieldName);
                                     if (partitionValue == null
                                             || !filter.equalValue
                                                     .toString()

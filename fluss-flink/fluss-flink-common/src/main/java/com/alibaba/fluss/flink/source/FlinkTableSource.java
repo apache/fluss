@@ -55,7 +55,6 @@ import org.apache.flink.table.connector.source.lookup.PartialCachingLookupProvid
 import org.apache.flink.table.connector.source.lookup.cache.LookupCache;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.binary.BinaryStringData;
 import org.apache.flink.table.expressions.AggregateExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.functions.AsyncLookupFunction;
@@ -126,7 +125,7 @@ public class FlinkTableSource
 
     private long limit = -1;
 
-    @Nullable private List<FieldEqual> partitionFilters;
+    private List<FieldEqual> partitionFilters = Collections.emptyList();
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -418,6 +417,7 @@ public class FlinkTableSource
             singleRowFilter = lookupRow;
             return Result.of(acceptedFilters, remainingFilters);
         } else if (isPartitioned()) {
+            // dynamic partition pushdown
             Map<Integer, LogicalType> partitionKeyTypes = getPartitionKeyTypes();
             List<FieldEqual> fieldEquals =
                     PushdownUtils.extractFieldEquals(
@@ -426,7 +426,8 @@ public class FlinkTableSource
                             acceptedFilters,
                             remainingFilters,
                             FLINK_INTERNAL_VALUE);
-            fieldEquals = serializeFieldEquals(fieldEquals);
+            // partitions are filtered by string representations, convert the equals to string first
+            fieldEquals = stringifyFieldEquals(fieldEquals);
 
             this.partitionFilters = fieldEquals;
             return Result.of(acceptedFilters, remainingFilters);
@@ -496,15 +497,12 @@ public class FlinkTableSource
         return partitionKeyTypes;
     }
 
-    private List<FieldEqual> serializeFieldEquals(List<FieldEqual> fieldEquals) {
+    private List<FieldEqual> stringifyFieldEquals(List<FieldEqual> fieldEquals) {
         List<FieldEqual> serialize = new ArrayList<>();
         for (FieldEqual fieldEqual : fieldEquals) {
-            if (fieldEqual.equalValue instanceof BinaryStringData) {
-                serialize.add(
-                        new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
-            } else {
-                serialize.add(fieldEqual);
-            }
+            // revisit this again when we support more data types for partition key
+            serialize.add(
+                    new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
         }
         return serialize;
     }
