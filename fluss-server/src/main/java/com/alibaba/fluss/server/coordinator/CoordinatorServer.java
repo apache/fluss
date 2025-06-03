@@ -35,8 +35,8 @@ import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -112,7 +112,7 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorService coordinatorService;
 
     @GuardedBy("lock")
-    private ServerMetadataCache metadataCache;
+    private CoordinatorMetadataCache metadataCache;
 
     @GuardedBy("lock")
     private CoordinatorChannelManager coordinatorChannelManager;
@@ -135,6 +135,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     @Nullable
     private Authorizer authorizer;
+
+    @GuardedBy("lock")
+    private CoordinatorContext coordinatorContext;
 
     public CoordinatorServer(Configuration conf) {
         super(conf);
@@ -167,7 +170,8 @@ public class CoordinatorServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            this.metadataCache = new ServerMetadataCacheImpl();
+            this.coordinatorContext = new CoordinatorContext();
+            this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -225,6 +229,7 @@ public class CoordinatorServer extends ServerBase {
                             zkClient,
                             metadataCache,
                             coordinatorChannelManager,
+                            coordinatorContext,
                             autoPartitionManager,
                             lakeTableTieringManager,
                             serverMetricGroup,
@@ -373,6 +378,15 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
+                if (coordinatorContext != null) {
+                    // then reset coordinatorContext
+                    coordinatorContext.resetContext();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (lakeTableTieringManager != null) {
                     lakeTableTieringManager.close();
                 }
@@ -433,6 +447,11 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public RpcServer getRpcServer() {
         return rpcServer;
+    }
+
+    @VisibleForTesting
+    public ServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     private static void validateConfigs(Configuration conf) {

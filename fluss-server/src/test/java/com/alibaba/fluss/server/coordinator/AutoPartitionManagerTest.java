@@ -24,7 +24,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.testutils.TestingMetadataCache;
+import com.alibaba.fluss.server.testutils.TestingServerMetadataCache;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -188,7 +188,7 @@ class AutoPartitionManagerTest {
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         new MetadataManager(zookeeperClient, new Configuration()),
                         new Configuration(),
                         clock,
@@ -270,7 +270,7 @@ class AutoPartitionManagerTest {
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         metadataManager,
                         new Configuration(),
                         clock,
@@ -346,7 +346,7 @@ class AutoPartitionManagerTest {
                 new ManuallyTriggeredScheduledExecutorService();
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         metadataManager,
                         new Configuration(),
                         clock,
@@ -406,7 +406,7 @@ class AutoPartitionManagerTest {
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         metadataManager,
                         config,
                         clock,

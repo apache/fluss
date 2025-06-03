@@ -45,10 +45,9 @@ import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.log.remote.TestingRemoteLogStorage;
-import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
+import com.alibaba.fluss.server.metadata.ClusterMetadata;
 import com.alibaba.fluss.server.metadata.ServerInfo;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
@@ -135,7 +134,7 @@ public class ReplicaTestBase {
     protected ReplicaManager replicaManager;
     protected RpcClient rpcClient;
     protected Configuration conf;
-    private ServerMetadataCache serverMetadataCache;
+    protected TabletServerMetadataCache serverMetadataCache;
     protected TestingCompletedKvSnapshotCommitter snapshotReporter;
     protected TestCoordinatorGateway testCoordinatorGateway;
     private FlussScheduler scheduler;
@@ -183,7 +182,7 @@ public class ReplicaTestBase {
         kvManager = KvManager.create(conf, zkClient, logManager);
         kvManager.startup();
 
-        serverMetadataCache = new ServerMetadataCacheImpl();
+        serverMetadataCache = new TabletServerMetadataCache();
         initMetadataCache(serverMetadataCache);
 
         rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance());
@@ -201,15 +200,14 @@ public class ReplicaTestBase {
         registerTableInZkClient();
     }
 
-    private void initMetadataCache(ServerMetadataCache metadataCache) {
+    private void initMetadataCache(TabletServerMetadataCache metadataCache) {
         metadataCache.updateClusterMetadata(
-                new ClusterMetadataInfo(
-                        Optional.of(
-                                new ServerInfo(
-                                        0,
-                                        "rack0",
-                                        Endpoint.fromListenersString("CLIENT://localhost:1234"),
-                                        ServerType.COORDINATOR)),
+                new ClusterMetadata(
+                        new ServerInfo(
+                                0,
+                                null,
+                                Endpoint.fromListenersString("CLIENT://localhost:1234"),
+                                ServerType.COORDINATOR),
                         new HashSet<>(
                                 Arrays.asList(
                                         new ServerInfo(
@@ -401,8 +399,7 @@ public class ReplicaTestBase {
     }
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
-        replicaManager.becomeLeaderOrFollower(
-                0, notifyLeaderAndIsrDataList, result -> {}, (tableId, path) -> {});
+        replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
     }
 
     protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)

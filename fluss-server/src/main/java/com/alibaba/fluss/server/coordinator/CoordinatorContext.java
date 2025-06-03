@@ -98,6 +98,7 @@ public class CoordinatorContext {
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
+    private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
 
     public CoordinatorContext() {}
@@ -114,6 +115,14 @@ public class CoordinatorContext {
     public void setLiveTabletServers(List<ServerInfo> servers) {
         liveTabletServers.clear();
         servers.forEach(server -> liveTabletServers.put(server.id(), server));
+    }
+
+    public ServerInfo getCoordinatorServerInfo() {
+        return coordinatorServerInfo;
+    }
+
+    public void setCoordinatorServerInfo(ServerInfo coordinatorServerInfo) {
+        this.coordinatorServerInfo = coordinatorServerInfo;
     }
 
     public void addLiveTabletServer(ServerInfo serverInfo) {

@@ -170,6 +170,8 @@ message UpdateMetadataRequest {
   optional PbServerNode coordinator_server = 1;
   repeated PbServerNode tablet_servers = 2;
   repeated PbTableMetadata table_metadata = 3;
+  repeated PbPartitionMetadata partition_metadata = 4;
+  optional int32 coordinator_epoch = 5;
 }
 
 message UpdateMetadataResponse {
@@ -565,6 +567,9 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+
+  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
+  // trace by: https://github.com/alibaba/fluss/issues/981
 }
 
 message PbPartitionMetadata {
@@ -581,6 +586,7 @@ message PbBucketMetadata {
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
   // TODO: Add isr here.
+  optional int32 leader_epoch = 4;
 }
 
 message PbProduceLogReqForBucket {

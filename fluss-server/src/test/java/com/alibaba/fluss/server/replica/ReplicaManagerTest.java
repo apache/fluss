@@ -16,10 +16,15 @@
 
 package com.alibaba.fluss.server.replica;
 
+import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
@@ -50,6 +55,10 @@ import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
+import com.alibaba.fluss.server.metadata.ClusterMetadata;
+import com.alibaba.fluss.server.metadata.PartitionMetadata;
+import com.alibaba.fluss.server.metadata.ServerInfo;
+import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.testutils.KvTestUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.testutils.DataTestUtils;
@@ -70,9 +79,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -80,16 +91,20 @@ import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadConte
 import static com.alibaba.fluss.record.TestData.ANOTHER_DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
+import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordBatchEqualsWithRowKind;
@@ -1057,8 +1072,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete,
-                (tableId, path) -> {});
+                future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
@@ -1078,8 +1092,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete,
-                (tableId, path) -> {});
+                future::complete);
         assertThat(future.get())
                 .containsOnly(
                         new NotifyLeaderAndIsrResultForBucket(
@@ -1113,8 +1126,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete,
-                (tableId, path) -> {});
+                future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 1, INITIAL_BUCKET_EPOCH);
@@ -1145,8 +1157,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                future::complete,
-                (tableId, tablePath) -> {});
+                future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
                 replicaManager.getReplicaOrException(tb), true, 2, INITIAL_BUCKET_EPOCH);
@@ -1406,6 +1417,156 @@ class ReplicaManagerTest extends ReplicaTestBase {
         }
     }
 
+    @Test
+    void testUpdateMetadata() {
+        // check the server metadata before update.
+        long partitionTableId = 150002L;
+        long partitionId1 = 15L;
+        String partitionName1 = "p1";
+        long partitionId2 = 16L;
+        String partitionName2 = "p2";
+
+        Map<String, ServerNode> expectedCoordinatorServer = new HashMap<>();
+        expectedCoordinatorServer.put(
+                "CLIENT", new ServerNode(0, "localhost", 1234, ServerType.COORDINATOR));
+        expectedCoordinatorServer.put("INTERNAL", null);
+
+        Map<Long, TablePath> expectedTablePathById = new HashMap<>();
+        expectedTablePathById.put(DATA1_TABLE_ID, null);
+        expectedTablePathById.put(partitionTableId, null);
+
+        Map<Long, String> expectedPartitionNameById = new HashMap<>();
+        expectedPartitionNameById.put(partitionId1, null);
+        expectedPartitionNameById.put(partitionId2, null);
+
+        assertUpdateMetadataEquals(
+                expectedCoordinatorServer, 3, expectedTablePathById, expectedPartitionNameById);
+
+        // 1. test update metadata with coordinatorEpoch = 2, with new coordinatorServer address,
+        // with one new tabletServer, with one new table and one new partition table.
+        ServerInfo csServerInfo =
+                new ServerInfo(
+                        0,
+                        null,
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:1234,INTERNAL://localhost:1235"),
+                        ServerType.COORDINATOR);
+        Set<ServerInfo> tsServerInfoList =
+                new HashSet<>(
+                        Arrays.asList(
+                                new ServerInfo(
+                                        TABLET_SERVER_ID,
+                                        "rack0",
+                                        Endpoint.fromListenersString("CLIENT://localhost:90"),
+                                        ServerType.TABLET_SERVER),
+                                new ServerInfo(
+                                        2,
+                                        "rack1",
+                                        Endpoint.fromListenersString("CLIENT://localhost:91"),
+                                        ServerType.TABLET_SERVER),
+                                new ServerInfo(
+                                        3,
+                                        "rack2",
+                                        Endpoint.fromListenersString("CLIENT://localhost:92"),
+                                        ServerType.TABLET_SERVER),
+                                new ServerInfo(
+                                        4,
+                                        "rack3",
+                                        Endpoint.fromListenersString("CLIENT://localhost:93"),
+                                        ServerType.TABLET_SERVER)));
+        List<TableMetadata> tableMetadataList =
+                Arrays.asList(
+                        new TableMetadata(DATA1_TABLE_INFO, Collections.emptyList()),
+                        new TableMetadata(
+                                TableInfo.of(
+                                        TablePath.of("test_db_1", "test_partition_table_1"),
+                                        partitionTableId,
+                                        0,
+                                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                                        System.currentTimeMillis(),
+                                        System.currentTimeMillis()),
+                                Collections.emptyList()));
+
+        List<PartitionMetadata> partitionMetadataList =
+                Arrays.asList(
+                        new PartitionMetadata(
+                                partitionTableId,
+                                partitionName1,
+                                partitionId1,
+                                Collections.emptyList()),
+                        new PartitionMetadata(
+                                partitionTableId,
+                                partitionName2,
+                                partitionId2,
+                                Collections.emptyList()));
+        replicaManager.maybeUpdateMetadataCache(
+                2,
+                buildClusterMetadata(
+                        csServerInfo, tsServerInfoList, tableMetadataList, partitionMetadataList));
+
+        expectedCoordinatorServer.put(
+                "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
+        expectedTablePathById.put(DATA1_TABLE_ID, DATA1_TABLE_PATH);
+        expectedTablePathById.put(
+                partitionTableId, TablePath.of("test_db_1", "test_partition_table_1"));
+        expectedPartitionNameById.put(partitionId1, partitionName1);
+        expectedPartitionNameById.put(partitionId2, partitionName2);
+        assertUpdateMetadataEquals(
+                expectedCoordinatorServer, 4, expectedTablePathById, expectedPartitionNameById);
+
+        // 3. test drop one table.
+        tableMetadataList =
+                Collections.singletonList(
+                        new TableMetadata(
+                                TableInfo.of(
+                                        DATA1_TABLE_INFO.getTablePath(),
+                                        DELETED_TABLE_ID, // mark as deleted.
+                                        DATA1_TABLE_INFO.getSchemaId(),
+                                        DATA1_TABLE_INFO.toTableDescriptor(),
+                                        System.currentTimeMillis(),
+                                        System.currentTimeMillis()),
+                                Collections.emptyList()));
+        replicaManager.maybeUpdateMetadataCache(
+                2,
+                buildClusterMetadata(
+                        csServerInfo,
+                        tsServerInfoList,
+                        tableMetadataList,
+                        Collections.emptyList()));
+        expectedTablePathById.put(DATA1_TABLE_ID, null);
+        assertUpdateMetadataEquals(
+                expectedCoordinatorServer, 4, expectedTablePathById, expectedPartitionNameById);
+
+        // 4. test drop one partition.
+        partitionMetadataList =
+                Collections.singletonList(
+                        new PartitionMetadata(
+                                partitionTableId,
+                                partitionName1,
+                                DELETED_PARTITION_ID, // mark as deleted.
+                                Collections.emptyList()));
+        replicaManager.maybeUpdateMetadataCache(
+                2,
+                buildClusterMetadata(
+                        csServerInfo,
+                        tsServerInfoList,
+                        Collections.emptyList(),
+                        partitionMetadataList));
+        expectedPartitionNameById.put(partitionId1, null);
+        assertUpdateMetadataEquals(
+                expectedCoordinatorServer, 4, expectedTablePathById, expectedPartitionNameById);
+
+        // 5. check fenced coordinatorEpoch
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.maybeUpdateMetadataCache(
+                                        1, new ClusterMetadata(csServerInfo, tsServerInfoList)))
+                .isInstanceOf(InvalidCoordinatorException.class)
+                .hasMessageContaining(
+                        "invalid coordinator epoch 1 in updateMetadataCache request, "
+                                + "The latest known coordinator epoch is 2");
+    }
+
     private void assertReplicaEpochEquals(
             Replica replica, boolean isLeader, int leaderEpoch, int bucketEpoch) {
         assertThat(replica.isLeader()).isEqualTo(isLeader);
@@ -1501,5 +1662,47 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 assertThat(prefixValueList.get(j)).isEqualTo(expectedValueList.get(j));
             }
         }
+    }
+
+    private ClusterMetadata buildClusterMetadata(
+            @Nullable ServerInfo coordinatorServer,
+            Set<ServerInfo> aliveTabletServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList) {
+        return new ClusterMetadata(
+                coordinatorServer, aliveTabletServers, tableMetadataList, partitionMetadataList);
+    }
+
+    private void assertUpdateMetadataEquals(
+            Map<String, ServerNode> expectedCoordinatorServer,
+            int expectedTabletServerSize,
+            Map<Long, TablePath> expectedTablePathById,
+            Map<Long, String> expectedPartitionNameById) {
+        expectedCoordinatorServer.forEach(
+                (k, v) -> {
+                    if (v != null) {
+                        assertThat(serverMetadataCache.getCoordinatorServer(k)).isEqualTo(v);
+                    } else {
+                        assertThat(serverMetadataCache.getCoordinatorServer(k)).isNull();
+                    }
+                });
+        assertThat(serverMetadataCache.getAliveTabletServerInfos().size())
+                .isEqualTo(expectedTabletServerSize);
+        expectedTablePathById.forEach(
+                (k, v) -> {
+                    if (v != null) {
+                        assertThat(serverMetadataCache.getTablePath(k).get()).isEqualTo(v);
+                    } else {
+                        assertThat(serverMetadataCache.getTablePath(k)).isEmpty();
+                    }
+                });
+        expectedPartitionNameById.forEach(
+                (k, v) -> {
+                    if (v != null) {
+                        assertThat(serverMetadataCache.getPartitionName(k).get()).isEqualTo(v);
+                    } else {
+                        assertThat(serverMetadataCache.getPartitionName(k)).isEmpty();
+                    }
+                });
     }
 }

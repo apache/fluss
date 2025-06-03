@@ -44,15 +44,15 @@ import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerInfo;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.tablet.TestTabletServerGateway;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
@@ -130,11 +130,11 @@ class CoordinatorEventProcessorTest {
 
     private CoordinatorEventProcessor eventProcessor;
     private final String defaultDatabase = "db";
-    private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
+    private CoordinatorMetadataCache serverMetadataCache;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -143,6 +143,12 @@ class CoordinatorEventProcessorTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+
+        // register coordinator server
+        zookeeperClient.registerCoordinatorLeader(
+                new CoordinatorAddress(
+                        "2", Endpoint.fromListenersString("CLIENT://localhost:10012")));
+
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(
@@ -157,7 +163,7 @@ class CoordinatorEventProcessorTest {
 
     @BeforeEach
     void beforeEach() throws IOException {
-        serverMetadataCache = new ServerMetadataCacheImpl();
+        serverMetadataCache = new CoordinatorMetadataCache();
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
@@ -759,6 +765,7 @@ class CoordinatorEventProcessorTest {
                 zookeeperClient,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
+                new CoordinatorContext(),
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,

@@ -92,8 +92,7 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         Arrays.asList(leader.id(), TABLET_SERVER_ID),
                                         INITIAL_COORDINATOR_EPOCH,
                                         LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
-                result -> {},
-                (tableId, path) -> {});
+                result -> {});
 
         InitialFetchStatus initialFetchStatus =
                 new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), fetchOffset);

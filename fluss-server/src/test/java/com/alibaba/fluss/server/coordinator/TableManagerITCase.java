@@ -41,6 +41,7 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
@@ -486,11 +487,16 @@ class TableManagerITCase {
 
         // now, assuming we send update metadata request to the server,
         // we should get the same response
-        gateway.updateMetadata(
-                        makeUpdateMetadataRequest(
-                                Optional.of(coordinatorServerInfo),
-                                new HashSet<>(tabletServerInfos)))
-                .get();
+        if (!isCoordinatorServer) {
+            ((TabletServerGateway) gateway)
+                    .updateMetadata(
+                            makeUpdateMetadataRequest(
+                                    coordinatorServerInfo,
+                                    new HashSet<>(tabletServerInfos),
+                                    Collections.emptyList(),
+                                    Collections.emptyList()))
+                    .get();
+        }
 
         // test lookup metadata from internal view
 
@@ -619,11 +625,14 @@ class TableManagerITCase {
 
         // now, assuming we send update metadata request to the server,
         // we should get the same response
-        gateway.updateMetadata(
-                        makeLegacyUpdateMetadataRequest(
-                                Optional.of(coordinatorServerInfo),
-                                new HashSet<>(tabletServerInfos)))
-                .get();
+        if (!isCoordinatorServer) {
+            ((TabletServerGateway) gateway)
+                    .updateMetadata(
+                            makeLegacyUpdateMetadataRequest(
+                                    Optional.of(coordinatorServerInfo),
+                                    new HashSet<>(tabletServerInfos)))
+                    .get();
+        }
 
         // test lookup metadata
         AdminGateway adminGatewayForClient = getAdminGateway();

@@ -38,8 +38,7 @@ import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.replica.ReplicaManager;
@@ -121,7 +120,7 @@ public class TabletServer extends ServerBase {
     private TabletServerMetricGroup tabletServerMetricGroup;
 
     @GuardedBy("lock")
-    private ServerMetadataCache metadataCache;
+    private TabletServerMetadataCache metadataCache;
 
     @GuardedBy("lock")
     private LogManager logManager;
@@ -178,7 +177,7 @@ public class TabletServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            this.metadataCache = new ServerMetadataCacheImpl();
+            this.metadataCache = new TabletServerMetadataCache();
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
@@ -202,7 +201,7 @@ public class TabletServer extends ServerBase {
 
             CoordinatorGateway coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(
-                            () -> metadataCache.getCoordinatorServer(interListenerName).get(),
+                            () -> metadataCache.getCoordinatorServer(interListenerName),
                             rpcClient,
                             CoordinatorGateway.class);
 
@@ -408,6 +407,11 @@ public class TabletServer extends ServerBase {
     @VisibleForTesting
     public int getServerId() {
         return serverId;
+    }
+
+    @VisibleForTesting
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     @VisibleForTesting

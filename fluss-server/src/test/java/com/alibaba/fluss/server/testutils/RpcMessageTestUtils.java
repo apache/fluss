@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.testutils;
 
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.ChangeType;
@@ -26,9 +27,11 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
+import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
+import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
@@ -37,6 +40,7 @@ import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.LimitScanRequest;
 import com.alibaba.fluss.rpc.messages.LimitScanResponse;
 import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
+import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesRequest;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
@@ -44,6 +48,7 @@ import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
+import com.alibaba.fluss.rpc.messages.PbKeyValue;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
@@ -61,6 +66,7 @@ import com.alibaba.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -262,6 +268,68 @@ public class RpcMessageTestUtils {
                         .setTableId(tableId);
         listOffsetsRequest.addBucketId(bucketId);
         return listOffsetsRequest;
+    }
+
+    private static CreatePartitionRequest newCreatePartitionRequest(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        CreatePartitionRequest createPartitionRequest =
+                new CreatePartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        createPartitionRequest
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
+        partitionSpec
+                .getSpecMap()
+                .forEach(
+                        (partitionKey, value) ->
+                                pbPartitionKeyAndValues.add(
+                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+        createPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
+        return createPartitionRequest;
+    }
+
+    public static DropPartitionRequest newDropPartitionRequest(
+            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
+        DropPartitionRequest dropPartitionRequest =
+                new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        dropPartitionRequest
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
+        partitionSpec
+                .getSpecMap()
+                .forEach(
+                        (partitionKey, value) ->
+                                pbPartitionKeyAndValues.add(
+                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+        dropPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
+        return dropPartitionRequest;
+    }
+
+    public static long createPartition(
+            FlussClusterExtension extension,
+            TablePath tablePath,
+            PartitionSpec partitionSpec,
+            boolean ignoreIfNotExists)
+            throws Exception {
+        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
+        coordinatorGateway
+                .createPartition(
+                        newCreatePartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
+                .get();
+
+        ListPartitionInfosRequest request = new ListPartitionInfosRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return coordinatorGateway
+                .listPartitionInfos(request)
+                .get()
+                .getPartitionsInfosList()
+                .get(0)
+                .getPartitionId();
     }
 
     public static long createTable(

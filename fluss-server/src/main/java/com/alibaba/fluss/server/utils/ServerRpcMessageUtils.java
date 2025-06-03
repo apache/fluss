@@ -19,12 +19,15 @@ package com.alibaba.fluss.server.utils;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.BytesViewLogRecords;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
@@ -65,6 +68,7 @@ import com.alibaba.fluss.rpc.messages.ListOffsetsResponse;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosResponse;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.LookupResponse;
+import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
@@ -75,6 +79,7 @@ import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbAdjustIsrRespForTable;
+import com.alibaba.fluss.rpc.messages.PbBucketMetadata;
 import com.alibaba.fluss.rpc.messages.PbCreateAclRespInfo;
 import com.alibaba.fluss.rpc.messages.PbDropAclsFilterResult;
 import com.alibaba.fluss.rpc.messages.PbDropAclsMatchingAcl;
@@ -93,6 +98,7 @@ import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLakeTableOffsetReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPartitionMetadata;
 import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
@@ -107,6 +113,7 @@ import com.alibaba.fluss.rpc.messages.PbServerNode;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbTableBucket;
+import com.alibaba.fluss.rpc.messages.PbTableMetadata;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.PbValue;
 import com.alibaba.fluss.rpc.messages.PbValueList;
@@ -139,7 +146,11 @@ import com.alibaba.fluss.server.entity.StopReplicaResultForBucket;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
+import com.alibaba.fluss.server.metadata.BucketMetadata;
+import com.alibaba.fluss.server.metadata.ClusterMetadata;
+import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.ServerInfo;
+import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -148,12 +159,15 @@ import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -212,9 +226,54 @@ public class ServerRpcMessageUtils {
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
     }
 
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public static MetadataResponse buildMetadataResponse(
+            @Nullable ServerNode coordinatorServer,
+            Set<ServerNode> aliveTabletServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList) {
+        MetadataResponse metadataResponse = new MetadataResponse();
+
+        if (coordinatorServer != null) {
+            metadataResponse
+                    .setCoordinatorServer()
+                    .setNodeId(coordinatorServer.id())
+                    .setHost(coordinatorServer.host())
+                    .setPort(coordinatorServer.port());
+        }
+
+        List<PbServerNode> pbServerNodeList = new ArrayList<>();
+        for (ServerNode serverNode : aliveTabletServers) {
+            PbServerNode pbServerNode =
+                    new PbServerNode()
+                            .setNodeId(serverNode.id())
+                            .setHost(serverNode.host())
+                            .setPort(serverNode.port());
+            if (serverNode.rack() != null) {
+                pbServerNode.setRack(serverNode.rack());
+            }
+            pbServerNodeList.add(pbServerNode);
+        }
+
+        List<PbTableMetadata> pbTableMetadataList = new ArrayList<>();
+        tableMetadataList.forEach(
+                tableMetadata -> pbTableMetadataList.add(toPbTableMetadata(tableMetadata)));
+
+        List<PbPartitionMetadata> pbPartitionMetadataList = new ArrayList<>();
+        partitionMetadataList.forEach(
+                partitionMetadata ->
+                        pbPartitionMetadataList.add(toPbPartitionMetadata(partitionMetadata)));
+
+        metadataResponse.addAllTabletServers(pbServerNodeList);
+        metadataResponse.addAllTableMetadatas(pbTableMetadataList);
+        metadataResponse.addAllPartitionMetadatas(pbPartitionMetadataList);
+        return metadataResponse;
+    }
+
     public static UpdateMetadataRequest makeUpdateMetadataRequest(
-            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTableServers) {
+            @Nullable ServerInfo coordinatorServer,
+            Set<ServerInfo> aliveTableServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
@@ -232,16 +291,181 @@ public class ServerRpcMessageUtils {
             aliveTableServerNodes.add(pbTabletServerNode);
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
-        coordinatorServer.map(
-                node ->
-                        updateMetadataRequest
-                                .setCoordinatorServer()
-                                .setNodeId(node.id())
-                                .setListeners(Endpoint.toListenersString(node.endpoints()))
-                                // for backward compatibility for versions <= 0.6
-                                .setHost(node.endpoints().get(0).getHost())
-                                .setPort(node.endpoints().get(0).getPort()));
+
+        if (coordinatorServer != null) {
+            updateMetadataRequest
+                    .setCoordinatorServer()
+                    .setNodeId(coordinatorServer.id())
+                    .setListeners(Endpoint.toListenersString(coordinatorServer.endpoints()))
+                    // for backward compatibility for versions <= 0.6
+                    .setHost(coordinatorServer.endpoints().get(0).getHost())
+                    .setPort(coordinatorServer.endpoints().get(0).getPort());
+        }
+
+        List<PbTableMetadata> pbTableMetadataList = new ArrayList<>();
+        tableMetadataList.forEach(
+                tableMetadata -> pbTableMetadataList.add(toPbTableMetadata(tableMetadata)));
+
+        List<PbPartitionMetadata> pbPartitionMetadataList = new ArrayList<>();
+        partitionMetadataList.forEach(
+                partitionMetadata ->
+                        pbPartitionMetadataList.add(toPbPartitionMetadata(partitionMetadata)));
+        updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
+        updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
+
         return updateMetadataRequest;
+    }
+
+    public static ClusterMetadata getUpdateMetadataRequestData(UpdateMetadataRequest request) {
+        ServerInfo coordinatorServer = null;
+        if (request.hasCoordinatorServer()) {
+            PbServerNode pbCoordinatorServer = request.getCoordinatorServer();
+            List<Endpoint> endpoints =
+                    pbCoordinatorServer.hasListeners()
+                            ? Endpoint.fromListenersString(pbCoordinatorServer.getListeners())
+                            // backward compatible with old version that doesn't have listeners
+                            : Collections.singletonList(
+                                    new Endpoint(
+                                            pbCoordinatorServer.getHost(),
+                                            pbCoordinatorServer.getPort(),
+                                            // TODO: maybe use internal listener name from conf
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
+            coordinatorServer =
+                    new ServerInfo(
+                            pbCoordinatorServer.getNodeId(),
+                            pbCoordinatorServer.hasRack() ? pbCoordinatorServer.getRack() : null,
+                            endpoints,
+                            ServerType.COORDINATOR);
+        }
+
+        Set<ServerInfo> aliveTabletServers = new HashSet<>();
+        for (PbServerNode tabletServer : request.getTabletServersList()) {
+            List<Endpoint> endpoints =
+                    tabletServer.hasListeners()
+                            ? Endpoint.fromListenersString(tabletServer.getListeners())
+                            // backward compatible with old version that doesn't have listeners
+                            : Collections.singletonList(
+                                    new Endpoint(
+                                            tabletServer.getHost(),
+                                            tabletServer.getPort(),
+                                            // TODO: maybe use internal listener name from conf
+                                            ConfigOptions.INTERNAL_LISTENER_NAME.defaultValue()));
+            aliveTabletServers.add(
+                    new ServerInfo(
+                            tabletServer.getNodeId(),
+                            tabletServer.hasRack() ? tabletServer.getRack() : null,
+                            endpoints,
+                            ServerType.TABLET_SERVER));
+        }
+
+        List<TableMetadata> tableMetadataList = new ArrayList<>();
+        request.getTableMetadatasList()
+                .forEach(tableMetadata -> tableMetadataList.add(toTableMetaData(tableMetadata)));
+
+        List<PartitionMetadata> partitionMetadataList = new ArrayList<>();
+        request.getPartitionMetadatasList()
+                .forEach(
+                        partitionMetadata ->
+                                partitionMetadataList.add(toPartitionMetadata(partitionMetadata)));
+
+        return new ClusterMetadata(
+                coordinatorServer, aliveTabletServers, tableMetadataList, partitionMetadataList);
+    }
+
+    private static PbTableMetadata toPbTableMetadata(TableMetadata tableMetadata) {
+        TableInfo tableInfo = tableMetadata.getTableInfo();
+        PbTableMetadata pbTableMetadata =
+                new PbTableMetadata()
+                        .setTableId(tableInfo.getTableId())
+                        .setSchemaId(tableInfo.getSchemaId())
+                        .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setCreatedTime(tableInfo.getCreatedTime())
+                        .setModifiedTime(tableInfo.getModifiedTime());
+        TablePath tablePath = tableInfo.getTablePath();
+        pbTableMetadata
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        pbTableMetadata.addAllBucketMetadatas(
+                toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
+        return pbTableMetadata;
+    }
+
+    private static PbPartitionMetadata toPbPartitionMetadata(PartitionMetadata partitionMetadata) {
+        PbPartitionMetadata pbPartitionMetadata =
+                new PbPartitionMetadata()
+                        .setTableId(partitionMetadata.getTableId())
+                        .setPartitionId(partitionMetadata.getPartitionId())
+                        .setPartitionName(partitionMetadata.getPartitionName());
+        pbPartitionMetadata.addAllBucketMetadatas(
+                toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
+        return pbPartitionMetadata;
+    }
+
+    private static List<PbBucketMetadata> toPbBucketMetadata(
+            List<BucketMetadata> bucketMetadataList) {
+        List<PbBucketMetadata> pbBucketMetadataList = new ArrayList<>();
+        for (BucketMetadata bucketMetadata : bucketMetadataList) {
+            PbBucketMetadata pbBucketMetadata =
+                    new PbBucketMetadata().setBucketId(bucketMetadata.getBucketId());
+
+            OptionalInt leaderEpochOpt = bucketMetadata.getLeaderEpoch();
+            if (leaderEpochOpt.isPresent()) {
+                pbBucketMetadata.setLeaderEpoch(leaderEpochOpt.getAsInt());
+            }
+
+            OptionalInt leaderId = bucketMetadata.getLeaderId();
+            if (leaderId.isPresent()) {
+                pbBucketMetadata.setLeaderId(leaderId.getAsInt());
+            }
+
+            for (Integer replica : bucketMetadata.getReplicas()) {
+                pbBucketMetadata.addReplicaId(replica);
+            }
+
+            pbBucketMetadataList.add(pbBucketMetadata);
+        }
+        return pbBucketMetadataList;
+    }
+
+    private static TableMetadata toTableMetaData(PbTableMetadata pbTableMetadata) {
+        TablePath tablePath = toTablePath(pbTableMetadata.getTablePath());
+        long tableId = pbTableMetadata.getTableId();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        pbTableMetadata.getSchemaId(),
+                        TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        pbTableMetadata.getCreatedTime(),
+                        pbTableMetadata.getModifiedTime());
+
+        List<BucketMetadata> bucketMetadata = new ArrayList<>();
+        for (PbBucketMetadata pbBucketMetadata : pbTableMetadata.getBucketMetadatasList()) {
+            bucketMetadata.add(toBucketMetadata(pbBucketMetadata));
+        }
+
+        return new TableMetadata(tableInfo, bucketMetadata);
+    }
+
+    private static BucketMetadata toBucketMetadata(PbBucketMetadata pbBucketMetadata) {
+        return new BucketMetadata(
+                pbBucketMetadata.getBucketId(),
+                pbBucketMetadata.hasLeaderId() ? pbBucketMetadata.getLeaderId() : null,
+                pbBucketMetadata.hasLeaderEpoch() ? pbBucketMetadata.getLeaderEpoch() : null,
+                Arrays.stream(pbBucketMetadata.getReplicaIds())
+                        .boxed()
+                        .collect(Collectors.toList()));
+    }
+
+    private static PartitionMetadata toPartitionMetadata(PbPartitionMetadata pbPartitionMetadata) {
+        return new PartitionMetadata(
+                pbPartitionMetadata.getTableId(),
+                pbPartitionMetadata.getPartitionName(),
+                pbPartitionMetadata.getPartitionId(),
+                pbPartitionMetadata.getBucketMetadatasList().stream()
+                        .map(ServerRpcMessageUtils::toBucketMetadata)
+                        .collect(Collectors.toList()));
     }
 
     public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(

@@ -16,27 +16,39 @@
 
 package com.alibaba.fluss.server.metadata;
 
-import com.alibaba.fluss.cluster.BucketLocation;
-
 import java.util.List;
 
-/** This entity used to describe the table's partition info. */
-public class PartitionMetadataInfo {
+/** This entity used to describe the table's partition metadata. */
+public class PartitionMetadata {
+
+    /**
+     * The already deleted partitionName. This partitionName will be used in UpdateMetadata request
+     * to identify this partition already deleted, but there is an partitionId residual in
+     * zookeeper. In this case, tabletServers need to clear the metadata of this partition.
+     */
+    public static final String DELETED_PARTITION_NAME = "__delete__";
+
+    /**
+     * The already delete partition id. This partition id will be used in UpdateMetadata request to
+     * identify this partition already deleted, and tabletServers need to clear the metadata of this
+     * partition.
+     */
+    public static final Long DELETED_PARTITION_ID = -2L;
 
     private final long tableId;
     private final String partitionName;
     private final long partitionId;
-    private final List<BucketLocation> bucketLocations;
+    private final List<BucketMetadata> bucketMetadataList;
 
-    public PartitionMetadataInfo(
+    public PartitionMetadata(
             long tableId,
             String partitionName,
             long partitionId,
-            List<BucketLocation> bucketLocations) {
+            List<BucketMetadata> bucketMetadataList) {
         this.tableId = tableId;
         this.partitionName = partitionName;
         this.partitionId = partitionId;
-        this.bucketLocations = bucketLocations;
+        this.bucketMetadataList = bucketMetadataList;
     }
 
     public long getTableId() {
@@ -51,7 +63,7 @@ public class PartitionMetadataInfo {
         return partitionId;
     }
 
-    public List<BucketLocation> getBucketLocations() {
-        return bucketLocations;
+    public List<BucketMetadata> getBucketMetadataList() {
+        return bucketMetadataList;
     }
 }

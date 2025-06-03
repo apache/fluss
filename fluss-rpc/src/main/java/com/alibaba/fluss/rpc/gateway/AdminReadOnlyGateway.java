@@ -45,8 +45,6 @@ import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
-import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
-import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.RPC;
 
@@ -128,15 +126,6 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.GET_METADATA)
     CompletableFuture<MetadataResponse> metadata(MetadataRequest request);
-
-    /**
-     * request send to tablet server to update the metadata cache for every tablet server node,
-     * asynchronously.
-     *
-     * @return the update metadata response
-     */
-    @RPC(api = ApiKeys.UPDATE_METADATA)
-    CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request);
 
     /**
      * Get the latest kv snapshots of a primary key table. A kv snapshot is a snapshot of a kv

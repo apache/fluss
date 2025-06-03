@@ -18,33 +18,36 @@ package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl}. */
-public class ServerMetadataCacheImplTest {
-    private ServerMetadataCache serverMetadataCache;
+/** Test for {@link CoordinatorMetadataCache}. */
+public class CoordinatorMetadataCacheTest {
+    private CoordinatorMetadataCache serverMetadataCache;
+
     private ServerInfo coordinatorServer;
     private Set<ServerInfo> aliveTableServers;
 
     @BeforeEach
     public void setup() {
-        serverMetadataCache = new ServerMetadataCacheImpl();
+        serverMetadataCache = new CoordinatorMetadataCache();
+
         coordinatorServer =
                 new ServerInfo(
                         0,
-                        "rack0",
+                        null,
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:99,INTERNAL://localhost:100"),
                         ServerType.COORDINATOR);
+
         aliveTableServers =
                 new HashSet<>(
                         Arrays.asList(
@@ -67,15 +70,19 @@ public class ServerMetadataCacheImplTest {
     }
 
     @Test
-    void testUpdateClusterMetadataRequest() {
-        serverMetadataCache.updateClusterMetadata(
-                new ClusterMetadataInfo(Optional.of(coordinatorServer), aliveTableServers));
-        assertThat(serverMetadataCache.getCoordinatorServer("CLIENT").get())
+    void testCoordinatorServerMetadataCache() {
+        serverMetadataCache.updateMetadata(coordinatorServer, aliveTableServers);
+        assertThat(serverMetadataCache.getCoordinatorServer("CLIENT"))
                 .isEqualTo(coordinatorServer.node("CLIENT"));
-        assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL").get())
+        assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL"))
                 .isEqualTo(coordinatorServer.node("INTERNAL"));
         assertThat(serverMetadataCache.isAliveTabletServer(0)).isTrue();
         assertThat(serverMetadataCache.getAllAliveTabletServers("CLIENT").size()).isEqualTo(1);
         assertThat(serverMetadataCache.getAllAliveTabletServers("INTERNAL").size()).isEqualTo(3);
+        assertThat(serverMetadataCache.getAliveTabletServerInfos())
+                .containsExactlyInAnyOrder(
+                        new TabletServerInfo(0, "rack0"),
+                        new TabletServerInfo(1, "rack1"),
+                        new TabletServerInfo(2, "rack2"));
     }
 }

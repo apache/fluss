@@ -70,7 +70,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
@@ -863,7 +862,10 @@ public class TabletServiceITCase {
         followerGateway
                 .updateMetadata(
                         makeUpdateMetadataRequest(
-                                Optional.of(coordinatorServerInfo), newTabletServerInfos))
+                                coordinatorServerInfo,
+                                newTabletServerInfos,
+                                Collections.emptyList(),
+                                Collections.emptyList()))
                 .get();
 
         // 3. send one NotifyLeaderAndIsr request again with same LeaderAndIsr to mock the

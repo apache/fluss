@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.coordinator.statemachine;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -32,8 +33,7 @@ import com.alibaba.fluss.server.coordinator.LakeTableTieringManager;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -55,6 +55,7 @@ import java.util.Collections;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.NewBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
 import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -71,11 +72,11 @@ class TableBucketStateMachineTest {
 
     private static ZooKeeperClient zookeeperClient;
     private static CoordinatorContext coordinatorContext;
-    private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
+    private CoordinatorMetadataCache serverMetadataCache;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -97,8 +98,9 @@ class TableBucketStateMachineTest {
                         testCoordinatorChannelManager,
                         event -> {
                             // do nothing
-                        });
-        serverMetadataCache = new ServerMetadataCacheImpl();
+                        },
+                        coordinatorContext);
+        serverMetadataCache = new CoordinatorMetadataCache();
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
@@ -183,6 +185,14 @@ class TableBucketStateMachineTest {
         // init a table bucket assignment to coordinator context
         long tableId = 4;
         TableBucket tableBucket = new TableBucket(tableId, 0);
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        fakeTablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket, NewBucket);
@@ -247,7 +257,8 @@ class TableBucketStateMachineTest {
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
         coordinatorRequestBatch =
-                new CoordinatorRequestBatch(testCoordinatorChannelManager, eventManager);
+                new CoordinatorRequestBatch(
+                        testCoordinatorChannelManager, eventManager, coordinatorContext);
         tableBucketStateMachine =
                 new TableBucketStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);

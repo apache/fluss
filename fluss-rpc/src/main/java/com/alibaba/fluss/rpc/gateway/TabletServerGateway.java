@@ -43,6 +43,8 @@ import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
+import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
+import com.alibaba.fluss.rpc.messages.UpdateMetadataResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.RPC;
 
@@ -59,6 +61,15 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.NOTIFY_LEADER_AND_ISR)
     CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest);
+
+    /**
+     * request send to tablet server to update the metadata cache for every tablet server node,
+     * asynchronously.
+     *
+     * @return the update metadata response
+     */
+    @RPC(api = ApiKeys.UPDATE_METADATA)
+    CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request);
 
     /**
      * Stop replica.
