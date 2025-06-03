@@ -38,7 +38,6 @@ import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -411,7 +410,7 @@ public class TabletServer extends ServerBase {
     }
 
     @VisibleForTesting
-    public ServerMetadataCache getMetadataCache() {
+    public TabletServerMetadataCache getMetadataCache() {
         return metadataCache;
     }
 

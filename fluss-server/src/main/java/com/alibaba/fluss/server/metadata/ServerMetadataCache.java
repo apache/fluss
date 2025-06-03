@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
@@ -62,10 +61,6 @@ public interface ServerMetadataCache {
     Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName);
 
     Set<TabletServerInfo> getAliveTabletServerInfos();
-
-    Optional<TablePath> getTablePath(long tableId);
-
-    Optional<String> getPartitionName(long partitionId);
 
     /** Get ids of all alive tablet server nodes. */
     default TabletServerInfo[] getLiveServers() {

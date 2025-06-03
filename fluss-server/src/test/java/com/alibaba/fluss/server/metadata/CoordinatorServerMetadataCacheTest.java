@@ -19,9 +19,6 @@ package com.alibaba.fluss.server.metadata;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,15 +27,10 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorServerMetadataCache}. */
 public class CoordinatorServerMetadataCacheTest {
-    private CoordinatorContext coordinatorContext;
     private CoordinatorServerMetadataCache serverMetadataCache;
 
     private ServerInfo coordinatorServer;
@@ -46,8 +38,7 @@ public class CoordinatorServerMetadataCacheTest {
 
     @BeforeEach
     public void setup() {
-        coordinatorContext = new CoordinatorContext();
-        serverMetadataCache = new CoordinatorServerMetadataCache(coordinatorContext);
+        serverMetadataCache = new CoordinatorServerMetadataCache();
 
         coordinatorServer =
                 new ServerInfo(
@@ -80,34 +71,7 @@ public class CoordinatorServerMetadataCacheTest {
 
     @Test
     void testCoordinatorServerMetadataCache() {
-        long partitionTableId = 150002L;
-        long partitionId1 = 15L;
-        String partitionName1 = "p1";
-        long partitionId2 = 16L;
-        String partitionName2 = "p2";
-
-        coordinatorContext.setCoordinatorServerInfo(coordinatorServer);
-        aliveTableServers.forEach(
-                aliveTableServer -> coordinatorContext.addLiveTabletServer(aliveTableServer));
-
-        coordinatorContext.putTablePath(DATA1_TABLE_ID, DATA1_TABLE_PATH);
-        coordinatorContext.putTableInfo(DATA1_TABLE_INFO);
-
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
-        TableInfo partitionTableInfo =
-                TableInfo.of(
-                        partitionTablePath,
-                        partitionTableId,
-                        0,
-                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
-        coordinatorContext.putTablePath(partitionTableId, partitionTablePath);
-        coordinatorContext.putTableInfo(partitionTableInfo);
-
-        coordinatorContext.putPartition(partitionId1, partitionName1);
-        coordinatorContext.putPartition(partitionId2, partitionName2);
-
+        serverMetadataCache.updateMetadata(coordinatorServer, aliveTableServers);
         assertThat(serverMetadataCache.getCoordinatorServer("CLIENT"))
                 .isEqualTo(coordinatorServer.node("CLIENT"));
         assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL"))
@@ -120,14 +84,5 @@ public class CoordinatorServerMetadataCacheTest {
                         new TabletServerInfo(0, "rack0"),
                         new TabletServerInfo(1, "rack1"),
                         new TabletServerInfo(2, "rack2"));
-
-        assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID).get())
-                .isEqualTo(DATA1_TABLE_PATH);
-        assertThat(serverMetadataCache.getTablePath(partitionTableId).get())
-                .isEqualTo(TablePath.of("test_db_1", "test_partition_table_1"));
-        assertThat(serverMetadataCache.getPartitionName(partitionId1).get())
-                .isEqualTo(partitionName1);
-        assertThat(serverMetadataCache.getPartitionName(partitionId2).get())
-                .isEqualTo(partitionName2);
     }
 }

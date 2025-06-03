@@ -112,7 +112,7 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorService coordinatorService;
 
     @GuardedBy("lock")
-    private ServerMetadataCache metadataCache;
+    private CoordinatorServerMetadataCache metadataCache;
 
     @GuardedBy("lock")
     private CoordinatorChannelManager coordinatorChannelManager;
@@ -171,7 +171,7 @@ public class CoordinatorServer extends ServerBase {
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
             this.coordinatorContext = new CoordinatorContext();
-            this.metadataCache = new CoordinatorServerMetadataCache(coordinatorContext);
+            this.metadataCache = new CoordinatorServerMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -227,6 +227,7 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
                             zkClient,
+                            metadataCache,
                             coordinatorChannelManager,
                             coordinatorContext,
                             autoPartitionManager,

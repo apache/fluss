@@ -290,12 +290,15 @@ class MetadataUpdateITCase {
             Map<Long, String> expectedPartitionNameById) {
         ServerMetadataCache csMetadataCache =
                 FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getMetadataCache();
-        List<ServerMetadataCache> metadataCacheList =
+        assertThat(csMetadataCache.getCoordinatorServer("FLUSS"))
+                .isEqualTo(expectedCoordinatorServer);
+        assertThat(csMetadataCache.getAliveTabletServerInfos().size())
+                .isEqualTo(expectedTabletServerSize);
+
+        List<TabletServerMetadataCache> metadataCacheList =
                 FLUSS_CLUSTER_EXTENSION.getTabletServers().stream()
                         .map(TabletServer::getMetadataCache)
                         .collect(Collectors.toList());
-        metadataCacheList.add(csMetadataCache);
-
         metadataCacheList.forEach(
                 serverMetadataCache -> {
                     assertThat(serverMetadataCache.getCoordinatorServer("FLUSS"))

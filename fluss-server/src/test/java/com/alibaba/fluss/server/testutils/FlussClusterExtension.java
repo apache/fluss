@@ -44,7 +44,7 @@ import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import com.alibaba.fluss.server.metadata.ServerInfo;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.tablet.TabletServer;
@@ -589,7 +589,8 @@ public final class FlussClusterExtension
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
 
                         // check table metadata.
-                        ServerMetadataCache serverMetadataCache = tabletServer.getMetadataCache();
+                        TabletServerMetadataCache serverMetadataCache =
+                                tabletServer.getMetadataCache();
                         assertThat(serverMetadataCache.getTablePath(tableBucket.getTableId()))
                                 .isPresent();
                     }

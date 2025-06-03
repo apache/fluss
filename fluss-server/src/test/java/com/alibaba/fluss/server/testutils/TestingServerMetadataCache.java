@@ -18,7 +18,6 @@ package com.alibaba.fluss.server.testutils;
 
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 
 import java.util.Collections;
@@ -66,15 +65,5 @@ public class TestingServerMetadataCache implements ServerMetadataCache {
 
     public TabletServerInfo[] getLiveServers() {
         return tabletServerInfos;
-    }
-
-    @Override
-    public Optional<TablePath> getTablePath(long tableId) {
-        return Optional.empty();
-    }
-
-    @Override
-    public Optional<String> getPartitionName(long partitionId) {
-        return Optional.empty();
     }
 }

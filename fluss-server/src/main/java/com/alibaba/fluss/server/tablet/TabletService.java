@@ -68,7 +68,7 @@ import com.alibaba.fluss.server.entity.FetchData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -118,13 +118,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
+    private final TabletServerMetadataCache metadataCache;
 
     public TabletService(
             int serverId,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             ReplicaManager replicaManager,
-            ServerMetadataCache metadataCache,
+            TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer) {
         super(
@@ -136,6 +137,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 authorizer);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
+        this.metadataCache = metadataCache;
     }
 
     @Override

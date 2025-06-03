@@ -314,7 +314,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                     pbTablePath.getDatabaseName(), pbTablePath.getTableName()))) {
                 TablePath tablePath = toTablePath(pbTablePath);
                 tablePaths.add(tablePath);
-                tableMetadata.add(getTableMetadata(tablePath, listenerName));
+                tableMetadata.add(getTableMetadata(tablePath));
             }
         }
 
@@ -326,13 +326,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             Resource.table(
                                     partitionPath.getDatabaseName(),
                                     partitionPath.getTableName()))) {
-                partitionMetadata.add(
-                        getPartitionMetadata(toPhysicalTablePath(partitionPath), listenerName));
+                partitionMetadata.add(getPartitionMetadata(toPhysicalTablePath(partitionPath)));
             }
         }
 
         // get partition metadata from partition ids
-        partitionMetadata.addAll(getPartitionMetadata(tablePaths, partitionIds, listenerName));
+        partitionMetadata.addAll(getPartitionMetadata(tablePaths, partitionIds));
 
         return CompletableFuture.completedFuture(
                 buildMetadataResponse(
@@ -518,7 +517,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
      * Returned a {@link TableMetadata} contains the table info for {@code tablePath} and the bucket
      * locations for {@code physicalTablePaths}.
      */
-    private TableMetadata getTableMetadata(TablePath tablePath, String listenerName) {
+    private TableMetadata getTableMetadata(TablePath tablePath) {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         long tableId = tableInfo.getTableId();
         try {
@@ -540,8 +539,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
     }
 
-    private PartitionMetadata getPartitionMetadata(
-            PhysicalTablePath partitionPath, String listenerName) {
+    private PartitionMetadata getPartitionMetadata(PhysicalTablePath partitionPath) {
         try {
             checkNotNull(
                     partitionPath.getPartitionName(),
@@ -576,7 +574,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private List<PartitionMetadata> getPartitionMetadata(
-            Collection<TablePath> tablePaths, long[] partitionIds, String listenerName) {
+            Collection<TablePath> tablePaths, long[] partitionIds) {
         // todo: hack logic; currently, we can't get partition metadata by partition ids directly,
         // in here, we always assume the partition ids must belong to the first argument tablePaths;
         // at least, in current client metadata request design, the assumption is true.
@@ -602,8 +600,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     if (partitionName != null) {
                         partitionMetadata.add(
                                 getPartitionMetadata(
-                                        PhysicalTablePath.of(tablePath, partitionName),
-                                        listenerName));
+                                        PhysicalTablePath.of(tablePath, partitionName)));
                         hitPartitionIds.add(partitionId);
                     }
                 }

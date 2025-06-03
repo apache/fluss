@@ -91,12 +91,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getAliveTabletServerInfos();
     }
 
-    @Override
     public Optional<TablePath> getTablePath(long tableId) {
         return serverMetadataSnapshot.getTablePath(tableId);
     }
 
-    @Override
     public Optional<String> getPartitionName(long partitionId) {
         return serverMetadataSnapshot.getPartitionName(partitionId);
     }
@@ -110,7 +108,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                     // 2. Update the alive table servers. We always use the new alive table servers
                     // to replace the old alive table servers.
-                    HashMap<Integer, ServerInfo> newAliveTableServers = new HashMap<>();
+                    Map<Integer, ServerInfo> newAliveTableServers = new HashMap<>();
                     Set<ServerInfo> aliveTabletServers = clusterMetadata.getAliveTabletServers();
                     for (ServerInfo tabletServer : aliveTabletServers) {
                         newAliveTableServers.put(tabletServer.id(), tabletServer);

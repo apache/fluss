@@ -18,11 +18,10 @@ package com.alibaba.fluss.server.metadata;
 
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -30,35 +29,43 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+
+import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /** The implement of {@link ServerMetadataCache} for {@link CoordinatorServer}. */
 public class CoordinatorServerMetadataCache implements ServerMetadataCache {
 
-    private final CoordinatorContext coordinatorContext;
+    private final Lock metadataLock = new ReentrantLock();
 
-    public CoordinatorServerMetadataCache(CoordinatorContext coordinatorContext) {
-        this.coordinatorContext = coordinatorContext;
+    @GuardedBy("metadataLock")
+    private @Nullable ServerInfo coordinatorServer;
+
+    @GuardedBy("metadataLock")
+    private final Map<Integer, ServerInfo> aliveTabletServers;
+
+    public CoordinatorServerMetadataCache() {
+        this.coordinatorServer = null;
+        this.aliveTabletServers = new HashMap<>();
     }
 
     @Override
     public boolean isAliveTabletServer(int serverId) {
-        Map<Integer, ServerInfo> aliveTabletServer = coordinatorContext.getLiveTabletServers();
-        return aliveTabletServer.containsKey(serverId);
+        return aliveTabletServers.containsKey(serverId);
     }
 
     @Override
     public Optional<ServerNode> getTabletServer(int serverId, String listenerName) {
-        Map<Integer, ServerInfo> aliveTabletServer = coordinatorContext.getLiveTabletServers();
-        return aliveTabletServer.containsKey(serverId)
-                ? Optional.ofNullable(aliveTabletServer.get(serverId).node(listenerName))
+        return aliveTabletServers.containsKey(serverId)
+                ? Optional.ofNullable(aliveTabletServers.get(serverId).node(listenerName))
                 : Optional.empty();
     }
 
     @Override
     public Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName) {
         Map<Integer, ServerNode> serverNodes = new HashMap<>();
-        for (Map.Entry<Integer, ServerInfo> entry :
-                coordinatorContext.getLiveTabletServers().entrySet()) {
+        for (Map.Entry<Integer, ServerInfo> entry : aliveTabletServers.entrySet()) {
             ServerNode serverNode = entry.getValue().node(listenerName);
             if (serverNode != null) {
                 serverNodes.put(entry.getKey(), serverNode);
@@ -69,15 +76,13 @@ public class CoordinatorServerMetadataCache implements ServerMetadataCache {
 
     @Override
     public @Nullable ServerNode getCoordinatorServer(String listenerName) {
-        ServerInfo coordinatorServer = coordinatorContext.getCoordinatorServerInfo();
-        return coordinatorServer == null ? null : coordinatorServer.node(listenerName);
+        return coordinatorServer != null ? coordinatorServer.node(listenerName) : null;
     }
 
     @Override
     public Set<TabletServerInfo> getAliveTabletServerInfos() {
         Set<TabletServerInfo> tabletServerInfos = new HashSet<>();
-        coordinatorContext
-                .getLiveTabletServers()
+        aliveTabletServers
                 .values()
                 .forEach(
                         serverInfo ->
@@ -86,12 +91,18 @@ public class CoordinatorServerMetadataCache implements ServerMetadataCache {
         return Collections.unmodifiableSet(tabletServerInfos);
     }
 
-    @Override
-    public Optional<TablePath> getTablePath(long tableId) {
-        return Optional.ofNullable(coordinatorContext.getTablePathById(tableId));
-    }
+    public void updateMetadata(ServerInfo coordinatorServer, Set<ServerInfo> serverInfoSet) {
+        inLock(
+                metadataLock,
+                () -> {
+                    Map<Integer, ServerInfo> newAliveTableServers = new HashMap<>();
+                    for (ServerInfo tabletServer : serverInfoSet) {
+                        newAliveTableServers.put(tabletServer.id(), tabletServer);
+                    }
 
-    public Optional<String> getPartitionName(long partitionId) {
-        return Optional.ofNullable(coordinatorContext.getPartitionName(partitionId));
+                    this.coordinatorServer = coordinatorServer;
+                    this.aliveTabletServers.clear();
+                    this.aliveTabletServers.putAll(newAliveTableServers);
+                });
     }
 }
