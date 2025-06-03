@@ -205,7 +205,7 @@ public class ReplicaTestBase {
                 new ClusterMetadata(
                         new ServerInfo(
                                 0,
-                                "rack0",
+                                null,
                                 Endpoint.fromListenersString("CLIENT://localhost:1234"),
                                 ServerType.COORDINATOR),
                         new HashSet<>(

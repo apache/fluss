@@ -98,10 +98,7 @@ public class CoordinatorContext {
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
-    // in normal case, it won't be null, but from I can see, it'll only be null in unit test
-    // since the we won't register a coordinator node in zk.
-    // todo: may remove the nullable in the future
-    private @Nullable ServerInfo coordinatorServerInfo = null;
+    private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
 
     public CoordinatorContext() {}
@@ -120,11 +117,11 @@ public class CoordinatorContext {
         servers.forEach(server -> liveTabletServers.put(server.id(), server));
     }
 
-    public @Nullable ServerInfo getCoordinatorServerInfo() {
+    public ServerInfo getCoordinatorServerInfo() {
         return coordinatorServerInfo;
     }
 
-    public void setCoordinatorServerInfo(@Nullable ServerInfo coordinatorServerInfo) {
+    public void setCoordinatorServerInfo(ServerInfo coordinatorServerInfo) {
         this.coordinatorServerInfo = coordinatorServerInfo;
     }
 

@@ -44,6 +44,7 @@ import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import com.alibaba.fluss.server.metadata.ServerInfo;
+import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.tablet.TabletServer;
@@ -582,10 +583,15 @@ public final class FlussClusterExtension
                     LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
                     List<Integer> isr = leaderAndIsr.isr();
                     for (int replicaId : isr) {
-                        ReplicaManager replicaManager =
-                                getTabletServerById(replicaId).getReplicaManager();
+                        TabletServer tabletServer = getTabletServerById(replicaId);
+                        ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
+
+                        // check table metadata.
+                        ServerMetadataCache serverMetadataCache = tabletServer.getMetadataCache();
+                        assertThat(serverMetadataCache.getTablePath(tableBucket.getTableId()))
+                                .isPresent();
                     }
 
                     int leader = leaderAndIsr.leader();

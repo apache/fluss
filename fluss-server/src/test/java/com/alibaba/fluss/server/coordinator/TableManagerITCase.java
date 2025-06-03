@@ -41,6 +41,7 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
@@ -93,6 +94,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newGetTable
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newListTablesRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newMetadataRequest;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newTableExistsRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
@@ -483,6 +485,19 @@ class TableManagerITCase {
 
         checkBucketMetadata(expectBucketCount, tableMetadata.getBucketMetadatasList());
 
+        // now, assuming we send update metadata request to the server,
+        // we should get the same response
+        if (!isCoordinatorServer) {
+            ((TabletServerGateway) gateway)
+                    .updateMetadata(
+                            makeUpdateMetadataRequest(
+                                    coordinatorServerInfo,
+                                    new HashSet<>(tabletServerInfos),
+                                    Collections.emptyList(),
+                                    Collections.emptyList()))
+                    .get();
+        }
+
         // test lookup metadata from internal view
 
         metadataResponse =
@@ -607,6 +622,17 @@ class TableManagerITCase {
 
         List<ServerInfo> tabletServerInfos = FLUSS_CLUSTER_EXTENSION.getTabletServerInfos();
         ServerInfo coordinatorServerInfo = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerInfo();
+
+        // now, assuming we send update metadata request to the server,
+        // we should get the same response
+        if (!isCoordinatorServer) {
+            ((TabletServerGateway) gateway)
+                    .updateMetadata(
+                            makeLegacyUpdateMetadataRequest(
+                                    Optional.of(coordinatorServerInfo),
+                                    new HashSet<>(tabletServerInfos)))
+                    .get();
+        }
 
         // test lookup metadata
         AdminGateway adminGatewayForClient = getAdminGateway();

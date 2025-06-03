@@ -103,8 +103,8 @@ import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_ID;
-import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_ID;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordBatchEqualsWithRowKind;
@@ -1520,7 +1520,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         new TableMetadata(
                                 TableInfo.of(
                                         DATA1_TABLE_INFO.getTablePath(),
-                                        TABLE_DURATION_DELETE_ID, // mark as deleted.
+                                        DELETED_TABLE_ID, // mark as deleted.
                                         DATA1_TABLE_INFO.getSchemaId(),
                                         DATA1_TABLE_INFO.toTableDescriptor(),
                                         System.currentTimeMillis(),
@@ -1543,7 +1543,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         new PartitionMetadata(
                                 partitionTableId,
                                 partitionName1,
-                                PARTITION_DURATION_DELETE_ID, // mark as deleted.
+                                DELETED_PARTITION_ID, // mark as deleted.
                                 Collections.emptyList()));
         replicaManager.maybeUpdateMetadataCache(
                 2,

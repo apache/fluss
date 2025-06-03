@@ -53,6 +53,7 @@ import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
@@ -142,6 +143,12 @@ class CoordinatorEventProcessorTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+
+        // register coordinator server
+        zookeeperClient.registerCoordinatorLeader(
+                new CoordinatorAddress(
+                        "2", Endpoint.fromListenersString("CLIENT://localhost:10012")));
+
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(

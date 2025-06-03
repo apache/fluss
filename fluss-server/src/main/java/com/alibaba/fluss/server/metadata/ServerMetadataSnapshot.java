@@ -20,7 +20,6 @@ import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -30,10 +29,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 /**
- * An immutable representation of a subset of the server nodes in the fluss cluster. Every
+ * An immutable representation of a full set of the server nodes in the fluss cluster. Every
  * MetadataSnapshot instance is immutable, and updates (performed under a lock) replace the value
  * with a completely new one. this means reads (which are not under any lock) need to grab/the value
  * of this var (into a val) ONCE and retain that read copy for the duration of their operation.
@@ -47,7 +47,7 @@ public class ServerMetadataSnapshot {
     private final Map<TablePath, Long> tableIdByPath;
     private final Map<Long, TablePath> pathByTableId;
     // partition table.
-    private final Map<PhysicalTablePath, Long> partitionsIdByPath;
+    private final Map<PhysicalTablePath, Long> partitionIdByPath;
     private final Map<Long, String> partitionNameById;
 
     // TODO add detail metadata for table and partition, trace
@@ -58,16 +58,16 @@ public class ServerMetadataSnapshot {
             Map<Integer, ServerInfo> aliveTabletServers,
             Map<TablePath, Long> tableIdByPath,
             Map<Long, TablePath> pathByTableId,
-            Map<PhysicalTablePath, Long> partitionsIdByPath) {
+            Map<PhysicalTablePath, Long> partitionIdByPath) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = Collections.unmodifiableMap(aliveTabletServers);
 
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.pathByTableId = Collections.unmodifiableMap(pathByTableId);
 
-        this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
+        this.partitionIdByPath = Collections.unmodifiableMap(partitionIdByPath);
         Map<Long, String> tempPartitionNameById = new HashMap<>();
-        partitionsIdByPath.forEach(
+        partitionIdByPath.forEach(
                 ((physicalTablePath, partitionId) ->
                         tempPartitionNameById.put(
                                 partitionId, physicalTablePath.getPartitionName())));
@@ -116,8 +116,9 @@ public class ServerMetadataSnapshot {
         return Collections.unmodifiableSet(tabletServerInfos);
     }
 
-    public long getTableId(TablePath tablePath) {
-        return tableIdByPath.getOrDefault(tablePath, TableInfo.UNKNOWN_TABLE_ID);
+    public OptionalLong getTableId(TablePath tablePath) {
+        Long tableId = tableIdByPath.get(tablePath);
+        return tableId == null ? OptionalLong.empty() : OptionalLong.of(tableId);
     }
 
     public Optional<TablePath> getTablePath(long tableId) {
@@ -130,14 +131,14 @@ public class ServerMetadataSnapshot {
 
     /** Get the partition id for this partition. */
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
-        return Optional.ofNullable(partitionsIdByPath.get(physicalTablePath));
+        return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
     }
 
     public Optional<String> getPartitionName(long partitionId) {
         return Optional.ofNullable(partitionNameById.get(partitionId));
     }
 
-    public Map<PhysicalTablePath, Long> getPartitionsIdByPath() {
-        return partitionsIdByPath;
+    public Map<PhysicalTablePath, Long> getPartitionIdByPath() {
+        return partitionIdByPath;
     }
 }

@@ -33,16 +33,16 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_ID;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_NAME;
-import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_ID;
-import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_PATH;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
+import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /** The implement of {@link ServerMetadataCache} for {@link TabletServer}. */
 public class TabletServerMetadataCache implements ServerMetadataCache {
 
-    private final Lock bucketMetadataLock = new ReentrantLock();
+    private final Lock metadataLock = new ReentrantLock();
 
     /**
      * This is cache state. every Cluster instance is immutable, and updates (performed under a
@@ -56,7 +56,6 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     private volatile ServerMetadataSnapshot serverMetadataSnapshot;
 
     public TabletServerMetadataCache() {
-        // no coordinator server address while creating.
         this.serverMetadataSnapshot = ServerMetadataSnapshot.empty();
     }
 
@@ -104,7 +103,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
     public void updateClusterMetadata(ClusterMetadata clusterMetadata) {
         inLock(
-                bucketMetadataLock,
+                metadataLock,
                 () -> {
                     // 1. update coordinator server.
                     ServerInfo coordinatorServer = clusterMetadata.getCoordinatorServer();
@@ -126,9 +125,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
                         TablePath tablePath = tableInfo.getTablePath();
                         long tableId = tableInfo.getTableId();
-                        if (tableId == TABLE_DURATION_DELETE_ID) {
+                        if (tableId == DELETED_TABLE_ID) {
                             tableIdByPath.remove(tablePath);
-                        } else if (tablePath == TABLE_DURATION_DELETE_PATH) {
+                        } else if (tablePath == DELETED_TABLE_PATH) {
                             serverMetadataSnapshot
                                     .getTablePath(tableId)
                                     .ifPresent(tableIdByPath::remove);
@@ -142,10 +141,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             ((tablePath, tableId) -> newPathByTableId.put(tableId, tablePath)));
 
                     // 4. update partition metadata. Always partial update.
-                    // TODO Currently, it only updates the partitionsIdByPath, we need to update all
+                    // TODO Currently, it only updates the partitionIdByPath, we need to update all
                     // the partition metadata. Trace by: https://github.com/alibaba/fluss/issues/900
-                    Map<PhysicalTablePath, Long> partitionsIdByPath =
-                            new HashMap<>(serverMetadataSnapshot.getPartitionsIdByPath());
+                    Map<PhysicalTablePath, Long> partitionIdByPath =
+                            new HashMap<>(serverMetadataSnapshot.getPartitionIdByPath());
                     for (PartitionMetadata partitionMetadata :
                             clusterMetadata.getPartitionMetadataList()) {
                         long tableId = partitionMetadata.getTableId();
@@ -154,18 +153,18 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         PhysicalTablePath physicalTablePath =
                                 PhysicalTablePath.of(tablePath, partitionName);
                         long partitionId = partitionMetadata.getPartitionId();
-                        if (partitionId == PARTITION_DURATION_DELETE_ID) {
-                            partitionsIdByPath.remove(physicalTablePath);
-                        } else if (partitionName.equals(PARTITION_DURATION_DELETE_NAME)) {
+                        if (partitionId == DELETED_PARTITION_ID) {
+                            partitionIdByPath.remove(physicalTablePath);
+                        } else if (partitionName.equals(DELETED_PARTITION_NAME)) {
                             serverMetadataSnapshot
                                     .getPartitionName(partitionId)
                                     .ifPresent(
                                             pName ->
-                                                    partitionsIdByPath.remove(
+                                                    partitionIdByPath.remove(
                                                             PhysicalTablePath.of(
                                                                     tablePath, pName)));
                         } else {
-                            partitionsIdByPath.put(physicalTablePath, partitionId);
+                            partitionIdByPath.put(physicalTablePath, partitionId);
                         }
                     }
 
@@ -175,7 +174,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     newAliveTableServers,
                                     tableIdByPath,
                                     newPathByTableId,
-                                    partitionsIdByPath);
+                                    partitionIdByPath);
                 });
     }
 }

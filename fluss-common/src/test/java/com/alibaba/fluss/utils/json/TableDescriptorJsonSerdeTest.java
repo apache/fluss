@@ -30,7 +30,7 @@ public class TableDescriptorJsonSerdeTest extends JsonSerdeTestBase<TableDescrip
 
     @Override
     protected TableDescriptor[] createObjects() {
-        TableDescriptor[] tableDescriptors = new TableDescriptor[3];
+        TableDescriptor[] tableDescriptors = new TableDescriptor[2];
 
         tableDescriptors[0] =
                 TableDescriptor.builder()
@@ -53,8 +53,6 @@ public class TableDescriptorJsonSerdeTest extends JsonSerdeTestBase<TableDescrip
                         .kvFormat(KvFormat.INDEXED)
                         .build();
 
-        tableDescriptors[2] = TableDescriptor.EMPTY;
-
         return tableDescriptors;
     }
 
@@ -68,8 +66,7 @@ public class TableDescriptorJsonSerdeTest extends JsonSerdeTestBase<TableDescrip
             "{\"version\":1,\"schema\":"
                     + SchemaJsonSerdeTest.SCHEMA_JSON_1
                     + ",\"partition_key\":[],\"bucket_key\":[\"a\"],\"bucket_count\":32,\"properties\":{\"option-3\":\"300\",\"option-4\":\"400\","
-                    + "\"table.log.format\":\"INDEXED\",\"table.kv.format\":\"INDEXED\"},\"custom_properties\":{}}",
-            "{\"version\":1,\"schema\":{\"version\":1,\"columns\":[]},\"partition_key\":[],\"bucket_key\":[],\"bucket_count\":0,\"properties\":{},\"custom_properties\":{}}"
+                    + "\"table.log.format\":\"INDEXED\",\"table.kv.format\":\"INDEXED\"},\"custom_properties\":{}}"
         };
     }
 }

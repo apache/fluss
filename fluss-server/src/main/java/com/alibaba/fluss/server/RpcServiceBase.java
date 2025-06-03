@@ -119,7 +119,6 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toGetFileSyst
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toPhysicalTablePath;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
-import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
@@ -507,7 +506,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             return CompletableFuture.completedFuture(makeListAclsResponse(acls));
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format("Failed to list acls for resource: ", aclBindingFilter), e);
+                    String.format("Failed to list acls for resource: %s", aclBindingFilter), e);
         }
     }
 
@@ -639,7 +638,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
             // now get the leader
             Optional<LeaderAndIsr> optLeaderAndIsr = zkClient.getLeaderAndIsr(tableBucket);
-            int leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(NO_LEADER);
+            Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
             bucketMetadataList.add(new BucketMetadata(bucketId, leader, leaderEpoch, replicas));
         }
         return bucketMetadataList;

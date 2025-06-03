@@ -167,6 +167,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -409,8 +410,12 @@ public class ServerRpcMessageUtils {
             PbBucketMetadata pbBucketMetadata =
                     new PbBucketMetadata()
                             .setBucketId(bucketMetadata.getBucketId())
-                            .setLeaderEpoch(bucketMetadata.getLeaderEpoch())
-                            .setLeaderId(bucketMetadata.getLeaderId());
+                            .setLeaderEpoch(bucketMetadata.getLeaderEpoch());
+
+            OptionalInt leaderId = bucketMetadata.getLeaderId();
+            if (leaderId.isPresent()) {
+                pbBucketMetadata.setLeaderId(leaderId.getAsInt());
+            }
 
             for (Integer replica : bucketMetadata.getReplicas()) {
                 pbBucketMetadata.addReplicaId(replica);
@@ -444,7 +449,7 @@ public class ServerRpcMessageUtils {
     private static BucketMetadata toBucketMetadata(PbBucketMetadata pbBucketMetadata) {
         return new BucketMetadata(
                 pbBucketMetadata.getBucketId(),
-                pbBucketMetadata.getLeaderId(),
+                pbBucketMetadata.hasLeaderId() ? pbBucketMetadata.getLeaderId() : null,
                 pbBucketMetadata.hasLeaderEpoch()
                         ? pbBucketMetadata.getLeaderEpoch()
                         : NO_LEADER_EPOCH,

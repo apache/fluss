@@ -54,10 +54,12 @@ class MetadataUpdateITCase {
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
 
     private CoordinatorGateway coordinatorGateway;
+    private ServerNode coordinatorServerNode;
 
     @BeforeEach
     void setup() {
         coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        coordinatorServerNode = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode();
     }
 
     @Test
@@ -73,7 +75,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -84,7 +86,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 4,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -95,7 +97,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -109,12 +111,13 @@ class MetadataUpdateITCase {
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(2);
         // let's start the coordinator server again;
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        coordinatorServerNode = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode();
         // check the metadata again
         retry(
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 2,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -125,7 +128,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -136,10 +139,7 @@ class MetadataUpdateITCase {
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
         Map<Long, TablePath> expectedTablePathById = new HashMap<>();
         assertUpdateMetadataEquals(
-                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
-                3,
-                expectedTablePathById,
-                Collections.emptyMap());
+                coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
 
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
@@ -148,7 +148,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -169,7 +169,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -185,7 +185,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -203,7 +203,7 @@ class MetadataUpdateITCase {
         //                Duration.ofMinutes(1),
         //                () ->
         //                        assertUpdateMetadataEquals(
-        //                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+        //                                coordinatorServerNode,
         //                                3,
         //                                expectedTablePathById,
         //                                Collections.emptyMap()));
@@ -215,10 +215,7 @@ class MetadataUpdateITCase {
         Map<Long, TablePath> expectedTablePathById = new HashMap<>();
         Map<Long, String> expectedPartitionNameById = new HashMap<>();
         assertUpdateMetadataEquals(
-                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
-                3,
-                expectedTablePathById,
-                Collections.emptyMap());
+                coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
 
         // create a partitioned table.
         TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
@@ -236,7 +233,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 Collections.emptyMap()));
@@ -262,7 +259,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 expectedPartitionNameById));
@@ -280,7 +277,7 @@ class MetadataUpdateITCase {
                 Duration.ofMinutes(1),
                 () ->
                         assertUpdateMetadataEquals(
-                                FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                                coordinatorServerNode,
                                 3,
                                 expectedTablePathById,
                                 expectedPartitionNameById));

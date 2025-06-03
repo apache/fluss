@@ -101,7 +101,7 @@ class TableBucketStateMachineTest {
                         },
                         coordinatorContext);
         ServerMetadataCache serverMetadataCache =
-                new CoordinatorServerMetadataCache(new CoordinatorContext());
+                new CoordinatorServerMetadataCache(coordinatorContext);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,

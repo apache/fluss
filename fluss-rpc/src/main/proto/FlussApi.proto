@@ -567,6 +567,9 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+
+  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
+  // trace by: https://github.com/alibaba/fluss/issues/981
 }
 
 message PbPartitionMetadata {

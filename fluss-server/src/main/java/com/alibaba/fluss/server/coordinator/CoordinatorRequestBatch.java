@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -59,10 +60,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_ID;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.PARTITION_DURATION_DELETE_NAME;
-import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_ID;
-import static com.alibaba.fluss.server.metadata.TableMetadata.TABLE_DURATION_DELETE_PATH;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
+import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyKvSnapshotOffsetRequest;
@@ -72,13 +73,16 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyRem
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
-import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER_EPOCH;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
 public class CoordinatorRequestBatch {
 
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorRequestBatch.class);
+
+    private static final Schema EMPTY_SCHEMA = Schema.newBuilder().build();
+    private static final TableDescriptor EMPTY_TABLE_DESCRIPTOR =
+            TableDescriptor.builder().schema(EMPTY_SCHEMA).distributedBy(0).build();
 
     // a map from tablet server to notify the leader and isr for each bucket.
     private final Map<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
@@ -224,6 +228,8 @@ public class CoordinatorRequestBatch {
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
 
+        // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
+        // updateMetadata request, trace by: https://github.com/alibaba/fluss/issues/983
         addUpdateMetadataRequestForTabletServers(
                 coordinatorContext.getLiveTabletServers().keySet(),
                 null,
@@ -264,12 +270,12 @@ public class CoordinatorRequestBatch {
      *   <li>case3: Table create and bucketAssignment don't generated, case will happen for new
      *       created partitioned table
      *   <li>case4: Table is queued for deletion, in this case we will set a empty tableBucket set
-     *       and tableId set to {@link TableMetadata#TABLE_DURATION_DELETE_ID} to avoid send unless
-     *       info to tabletServer
+     *       and tableId set to {@link TableMetadata#DELETED_TABLE_ID} to avoid send unless info to
+     *       tabletServer
      *   <li>case5: Partition create and bucketAssignment of this partition generated.
      *   <li>case6: Partition is queued for deletion, in this case we will set a empty tableBucket
-     *       set and partitionId set to {@link PartitionMetadata#PARTITION_DURATION_DELETE_ID } to
-     *       avoid send unless info to tabletServer
+     *       set and partitionId set to {@link PartitionMetadata#DELETED_PARTITION_ID } to avoid
+     *       send unless info to tabletServer
      *   <li>case7: Leader and isr is changed for these input tableBuckets
      *   <li>case8: One newly tabletServer added into cluster
      *   <li>case9: One tabletServer is removed from cluster
@@ -304,7 +310,7 @@ public class CoordinatorRequestBatch {
                         coordinatorContext.getBucketLeaderAndIsr(tableBucket);
                 int leaderEpoch =
                         bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(NO_LEADER_EPOCH);
-                int leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(NO_LEADER);
+                Integer leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
                 if (currentPartitionId == null) {
                     Map<Integer, List<Integer>> tableAssignment =
                             coordinatorContext.getTableAssignment(currentTableId);
@@ -618,10 +624,10 @@ public class CoordinatorRequestBatch {
                         if (tableQueuedForDeletion) {
                             newTableInfo =
                                     TableInfo.of(
-                                            TABLE_DURATION_DELETE_PATH,
+                                            DELETED_TABLE_PATH,
                                             tableId,
                                             0,
-                                            TableDescriptor.EMPTY,
+                                            EMPTY_TABLE_DESCRIPTOR,
                                             -1L,
                                             -1L);
                         } else {
@@ -633,9 +639,9 @@ public class CoordinatorRequestBatch {
                                 tableQueuedForDeletion
                                         ? TableInfo.of(
                                                 tableInfo.getTablePath(),
-                                                TABLE_DURATION_DELETE_ID,
+                                                DELETED_TABLE_ID,
                                                 0,
-                                                TableDescriptor.EMPTY,
+                                                EMPTY_TABLE_DESCRIPTOR,
                                                 -1L,
                                                 -1L)
                                         : tableInfo;
@@ -660,7 +666,7 @@ public class CoordinatorRequestBatch {
                                 partitionMetadata =
                                         new PartitionMetadata(
                                                 tableId,
-                                                PARTITION_DURATION_DELETE_NAME,
+                                                DELETED_PARTITION_NAME,
                                                 partitionId,
                                                 kvEntry.getValue());
                             } else {
@@ -673,13 +679,16 @@ public class CoordinatorRequestBatch {
                                             tableId,
                                             partitionName,
                                             partitionQueuedForDeletion
-                                                    ? PARTITION_DURATION_DELETE_ID
+                                                    ? DELETED_PARTITION_ID
                                                     : partitionId,
                                             kvEntry.getValue());
                         }
                         partitionMetadataList.add(partitionMetadata);
                     }
                 });
+
+        // TODO Todo Distinguish which tablet servers need to be updated instead of sending all live
+        // tablet servers.
         return makeUpdateMetadataRequest(
                 coordinatorContext.getCoordinatorServerInfo(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),

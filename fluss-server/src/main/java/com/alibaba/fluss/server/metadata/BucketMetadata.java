@@ -16,16 +16,20 @@
 
 package com.alibaba.fluss.server.metadata;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
+import java.util.OptionalInt;
 
 /** This entity used to describe the bucket metadata. */
 public class BucketMetadata {
     private final int bucketId;
-    private final int leaderId;
+    private final @Nullable Integer leaderId;
     private final int leaderEpoch;
     private final List<Integer> replicas;
 
-    public BucketMetadata(int bucketId, int leaderId, int leaderEpoch, List<Integer> replicas) {
+    public BucketMetadata(
+            int bucketId, @Nullable Integer leaderId, int leaderEpoch, List<Integer> replicas) {
         this.bucketId = bucketId;
         this.leaderId = leaderId;
         this.leaderEpoch = leaderEpoch;
@@ -36,8 +40,8 @@ public class BucketMetadata {
         return bucketId;
     }
 
-    public int getLeaderId() {
-        return leaderId;
+    public OptionalInt getLeaderId() {
+        return leaderId == null ? OptionalInt.empty() : OptionalInt.of(leaderId);
     }
 
     public int getLeaderEpoch() {

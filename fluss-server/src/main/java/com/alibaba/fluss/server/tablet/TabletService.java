@@ -155,9 +155,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.getTimeoutMs(),
                 request.getAcks(),
                 produceLogData,
-                bucketResponseMap -> {
-                    response.complete(makeProduceLogResponse(bucketResponseMap));
-                });
+                bucketResponseMap -> response.complete(makeProduceLogResponse(bucketResponseMap)));
         return response;
     }
 
@@ -215,9 +213,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.getAcks(),
                 putKvData,
                 getTargetColumns(request),
-                bucketResponse -> {
-                    response.complete(makePutKvResponse(bucketResponse));
-                });
+                bucketResponse -> response.complete(makePutKvResponse(bucketResponse)));
         return response;
     }
 
@@ -235,9 +231,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
         replicaManager.lookups(
                 lookupData,
-                value -> {
-                    response.complete(makeLookupResponse(value, errorResponseMap));
-                });
+                value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         return response;
     }
 
@@ -255,9 +249,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
         replicaManager.prefixLookups(
                 prefixLookupData,
-                value -> {
-                    response.complete(makePrefixLookupResponse(value, errorResponseMap));
-                });
+                value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
     }
 
@@ -291,14 +283,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request) {
-        UpdateMetadataResponse updateMetadataResponse = new UpdateMetadataResponse();
         int coordinatorEpoch =
                 request.hasCoordinatorEpoch()
                         ? request.getCoordinatorEpoch()
                         : INITIAL_COORDINATOR_EPOCH;
         replicaManager.maybeUpdateMetadataCache(
                 coordinatorEpoch, getUpdateMetadataRequestData(request));
-        return CompletableFuture.completedFuture(updateMetadataResponse);
+        return CompletableFuture.completedFuture(new UpdateMetadataResponse());
     }
 
     @Override
@@ -366,19 +357,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     private void authorizeTable(OperationType operationType, long tableId) {
-        TablePath tablePath =
-                metadataCache
-                        .getTablePath(tableId)
-                        .orElseThrow(
-                                () ->
-                                        new UnknownTableOrBucketException(
-                                                String.format(
-                                                        "This server does not host this table ID %s.",
-                                                        tableId)));
+        TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
         if (tablePath == null) {
             throw new UnknownTableOrBucketException(
                     String.format(
-                            "This server %s does not host this table ID %s. This may happen when the table metadata cache in the server is not updated yet.",
+                            "This server %s does not know this table ID %s. This may happen when the table "
+                                    + "metadata cache in the server is not updated yet.",
                             serviceName, tableId));
         }
         if (authorizer != null
@@ -440,7 +424,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                         new ApiError(
                                                 Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
                                                 String.format(
-                                                        "This server %s does not host this table ID %s. "
+                                                        "This server %s does not know this table ID %s. "
                                                                 + "This may happen when the table metadata cache in the server is not updated yet.",
                                                         serviceName, tableId))));
                     } else if (!filteredTableIds.contains(tableId)) {
