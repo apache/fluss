@@ -39,7 +39,6 @@ import static com.alibaba.fluss.metadata.TablePath.detectInvalidName;
 /** Utils for partition. */
 public class PartitionUtils {
 
-    // TODO Support other data types, trace by https://github.com/alibaba/fluss/issues/489
     public static final List<DataTypeRoot> PARTITION_KEY_SUPPORTED_TYPES =
             Arrays.asList(
                     DataTypeRoot.STRING,
