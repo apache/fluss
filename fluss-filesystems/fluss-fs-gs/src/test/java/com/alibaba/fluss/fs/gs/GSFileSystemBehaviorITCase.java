@@ -17,9 +17,8 @@
 package com.alibaba.fluss.fs.gs;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.fs.FSDataInputStream;
-import com.alibaba.fluss.fs.FSDataOutputStream;
 import com.alibaba.fluss.fs.FileSystem;
+import com.alibaba.fluss.fs.FileSystemBehaviorTestSuite;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.testutils.common.CommonTestUtils;
 
@@ -27,68 +26,35 @@ import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem;
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystemOptions;
 import com.google.cloud.hadoop.gcsio.testing.InMemoryGoogleCloudStorage;
 import org.apache.commons.lang3.reflect.FieldUtils;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
-
 /** Tests that validate the behavior of the Google Cloud Storage File System Plugin. */
-class GSFileSystemPluginTest {
+class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
-    private MockAuthServer mockGSServer;
+    private static MockAuthServer mockGSServer;
+    private static FileSystem fileSystem;
 
-    @BeforeEach
-    void setUp() {
+    @BeforeAll
+    static void setup() throws IOException {
         mockGSServer = MockAuthServer.create();
+        fileSystem = createFileSystem();
     }
 
-    @Test
-    void testWithPluginManager() throws Exception {
-        FileSystem fileSystem = createFileSystem();
+    @Override
+    protected FileSystem getFileSystem() {
+        return fileSystem;
+    }
 
-        String basePath = "gs://test-bucket/fluss";
-        assertThat(FileSystem.get(URI.create(basePath))).isInstanceOf(GSFileSystem.class);
-
-        FsPath path = new FsPath(basePath, "test");
-        final FSDataOutputStream outputStream =
-                fileSystem.create(path, FileSystem.WriteMode.OVERWRITE);
-        final byte[] testbytes = {1, 2, 3, 4, 5};
-        outputStream.write(testbytes);
-        outputStream.close();
-
-        // check the path
-        assertThat(fileSystem.exists(path)).isTrue();
-
-        // try to read the file
-        byte[] testbytesRead = new byte[5];
-        FSDataInputStream inputStream = fileSystem.open(path);
-        assertThat(5).isEqualTo(inputStream.read(testbytesRead));
-        inputStream.close();
-        assertThat(testbytesRead).isEqualTo(testbytes);
-
-        assertThat(fileSystem.exists(path)).isTrue();
-
-        // try to seek the file
-        inputStream = fileSystem.open(path);
-        inputStream.seek(4);
-        testbytesRead = new byte[1];
-        assertThat(1).isEqualTo(inputStream.read(testbytesRead));
-        assertThat(testbytesRead).isEqualTo(new byte[] {testbytes[4]});
-
-        // now delete the file
-        assertThat(fileSystem.delete(path, true)).isTrue();
-        // get the status of the file should throw exception
-        assertThatThrownBy(() -> fileSystem.getFileStatus(path))
-                .isInstanceOf(FileNotFoundException.class);
+    @Override
+    protected FsPath getBasePath() {
+        return new FsPath("gs://test-bucket/fluss");
     }
 
     private static FileSystem createFileSystem() throws IOException {
@@ -140,8 +106,8 @@ class GSFileSystemPluginTest {
         }
     }
 
-    @AfterEach
-    void tearDown() throws IOException {
+    @AfterAll
+    static void tearDown() throws IOException {
         mockGSServer.close();
     }
 }
