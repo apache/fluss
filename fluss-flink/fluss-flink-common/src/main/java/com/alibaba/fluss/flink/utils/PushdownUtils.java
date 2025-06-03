@@ -61,6 +61,7 @@ import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -437,7 +438,8 @@ public class PushdownUtils {
     // ------------------------------------------------------------------------------------------
 
     /** A structure represents a source field equal literal expression. */
-    public static class FieldEqual {
+    public static class FieldEqual implements Serializable {
+        private static final long serialVersionUID = 1L;
         public final int fieldIndex;
         public final Object equalValue;
 

@@ -94,7 +94,8 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
                             OffsetsInitializer.full(),
                             1000,
                             // use batch mode
-                            false);
+                            false,
+                            Collections.emptyList());
             enumerator.start();
             // register all read
             for (int i = 0; i < 3; i++) {
@@ -170,7 +171,8 @@ class LakeTableEnumeratorTest extends PaimonSyncTestBase {
                             OffsetsInitializer.full(),
                             1000,
                             // use batch mode
-                            false);
+                            false,
+                            Collections.emptyList());
             enumerator.start();
             // register all read
             for (int i = 0; i < 3; i++) {
