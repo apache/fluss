@@ -31,6 +31,7 @@ import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
@@ -40,9 +41,12 @@ import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 
 import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
+import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
@@ -63,6 +67,12 @@ public final class FlussConnection implements Connection {
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
         this.conf = conf;
+        // init Filesystem with configuration from FlussConnection,
+        // only pass options with 'client.fs.' prefix
+        FileSystem.initialize(
+                Configuration.fromMap(
+                        extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
+                null);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);

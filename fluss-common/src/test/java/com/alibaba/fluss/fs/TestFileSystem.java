@@ -44,6 +44,16 @@ public class TestFileSystem extends LocalFileSystem {
     private static final Map<FsPath, Integer> currentUnclosedOutputStream =
             MapUtils.newConcurrentHashMap();
 
+    private final Configuration configuration;
+
+    public TestFileSystem(Configuration configuration) {
+        this.configuration = configuration;
+    }
+
+    public Configuration getConfiguration() {
+        return configuration;
+    }
+
     public static int getNumtimeStreamOpened() {
         return streamOpenCounter.get();
     }
@@ -143,7 +153,7 @@ public class TestFileSystem extends LocalFileSystem {
 
         @Override
         public FileSystem create(URI fsUri, Configuration configuration) throws IOException {
-            return new TestFileSystem();
+            return new TestFileSystem(configuration);
         }
     }
 }

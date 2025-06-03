@@ -47,6 +47,7 @@ import org.apache.flink.table.types.logical.RowType;
 
 import java.io.File;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -82,11 +83,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
         Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
-        if (datalakeFormat.isPresent()) {
-            helper.validateExcept("table.", "client.", datalakeFormat.get() + ".");
-        } else {
-            helper.validateExcept("table.", "client.");
-        }
+        List<String> prefixesToSkip = new ArrayList<>(Arrays.asList("table.", "client."));
+        datalakeFormat.ifPresent(dataLakeFormat -> prefixesToSkip.add(dataLakeFormat + "."));
+        helper.validateExcept(prefixesToSkip.toArray(new String[0]));
 
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
