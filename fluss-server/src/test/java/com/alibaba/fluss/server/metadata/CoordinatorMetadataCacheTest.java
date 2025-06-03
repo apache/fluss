@@ -29,16 +29,16 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link CoordinatorServerMetadataCache}. */
-public class CoordinatorServerMetadataCacheTest {
-    private CoordinatorServerMetadataCache serverMetadataCache;
+/** Test for {@link CoordinatorMetadataCache}. */
+public class CoordinatorMetadataCacheTest {
+    private CoordinatorMetadataCache serverMetadataCache;
 
     private ServerInfo coordinatorServer;
     private Set<ServerInfo> aliveTableServers;
 
     @BeforeEach
     public void setup() {
-        serverMetadataCache = new CoordinatorServerMetadataCache();
+        serverMetadataCache = new CoordinatorMetadataCache();
 
         coordinatorServer =
                 new ServerInfo(

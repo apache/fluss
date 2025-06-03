@@ -174,7 +174,6 @@ import java.util.stream.Stream;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
-import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER_EPOCH;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -408,9 +407,12 @@ public class ServerRpcMessageUtils {
         List<PbBucketMetadata> pbBucketMetadataList = new ArrayList<>();
         for (BucketMetadata bucketMetadata : bucketMetadataList) {
             PbBucketMetadata pbBucketMetadata =
-                    new PbBucketMetadata()
-                            .setBucketId(bucketMetadata.getBucketId())
-                            .setLeaderEpoch(bucketMetadata.getLeaderEpoch());
+                    new PbBucketMetadata().setBucketId(bucketMetadata.getBucketId());
+
+            OptionalInt leaderEpochOpt = bucketMetadata.getLeaderEpoch();
+            if (leaderEpochOpt.isPresent()) {
+                pbBucketMetadata.setLeaderEpoch(leaderEpochOpt.getAsInt());
+            }
 
             OptionalInt leaderId = bucketMetadata.getLeaderId();
             if (leaderId.isPresent()) {
@@ -450,9 +452,7 @@ public class ServerRpcMessageUtils {
         return new BucketMetadata(
                 pbBucketMetadata.getBucketId(),
                 pbBucketMetadata.hasLeaderId() ? pbBucketMetadata.getLeaderId() : null,
-                pbBucketMetadata.hasLeaderEpoch()
-                        ? pbBucketMetadata.getLeaderEpoch()
-                        : NO_LEADER_EPOCH,
+                pbBucketMetadata.hasLeaderEpoch() ? pbBucketMetadata.getLeaderEpoch() : null,
                 Arrays.stream(pbBucketMetadata.getReplicaIds())
                         .boxed()
                         .collect(Collectors.toList()));

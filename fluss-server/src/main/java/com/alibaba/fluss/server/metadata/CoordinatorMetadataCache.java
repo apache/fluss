@@ -35,7 +35,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /** The implement of {@link ServerMetadataCache} for {@link CoordinatorServer}. */
-public class CoordinatorServerMetadataCache implements ServerMetadataCache {
+public class CoordinatorMetadataCache implements ServerMetadataCache {
 
     private final Lock metadataLock = new ReentrantLock();
 
@@ -45,7 +45,7 @@ public class CoordinatorServerMetadataCache implements ServerMetadataCache {
     @GuardedBy("metadataLock")
     private final Map<Integer, ServerInfo> aliveTabletServers;
 
-    public CoordinatorServerMetadataCache() {
+    public CoordinatorMetadataCache() {
         this.coordinatorServer = null;
         this.aliveTabletServers = new HashMap<>();
     }

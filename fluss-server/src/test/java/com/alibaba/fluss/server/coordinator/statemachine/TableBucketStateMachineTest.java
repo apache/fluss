@@ -33,7 +33,7 @@ import com.alibaba.fluss.server.coordinator.LakeTableTieringManager;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
-import com.alibaba.fluss.server.metadata.CoordinatorServerMetadataCache;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
@@ -76,7 +76,7 @@ class TableBucketStateMachineTest {
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
-    private CoordinatorServerMetadataCache serverMetadataCache;
+    private CoordinatorMetadataCache serverMetadataCache;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -100,7 +100,7 @@ class TableBucketStateMachineTest {
                             // do nothing
                         },
                         coordinatorContext);
-        serverMetadataCache = new CoordinatorServerMetadataCache();
+        serverMetadataCache = new CoordinatorMetadataCache();
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,

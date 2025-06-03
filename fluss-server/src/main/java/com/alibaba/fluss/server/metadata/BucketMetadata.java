@@ -25,11 +25,14 @@ import java.util.OptionalInt;
 public class BucketMetadata {
     private final int bucketId;
     private final @Nullable Integer leaderId;
-    private final int leaderEpoch;
+    private final @Nullable Integer leaderEpoch;
     private final List<Integer> replicas;
 
     public BucketMetadata(
-            int bucketId, @Nullable Integer leaderId, int leaderEpoch, List<Integer> replicas) {
+            int bucketId,
+            @Nullable Integer leaderId,
+            @Nullable Integer leaderEpoch,
+            List<Integer> replicas) {
         this.bucketId = bucketId;
         this.leaderId = leaderId;
         this.leaderEpoch = leaderEpoch;
@@ -44,8 +47,8 @@ public class BucketMetadata {
         return leaderId == null ? OptionalInt.empty() : OptionalInt.of(leaderId);
     }
 
-    public int getLeaderEpoch() {
-        return leaderEpoch;
+    public OptionalInt getLeaderEpoch() {
+        return leaderEpoch == null ? OptionalInt.empty() : OptionalInt.of(leaderEpoch);
     }
 
     public List<Integer> getReplicas() {

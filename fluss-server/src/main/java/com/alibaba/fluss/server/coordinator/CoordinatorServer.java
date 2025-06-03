@@ -35,7 +35,7 @@ import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
-import com.alibaba.fluss.server.metadata.CoordinatorServerMetadataCache;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
@@ -112,7 +112,7 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorService coordinatorService;
 
     @GuardedBy("lock")
-    private CoordinatorServerMetadataCache metadataCache;
+    private CoordinatorMetadataCache metadataCache;
 
     @GuardedBy("lock")
     private CoordinatorChannelManager coordinatorChannelManager;
@@ -171,7 +171,7 @@ public class CoordinatorServer extends ServerBase {
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
             this.coordinatorContext = new CoordinatorContext();
-            this.metadataCache = new CoordinatorServerMetadataCache();
+            this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {

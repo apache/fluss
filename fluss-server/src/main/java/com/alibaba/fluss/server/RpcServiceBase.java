@@ -526,7 +526,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             List<BucketMetadata> bucketMetadataList = new ArrayList<>();
             if (assignmentInfo.tableAssignment != null) {
                 TableAssignment tableAssignment = assignmentInfo.tableAssignment;
-                bucketMetadataList = toBucketMetadataList(tableId, null, tableAssignment, -1);
+                bucketMetadataList = toBucketMetadataList(tableId, null, tableAssignment, null);
             } else {
                 if (!tableInfo.isPartitioned()) {
                     LOG.warn("No table assignment node found for table {}", tableId);
@@ -556,7 +556,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                 assignmentInfo.tableId,
                                 assignmentInfo.partitionId,
                                 tableAssignment,
-                                -1);
+                                null);
             } else {
                 LOG.warn("No partition assignment node found for partition {}", partitionPath);
             }
@@ -622,7 +622,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             long tableId,
             @Nullable Long partitionId,
             TableAssignment tableAssignment,
-            int leaderEpoch)
+            @Nullable Integer leaderEpoch)
             throws Exception {
         List<BucketMetadata> bucketMetadataList = new ArrayList<>();
         // iterate each bucket assignment

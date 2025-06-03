@@ -94,7 +94,6 @@ class RemoveOfflineReplicaFromIsrITCase {
         // stop the follower
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(follower);
 
-        System.out.println("isr: " + isr);
         // the follower should be removed from isr
         isr.remove(follower);
 

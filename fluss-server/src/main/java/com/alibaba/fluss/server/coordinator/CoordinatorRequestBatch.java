@@ -73,7 +73,6 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyRem
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
-import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER_EPOCH;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
 public class CoordinatorRequestBatch {
@@ -308,8 +307,8 @@ public class CoordinatorRequestBatch {
                 Long currentPartitionId = tableBucket.getPartitionId();
                 Optional<LeaderAndIsr> bucketLeaderAndIsr =
                         coordinatorContext.getBucketLeaderAndIsr(tableBucket);
-                int leaderEpoch =
-                        bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(NO_LEADER_EPOCH);
+                Integer leaderEpoch =
+                        bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(null);
                 Integer leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
                 if (currentPartitionId == null) {
                     Map<Integer, List<Integer>> tableAssignment =
