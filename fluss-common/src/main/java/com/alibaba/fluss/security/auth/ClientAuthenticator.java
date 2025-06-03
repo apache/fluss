@@ -21,9 +21,11 @@ import com.alibaba.fluss.exception.AuthenticationException;
 
 import javax.annotation.Nullable;
 
+import java.io.Closeable;
+
 /** Authenticator for client side. */
 @PublicEvolving
-public interface ClientAuthenticator {
+public interface ClientAuthenticator extends Closeable {
 
     /** The protocol name of the authenticator, which will send in the AuthenticateRequest. */
     String protocol();

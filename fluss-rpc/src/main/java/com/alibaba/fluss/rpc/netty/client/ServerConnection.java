@@ -58,6 +58,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
+import static com.alibaba.fluss.utils.IOUtils.closeQuietly;
+
 /** Connection to a Netty server used by the {@link NettyClient}. */
 @ThreadSafe
 final class ServerConnection {
@@ -204,6 +206,7 @@ final class ServerConnection {
             connectionMetricGroup.close();
         }
 
+        closeQuietly(authenticator);
         return closeFuture;
     }
 
