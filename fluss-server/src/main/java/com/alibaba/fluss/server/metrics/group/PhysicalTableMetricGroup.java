@@ -59,7 +59,8 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
                 makeScope(
                         serverMetricGroup,
                         physicalTablePath.getDatabaseName(),
-                        physicalTablePath.getTableName()),
+                        physicalTablePath.getTableName(),
+                        physicalTablePath.getPartitionName()),
                 serverMetricGroup);
         this.physicalTablePath = physicalTablePath;
 
