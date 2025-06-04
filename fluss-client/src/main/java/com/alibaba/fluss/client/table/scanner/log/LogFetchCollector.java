@@ -260,7 +260,7 @@ public class LogFetchCollector {
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
             // Check if bucket should be removed from scanner status to stop repeated fetch
-            // attempts
+            // attempts.
             Long currentOffset = logScannerStatus.getBucketOffset(tb);
             if (currentOffset != null) {
                 LOG.warn(
