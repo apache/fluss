@@ -21,9 +21,7 @@ import com.alibaba.fluss.server.metadata.PartitionMetadata;
 
 import org.assertj.core.api.AbstractAssert;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,10 +42,9 @@ public class PartitionMetadataAssert
         assertThat(expected.getPartitionName()).isEqualTo(actual.getPartitionName());
         List<BucketMetadata> bucketMetadataList = expected.getBucketMetadataList();
         List<BucketMetadata> actualBucketMetadataList = actual.getBucketMetadataList();
-        assertThat(bucketMetadataList).hasSameSizeAs(actualBucketMetadataList);
-        Set<BucketMetadata> metadataSet = new HashSet<>(expected.getBucketMetadataList());
-        actualBucketMetadataList.forEach(
-                actualBucketMetadata -> assertThat(metadataSet).contains(actualBucketMetadata));
+        assertThat(bucketMetadataList)
+                .hasSameSizeAs(actualBucketMetadataList)
+                .hasSameElementsAs(actualBucketMetadataList);
         return this;
     }
 }

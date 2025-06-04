@@ -60,6 +60,12 @@ public class TabletServerMetadataCacheTest {
             Arrays.asList(
                     new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
                     new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2)));
+    private final List<BucketMetadata> changedBucket1BucketMetadata =
+            Collections.singletonList(new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2)));
+    private final List<BucketMetadata> afterChangeBucketMetadata =
+            Arrays.asList(
+                    new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
+                    new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2)));
 
     @BeforeEach
     public void setup() {
@@ -157,29 +163,20 @@ public class TabletServerMetadataCacheTest {
                                 100L,
                                 100L));
 
-        assertTableMetadataEquals(
-                DATA1_TABLE_ID,
-                DATA1_TABLE_INFO,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2))));
+        assertTableMetadataEquals(DATA1_TABLE_ID, DATA1_TABLE_INFO, initialBucketMetadata);
 
         assertPartitionMetadataEquals(
                 partitionId1,
                 partitionTableId,
                 partitionId1,
                 partitionName1,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2))));
+                initialBucketMetadata);
         assertPartitionMetadataEquals(
                 partitionId2,
                 partitionTableId,
                 partitionId2,
                 partitionName2,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2))));
+                initialBucketMetadata);
 
         // test partial update bucket info as setting NO_LEADER to 1 for bucketId = 1
         serverMetadataCache.updateClusterMetadata(
@@ -187,42 +184,27 @@ public class TabletServerMetadataCacheTest {
                         coordinatorServer,
                         aliveTableServers,
                         Collections.singletonList(
-                                new TableMetadata(
-                                        DATA1_TABLE_INFO,
-                                        Collections.singletonList(
-                                                new BucketMetadata(
-                                                        1, 1, 0, Arrays.asList(1, 0, 2))))),
+                                new TableMetadata(DATA1_TABLE_INFO, changedBucket1BucketMetadata)),
                         Collections.singletonList(
                                 new PartitionMetadata(
                                         partitionTableId,
                                         partitionName1,
                                         partitionId1,
-                                        Collections.singletonList(
-                                                new BucketMetadata(
-                                                        1, 1, 0, Arrays.asList(1, 0, 2)))))));
-        assertTableMetadataEquals(
-                DATA1_TABLE_ID,
-                DATA1_TABLE_INFO,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2))));
+                                        changedBucket1BucketMetadata))));
+        assertTableMetadataEquals(DATA1_TABLE_ID, DATA1_TABLE_INFO, afterChangeBucketMetadata);
 
         assertPartitionMetadataEquals(
                 partitionId1,
                 partitionTableId,
                 partitionId1,
                 partitionName1,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2))));
+                afterChangeBucketMetadata);
         assertPartitionMetadataEquals(
                 partitionId2,
                 partitionTableId,
                 partitionId2,
                 partitionName2,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2))));
+                initialBucketMetadata);
 
         // test delete one table.
         serverMetadataCache.updateClusterMetadata(
@@ -239,9 +221,7 @@ public class TabletServerMetadataCacheTest {
                                                 DATA1_TABLE_DESCRIPTOR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
-                                        Collections.singletonList(
-                                                new BucketMetadata(
-                                                        1, 1, 0, Arrays.asList(1, 0, 2))))),
+                                        changedBucket1BucketMetadata)),
                         Collections.emptyList()));
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
         assertThat(serverMetadataCache.getTableInfo(DATA1_TABLE_ID)).isEmpty();
@@ -270,9 +250,7 @@ public class TabletServerMetadataCacheTest {
                 partitionTableId,
                 partitionId2,
                 partitionName2,
-                Arrays.asList(
-                        new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                        new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2))));
+                initialBucketMetadata);
     }
 
     private void assertTableMetadataEquals(
@@ -282,7 +260,8 @@ public class TabletServerMetadataCacheTest {
         TablePath tablePath = serverMetadataCache.getTablePath(tableId).get();
         TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath).get();
         assertThat(tableMetadata.getTableInfo()).isEqualTo(expectedTableInfo);
-        assertThat(tableMetadata.getBucketMetadataList()).containsAll(expectedBucketMetadataList);
+        assertThat(tableMetadata.getBucketMetadataList())
+                .hasSameElementsAs(expectedBucketMetadataList);
     }
 
     private void assertPartitionMetadataEquals(
@@ -302,6 +281,6 @@ public class TabletServerMetadataCacheTest {
         assertThat(partitionMetadata.getPartitionId()).isEqualTo(expectedPartitionId);
         assertThat(partitionMetadata.getPartitionName()).isEqualTo(actualPartitionName);
         assertThat(partitionMetadata.getBucketMetadataList())
-                .containsAll(expectedBucketMetadataList);
+                .hasSameElementsAs(expectedBucketMetadataList);
     }
 }

@@ -21,7 +21,6 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -55,12 +54,11 @@ public class ServerMetadataSnapshot {
     private final Map<Long, TableInfo> tableInfoByTableId;
 
     // a map of bucket metadata of none-partition table, table_id -> <bucket, bucketMetadata>
-    private final Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMap;
+    private final Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables;
 
-    // a map of bucket metadata of partition table, <<table_id, partition_id>> -> <bucket,
+    // a map of bucket metadata of partition table, partition_id -> <bucket,
     // bucketMetadata>
-    private final Map<TablePartition, Map<Integer, BucketMetadata>>
-            bucketMetadataMapForPartitionedTable;
+    private final Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions;
 
     public ServerMetadataSnapshot(
             @Nullable ServerInfo coordinatorServer,
@@ -69,9 +67,8 @@ public class ServerMetadataSnapshot {
             Map<Long, TablePath> pathByTableId,
             Map<PhysicalTablePath, Long> partitionIdByPath,
             Map<Long, TableInfo> tableInfoByTableId,
-            Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMap,
-            Map<TablePartition, Map<Integer, BucketMetadata>>
-                    bucketMetadataMapForPartitionedTable) {
+            Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
+            Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = Collections.unmodifiableMap(aliveTabletServers);
 
@@ -87,9 +84,9 @@ public class ServerMetadataSnapshot {
         this.partitionNameById = Collections.unmodifiableMap(tempPartitionNameById);
 
         this.tableInfoByTableId = Collections.unmodifiableMap(tableInfoByTableId);
-        this.bucketMetadataMap = Collections.unmodifiableMap(bucketMetadataMap);
-        this.bucketMetadataMapForPartitionedTable =
-                Collections.unmodifiableMap(bucketMetadataMapForPartitionedTable);
+        this.bucketMetadataMapForTables = Collections.unmodifiableMap(bucketMetadataMapForTables);
+        this.bucketMetadataMapForPartitions =
+                Collections.unmodifiableMap(bucketMetadataMapForPartitions);
     }
 
     /** Create an empty cluster instance with no nodes and no table-buckets. */
@@ -162,13 +159,12 @@ public class ServerMetadataSnapshot {
         return Optional.ofNullable(tableInfoByTableId.get(tableId));
     }
 
-    public Map<Integer, BucketMetadata> getBucketMetadata(long tableId) {
-        return bucketMetadataMap.getOrDefault(tableId, Collections.emptyMap());
+    public Map<Integer, BucketMetadata> getBucketMetadataForTable(long tableId) {
+        return bucketMetadataMapForTables.getOrDefault(tableId, Collections.emptyMap());
     }
 
-    public Map<Integer, BucketMetadata> getBucketMetadata(TablePartition tablePartition) {
-        return bucketMetadataMapForPartitionedTable.getOrDefault(
-                tablePartition, Collections.emptyMap());
+    public Map<Integer, BucketMetadata> getBucketMetadataForPartition(long partitionId) {
+        return bucketMetadataMapForPartitions.getOrDefault(partitionId, Collections.emptyMap());
     }
 
     public Map<PhysicalTablePath, Long> getPartitionIdByPath() {
@@ -179,12 +175,11 @@ public class ServerMetadataSnapshot {
         return tableInfoByTableId;
     }
 
-    public Map<Long, Map<Integer, BucketMetadata>> getBucketMetadataMap() {
-        return bucketMetadataMap;
+    public Map<Long, Map<Integer, BucketMetadata>> getBucketMetadataMapForTables() {
+        return bucketMetadataMapForTables;
     }
 
-    public Map<TablePartition, Map<Integer, BucketMetadata>>
-            getBucketMetadataMapForPartitionedTable() {
-        return bucketMetadataMapForPartitionedTable;
+    public Map<Long, Map<Integer, BucketMetadata>> getBucketMetadataMapForPartitions() {
+        return bucketMetadataMapForPartitions;
     }
 }

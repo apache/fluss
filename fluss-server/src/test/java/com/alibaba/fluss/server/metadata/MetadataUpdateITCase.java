@@ -349,9 +349,7 @@ class MetadataUpdateITCase {
                                 if (!tableContext.isDeleted) {
                                     TablePath tablePath = tableContext.tablePath;
                                     assertThat(serverMetadataCache.getTablePath(tableId))
-                                            .isPresent();
-                                    assertThat(serverMetadataCache.getTablePath(tableId).get())
-                                            .isEqualTo(tablePath);
+                                            .hasValue(tablePath);
 
                                     // check table info and bucket location and leader only for
                                     // non-partitioned table.
@@ -381,12 +379,7 @@ class MetadataUpdateITCase {
                             (partitionId, tableContext) -> {
                                 if (!tableContext.isDeleted) {
                                     assertThat(serverMetadataCache.getPartitionName(partitionId))
-                                            .isPresent();
-                                    assertThat(
-                                                    serverMetadataCache
-                                                            .getPartitionName(partitionId)
-                                                            .get())
-                                            .isEqualTo(tableContext.partitionName);
+                                            .hasValue(tableContext.partitionName);
 
                                     assertThat(
                                                     serverMetadataCache.getPartitionMetadata(

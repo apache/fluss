@@ -257,8 +257,8 @@ public class CoordinatorContext {
         return this.partitionNameById.get(partitionId);
     }
 
-    public Optional<Long> getPartitionId(PhysicalTablePath partitionId) {
-        return Optional.ofNullable(partitionIdByPath.get(partitionId));
+    public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
+        return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
     }
 
     public Map<Integer, List<Integer>> getTableAssignment(long tableId) {
@@ -575,8 +575,11 @@ public class CoordinatorContext {
                     .keySet()
                     .forEach(bucket -> bucketLeaderAndIsr.remove(new TableBucket(tableId, bucket)));
         }
+
         TablePath tablePath = tablePathById.remove(tableId);
-        tableIdByPath.remove(tablePath);
+        if (tablePath != null) {
+            tableIdByPath.remove(tablePath);
+        }
         tableInfoById.remove(tableId);
     }
 
