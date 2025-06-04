@@ -40,23 +40,19 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
     private final Lock metadataLock = new ReentrantLock();
 
     @GuardedBy("metadataLock")
-    private @Nullable ServerInfo coordinatorServer;
+    private volatile NodeMetadataSnapshot metadataSnapshot =
+            new NodeMetadataSnapshot(null, Collections.emptyMap());
 
-    @GuardedBy("metadataLock")
-    private final Map<Integer, ServerInfo> aliveTabletServers;
-
-    public CoordinatorMetadataCache() {
-        this.coordinatorServer = null;
-        this.aliveTabletServers = new HashMap<>();
-    }
+    public CoordinatorMetadataCache() {}
 
     @Override
     public boolean isAliveTabletServer(int serverId) {
-        return aliveTabletServers.containsKey(serverId);
+        return metadataSnapshot.aliveTabletServers.containsKey(serverId);
     }
 
     @Override
     public Optional<ServerNode> getTabletServer(int serverId, String listenerName) {
+        Map<Integer, ServerInfo> aliveTabletServers = metadataSnapshot.aliveTabletServers;
         return aliveTabletServers.containsKey(serverId)
                 ? Optional.ofNullable(aliveTabletServers.get(serverId).node(listenerName))
                 : Optional.empty();
@@ -64,6 +60,7 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
 
     @Override
     public Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName) {
+        Map<Integer, ServerInfo> aliveTabletServers = metadataSnapshot.aliveTabletServers;
         Map<Integer, ServerNode> serverNodes = new HashMap<>();
         for (Map.Entry<Integer, ServerInfo> entry : aliveTabletServers.entrySet()) {
             ServerNode serverNode = entry.getValue().node(listenerName);
@@ -76,11 +73,13 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
 
     @Override
     public @Nullable ServerNode getCoordinatorServer(String listenerName) {
+        ServerInfo coordinatorServer = metadataSnapshot.coordinatorServer;
         return coordinatorServer != null ? coordinatorServer.node(listenerName) : null;
     }
 
     @Override
     public Set<TabletServerInfo> getAliveTabletServerInfos() {
+        Map<Integer, ServerInfo> aliveTabletServers = metadataSnapshot.aliveTabletServers;
         Set<TabletServerInfo> tabletServerInfos = new HashSet<>();
         aliveTabletServers
                 .values()
@@ -100,9 +99,20 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
                         newAliveTableServers.put(tabletServer.id(), tabletServer);
                     }
 
-                    this.coordinatorServer = coordinatorServer;
-                    this.aliveTabletServers.clear();
-                    this.aliveTabletServers.putAll(newAliveTableServers);
+                    this.metadataSnapshot =
+                            new NodeMetadataSnapshot(coordinatorServer, newAliveTableServers);
                 });
+    }
+
+    private static class NodeMetadataSnapshot {
+        final @Nullable ServerInfo coordinatorServer;
+        final Map<Integer, ServerInfo> aliveTabletServers;
+
+        private NodeMetadataSnapshot(
+                @Nullable ServerInfo coordinatorServer,
+                Map<Integer, ServerInfo> aliveTabletServers) {
+            this.coordinatorServer = coordinatorServer;
+            this.aliveTabletServers = aliveTabletServers;
+        }
     }
 }
