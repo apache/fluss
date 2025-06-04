@@ -30,6 +30,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/** Test for {@link FlinkCatalogFactory}. */
 public class FlinkCatalogFactoryTest {
 
     @Test

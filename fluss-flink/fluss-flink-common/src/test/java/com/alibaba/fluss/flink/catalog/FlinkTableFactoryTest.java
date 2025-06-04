@@ -153,20 +153,20 @@ class FlinkTableFactoryTest {
         int[][] lookupKey = {{0}, {2}};
         LookupTableSource.LookupRuntimeProvider lookupProvider =
                 tableSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
-        assertTrue(lookupProvider instanceof AsyncLookupFunctionProvider);
+        assertThat(lookupProvider instanceof AsyncLookupFunctionProvider).isTrue();
         AsyncLookupFunction asyncLookupFunction =
                 ((AsyncLookupFunctionProvider) lookupProvider).createAsyncLookupFunction();
-        assertTrue(asyncLookupFunction instanceof FlinkAsyncLookupFunction);
+        assertThat(asyncLookupFunction instanceof FlinkAsyncLookupFunction).isTrue();
 
         // test sync
         properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
         tableSource = (FlinkTableSource) createTableSource(schema, properties);
         lookupProvider =
                 tableSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
-        assertTrue(lookupProvider instanceof LookupFunctionProvider);
+        assertThat(lookupProvider instanceof LookupFunctionProvider).isTrue();
         LookupFunction lookupFunction =
                 ((LookupFunctionProvider) lookupProvider).createLookupFunction();
-        assertTrue(lookupFunction instanceof FlinkLookupFunction);
+        assertThat(lookupFunction instanceof FlinkLookupFunction).isTrue();
 
         // test lookup full cache
         Map<String, String> fullCacheProperties = getBasicOptions();
