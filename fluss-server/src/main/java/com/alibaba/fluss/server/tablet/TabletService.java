@@ -359,21 +359,24 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     private void authorizeTable(OperationType operationType, long tableId) {
-        TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
-        if (tablePath == null) {
-            throw new UnknownTableOrBucketException(
-                    String.format(
-                            "This server %s does not know this table ID %s. This may happen when the table "
-                                    + "metadata cache in the server is not updated yet.",
-                            serviceName, tableId));
-        }
-        if (authorizer != null
-                && !authorizer.isAuthorized(
-                        currentSession(), operationType, Resource.table(tablePath))) {
-            throw new AuthorizationException(
-                    String.format(
-                            "No permission to %s table %s in database %s",
-                            operationType, tablePath.getTableName(), tablePath.getDatabaseName()));
+        if (authorizer != null) {
+            TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
+            if (tablePath == null) {
+                throw new UnknownTableOrBucketException(
+                        String.format(
+                                "This server %s does not know this table ID %s. This may happen when the table "
+                                        + "metadata cache in the server is not updated yet.",
+                                serviceName, tableId));
+            }
+            if (!authorizer.isAuthorized(
+                    currentSession(), operationType, Resource.table(tablePath))) {
+                throw new AuthorizationException(
+                        String.format(
+                                "No permission to %s table %s in database %s",
+                                operationType,
+                                tablePath.getTableName(),
+                                tablePath.getDatabaseName()));
+            }
         }
     }
 
