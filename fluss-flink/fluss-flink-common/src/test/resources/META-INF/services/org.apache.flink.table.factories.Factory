@@ -16,3 +16,4 @@
 
 
 com.alibaba.fluss.flink.catalog.FlinkTableFactory
+com.alibaba.fluss.flink.catalog.FlinkCatalogFactory

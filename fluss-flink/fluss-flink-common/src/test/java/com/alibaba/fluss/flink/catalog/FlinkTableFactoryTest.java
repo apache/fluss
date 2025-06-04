@@ -17,6 +17,11 @@
 package com.alibaba.fluss.flink.catalog;
 
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
+import com.alibaba.fluss.flink.sink.FlinkTableSink;
+import com.alibaba.fluss.flink.source.FlinkTableSource;
+import com.alibaba.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
+import com.alibaba.fluss.flink.source.lookup.FlinkLookupFunction;
+
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
@@ -27,18 +32,35 @@ import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
-import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.source.DynamicTableSource;
+import org.apache.flink.table.connector.source.LookupTableSource;
+import org.apache.flink.table.connector.source.lookup.AsyncLookupFunctionProvider;
+import org.apache.flink.table.connector.source.lookup.LookupFunctionProvider;
+import org.apache.flink.table.connector.source.lookup.cache.DefaultLookupCache;
 import org.apache.flink.table.factories.FactoryUtil;
+import org.apache.flink.table.functions.AsyncLookupFunction;
+import org.apache.flink.table.functions.LookupFunction;
+import org.apache.flink.table.runtime.connector.source.LookupRuntimeProviderContext;
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
+import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.flink.table.connector.source.lookup.LookupOptions.PARTIAL_CACHE_CACHE_MISSING_KEY;
+import static org.apache.flink.table.connector.source.lookup.LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS;
+import static org.apache.flink.table.connector.source.lookup.LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_WRITE;
+import static org.apache.flink.table.connector.source.lookup.LookupOptions.PARTIAL_CACHE_MAX_ROWS;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.Assert.assertTrue;
 
 /** Test for {@link FlinkTableFactory}. */
 class FlinkTableFactoryTest {
@@ -46,25 +68,124 @@ class FlinkTableFactoryTest {
     public static final ObjectIdentifier OBJECT_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1");
 
-
     @Test
-    void testOptions() {
+    void testTableSourceOptions() {
         ResolvedSchema schema = createBasicSchema();
-        Map<String, String> properties = getBasicOptions();
-        properties.put("k1", "v1");
-        properties.put("k2", "v2");
+        Map<String, String> validProperties = getBasicOptions();
+        validProperties.put("k1", "v1");
 
         // test invalid options
-        assertThatThrownBy(() -> createTableSource(schema, properties))
+        assertThatThrownBy(() -> createTableSource(schema, validProperties))
                 .cause()
                 .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("Unsupported options:\n" +
-                        "\n" +
-                        "k1\n" +
-                        "k2");
-        // test skip validate options
-        createTableSource(schema, properties);
+                .hasMessageContaining("Unsupported options:\n" + "\n" + "k1");
 
+        // test scan startup mode options
+        Map<String, String> scanModeProperties = getBasicOptions();
+        scanModeProperties.put(FlinkConnectorOptions.SCAN_STARTUP_MODE.key(), "timestamp");
+        assertThatThrownBy(() -> createTableSource(schema, scanModeProperties))
+                .cause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "'scan.startup.timestamp' is required int 'timestamp' startup mode but missing.");
+        scanModeProperties.put(FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "1678883047356");
+        createTableSource(schema, scanModeProperties);
+        scanModeProperties.put(
+                FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
+        createTableSource(schema, scanModeProperties);
+        scanModeProperties.put(
+                FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09T23:09:12");
+        assertThatThrownBy(() -> createTableSource(schema, scanModeProperties))
+                .cause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "Invalid properties 'scan.startup.timestamp' should follow the format 'yyyy-MM-dd HH:mm:ss' "
+                                + "or 'timestamp', but is '2023-12-09T23:09:12'. "
+                                + "You can config like: '2023-12-09 23:09:12' or '1678883047356'.");
+        // test datalake options
+        Map<String, String> datalakeProperties = getBasicOptions();
+        datalakeProperties.put("table.datalake.format", "paimon");
+        datalakeProperties.put("paimon.file.format", "parquet");
+        createTableSource(schema, datalakeProperties);
+    }
+
+    @Test
+    void testScanSource() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+
+        FlinkTableSource tableSource = (FlinkTableSource) createTableSource(schema, properties);
+
+        // test bucket key
+        assertThat(tableSource.getBucketKeyIndexes()).isEqualTo(new int[] {0});
+        // test primary key
+        assertThat(tableSource.getPrimaryKeyIndexes()).isEqualTo(new int[] {0, 2});
+
+        // test partition key
+        assertThat(tableSource.getPrimaryKeyIndexes()).isEqualTo(new int[] {0, 2});
+    }
+
+    @Test
+    void testLookupSource() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("lookup.cache", "partial");
+        properties.put(PARTIAL_CACHE_EXPIRE_AFTER_ACCESS.key(), "18000");
+        properties.put(PARTIAL_CACHE_EXPIRE_AFTER_WRITE.key(), "36000");
+        properties.put(PARTIAL_CACHE_MAX_ROWS.key(), "100000");
+        properties.put(PARTIAL_CACHE_CACHE_MISSING_KEY.key(), "false");
+
+        // test cache
+        FlinkTableSource tableSource = (FlinkTableSource) createTableSource(schema, properties);
+        DefaultLookupCache cache = (DefaultLookupCache) tableSource.getCache();
+        DefaultLookupCache expectedCache =
+                DefaultLookupCache.newBuilder()
+                        .expireAfterAccess(Duration.ofMillis(18000))
+                        .expireAfterWrite(Duration.ofMillis(36000))
+                        .maximumSize(100000)
+                        .cacheMissingKey(false)
+                        .build();
+        assertThat(cache).isEqualTo(expectedCache);
+
+        // test async
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "true");
+        tableSource = (FlinkTableSource) createTableSource(schema, properties);
+        int[][] lookupKey = {{0}, {2}};
+        LookupTableSource.LookupRuntimeProvider lookupProvider =
+                tableSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
+        assertTrue(lookupProvider instanceof AsyncLookupFunctionProvider);
+        AsyncLookupFunction asyncLookupFunction =
+                ((AsyncLookupFunctionProvider) lookupProvider).createAsyncLookupFunction();
+        assertTrue(asyncLookupFunction instanceof FlinkAsyncLookupFunction);
+
+        // test sync
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
+        tableSource = (FlinkTableSource) createTableSource(schema, properties);
+        lookupProvider =
+                tableSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
+        assertTrue(lookupProvider instanceof LookupFunctionProvider);
+        LookupFunction lookupFunction =
+                ((LookupFunctionProvider) lookupProvider).createLookupFunction();
+        assertTrue(lookupFunction instanceof FlinkLookupFunction);
+
+        // test lookup full cache
+        Map<String, String> fullCacheProperties = getBasicOptions();
+        fullCacheProperties.put("lookup.cache", "full");
+        assertThatThrownBy(() -> createTableSource(schema, fullCacheProperties))
+                .cause()
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Full lookup caching is not supported yet.");
+    }
+
+    @Test
+    void testSink() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put(BUCKET_NUMBER.key(), "100");
+        FlinkTableSink tableSink = (FlinkTableSink) createTableSink(schema, properties);
+        List<String> bucketKeys = tableSink.getBucketKeys();
+        assertThat(bucketKeys)
+                .isEqualTo(Arrays.asList(properties.get(BUCKET_KEY.key()).split(",")));
     }
 
     private ResolvedSchema createBasicSchema() {
@@ -84,8 +205,21 @@ class FlinkTableFactoryTest {
         return options;
     }
 
+    private static Map<String, String> getBasicOptionsWithBucketKey() {
+        Map<String, String> basicOptions = getBasicOptions();
+        basicOptions.put(BUCKET_KEY.key(), "first");
+        return basicOptions;
+    }
+
     private static DynamicTableSource createTableSource(
             ResolvedSchema schema, Map<String, String> options) {
+        return createTableSource(schema, options, Collections.emptyMap());
+    }
+
+    private static DynamicTableSource createTableSource(
+            ResolvedSchema schema,
+            Map<String, String> options,
+            Map<String, String> enrichmentOptions) {
         return FactoryUtil.createDynamicTableSource(
                 null,
                 OBJECT_IDENTIFIER,
@@ -93,11 +227,13 @@ class FlinkTableFactoryTest {
                         CatalogTable.of(
                                 Schema.newBuilder().fromResolvedSchema(schema).build(),
                                 "mock source",
-                                Collections.emptyList(),
+                                schema.getPrimaryKey()
+                                        .map(UniqueConstraint::getColumns)
+                                        .orElse(Collections.emptyList()),
                                 options),
                         schema),
-                Collections.emptyMap(),
-                getConfiguration(),
+                enrichmentOptions,
+                new Configuration(),
                 Thread.currentThread().getContextClassLoader(),
                 false);
     }
@@ -115,14 +251,8 @@ class FlinkTableFactoryTest {
                                 options),
                         schema),
                 Collections.emptyMap(),
-                getConfiguration(),
+                new Configuration(),
                 Thread.currentThread().getContextClassLoader(),
                 false);
     }
-
-    private static Configuration getConfiguration() {
-        Configuration conf = new Configuration();
-        return conf;
-    }
-
 }

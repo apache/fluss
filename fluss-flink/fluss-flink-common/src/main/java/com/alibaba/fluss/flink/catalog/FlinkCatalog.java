@@ -36,6 +36,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.IOUtils;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
@@ -651,5 +652,10 @@ public class FlinkCatalog implements Catalog {
                 }
             }
         }
+    }
+
+    @VisibleForTesting
+    public Map<String, String> getSecurityConfigs() {
+        return securityConfigs;
     }
 }

@@ -281,8 +281,6 @@
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
                                         <exclude>com.alibaba.fluss.compression.*</exclude>
                                         <!-- start exclude for flink-connector -->
-                                        <exclude>com.alibaba.fluss.flink.catalog.*
-                                        </exclude>
                                         <exclude>com.alibaba.fluss.flink.utils.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.source.*
                                         </exclude>

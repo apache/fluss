@@ -31,6 +31,7 @@ import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -514,5 +515,26 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public LookupCache getCache() {
+        return cache;
+    }
+
+    @VisibleForTesting
+    public int[] getPrimaryKeyIndexes() {
+        return primaryKeyIndexes;
+    }
+
+    @VisibleForTesting
+    public int[] getBucketKeyIndexes() {
+        return bucketKeyIndexes;
+    }
+
+    @VisibleForTesting
+    public int[] getPartitionKeyIndexes() {
+        return partitionKeyIndexes;
     }
 }

@@ -27,6 +27,7 @@ import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.GenericRow;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.connector.ChangelogMode;
@@ -372,5 +373,10 @@ public class FlinkTableSink
             pkNames.add(tableRowType.getFieldNames().get(index));
         }
         return pkNames;
+    }
+
+    @VisibleForTesting
+    public List<String> getBucketKeys() {
+        return bucketKeys;
     }
 }
