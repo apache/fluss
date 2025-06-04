@@ -60,7 +60,6 @@ import static org.apache.flink.table.connector.source.lookup.LookupOptions.PARTI
 import static org.apache.flink.table.connector.source.lookup.LookupOptions.PARTIAL_CACHE_MAX_ROWS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.Assert.assertTrue;
 
 /** Test for {@link FlinkTableFactory}. */
 class FlinkTableFactoryTest {
