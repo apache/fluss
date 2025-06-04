@@ -62,7 +62,7 @@ public class BoundedSplitReader implements AutoCloseable {
 
     /** Read next batch of data. Return null when no data is available. */
     @Nullable
-    CloseableIterator<RecordAndPos> readBatch() throws IOException {
+    public CloseableIterator<RecordAndPos> readBatch() throws IOException {
         // pool a RecordAndPosBatch, pool size is 1, the underlying implementation does not allow
         // multiple batches to be read at the same time
         RecordAndPosBatch recordAndPosBatch = pollRecordAndPosBatch();

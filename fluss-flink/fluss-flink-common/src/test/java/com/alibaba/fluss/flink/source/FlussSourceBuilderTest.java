@@ -19,7 +19,7 @@ package com.alibaba.fluss.flink.source;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.RowType;

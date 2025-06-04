@@ -24,7 +24,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.NetworkException;
 import com.alibaba.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import com.alibaba.fluss.flink.sink.serializer.SerializerInitContextImpl;
-import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;

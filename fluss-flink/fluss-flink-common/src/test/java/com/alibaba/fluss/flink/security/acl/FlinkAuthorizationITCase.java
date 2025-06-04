@@ -59,7 +59,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
-import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.waitUntilPartitions;
+import static com.alibaba.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static com.alibaba.fluss.security.acl.OperationType.CREATE;
 import static com.alibaba.fluss.security.acl.OperationType.DESCRIBE;
 import static com.alibaba.fluss.security.acl.OperationType.DROP;

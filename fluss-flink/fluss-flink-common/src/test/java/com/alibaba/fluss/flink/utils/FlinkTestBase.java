@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.testutils;
+package com.alibaba.fluss.flink.utils;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
@@ -88,9 +88,21 @@ public class FlinkTestBase extends AbstractTestBase {
                     .column("name", DataTypes.STRING())
                     .build();
 
+    protected static final Schema DEFAULT_LOG_TABLE_SCHEMA =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("name", DataTypes.STRING())
+                    .build();
+
     protected static final TableDescriptor DEFAULT_PK_TABLE_DESCRIPTOR =
             TableDescriptor.builder()
                     .schema(DEFAULT_PK_TABLE_SCHEMA)
+                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
+                    .build();
+
+    protected static final TableDescriptor DEFAULT_LOG_TABLE_DESCRIPTOR =
+            TableDescriptor.builder()
+                    .schema(DEFAULT_LOG_TABLE_SCHEMA)
                     .distributedBy(DEFAULT_BUCKET_NUM, "id")
                     .build();
 

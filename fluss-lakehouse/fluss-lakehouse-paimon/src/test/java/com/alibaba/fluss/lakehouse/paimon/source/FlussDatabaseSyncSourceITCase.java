@@ -17,7 +17,7 @@
 package com.alibaba.fluss.lakehouse.paimon.source;
 
 import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
+import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
 import com.alibaba.fluss.lakehouse.paimon.testutils.TestingDatabaseSyncSink;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
