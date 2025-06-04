@@ -837,6 +837,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeLiveTabletServer(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
 
+        // Here, we will first update alive tabletServer info for all tabletServers and
+        // coordinatorServer metadata. The purpose of this approach is to prevent the scenario where
+        // NotifyLeaderAndIsrRequest gets sent before UpdateMetadataRequest, which could cause the
+        // leader to incorrectly adjust isr.
+        Set<ServerInfo> serverInfos =
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values());
+        // update coordinatorServer metadata cache.
+        serverMetadataCache.updateMetadata(
+                coordinatorContext.getCoordinatorServerInfo(), serverInfos);
+        updateTabletServerMetadataCache(serverInfos, null, null, Collections.emptySet());
+
         TableBucketStateMachine tableBucketStateMachine = tableManager.getTableBucketStateMachine();
         // get all table bucket whose leader is in this server and it not to be deleted
         Set<TableBucket> bucketsWithOfflineLeader =
@@ -865,11 +876,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // trigger OfflineReplica state change for those newly offline replicas
         replicaStateMachine.handleStateChanges(replicas, OfflineReplica);
 
-        Set<ServerInfo> serverInfos =
-                new HashSet<>(coordinatorContext.getLiveTabletServers().values());
-        // update coordinatorServer metadata cache.
-        serverMetadataCache.updateMetadata(
-                coordinatorContext.getCoordinatorServerInfo(), serverInfos);
         // update tabletServer metadata cache by send updateMetadata request.
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);
     }
