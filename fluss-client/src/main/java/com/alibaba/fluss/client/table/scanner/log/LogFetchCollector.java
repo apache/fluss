@@ -127,8 +127,8 @@ public class LogFetchCollector {
                             // because the old one may be immutable
                             List<ScanRecord> newScanRecords =
                                     new ArrayList<>(records.size() + currentRecords.size());
-                            newScanRecords.addAll(currentRecords);
-                            newScanRecords.addAll(records);
+                            newScanRecords.All(currentRecords);
+                            newScanRecords.All(records);
                             fetched.put(tableBucket, newScanRecords);
                         }
 
@@ -259,7 +259,7 @@ public class LogFetchCollector {
                     "Error in fetch for bucket {}: {}:{}", tb, error.exceptionName(), errorMessage);
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
-            // ADD: Check if bucket should be removed from scanner status to stop repeated fetch
+            // Check if bucket should be removed from scanner status to stop repeated fetch
             // attempts
             Long currentOffset = logScannerStatus.getBucketOffset(tb);
             if (currentOffset != null) {
