@@ -127,8 +127,8 @@ public class LogFetchCollector {
                             // because the old one may be immutable
                             List<ScanRecord> newScanRecords =
                                     new ArrayList<>(records.size() + currentRecords.size());
-                            newScanRecords.All(currentRecords);
-                            newScanRecords.All(records);
+                            newScanRecords.addAll(currentRecords);
+                            newScanRecords.addAll(records);
                             fetched.put(tableBucket, newScanRecords);
                         }
 
