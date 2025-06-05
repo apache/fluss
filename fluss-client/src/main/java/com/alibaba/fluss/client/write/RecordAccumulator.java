@@ -310,8 +310,7 @@ public final class RecordAccumulator {
     /** Abort all incomplete batches (whether they have been sent or not). */
     public void abortBatches(final Exception reason) {
         for (WriteBatch batch : incomplete.copyAll()) {
-            Deque<WriteBatch> dq =
-                    getDequeEvenIfPartitionNotReady(batch.physicalTablePath(), batch.bucketId());
+            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
             synchronized (dq) {
                 batch.abortRecordAppends();
                 dq.remove(batch);
@@ -384,14 +383,19 @@ public final class RecordAccumulator {
         writerBufferPool.returnAll(batch.pooledMemorySegments());
     }
 
+    /**
+     * Get the ready deque for the given table path and bucket id, or null if it does not exist. A
+     * deque is considered ready if it's not a partitioned table or the partition is created and
+     * partition_id is fetched.
+     */
     @VisibleForTesting
-    public Deque<WriteBatch> getDeque(PhysicalTablePath path, int bucketId) {
+    Deque<WriteBatch> getReadyDeque(PhysicalTablePath path, int bucketId) {
         BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
         if (bucketAndWriteBatches == null) {
             return null;
         }
 
-        // for these partitioned tables, we need to check partitionId first.
+        // for the partitioned tables, we need to check whether the partition is ready
         if (bucketAndWriteBatches.isPartitionedTable && bucketAndWriteBatches.partitionId == null) {
             return null;
         }
@@ -399,7 +403,12 @@ public final class RecordAccumulator {
         return bucketAndWriteBatches.batches.get(bucketId);
     }
 
-    public Deque<WriteBatch> getDequeEvenIfPartitionNotReady(PhysicalTablePath path, int bucketId) {
+    /**
+     * Get the deque for the given table path and bucket id, or null if it does not exist.
+     *
+     * <p>Note: this method does not check whether the partition is ready for partitioned tables.
+     */
+    private Deque<WriteBatch> getDeque(PhysicalTablePath path, int bucketId) {
         BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
         if (bucketAndWriteBatches == null) {
             return null;
@@ -644,7 +653,7 @@ public final class RecordAccumulator {
             updateDrainIndex(node.id(), drainIndex);
             drainIndex = (drainIndex + 1) % buckets.size();
 
-            Deque<WriteBatch> deque = getDeque(physicalTablePath, tableBucket.getBucket());
+            Deque<WriteBatch> deque = getReadyDeque(physicalTablePath, tableBucket.getBucket());
             if (deque == null) {
                 continue;
             }

@@ -132,7 +132,7 @@ public abstract class WriteBatch {
         }
 
         LOG.trace(
-                "Abort batch for table path {} of bucket {}",
+                "Abort batch for table path {} with bucket_id {}",
                 physicalTablePath,
                 bucketId,
                 exception);
