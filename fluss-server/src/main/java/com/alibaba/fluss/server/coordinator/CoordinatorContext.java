@@ -78,8 +78,8 @@ public class CoordinatorContext {
     // a map of partition assignment, <table_id, partition_id> -> <bucket, bucket_replicas>
     private final Map<TablePartition, Map<Integer, List<Integer>>> partitionAssignments =
             new HashMap<>();
-    // a map from partition_id -> partition_name
-    private final Map<Long, String> partitionNameById = new HashMap<>();
+    // a map from partition_id -> physicalTablePath
+    private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
     private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
 
     // a map from table_id to the table path
@@ -229,7 +229,7 @@ public class CoordinatorContext {
     }
 
     public void putPartition(long partitionId, PhysicalTablePath physicalTablePath) {
-        this.partitionNameById.put(partitionId, physicalTablePath.getPartitionName());
+        this.pathByPartitionId.put(partitionId, physicalTablePath);
         this.partitionIdByPath.put(physicalTablePath, partitionId);
     }
 
@@ -250,11 +250,20 @@ public class CoordinatorContext {
     }
 
     public boolean containsPartitionId(long partitionId) {
-        return this.partitionNameById.containsKey(partitionId);
+        return this.pathByPartitionId.containsKey(partitionId);
     }
 
     public @Nullable String getPartitionName(long partitionId) {
-        return this.partitionNameById.get(partitionId);
+        PhysicalTablePath physicalTablePath = pathByPartitionId.get(partitionId);
+        if (physicalTablePath == null) {
+            return null;
+        } else {
+            return physicalTablePath.getPartitionName();
+        }
+    }
+
+    public Optional<PhysicalTablePath> getPhysicalTablePath(long partitionId) {
+        return Optional.ofNullable(pathByPartitionId.get(partitionId));
     }
 
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
@@ -599,10 +608,10 @@ public class CoordinatorContext {
                                                     bucket)));
         }
 
-        String partitionName = partitionNameById.remove(tablePartition.getPartitionId());
-        if (partitionName != null) {
-            TablePath tablePath = getTablePathById(tablePartition.getTableId());
-            partitionIdByPath.remove(PhysicalTablePath.of(tablePath, partitionName));
+        PhysicalTablePath physicalTablePath =
+                pathByPartitionId.remove(tablePartition.getPartitionId());
+        if (physicalTablePath != null) {
+            partitionIdByPath.remove(physicalTablePath);
         }
     }
 
@@ -616,7 +625,7 @@ public class CoordinatorContext {
         tablePathById.clear();
         tableIdByPath.clear();
         tableInfoById.clear();
-        partitionNameById.clear();
+        pathByPartitionId.clear();
         partitionIdByPath.clear();
     }
 

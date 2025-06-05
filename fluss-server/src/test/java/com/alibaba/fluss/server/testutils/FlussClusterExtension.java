@@ -176,6 +176,11 @@ public final class FlussClusterExtension
                 metadataManager.dropTable(TablePath.of(defaultDb, table), true);
             }
         }
+
+        // remove all table metadata in tabletServer cache.
+        for (TabletServer tabletServer : tabletServers.values()) {
+            tabletServer.getMetadataCache().clearTableMetadata();
+        }
     }
 
     public void start() throws Exception {

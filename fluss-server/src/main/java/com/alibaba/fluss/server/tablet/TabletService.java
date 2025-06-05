@@ -39,6 +39,8 @@ import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListOffsetsResponse;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
 import com.alibaba.fluss.rpc.messages.LookupResponse;
+import com.alibaba.fluss.rpc.messages.MetadataRequest;
+import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import com.alibaba.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -128,13 +130,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer) {
-        super(
-                remoteFileSystem,
-                ServerType.TABLET_SERVER,
-                zkClient,
-                metadataCache,
-                metadataManager,
-                authorizer);
+        super(remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataManager, authorizer);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
@@ -281,6 +277,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 notifyLeaderAndIsrRequestData,
                 result -> response.complete(makeNotifyLeaderAndIsrResponse(result)));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+        return CompletableFuture.completedFuture(
+                makeMetadataResponse(
+                        request,
+                        currentListenerName(),
+                        currentSession(),
+                        authorizer,
+                        metadataCache,
+                        metadataCache::getTableMetadata,
+                        metadataCache::getPhysicalTablePath,
+                        metadataCache::getPartitionMetadata));
     }
 
     @Override

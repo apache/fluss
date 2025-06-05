@@ -19,6 +19,8 @@ package com.alibaba.fluss.server.metadata;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -58,6 +60,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newDropTabl
 import static com.alibaba.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT Case for metadata update. */
 class MetadataUpdateITCase {
@@ -354,62 +357,62 @@ class MetadataUpdateITCase {
                                     // check table info and bucket location and leader only for
                                     // non-partitioned table.
                                     if (!tableContext.isPartitionedTable) {
-                                        assertThat(serverMetadataCache.getTableMetadata(tablePath))
-                                                .isPresent();
                                         TableMetadata tableMetadataFromZk =
                                                 getTableMetadataFromZk(tablePath, tableId);
                                         assertTableMetadata(
-                                                        serverMetadataCache
-                                                                .getTableMetadata(tablePath)
-                                                                .get())
+                                                        serverMetadataCache.getTableMetadata(
+                                                                tablePath))
                                                 .isEqualTo(tableMetadataFromZk);
                                     }
                                 } else {
                                     assertThat(serverMetadataCache.getTablePath(tableId))
                                             .isNotPresent();
-                                    assertThat(serverMetadataCache.getTableInfo(tableId))
-                                            .isNotPresent();
-                                    assertThat(
-                                                    serverMetadataCache.getTableMetadata(
-                                                            tableContext.tablePath))
-                                            .isNotPresent();
+                                    assertThatThrownBy(
+                                                    () ->
+                                                            serverMetadataCache.getTableMetadata(
+                                                                    tableContext.tablePath))
+                                            .isInstanceOf(TableNotExistException.class)
+                                            .hasMessageContaining(
+                                                    "Table '"
+                                                            + tableContext.tablePath
+                                                            + "' does not exist.");
                                 }
                             });
                     expectedPartitionNameById.forEach(
                             (partitionId, tableContext) -> {
+                                PhysicalTablePath physicalTablePath =
+                                        PhysicalTablePath.of(
+                                                tableContext.tablePath, tableContext.partitionName);
                                 if (!tableContext.isDeleted) {
-                                    assertThat(serverMetadataCache.getPartitionName(partitionId))
-                                            .hasValue(tableContext.partitionName);
-
                                     assertThat(
-                                                    serverMetadataCache.getPartitionMetadata(
-                                                            PhysicalTablePath.of(
-                                                                    tableContext.tablePath,
-                                                                    tableContext.partitionName)))
-                                            .isPresent();
+                                                    serverMetadataCache.getPhysicalTablePath(
+                                                            partitionId))
+                                            .hasValue(physicalTablePath);
+
                                     PartitionMetadata partitionMetadataFromZk =
                                             getPartitionMetadataFromZk(
                                                     tableContext.tableId,
                                                     tableContext.partitionName,
                                                     partitionId);
                                     assertPartitionMetadata(
-                                                    serverMetadataCache
-                                                            .getPartitionMetadata(
-                                                                    PhysicalTablePath.of(
-                                                                            tableContext.tablePath,
-                                                                            tableContext
-                                                                                    .partitionName))
-                                                            .get())
+                                                    serverMetadataCache.getPartitionMetadata(
+                                                            physicalTablePath))
                                             .isEqualTo(partitionMetadataFromZk);
                                 } else {
-                                    assertThat(serverMetadataCache.getPartitionName(partitionId))
-                                            .isNotPresent();
                                     assertThat(
-                                                    serverMetadataCache.getPartitionMetadata(
-                                                            PhysicalTablePath.of(
-                                                                    tableContext.tablePath,
-                                                                    tableContext.partitionName)))
+                                                    serverMetadataCache.getPhysicalTablePath(
+                                                            partitionId))
                                             .isNotPresent();
+                                    assertThatThrownBy(
+                                                    () ->
+                                                            serverMetadataCache
+                                                                    .getPartitionMetadata(
+                                                                            physicalTablePath))
+                                            .isInstanceOf(PartitionNotExistException.class)
+                                            .hasMessageContaining(
+                                                    "Table partition '"
+                                                            + physicalTablePath
+                                                            + "' does not exist.");
                                 }
                             });
                 });

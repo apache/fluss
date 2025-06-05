@@ -177,7 +177,8 @@ public class TabletServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            this.metadataCache = new TabletServerMetadataCache();
+            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+            this.metadataCache = new TabletServerMetadataCache(metadataManager, zkClient);
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
@@ -223,7 +224,6 @@ public class TabletServer extends ServerBase {
                             systemClock);
             replicaManager.startup();
 
-            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.tabletService =
                     new TabletService(
                             serverId,
