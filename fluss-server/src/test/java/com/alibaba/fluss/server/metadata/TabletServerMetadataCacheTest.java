@@ -19,17 +19,22 @@ package com.alibaba.fluss.server.metadata;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.cluster.TabletServerInfo;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
@@ -48,12 +53,21 @@ public class TabletServerMetadataCacheTest {
     private ServerInfo coordinatorServer;
     private Set<ServerInfo> aliveTableServers;
 
-    private TablePath partitionedTablePath;
+    private final TablePath partitionedTablePath =
+            TablePath.of("test_db_1", "test_partition_table_1");
     private final long partitionTableId = 150002L;
     private final long partitionId1 = 15L;
     private final String partitionName1 = "p1";
     private final long partitionId2 = 16L;
     private final String partitionName2 = "p2";
+    private final TableInfo partitionTableInfo =
+            TableInfo.of(
+                    partitionedTablePath,
+                    partitionTableId,
+                    0,
+                    DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                    100L,
+                    100L);
     private List<TableMetadata> tableMetadataList;
     private List<PartitionMetadata> partitionMetadataList;
     private final List<BucketMetadata> initialBucketMetadata =
@@ -69,7 +83,11 @@ public class TabletServerMetadataCacheTest {
 
     @BeforeEach
     public void setup() {
-        serverMetadataCache = new TabletServerMetadataCache();
+        serverMetadataCache =
+                new TabletServerMetadataCache(
+                        new TestingMetadataManager(
+                                Arrays.asList(DATA1_TABLE_INFO, partitionTableInfo)),
+                        null);
         coordinatorServer =
                 new ServerInfo(
                         0,
@@ -96,20 +114,10 @@ public class TabletServerMetadataCacheTest {
                                         "rack2",
                                         Endpoint.fromListenersString("INTERNAL://localhost:104"),
                                         ServerType.TABLET_SERVER)));
-
-        partitionedTablePath = TablePath.of("test_db_1", "test_partition_table_1");
         tableMetadataList =
                 Arrays.asList(
                         new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata),
-                        new TableMetadata(
-                                TableInfo.of(
-                                        partitionedTablePath,
-                                        partitionTableId,
-                                        0,
-                                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
-                                        100L,
-                                        100L),
-                                Collections.emptyList()));
+                        new TableMetadata(partitionTableInfo, Collections.emptyList()));
 
         partitionMetadataList =
                 Arrays.asList(
@@ -150,18 +158,6 @@ public class TabletServerMetadataCacheTest {
                 .isEqualTo(DATA1_TABLE_PATH);
         assertThat(serverMetadataCache.getTablePath(partitionTableId).get())
                 .isEqualTo(TablePath.of("test_db_1", "test_partition_table_1"));
-
-        assertThat(serverMetadataCache.getTableInfo(DATA1_TABLE_ID).get())
-                .isEqualTo(DATA1_TABLE_INFO);
-        assertThat(serverMetadataCache.getTableInfo(partitionTableId).get())
-                .isEqualTo(
-                        TableInfo.of(
-                                partitionedTablePath,
-                                partitionTableId,
-                                0,
-                                DATA1_PARTITIONED_TABLE_DESCRIPTOR,
-                                100L,
-                                100L));
 
         assertTableMetadataEquals(DATA1_TABLE_ID, DATA1_TABLE_INFO, initialBucketMetadata);
 
@@ -224,8 +220,6 @@ public class TabletServerMetadataCacheTest {
                                         changedBucket1BucketMetadata)),
                         Collections.emptyList()));
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
-        assertThat(serverMetadataCache.getTableInfo(DATA1_TABLE_ID)).isEmpty();
-        assertThat(serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH)).isEmpty();
 
         // test delete one partition.
         serverMetadataCache.updateClusterMetadata(
@@ -240,11 +234,7 @@ public class TabletServerMetadataCacheTest {
                                         DELETED_PARTITION_ID, // mark this partition as
                                         // deletion.
                                         Collections.emptyList()))));
-        assertThat(serverMetadataCache.getPartitionName(partitionId1)).isEmpty();
-        assertThat(
-                        serverMetadataCache.getPartitionMetadata(
-                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
-                .isEmpty();
+        assertThat(serverMetadataCache.getPhysicalTablePath(partitionId1)).isEmpty();
         assertPartitionMetadataEquals(
                 partitionId2,
                 partitionTableId,
@@ -258,7 +248,7 @@ public class TabletServerMetadataCacheTest {
             TableInfo expectedTableInfo,
             List<BucketMetadata> expectedBucketMetadataList) {
         TablePath tablePath = serverMetadataCache.getTablePath(tableId).get();
-        TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath).get();
+        TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath);
         assertThat(tableMetadata.getTableInfo()).isEqualTo(expectedTableInfo);
         assertThat(tableMetadata.getBucketMetadataList())
                 .hasSameElementsAs(expectedBucketMetadataList);
@@ -270,17 +260,30 @@ public class TabletServerMetadataCacheTest {
             long expectedPartitionId,
             String expectedPartitionName,
             List<BucketMetadata> expectedBucketMetadataList) {
-        String actualPartitionName = serverMetadataCache.getPartitionName(partitionId).get();
+        String actualPartitionName =
+                serverMetadataCache.getPhysicalTablePath(partitionId).get().getPartitionName();
         assertThat(actualPartitionName).isEqualTo(expectedPartitionName);
         PartitionMetadata partitionMetadata =
-                serverMetadataCache
-                        .getPartitionMetadata(
-                                PhysicalTablePath.of(partitionedTablePath, actualPartitionName))
-                        .get();
+                serverMetadataCache.getPartitionMetadata(
+                        PhysicalTablePath.of(partitionedTablePath, actualPartitionName));
         assertThat(partitionMetadata.getTableId()).isEqualTo(expectedTableId);
         assertThat(partitionMetadata.getPartitionId()).isEqualTo(expectedPartitionId);
         assertThat(partitionMetadata.getPartitionName()).isEqualTo(actualPartitionName);
         assertThat(partitionMetadata.getBucketMetadataList())
                 .hasSameElementsAs(expectedBucketMetadataList);
+    }
+
+    private static final class TestingMetadataManager extends MetadataManager {
+
+        private final Map<TablePath, TableInfo> tableInfoMap = new HashMap<>();
+
+        public TestingMetadataManager(List<TableInfo> tableInfos) {
+            super(null, new Configuration());
+            tableInfos.forEach(tableInfo -> tableInfoMap.put(tableInfo.getTablePath(), tableInfo));
+        }
+
+        public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
+            return tableInfoMap.get(tablePath);
+        }
     }
 }

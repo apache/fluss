@@ -31,6 +31,7 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.KvManager;
@@ -122,7 +123,7 @@ public class ReplicaTestBase {
 
     protected static final int TABLET_SERVER_ID = 1;
     private static final String TABLET_SERVER_RACK = "rack1";
-    private static ZooKeeperClient zkClient;
+    protected static ZooKeeperClient zkClient;
 
     // to register all should be closed after each test
     private final CloseableRegistry closeableRegistry = new CloseableRegistry();
@@ -182,7 +183,8 @@ public class ReplicaTestBase {
         kvManager = KvManager.create(conf, zkClient, logManager);
         kvManager.startup();
 
-        serverMetadataCache = new TabletServerMetadataCache();
+        serverMetadataCache =
+                new TabletServerMetadataCache(new MetadataManager(zkClient, conf), zkClient);
         initMetadataCache(serverMetadataCache);
 
         rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance());

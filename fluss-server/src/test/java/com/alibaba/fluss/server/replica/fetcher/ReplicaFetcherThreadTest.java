@@ -26,6 +26,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
@@ -331,7 +332,7 @@ public class ReplicaFetcherThreadTest {
                         null,
                         zkClient,
                         serverId,
-                        new TabletServerMetadataCache(),
+                        new TabletServerMetadataCache(new MetadataManager(null, conf), null),
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         SystemClock.getInstance());

@@ -16,18 +16,23 @@
 
 package com.alibaba.fluss.server.metadata;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.tablet.TabletServer;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -35,6 +40,8 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.server.RpcServiceBase.getPartitionMetadataFromZk;
+import static com.alibaba.fluss.server.RpcServiceBase.getTableMetadataFromZk;
 import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
@@ -57,8 +64,13 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     @GuardedBy("bucketMetadataLock")
     private volatile ServerMetadataSnapshot serverMetadataSnapshot;
 
-    public TabletServerMetadataCache() {
+    private final MetadataManager metadataManager;
+    private final ZooKeeperClient zkClient;
+
+    public TabletServerMetadataCache(MetadataManager metadataManager, ZooKeeperClient zkClient) {
         this.serverMetadataSnapshot = ServerMetadataSnapshot.empty();
+        this.metadataManager = metadataManager;
+        this.zkClient = zkClient;
     }
 
     @Override
@@ -97,36 +109,34 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getTablePath(tableId);
     }
 
-    public Optional<String> getPartitionName(long partitionId) {
-        return serverMetadataSnapshot.getPartitionName(partitionId);
+    public Optional<PhysicalTablePath> getPhysicalTablePath(long partitionId) {
+        return serverMetadataSnapshot.getPhysicalTablePath(partitionId);
     }
 
-    public Optional<TableInfo> getTableInfo(long tableId) {
-        return serverMetadataSnapshot.getTableInfo(tableId);
-    }
-
-    public Optional<TableMetadata> getTableMetadata(TablePath tablePath) {
+    public TableMetadata getTableMetadata(TablePath tablePath) {
+        // always get table info from zk.
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
         ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
         OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
+        List<BucketMetadata> bucketMetadataList;
         if (!tableIdOpt.isPresent()) {
-            return Optional.empty();
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
+            // get table assignment from zk.
+            bucketMetadataList =
+                    getTableMetadataFromZk(
+                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
         } else {
-            long tableId = tableIdOpt.getAsLong();
-            Optional<TableInfo> tableInfoOpt = snapshot.getTableInfo(tableId);
-            if (tableInfoOpt.isPresent()) {
-                TableInfo tableInfo = tableInfoOpt.get();
-                return Optional.of(
-                        new TableMetadata(
-                                tableInfo,
-                                new ArrayList<>(
-                                        snapshot.getBucketMetadataForTable(tableId).values())));
-            } else {
-                return Optional.empty();
-            }
+            // get table assignment from cache.
+            bucketMetadataList =
+                    new ArrayList<>(
+                            snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).values());
         }
+
+        return new TableMetadata(tableInfo, bucketMetadataList);
     }
 
-    public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
+    public PartitionMetadata getPartitionMetadata(PhysicalTablePath partitionPath) {
         TablePath tablePath =
                 new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
         String partitionName = partitionPath.getPartitionName();
@@ -137,15 +147,15 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         if (tableIdOpt.isPresent() && partitionIdOpt.isPresent()) {
             long tableId = tableIdOpt.getAsLong();
             long partitionId = partitionIdOpt.get();
-            return Optional.of(
-                    new PartitionMetadata(
-                            tableId,
-                            partitionName,
-                            partitionId,
-                            new ArrayList<>(
-                                    snapshot.getBucketMetadataForPartition(partitionId).values())));
+            return new PartitionMetadata(
+                    tableId,
+                    partitionName,
+                    partitionId,
+                    new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values()));
         } else {
-            return Optional.empty();
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
+            return getPartitionMetadataFromZk(partitionPath, zkClient);
         }
     }
 
@@ -167,8 +177,6 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     // 3. update table metadata. Always partial update.
                     Map<TablePath, Long> tableIdByPath =
                             new HashMap<>(serverMetadataSnapshot.getTableIdByPath());
-                    Map<Long, TableInfo> tableInfoByTableId =
-                            new HashMap<>(serverMetadataSnapshot.getTableInfoByTableId());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables =
                             new HashMap<>(serverMetadataSnapshot.getBucketMetadataMapForTables());
 
@@ -179,18 +187,15 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         if (tableId == DELETED_TABLE_ID) {
                             Long removedTableId = tableIdByPath.remove(tablePath);
                             if (removedTableId != null) {
-                                tableInfoByTableId.remove(removedTableId);
                                 bucketMetadataMapForTables.remove(removedTableId);
                             }
                         } else if (tablePath == DELETED_TABLE_PATH) {
                             serverMetadataSnapshot
                                     .getTablePath(tableId)
                                     .ifPresent(tableIdByPath::remove);
-                            tableInfoByTableId.remove(tableId);
                             bucketMetadataMapForTables.remove(tableId);
                         } else {
                             tableIdByPath.put(tablePath, tableId);
-                            tableInfoByTableId.put(tableId, tableInfo);
                             tableMetadata
                                     .getBucketMetadataList()
                                     .forEach(
@@ -230,12 +235,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             }
                         } else if (partitionName.equals(DELETED_PARTITION_NAME)) {
                             serverMetadataSnapshot
-                                    .getPartitionName(partitionId)
-                                    .ifPresent(
-                                            pName ->
-                                                    partitionIdByPath.remove(
-                                                            PhysicalTablePath.of(
-                                                                    tablePath, pName)));
+                                    .getPhysicalTablePath(partitionId)
+                                    .ifPresent(partitionIdByPath::remove);
                             bucketMetadataMapForPartitions.remove(partitionId);
                         } else {
                             partitionIdByPath.put(physicalTablePath, partitionId);
@@ -260,9 +261,28 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     tableIdByPath,
                                     newPathByTableId,
                                     partitionIdByPath,
-                                    tableInfoByTableId,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions);
+                });
+    }
+
+    @VisibleForTesting
+    public void clearTableMetadata() {
+        inLock(
+                metadataLock,
+                () -> {
+                    ServerInfo coordinatorServer = serverMetadataSnapshot.getCoordinatorServer();
+                    Map<Integer, ServerInfo> aliveTabletServers =
+                            serverMetadataSnapshot.getAliveTabletServers();
+                    serverMetadataSnapshot =
+                            new ServerMetadataSnapshot(
+                                    coordinatorServer,
+                                    aliveTabletServers,
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap());
                 });
     }
 }

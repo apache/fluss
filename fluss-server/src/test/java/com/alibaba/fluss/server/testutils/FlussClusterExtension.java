@@ -176,6 +176,12 @@ public final class FlussClusterExtension
                 metadataManager.dropTable(TablePath.of(defaultDb, table), true);
             }
         }
+
+        // TODO we need to drop these table by dropTable Event instead of manual clear table
+        // metadata.
+        for (TabletServer tabletServer : tabletServers.values()) {
+            tabletServer.getMetadataCache().clearTableMetadata();
+        }
     }
 
     public void start() throws Exception {

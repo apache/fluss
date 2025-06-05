@@ -31,8 +31,12 @@ import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionSpec;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
@@ -61,8 +65,11 @@ import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
 import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import com.alibaba.fluss.rpc.messages.MetadataRequest;
+import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.PbHeartbeatReqForTable;
 import com.alibaba.fluss.rpc.messages.PbHeartbeatRespForTable;
+import com.alibaba.fluss.rpc.netty.server.Session;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
@@ -72,6 +79,7 @@ import com.alibaba.fluss.server.RpcServiceBase;
 import com.alibaba.fluss.server.authorizer.AclCreateResult;
 import com.alibaba.fluss.server.authorizer.AclDeleteResult;
 import com.alibaba.fluss.server.authorizer.Authorizer;
+import com.alibaba.fluss.server.coordinator.event.AccessContextEvent;
 import com.alibaba.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -81,9 +89,13 @@ import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.LakeTieringTableInfo;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
+import com.alibaba.fluss.server.metadata.BucketMetadata;
+import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
+import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
@@ -93,9 +105,11 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
@@ -121,6 +135,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
+    private final ServerMetadataCache metadataCache;
 
     // null if the cluster hasn't configured datalake format
     private final @Nullable DataLakeFormat dataLakeFormat;
@@ -137,13 +152,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             @Nullable Authorizer authorizer,
             @Nullable LakeCatalog lakeCatalog,
             LakeTableTieringManager lakeTableTieringManager) {
-        super(
-                remoteFileSystem,
-                ServerType.COORDINATOR,
-                zkClient,
-                metadataCache,
-                metadataManager,
-                authorizer);
+        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.eventManagerSupplier =
@@ -153,6 +162,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
         this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
+        this.metadataCache = metadataCache;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
                 "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
@@ -406,6 +416,28 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(response);
     }
 
+    @Override
+    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+        String listenerName = currentListenerName();
+        Session session = currentSession();
+
+        AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
+                new AccessContextEvent<>(
+                        ctx ->
+                                makeMetadataResponse(
+                                        request,
+                                        listenerName,
+                                        session,
+                                        authorizer,
+                                        metadataCache,
+                                        (tablePath) -> getTableMetadata(ctx, tablePath),
+                                        ctx::getPhysicalTablePath,
+                                        (physicalTablePath) ->
+                                                getPartitionMetadata(ctx, physicalTablePath)));
+        eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
+        return metadataResponseAccessContextEvent.getResultFuture();
+    }
+
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier
@@ -544,5 +576,77 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             currentEpoch,
                             heartbeatReqForTable.getTableId()));
         }
+    }
+
+    private TableMetadata getTableMetadata(CoordinatorContext ctx, TablePath tablePath) {
+        // always get table info from zk.
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        long tableId = ctx.getTableIdByPath(tablePath);
+        List<BucketMetadata> bucketMetadataList;
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
+            // get table assignment from zk.
+            bucketMetadataList =
+                    getTableMetadataFromZk(
+                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
+        } else {
+            // get table assignment from coordinatorContext.
+            bucketMetadataList =
+                    getBucketMetadataFromContext(
+                            ctx, tableId, null, ctx.getTableAssignment(tableId));
+        }
+        return new TableMetadata(tableInfo, bucketMetadataList);
+    }
+
+    private PartitionMetadata getPartitionMetadata(
+            CoordinatorContext ctx, PhysicalTablePath partitionPath) {
+        TablePath tablePath =
+                new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
+        String partitionName = partitionPath.getPartitionName();
+        long tableId = ctx.getTableIdByPath(tablePath);
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
+            return getPartitionMetadataFromZk(partitionPath, zkClient);
+        } else {
+            Optional<Long> partitionIdOpt = ctx.getPartitionId(partitionPath);
+            if (partitionIdOpt.isPresent()) {
+                long partitionId = partitionIdOpt.get();
+                List<BucketMetadata> bucketMetadataList =
+                        getBucketMetadataFromContext(
+                                ctx,
+                                tableId,
+                                partitionId,
+                                ctx.getPartitionAssignment(
+                                        new TablePartition(tableId, partitionId)));
+                return new PartitionMetadata(
+                        tableId, partitionName, partitionId, bucketMetadataList);
+            } else {
+                return getPartitionMetadataFromZk(partitionPath, zkClient);
+            }
+        }
+    }
+
+    private static List<BucketMetadata> getBucketMetadataFromContext(
+            CoordinatorContext ctx,
+            long tableId,
+            @Nullable Long partitionId,
+            Map<Integer, List<Integer>> tableAssigment) {
+        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
+        tableAssigment.forEach(
+                (bucketId, serverIds) -> {
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+                    Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
+                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+                    BucketMetadata bucketMetadata =
+                            new BucketMetadata(
+                                    bucketId,
+                                    leader,
+                                    ctx.getBucketLeaderEpoch(tableBucket),
+                                    serverIds);
+                    bucketMetadataList.add(bucketMetadata);
+                });
+        return bucketMetadataList;
     }
 }

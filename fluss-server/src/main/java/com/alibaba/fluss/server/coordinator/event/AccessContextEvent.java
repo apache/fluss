@@ -22,10 +22,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 /**
- * An event designed to safely access the {@link CoordinatorContext}. This is intended solely for
- * testing purposes. Since {@link CoordinatorContext} is not thread-safe, directly accessing it in
- * tests can lead to unsafe operations. This event ensures safe access to the {@link
- * CoordinatorContext} during testing
+ * An event designed to safely access the {@link CoordinatorContext}. Since {@link
+ * CoordinatorContext} is not thread-safe, directly accessing it in tests can lead to unsafe
+ * operations. This event ensures safe access to the {@link CoordinatorContext}.
  *
  * @param <T> the type of the result of the access operation
  */

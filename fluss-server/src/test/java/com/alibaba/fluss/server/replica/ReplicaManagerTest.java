@@ -21,6 +21,8 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -61,6 +63,7 @@ import com.alibaba.fluss.server.metadata.ServerInfo;
 import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.testutils.KvTestUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
+import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.testutils.DataTestUtils;
 import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataTypes;
@@ -94,9 +97,9 @@ import static com.alibaba.fluss.record.TestData.DATA1_KEY_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
@@ -1420,9 +1423,12 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    void testUpdateMetadata() {
+    void testUpdateMetadata() throws Exception {
         // check the server metadata before update.
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
+        TablePath nonePartitionTablePath = TablePath.of("test_db_1", "test_update_metadata_table");
+        TablePath partitionTablePath =
+                TablePath.of("test_db_1", "test_update_metadata_partition_table");
+        long nonePartitionTableId = 150004L;
         long partitionTableId = 150002L;
         long partitionId1 = 15L;
         String partitionName1 = "p1";
@@ -1439,15 +1445,11 @@ class ReplicaManagerTest extends ReplicaTestBase {
         expectedCoordinatorServer.put("INTERNAL", null);
 
         Map<Long, TablePath> expectedTablePathById = new HashMap<>();
-        expectedTablePathById.put(DATA1_TABLE_ID, null);
+        expectedTablePathById.put(nonePartitionTableId, null);
         expectedTablePathById.put(partitionTableId, null);
 
-        Map<Long, TableInfo> expectedTableInfoById = new HashMap<>();
-        expectedTableInfoById.put(DATA1_TABLE_ID, null);
-        expectedTableInfoById.put(partitionTableId, null);
-
         Map<TablePath, TableMetadata> expectedTableMetadataById = new HashMap<>();
-        expectedTableMetadataById.put(DATA1_TABLE_PATH, null);
+        expectedTableMetadataById.put(nonePartitionTablePath, null);
         expectedTableMetadataById.put(partitionTablePath, null);
 
         Map<Long, String> expectedPartitionNameById = new HashMap<>();
@@ -1462,7 +1464,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 expectedCoordinatorServer,
                 3,
                 expectedTablePathById,
-                expectedTableInfoById,
                 expectedTableMetadataById,
                 expectedPartitionNameById,
                 expectedPartitionMetadataById);
@@ -1499,15 +1500,25 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         "rack3",
                                         Endpoint.fromListenersString("CLIENT://localhost:93"),
                                         ServerType.TABLET_SERVER)));
+
+        TableInfo nonePartitionTableInfo =
+                TableInfo.of(
+                        nonePartitionTablePath,
+                        nonePartitionTableId,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
         TableInfo partitionTableInfo =
                 TableInfo.of(
                         partitionTablePath,
                         partitionTableId,
-                        0,
+                        1,
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
-        TableMetadata tableMetadata1 = new TableMetadata(DATA1_TABLE_INFO, Collections.emptyList());
+        TableMetadata tableMetadata1 =
+                new TableMetadata(nonePartitionTableInfo, Collections.emptyList());
         TableMetadata tableMetadata2 =
                 new TableMetadata(partitionTableInfo, Collections.emptyList());
 
@@ -1525,15 +1536,22 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         Arrays.asList(tableMetadata1, tableMetadata2),
                         Arrays.asList(partitionMetadata1, partitionMetadata2)));
 
+        // register table to zk.
+        zkClient.registerTable(
+                nonePartitionTablePath,
+                TableRegistration.newTable(nonePartitionTableId, DATA1_TABLE_DESCRIPTOR));
+        zkClient.registerSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
+        zkClient.registerTable(
+                partitionTablePath,
+                TableRegistration.newTable(partitionTableId, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+        zkClient.registerSchema(partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
+
         expectedCoordinatorServer.put(
                 "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
-        expectedTablePathById.put(DATA1_TABLE_ID, DATA1_TABLE_PATH);
+        expectedTablePathById.put(nonePartitionTableId, nonePartitionTablePath);
         expectedTablePathById.put(partitionTableId, partitionTablePath);
 
-        expectedTableInfoById.put(DATA1_TABLE_ID, DATA1_TABLE_INFO);
-        expectedTableInfoById.put(partitionTableId, partitionTableInfo);
-
-        expectedTableMetadataById.put(DATA1_TABLE_PATH, tableMetadata1);
+        expectedTableMetadataById.put(nonePartitionTablePath, tableMetadata1);
         expectedTableMetadataById.put(partitionTablePath, tableMetadata2);
 
         expectedPartitionNameById.put(partitionId1, partitionName1);
@@ -1546,7 +1564,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 expectedCoordinatorServer,
                 4,
                 expectedTablePathById,
-                expectedTableInfoById,
                 expectedTableMetadataById,
                 expectedPartitionNameById,
                 expectedPartitionMetadataById);
@@ -1560,22 +1577,22 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         Collections.singletonList(
                                 new TableMetadata(
                                         TableInfo.of(
-                                                DATA1_TABLE_INFO.getTablePath(),
+                                                nonePartitionTablePath,
                                                 DELETED_TABLE_ID, // mark as deleted.
-                                                DATA1_TABLE_INFO.getSchemaId(),
-                                                DATA1_TABLE_INFO.toTableDescriptor(),
+                                                1,
+                                                DATA1_TABLE_DESCRIPTOR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
                                         Collections.emptyList())),
                         Collections.emptyList()));
-        expectedTablePathById.put(DATA1_TABLE_ID, null);
-        expectedTableInfoById.put(DATA1_TABLE_ID, null);
-        expectedTableMetadataById.put(DATA1_TABLE_PATH, null);
+        zkClient.deleteTable(nonePartitionTablePath);
+
+        expectedTablePathById.put(nonePartitionTableId, null);
+        expectedTableMetadataById.put(nonePartitionTablePath, null);
         assertUpdateMetadataEquals(
                 expectedCoordinatorServer,
                 4,
                 expectedTablePathById,
-                expectedTableInfoById,
                 expectedTableMetadataById,
                 expectedPartitionNameById,
                 expectedPartitionMetadataById);
@@ -1599,7 +1616,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 expectedCoordinatorServer,
                 4,
                 expectedTablePathById,
-                expectedTableInfoById,
                 expectedTableMetadataById,
                 expectedPartitionNameById,
                 expectedPartitionMetadataById);
@@ -1725,7 +1741,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
             Map<String, ServerNode> expectedCoordinatorServer,
             int expectedTabletServerSize,
             Map<Long, TablePath> expectedTablePathById,
-            Map<Long, TableInfo> expectedTableInfoById,
             Map<TablePath, TableMetadata> expectedTableMetadataById,
             Map<Long, String> expectedPartitionNameById,
             Map<PhysicalTablePath, PartitionMetadata> expectedPartitionMetadataById) {
@@ -1748,41 +1763,41 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     }
                 });
 
-        expectedTableInfoById.forEach(
-                (k, v) -> {
-                    if (v != null) {
-                        assertThat(serverMetadataCache.getTableInfo(k).get()).isEqualTo(v);
-                    } else {
-                        assertThat(serverMetadataCache.getTableInfo(k)).isEmpty();
-                    }
-                });
-
         expectedTableMetadataById.forEach(
                 (k, v) -> {
                     if (v != null) {
-                        assertTableMetadata(serverMetadataCache.getTableMetadata(k).get())
-                                .isEqualTo(v);
+                        assertTableMetadata(serverMetadataCache.getTableMetadata(k)).isEqualTo(v);
                     } else {
-                        assertThat(serverMetadataCache.getTableMetadata(k)).isEmpty();
+                        assertThatThrownBy(() -> serverMetadataCache.getTableMetadata(k))
+                                .isInstanceOf(TableNotExistException.class)
+                                .hasMessageContaining("Table '" + k + "' does not exist.");
                     }
                 });
 
         expectedPartitionNameById.forEach(
                 (k, v) -> {
                     if (v != null) {
-                        assertThat(serverMetadataCache.getPartitionName(k).get()).isEqualTo(v);
+                        assertThat(
+                                        serverMetadataCache
+                                                .getPhysicalTablePath(k)
+                                                .get()
+                                                .getPartitionName())
+                                .isEqualTo(v);
                     } else {
-                        assertThat(serverMetadataCache.getPartitionName(k)).isEmpty();
+                        assertThat(serverMetadataCache.getPhysicalTablePath(k)).isEmpty();
                     }
                 });
 
         expectedPartitionMetadataById.forEach(
                 (k, v) -> {
                     if (v != null) {
-                        assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k).get())
+                        assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k))
                                 .isEqualTo(v);
                     } else {
-                        assertThat(serverMetadataCache.getPartitionMetadata(k)).isEmpty();
+                        assertThatThrownBy(() -> serverMetadataCache.getPartitionMetadata(k))
+                                .isInstanceOf(PartitionNotExistException.class)
+                                .hasMessageContaining(
+                                        "Table partition '" + k + "' does not exist.");
                     }
                 });
     }
