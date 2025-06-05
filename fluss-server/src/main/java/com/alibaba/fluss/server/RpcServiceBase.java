@@ -84,6 +84,7 @@ import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.tablet.TabletService;
+import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
@@ -116,7 +117,6 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapsho
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListAclsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
-import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toPhysicalTablePath;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
@@ -461,9 +461,9 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Session session,
             Authorizer authorizer,
             ServerMetadataCache metadataCache,
-            Function<TablePath, TableMetadata> getTableMetadataFunction,
-            Function<Long, Optional<PhysicalTablePath>> getPhysicalTablePathFunction,
-            Function<PhysicalTablePath, PartitionMetadata> getPartitionMetadataFunction) {
+            Function<TablePath, TableMetadata> getTableMetadataFunc,
+            Function<Long, Optional<PhysicalTablePath>> getPhysicalTablePathFunc,
+            Function<PhysicalTablePath, PartitionMetadata> getPartitionMetadataFunc) {
         List<PbTablePath> pbTablePaths = request.getTablePathsList();
         List<TableMetadata> tableMetadata = new ArrayList<>();
 
@@ -476,22 +476,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             Resource.table(
                                     pbTablePath.getDatabaseName(), pbTablePath.getTableName()))) {
                 TablePath tablePath = toTablePath(pbTablePath);
-                tableMetadata.add(getTableMetadataFunction.apply(tablePath));
+                tableMetadata.add(getTableMetadataFunc.apply(tablePath));
                 tablePaths.add(tablePath);
             }
         }
 
         List<PartitionMetadata> partitionMetadata = new ArrayList<>();
-        List<PhysicalTablePath> partitions = new ArrayList<>();
-        request.getPartitionsPathsList()
-                .forEach(
-                        pbPhysicalTablePath ->
-                                partitions.add(toPhysicalTablePath(pbPhysicalTablePath)));
+        List<PhysicalTablePath> partitions =
+                request.getPartitionsPathsList().stream()
+                        .map(ServerRpcMessageUtils::toPhysicalTablePath)
+                        .collect(Collectors.toList());
         long[] partitionIds = request.getPartitionsIds();
         Set<Long> partitionIdsNotExistsInCache = new HashSet<>();
         for (long partitionId : partitionIds) {
             Optional<PhysicalTablePath> physicalTablePath =
-                    getPhysicalTablePathFunction.apply(partitionId);
+                    getPhysicalTablePathFunc.apply(partitionId);
             if (physicalTablePath.isPresent()) {
                 partitions.add(physicalTablePath.get());
             } else {
@@ -512,7 +511,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             Resource.table(
                                     partitionPath.getDatabaseName(),
                                     partitionPath.getTableName()))) {
-                partitionMetadata.add(getPartitionMetadataFunction.apply(partitionPath));
+                partitionMetadata.add(getPartitionMetadataFunc.apply(partitionPath));
             }
         }
 

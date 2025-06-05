@@ -136,8 +136,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final ServerMetadataCache metadataCache;
-    private final ZooKeeperClient zkClient;
-    private final MetadataManager metadataManager;
 
     // null if the cluster hasn't configured datalake format
     private final @Nullable DataLakeFormat dataLakeFormat;
@@ -165,8 +163,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
-        this.metadataManager = metadataManager;
-        this.zkClient = zkClient;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
                 "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
@@ -588,6 +584,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         long tableId = ctx.getTableIdByPath(tablePath);
         List<BucketMetadata> bucketMetadataList;
         if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
             // get table assignment from zk.
             bucketMetadataList =
                     getTableMetadataFromZk(
@@ -608,6 +606,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         String partitionName = partitionPath.getPartitionName();
         long tableId = ctx.getTableIdByPath(tablePath);
         if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
             return getPartitionMetadataFromZk(partitionPath, zkClient);
         } else {
             Optional<Long> partitionIdOpt = ctx.getPartitionId(partitionPath);

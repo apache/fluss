@@ -30,7 +30,6 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -120,6 +119,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
         List<BucketMetadata> bucketMetadataList;
         if (!tableIdOpt.isPresent()) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
             // get table assignment from zk.
             bucketMetadataList =
                     getTableMetadataFromZk(
@@ -151,6 +152,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     partitionId,
                     new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values()));
         } else {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
             return getPartitionMetadataFromZk(partitionPath, zkClient);
         }
     }
@@ -263,22 +266,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     @VisibleForTesting
-    public void clearTableMetadata() {
-        inLock(
-                metadataLock,
-                () -> {
-                    ServerInfo coordinatorServer = serverMetadataSnapshot.getCoordinatorServer();
-                    Map<Integer, ServerInfo> aliveTabletServers =
-                            serverMetadataSnapshot.getAliveTabletServers();
-                    serverMetadataSnapshot =
-                            new ServerMetadataSnapshot(
-                                    coordinatorServer,
-                                    aliveTabletServers,
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap(),
-                                    Collections.emptyMap());
-                });
+    public Map<TablePath, Long> getTableIdByPath() {
+        return serverMetadataSnapshot.getTableIdByPath();
     }
 }

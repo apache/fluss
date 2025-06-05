@@ -179,7 +179,9 @@ public final class FlussClusterExtension
 
         // remove all table metadata in tabletServer cache.
         for (TabletServer tabletServer : tabletServers.values()) {
-            tabletServer.getMetadataCache().clearTableMetadata();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(tabletServer.getMetadataCache().getTableIdByPath()).isEmpty());
         }
     }
 

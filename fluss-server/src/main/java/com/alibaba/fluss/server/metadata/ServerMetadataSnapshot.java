@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.server.metadata;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
@@ -167,15 +166,5 @@ public class ServerMetadataSnapshot {
 
     public Map<Long, Map<Integer, BucketMetadata>> getBucketMetadataMapForPartitions() {
         return bucketMetadataMapForPartitions;
-    }
-
-    @VisibleForTesting
-    public @Nullable ServerInfo getCoordinatorServer() {
-        return coordinatorServer;
-    }
-
-    @VisibleForTesting
-    public Map<Integer, ServerInfo> getAliveTabletServers() {
-        return aliveTabletServers;
     }
 }
