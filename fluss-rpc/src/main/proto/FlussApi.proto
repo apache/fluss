@@ -856,7 +856,7 @@ message PbHeartbeatReqForTable {
   // the coordinator epoch when the table is assigned to be tiering service
   required int32 coordinator_epoch = 2;
   // the tiering epoch when the table is assigned to be tiering service
-  required int32 tiering_epoch = 3;
+  required int64 tiering_epoch = 3;
 }
 
 message PbHeartbeatRespForTable {

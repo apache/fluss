@@ -57,8 +57,8 @@ public class TableBucket implements Serializable {
 
     public TableBucket(long tableId, @Nullable Long partitionId, int bucket) {
         this.tableId = tableId;
-        this.bucket = bucket;
         this.partitionId = partitionId;
+        this.bucket = bucket;
     }
 
     public int getBucket() {
