@@ -25,59 +25,59 @@ import Heading from '@theme/Heading';
 import styles from './index.module.css';
 
 function HomepageHeader() {
-  const {siteConfig} = useDocusaurusContext();
-  return (
-    <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
-        <Heading as="h1" className="hero__title">
-          {siteConfig.title}
-        </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <div className={styles.buttons}>
-          <Link
-            className="hero_button button button--primary button--lg"
-            to="/docs/quickstart/flink">
-            Quick Start
-          </Link>
+    const {siteConfig} = useDocusaurusContext();
+    return (
+        <header className={clsx('hero hero--primary', styles.heroBanner)}>
+            <div className="container">
+                <Heading as="h1" className="hero__title">
+                    {siteConfig.title}
+                </Heading>
+                <p className="hero__subtitle">{siteConfig.tagline}</p>
+                <div className={styles.buttons}>
+                    <Link
+                        className={clsx("hero_button button button--primary button--lg", styles.buttonWidth)}
+                        to="/docs/quickstart/flink">
+                        Quick Start
+                    </Link>
 
-          <Link
-              className={clsx("button button--secondary button--lg", styles.github_button)}
-              to="https://github.com/alibaba/fluss">
-            <img
-                src="img/github_icon.svg"
-                alt="GitHub"
-                className={styles.buttonIcon}
-            />
-            GitHub
-          </Link>
+                    <Link
+                        className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
+                        to="https://github.com/alibaba/fluss">
+                        <img
+                            src="img/github_icon.svg"
+                            alt="GitHub"
+                            className={styles.buttonIcon}
+                        />
+                        GitHub
+                    </Link>
 
-          <Link
-              className={clsx("button button--secondary button--lg", styles.join_slack_button)}
-              to="https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw">
-            <img
-                src="img/slack_icon.svg"
-                alt="Slack"
-                className={styles.buttonIcon}
-            />
-            Slack
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
+                    <Link
+                        className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
+                        to="https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw">
+                        <img
+                            src="img/slack_icon.svg"
+                            alt="Slack"
+                            className={styles.buttonIcon}
+                        />
+                        Slack
+                    </Link>
+                </div>
+            </div>
+        </header>
+    );
 }
 
 export default function Home(): JSX.Element {
-  const {siteConfig} = useDocusaurusContext();
-  return (
-    <Layout
-      title="Fluss"
-      description="Streaming Storage for Real-Time Analytics">
-      <HomepageHeader />
-      <main>
-        <HomepageIntroduce />
-        <HomepageFeatures />
-      </main>
-    </Layout>
-  );
+    const {siteConfig} = useDocusaurusContext();
+    return (
+        <Layout
+            title="Fluss"
+            description="Streaming Storage for Real-Time Analytics">
+            <HomepageHeader/>
+            <main>
+                <HomepageIntroduce/>
+                <HomepageFeatures/>
+            </main>
+        </Layout>
+    );
 }

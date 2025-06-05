@@ -20,51 +20,49 @@
  */
 
 .heroBanner {
-  padding: 5rem 0 11rem 0;
-  text-align: center;
-  position: relative;
-  overflow: hidden;
-  margin-left: -1px;
+    padding: 5rem 0 11rem 0;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    margin-left: -1px;
 
-  @media screen and (min-width: 997px) {
-    background: url("@site/static/img/background.jpg");
-    background-size: cover;
-  }
+    @media screen and (min-width: 997px) {
+        background: url("@site/static/img/background.jpg");
+        background-size: cover;
+    }
 
-  @media screen and (max-width: 996px) {
-    background: var(--ifm-color-primary-darkest);
-  }
+    @media screen and (max-width: 996px) {
+        background: var(--ifm-color-primary-darkest);
+    }
 
 }
 
 @media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 2rem;
-  }
+    .heroBanner {
+        padding: 2rem;
+    }
 }
 
 .buttons {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 20px;
 }
 
-.join_slack_button {
-  margin-left: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.buttonWidth {
+    width: 200px;
 }
 
-.github_button {
-  margin-left: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.buttonWithIcon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .buttonIcon {
-  margin-right: 8px;
-  width: 20px;
-  height: 20px;
+    margin-right: 8px;
+    width: 20px;
+    height: 20px;
 }
