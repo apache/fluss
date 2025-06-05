@@ -143,7 +143,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteToNonExistsPartitionWhenDisabledDynamicPartition() throws Exception {
-        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED, false);
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, false);
         createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
 
@@ -184,8 +184,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
                                     admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
                             if (partitionInfos.size() == partitionSize) {
                                 return Optional.of(partitionInfos);
-                            }
-                            {
+                            } else {
                                 return Optional.empty();
                             }
                         },

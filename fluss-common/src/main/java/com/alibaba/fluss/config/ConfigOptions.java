@@ -918,12 +918,12 @@ public class ConfigOptions {
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
                                     + "requests to complete before sending out new requests.");
 
-    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED =
-            key("client.writer.dynamic-partition.enabled")
+    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED =
+            key("client.writer.dynamic-create-partition.enabled")
                     .booleanType()
                     .defaultValue(true)
                     .withDescription(
-                            "Whether enable dynamic partition for client writer. Enable by default."
+                            "Whether enable dynamic create partition for client writer. Enable by default."
                                     + " Dynamic partition strategy refers to creating partitions based on the data "
                                     + "being written for partitioned table if the wrote partition don't exists.");
 

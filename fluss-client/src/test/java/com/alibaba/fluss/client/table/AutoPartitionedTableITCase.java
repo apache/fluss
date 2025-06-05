@@ -68,7 +68,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     void beforeEach() throws Exception {
         super.setup();
         // Auto partitioned table related tests will close dynamic partition creation default.
-        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED, false);
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, false);
     }
 
     @Test

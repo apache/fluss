@@ -310,7 +310,8 @@ public final class RecordAccumulator {
     /** Abort all incomplete batches (whether they have been sent or not). */
     public void abortBatches(final Exception reason) {
         for (WriteBatch batch : incomplete.copyAll()) {
-            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId(), true);
+            Deque<WriteBatch> dq =
+                    getDequeEvenIfPartitionNotReady(batch.physicalTablePath(), batch.bucketId());
             synchronized (dq) {
                 batch.abortRecordAppends();
                 dq.remove(batch);
@@ -384,17 +385,23 @@ public final class RecordAccumulator {
     }
 
     @VisibleForTesting
-    public Deque<WriteBatch> getDeque(
-            PhysicalTablePath path, int bucketId, boolean ignoreUnReadyPartitionTable) {
+    public Deque<WriteBatch> getDeque(PhysicalTablePath path, int bucketId) {
         BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
         if (bucketAndWriteBatches == null) {
             return null;
         }
 
         // for these partitioned tables, we need to check partitionId first.
-        if (!ignoreUnReadyPartitionTable
-                && bucketAndWriteBatches.isPartitionedTable
-                && bucketAndWriteBatches.partitionId == null) {
+        if (bucketAndWriteBatches.isPartitionedTable && bucketAndWriteBatches.partitionId == null) {
+            return null;
+        }
+
+        return bucketAndWriteBatches.batches.get(bucketId);
+    }
+
+    public Deque<WriteBatch> getDequeEvenIfPartitionNotReady(PhysicalTablePath path, int bucketId) {
+        BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
+        if (bucketAndWriteBatches == null) {
             return null;
         }
 
@@ -637,7 +644,7 @@ public final class RecordAccumulator {
             updateDrainIndex(node.id(), drainIndex);
             drainIndex = (drainIndex + 1) % buckets.size();
 
-            Deque<WriteBatch> deque = getDeque(physicalTablePath, tableBucket.getBucket(), false);
+            Deque<WriteBatch> deque = getDeque(physicalTablePath, tableBucket.getBucket());
             if (deque == null) {
                 continue;
             }

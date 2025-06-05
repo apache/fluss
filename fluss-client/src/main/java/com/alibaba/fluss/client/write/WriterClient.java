@@ -112,7 +112,7 @@ public class WriterClient {
                     new DynamicPartitionCreator(
                             metadataUpdater,
                             admin,
-                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED),
+                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
                             this::maybeAbortBatches);
         } catch (Throwable t) {
             close(Duration.ofMillis(0));

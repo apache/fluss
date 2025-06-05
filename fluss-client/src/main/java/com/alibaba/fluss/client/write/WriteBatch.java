@@ -131,7 +131,11 @@ public abstract class WriteBatch {
                     "Batch has already been completed in final stata " + finalState.get());
         }
 
-        LOG.trace("Abort batch for table path {}", physicalTablePath, exception);
+        LOG.trace(
+                "Abort batch for table path {} of bucket {}",
+                physicalTablePath,
+                bucketId,
+                exception);
         completeFutureAndFireCallbacks(exception);
     }
 

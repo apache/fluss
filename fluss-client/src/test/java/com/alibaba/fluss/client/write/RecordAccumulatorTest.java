@@ -247,7 +247,7 @@ class RecordAccumulatorTest {
             // append to the first batch
             accum.append(createRecord(row), writeCallback, cluster, 0, false);
             Deque<WriteBatch> writeBatches =
-                    accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false);
+                    accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
             assertThat(writeBatches).hasSize(1);
 
             WriteBatch batch = writeBatches.peekFirst();
@@ -259,8 +259,7 @@ class RecordAccumulatorTest {
         // this appends doesn't fit in the first batch, so a new batch is created and the first
         // batch is closed.
         accum.append(createRecord(row), writeCallback, cluster, 0, false);
-        Deque<WriteBatch> writeBatches =
-                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false);
+        Deque<WriteBatch> writeBatches = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
         assertThat(writeBatches).hasSize(2);
         Iterator<WriteBatch> bucketBatchesIterator = writeBatches.iterator();
         assertThat(bucketBatchesIterator.next().isClosed()).isTrue();
@@ -302,8 +301,7 @@ class RecordAccumulatorTest {
         // bucket's leader should be ready for bucket0.
         assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
 
-        Deque<WriteBatch> writeBatches =
-                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false);
+        Deque<WriteBatch> writeBatches = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
         assertThat(writeBatches).hasSize(1);
         WriteBatch batch = writeBatches.peek();
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
@@ -641,11 +639,11 @@ class RecordAccumulatorTest {
 
     private int getBatchNumInAccum(RecordAccumulator accum) {
         Deque<WriteBatch> bucketBatches1 =
-                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false);
+                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
         Deque<WriteBatch> bucketBatches2 =
-                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb2.getBucket(), false);
+                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb2.getBucket());
         Deque<WriteBatch> bucketBatches3 =
-                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb3.getBucket(), false);
+                accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb3.getBucket());
         return (bucketBatches1 == null ? 0 : bucketBatches1.size())
                 + (bucketBatches2 == null ? 0 : bucketBatches2.size())
                 + (bucketBatches3 == null ? 0 : bucketBatches3.size());

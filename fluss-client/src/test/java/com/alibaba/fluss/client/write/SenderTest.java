@@ -446,16 +446,11 @@ final class SenderTest {
                 Duration.ofMinutes(1),
                 () -> { // after response 1 is received, the writer will be reset
                     assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
-                    assertThat(
-                                    accumulator.getDeque(
-                                            DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false))
+                    assertThat(accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket()))
                             .hasSize(1);
                     assertThat(
                                     accumulator
-                                            .getDeque(
-                                                    DATA1_PHYSICAL_TABLE_PATH,
-                                                    tb1.getBucket(),
-                                                    false)
+                                            .getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket())
                                             .peek()
                                             .batchSequence())
                             .isEqualTo(0);
@@ -501,7 +496,7 @@ final class SenderTest {
 
         sender1.runOnce(); // receive response 1.
         Deque<WriteBatch> queuedBatches =
-                accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false);
+                accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
 
         // Make sure that we are queueing the second batch first.
         assertThat(queuedBatches.size()).isEqualTo(1);
@@ -571,7 +566,7 @@ final class SenderTest {
         assertThat(future2.get()).isNull();
         assertThat(future1.isDone()).isFalse();
         Deque<WriteBatch> queuedBatches =
-                accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket(), false);
+                accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
 
         assertThat(queuedBatches.size()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
