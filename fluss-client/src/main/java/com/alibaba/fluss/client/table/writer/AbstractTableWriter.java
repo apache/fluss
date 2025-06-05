@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.client.table.writer;
 
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
@@ -38,13 +37,9 @@ public abstract class AbstractTableWriter implements TableWriter {
     protected final WriterClient writerClient;
     protected final int fieldCount;
     private final @Nullable PartitionGetter partitionFieldGetter;
-    private final MetadataUpdater metadataUpdater;
 
     protected AbstractTableWriter(
-            TablePath tablePath,
-            TableInfo tableInfo,
-            MetadataUpdater metadataUpdater,
-            WriterClient writerClient) {
+            TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         this.tablePath = tablePath;
         this.writerClient = writerClient;
         this.fieldCount = tableInfo.getRowType().getFieldCount();
@@ -52,7 +47,6 @@ public abstract class AbstractTableWriter implements TableWriter {
                 tableInfo.isPartitioned()
                         ? new PartitionGetter(tableInfo.getRowType(), tableInfo.getPartitionKeys())
                         : null;
-        this.metadataUpdater = metadataUpdater;
     }
 
     /**
@@ -87,10 +81,7 @@ public abstract class AbstractTableWriter implements TableWriter {
         } else {
             // partitioned table, extract partition from the row
             String partition = partitionFieldGetter.getPartition(row);
-            PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partition);
-            // may update partition info
-            metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
-            return partitionPath;
+            return PhysicalTablePath.of(tablePath, partition);
         }
     }
 

@@ -86,12 +86,12 @@ public class MetadataUpdater {
         return cluster.getTableId(tablePath);
     }
 
-    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
-        return cluster.getPartitionIdOrElseThrow(physicalTablePath);
+    public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
+        return cluster.getPartitionId(physicalTablePath);
     }
 
-    public String getPartitionNameOrElseThrow(long partitionId) {
-        return cluster.getPartitionNameOrElseThrow(partitionId);
+    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
+        return cluster.getPartitionIdOrElseThrow(physicalTablePath);
     }
 
     public TableInfo getTableInfoOrElseThrow(TablePath tablePath) {
@@ -186,10 +186,11 @@ public class MetadataUpdater {
      *
      * <p>and update partition metadata .
      */
-    public void checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
+    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
         if (!cluster.getPartitionId(physicalTablePath).isPresent()) {
             updateMetadata(null, Collections.singleton(physicalTablePath), null);
         }
+        return cluster.getPartitionId(physicalTablePath).isPresent();
     }
 
     /**

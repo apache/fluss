@@ -24,6 +24,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.InvalidMetadataException;
 import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -93,7 +94,7 @@ public class Sender implements Runnable {
      * A per-bucket queue of batches ordered by creation time for tracking the in-flight batches.
      */
     @GuardedBy("inFlightBatchesLock")
-    private final Map<TableBucket, List<WriteBatch>> inFlightBatches;
+    private final Map<TableBucket, List<ReadyWriteBatch>> inFlightBatches;
 
     private final Object inFlightBatchesLock = new Object();
 
@@ -198,7 +199,7 @@ public class Sender implements Runnable {
         return running;
     }
 
-    private void addToInflightBatches(Map<Integer, List<WriteBatch>> batches) {
+    private void addToInflightBatches(Map<Integer, List<ReadyWriteBatch>> batches) {
         synchronized (inFlightBatchesLock) {
             batches.values().forEach(this::addToInflightBatches);
         }
@@ -210,7 +211,18 @@ public class Sender implements Runnable {
 
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
-            metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
+            try {
+                metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
+            } catch (Exception e) {
+                // TODO: this try-catch is not needed when we don't update metadata for
+                //  unready partitions
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                if (t.getCause() instanceof PartitionNotExistException) {
+                    // ignore this exception, this is probably happen because the partition
+                } else {
+                    throw e;
+                }
+            }
             LOG.debug(
                     "Client update metadata due to unknown leader tables from the batched records: {}",
                     readyCheckResult.unknownLeaderTables);
@@ -226,7 +238,7 @@ public class Sender implements Runnable {
         }
 
         // get the list of batches prepare to send.
-        Map<Integer, List<WriteBatch>> batches =
+        Map<Integer, List<ReadyWriteBatch>> batches =
                 accumulator.drain(metadataUpdater.getCluster(), readyNodes, maxRequestSize);
 
         if (!batches.isEmpty()) {
@@ -241,17 +253,18 @@ public class Sender implements Runnable {
         }
     }
 
-    private void completeBatch(WriteBatch batch) {
+    private void completeBatch(ReadyWriteBatch readyWriteBatch) {
         if (idempotenceManager.idempotenceEnabled()) {
-            idempotenceManager.handleCompletedBatch(batch);
+            idempotenceManager.handleCompletedBatch(readyWriteBatch);
         }
-        if (batch.complete()) {
-            maybeRemoveAndDeallocateBatch(batch);
+        if (readyWriteBatch.writeBatch().complete()) {
+            maybeRemoveAndDeallocateBatch(readyWriteBatch);
         }
     }
 
-    private void failBatch(WriteBatch batch, Exception exception, boolean adjustBatchSequences) {
-        if (batch.completeExceptionally(exception)) {
+    private void failBatch(
+            ReadyWriteBatch batch, Exception exception, boolean adjustBatchSequences) {
+        if (batch.writeBatch().completeExceptionally(exception)) {
             if (idempotenceManager.idempotenceEnabled()) {
                 try {
                     // This call can throw an exception in the rare case that there's an invalid
@@ -276,12 +289,12 @@ public class Sender implements Runnable {
         }
     }
 
-    private void reEnqueueBatch(WriteBatch batch) {
-        accumulator.reEnqueue(batch);
-        maybeRemoveFromInflightBatches(batch);
+    private void reEnqueueBatch(ReadyWriteBatch readyWriteBatch) {
+        accumulator.reEnqueue(readyWriteBatch);
+        maybeRemoveFromInflightBatches(readyWriteBatch);
 
         // metrics for retry record count.
-        writerMetricGroup.recordsRetryTotal().inc(batch.getRecordCount());
+        writerMetricGroup.recordsRetryTotal().inc(readyWriteBatch.writeBatch().getRecordCount());
     }
 
     /**
@@ -290,22 +303,24 @@ public class Sender implements Runnable {
      * exceptions for future batches, since if the first batch has failed, the future batches are
      * certain to fail with an {@link OutOfOrderSequenceException} exception.
      */
-    private boolean canRetry(WriteBatch batch, Errors error) {
+    private boolean canRetry(ReadyWriteBatch readyWriteBatch, Errors error) {
+        WriteBatch batch = readyWriteBatch.writeBatch();
         return batch.attempts() < retries
                 && !batch.isDone()
                 && ((error.exception() instanceof RetriableException)
                         || (idempotenceManager.idempotenceEnabled()
-                                && idempotenceManager.canRetry(batch, error)));
+                                && idempotenceManager.canRetry(
+                                        batch, readyWriteBatch.tableBucket(), error)));
     }
 
-    private void maybeRemoveAndDeallocateBatch(WriteBatch batch) {
-        maybeRemoveFromInflightBatches(batch);
-        accumulator.deallocate(batch);
+    private void maybeRemoveAndDeallocateBatch(ReadyWriteBatch readyWriteBatch) {
+        maybeRemoveFromInflightBatches(readyWriteBatch);
+        accumulator.deallocate(readyWriteBatch.writeBatch());
     }
 
-    private void maybeRemoveFromInflightBatches(WriteBatch batch) {
+    private void maybeRemoveFromInflightBatches(ReadyWriteBatch batch) {
         synchronized (inFlightBatchesLock) {
-            List<WriteBatch> batches = inFlightBatches.get(batch.tableBucket());
+            List<ReadyWriteBatch> batches = inFlightBatches.get(batch.tableBucket());
             if (batches != null) {
                 batches.remove(batch);
                 if (batches.isEmpty()) {
@@ -315,7 +330,7 @@ public class Sender implements Runnable {
         }
     }
 
-    private void addToInflightBatches(List<WriteBatch> batches) {
+    private void addToInflightBatches(List<ReadyWriteBatch> batches) {
         synchronized (inFlightBatchesLock) {
             batches.forEach(
                     batch ->
@@ -326,7 +341,7 @@ public class Sender implements Runnable {
     }
 
     /** Transfer the record batches into a list of produce log requests on a per-node basis. */
-    private void sendWriteRequests(Map<Integer, List<WriteBatch>> collated) {
+    private void sendWriteRequests(Map<Integer, List<ReadyWriteBatch>> collated) {
         collated.forEach((leaderId, batches) -> sendWriteRequest(leaderId, acks, batches));
     }
 
@@ -334,14 +349,14 @@ public class Sender implements Runnable {
      * Create a write request from the given record batches. The write request maybe {@link
      * ProduceLogRequest} or {@link PutKvRequest}.
      */
-    private void sendWriteRequest(int destination, short acks, List<WriteBatch> batches) {
+    private void sendWriteRequest(int destination, short acks, List<ReadyWriteBatch> batches) {
         if (batches.isEmpty()) {
             return;
         }
 
         // group record batch by table id.
-        final Map<TableBucket, WriteBatch> recordsByBucket = new HashMap<>();
-        Map<Long, List<WriteBatch>> writeBatchByTable = new HashMap<>();
+        final Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
+        Map<Long, List<ReadyWriteBatch>> writeBatchByTable = new HashMap<>();
         batches.forEach(
                 batch -> {
                     // keep the batch before ack.
@@ -386,7 +401,7 @@ public class Sender implements Runnable {
             TabletServerGateway gateway,
             ProduceLogRequest request,
             long tableId,
-            Map<TableBucket, WriteBatch> recordsByBucket) {
+            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         long startTime = System.currentTimeMillis();
         gateway.produceLog(request)
                 .whenComplete(
@@ -406,7 +421,7 @@ public class Sender implements Runnable {
             TabletServerGateway gateway,
             PutKvRequest request,
             long tableId,
-            Map<TableBucket, WriteBatch> recordsByBucket) {
+            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         long startTime = System.currentTimeMillis();
         gateway.putKv(request)
                 .whenComplete(
@@ -424,7 +439,7 @@ public class Sender implements Runnable {
     private void handleProduceLogResponse(
             ProduceLogResponse response,
             long tableId,
-            Map<TableBucket, WriteBatch> recordsByBucket) {
+            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         for (PbProduceLogRespForBucket logRespForBucket : response.getBucketsRespsList()) {
             TableBucket tb =
@@ -434,7 +449,7 @@ public class Sender implements Runnable {
                                     ? logRespForBucket.getPartitionId()
                                     : null,
                             logRespForBucket.getBucketId());
-            WriteBatch writeBatch = recordsByBucket.get(tb);
+            ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
             if (logRespForBucket.hasErrorCode()) {
                 Set<PhysicalTablePath> invalidMetadataTables =
                         handleWriteBatchException(
@@ -450,7 +465,7 @@ public class Sender implements Runnable {
     private void handlePutKvResponse(
             PutKvResponse putKvResponse,
             long tableId,
-            Map<TableBucket, WriteBatch> recordsByBucket) {
+            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         for (PbPutKvRespForBucket respForBucket : putKvResponse.getBucketsRespsList()) {
             TableBucket tb =
@@ -458,7 +473,7 @@ public class Sender implements Runnable {
                             tableId,
                             respForBucket.hasPartitionId() ? respForBucket.getPartitionId() : null,
                             respForBucket.getBucketId());
-            WriteBatch writeBatch = recordsByBucket.get(tb);
+            ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
             if (respForBucket.hasErrorCode()) {
                 Set<PhysicalTablePath> invalidMetadataTables =
                         handleWriteBatchException(
@@ -472,13 +487,13 @@ public class Sender implements Runnable {
     }
 
     private void handleWriteRequestException(
-            Throwable t, Map<TableBucket, WriteBatch> recordsByBucket) {
+            Throwable t, Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
 
         // if batch failed because of retrievable exception, we need to retry send all those
         // batches.
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
-        for (WriteBatch batch : recordsByBucket.values()) {
+        for (ReadyWriteBatch batch : recordsByBucket.values()) {
             Set<PhysicalTablePath> invalidMetadataTables = handleWriteBatchException(batch, error);
             invalidMetadataTablesSet.addAll(invalidMetadataTables);
         }
@@ -488,27 +503,28 @@ public class Sender implements Runnable {
 
     /** Handle the exception and return a set of tables for which the metadata is invalid. */
     private Set<PhysicalTablePath> handleWriteBatchException(
-            WriteBatch writeBatch, ApiError error) {
+            ReadyWriteBatch readyWriteBatch, ApiError error) {
         Set<PhysicalTablePath> invalidMetadataTables = new HashSet<>();
-        if (canRetry(writeBatch, error.error())) {
+        WriteBatch writeBatch = readyWriteBatch.writeBatch();
+        if (canRetry(readyWriteBatch, error.error())) {
             // if batch failed because of retrievable exception, we need to retry send all those
             // batches.
             LOG.warn(
                     "Get error write response on table bucket {}, retrying ({} attempts left). Error: {}",
-                    writeBatch.tableBucket(),
+                    readyWriteBatch.tableBucket(),
                     retries - writeBatch.attempts(),
                     error.formatErrMsg());
 
             if (!idempotenceManager.idempotenceEnabled()) {
-                reEnqueueBatch(writeBatch);
+                reEnqueueBatch(readyWriteBatch);
             } else if (idempotenceManager.hasWriterId(writeBatch.writerId())) {
                 // If idempotence is enabled only retry the request if the current writer id is
                 // the same as the writer id of the batch.
                 LOG.debug(
                         "Retrying batch to table-bucket {}, Batch sequence : {}",
-                        writeBatch.tableBucket(),
+                        readyWriteBatch.tableBucket(),
                         writeBatch.batchSequence());
-                reEnqueueBatch(writeBatch);
+                reEnqueueBatch(readyWriteBatch);
             } else {
                 Exception exception =
                         Errors.UNKNOWN_WRITER_ID_EXCEPTION.exception(
@@ -516,19 +532,19 @@ public class Sender implements Runnable {
                                         "Attempted to retry sending a batch but the writer id has changed from %s "
                                                 + "to %s in the mean time. This batch will be dropped.",
                                         writeBatch.writerId(), idempotenceManager.writerId()));
-                failBatch(writeBatch, exception, false);
+                failBatch(readyWriteBatch, exception, false);
             }
 
             if (error.exception() instanceof InvalidMetadataException) {
                 if (error.exception() instanceof UnknownTableOrBucketException) {
                     LOG.warn(
                             "Received unknown table or bucket error in write request on bucket {}. The table-bucket may not exist.",
-                            writeBatch.tableBucket());
+                            readyWriteBatch.tableBucket());
                 } else {
                     LOG.warn(
                             "Received invalid metadata error in write request on bucket {}. "
                                     + "Going to request metadata update.",
-                            writeBatch.tableBucket(),
+                            readyWriteBatch.tableBucket(),
                             error.exception());
                 }
                 invalidMetadataTables.add(writeBatch.physicalTablePath());
@@ -537,25 +553,26 @@ public class Sender implements Runnable {
             // If we have received a duplicate batch sequence error, it means that the batch
             // sequence has advanced beyond the sequence of the current batch.
             // The only thing we can do is to return success to the user.
-            completeBatch(writeBatch);
+            completeBatch(readyWriteBatch);
         } else {
             LOG.warn(
                     "Get error write response on table bucket {}, fail. Error: {}",
-                    writeBatch.tableBucket(),
+                    readyWriteBatch.tableBucket(),
                     error.formatErrMsg());
             // tell the user the result of their request. We only adjust batch sequence if the
             // batch didn't exhaust its retries -- if it did, we don't know whether the batch
             // sequence was accepted or not, and thus it is not safe to reassign the sequence.
-            failBatch(writeBatch, error.exception(), writeBatch.attempts() < this.retries);
+            failBatch(readyWriteBatch, error.exception(), writeBatch.attempts() < this.retries);
         }
         return invalidMetadataTables;
     }
 
-    private void updateWriterMetrics(Map<Integer, List<WriteBatch>> batches) {
+    private void updateWriterMetrics(Map<Integer, List<ReadyWriteBatch>> batches) {
         batches.values()
                 .forEach(
                         batchList -> {
-                            for (WriteBatch batch : batchList) {
+                            for (ReadyWriteBatch readyWriteBatch : batchList) {
+                                WriteBatch batch = readyWriteBatch.writeBatch();
                                 // update table metrics.
                                 int recordCount = batch.getRecordCount();
                                 writerMetricGroup.recordsSendTotal().inc(recordCount);

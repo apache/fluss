@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.client.table.writer;
 
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.metadata.DataLakeFormat;
@@ -57,9 +56,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             TablePath tablePath,
             TableInfo tableInfo,
             @Nullable int[] partialUpdateColumns,
-            WriterClient writerClient,
-            MetadataUpdater metadataUpdater) {
-        super(tablePath, tableInfo, metadataUpdater, writerClient);
+            WriterClient writerClient) {
+        super(tablePath, tableInfo, writerClient);
         RowType rowType = tableInfo.getRowType();
         sanityCheck(rowType, tableInfo.getPrimaryKeys(), partialUpdateColumns);
 

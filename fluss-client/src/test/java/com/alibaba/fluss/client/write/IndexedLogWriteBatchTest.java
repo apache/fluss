@@ -209,7 +209,7 @@ public class IndexedLogWriteBatchTest {
     private IndexedLogWriteBatch createLogWriteBatch(
             TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment) {
         return new IndexedLogWriteBatch(
-                tb,
+                tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writeLimit,

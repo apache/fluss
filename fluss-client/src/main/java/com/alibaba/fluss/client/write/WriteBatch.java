@@ -20,7 +20,6 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.bytesview.BytesView;
 
@@ -44,8 +43,8 @@ public abstract class WriteBatch {
 
     private final long createdMs;
     private final PhysicalTablePath physicalTablePath;
-    private final TableBucket tableBucket;
     private final RequestFuture requestFuture;
+    private final int bucketId;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
@@ -54,11 +53,10 @@ public abstract class WriteBatch {
     protected int recordCount;
     private long drainedMs;
 
-    public WriteBatch(
-            TableBucket tableBucket, PhysicalTablePath physicalTablePath, long createdMs) {
+    public WriteBatch(int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
         this.createdMs = createdMs;
-        this.tableBucket = tableBucket;
+        this.bucketId = bucketId;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
@@ -119,9 +117,9 @@ public abstract class WriteBatch {
 
     public void resetWriterState(long writerId, int batchSequence) {
         LOG.info(
-                "Resetting batch sequence of batch with current batch sequence {} for table bucket {} to {}",
+                "Resetting batch sequence of batch with current batch sequence {} for table path {} to {}",
                 batchSequence(),
-                tableBucket,
+                physicalTablePath,
                 batchSequence);
         reopened = true;
     }
@@ -133,7 +131,11 @@ public abstract class WriteBatch {
                     "Batch has already been completed in final stata " + finalState.get());
         }
 
-        LOG.trace("Abort batch for tableBucket {}", tableBucket, exception);
+        LOG.trace(
+                "Abort batch for table path {} with bucket_id {}",
+                physicalTablePath,
+                bucketId,
+                exception);
         completeFutureAndFireCallbacks(exception);
     }
 
@@ -141,8 +143,8 @@ public abstract class WriteBatch {
         return reopened;
     }
 
-    public TableBucket tableBucket() {
-        return tableBucket;
+    public int bucketId() {
+        return bucketId;
     }
 
     public PhysicalTablePath physicalTablePath() {
@@ -187,8 +189,8 @@ public abstract class WriteBatch {
                         callback.onCompletion(exception);
                     } catch (Exception e) {
                         LOG.error(
-                                "Error executing user-provided callback on message for table-bucket '{}'",
-                                tableBucket,
+                                "Error executing user-provided callback on message for table path '{}'",
+                                physicalTablePath,
                                 e);
                     }
                 });
@@ -226,9 +228,9 @@ public abstract class WriteBatch {
         final FinalState tryFinalState =
                 (batchException == null) ? FinalState.SUCCEEDED : FinalState.FAILED;
         if (tryFinalState == FinalState.SUCCEEDED) {
-            LOG.trace("Successfully produced messages to {}.", tableBucket);
+            LOG.trace("Successfully produced messages to {}.", physicalTablePath);
         } else {
-            LOG.trace("Failed to produce messages to {}.", tableBucket, batchException);
+            LOG.trace("Failed to produce messages to {}.", physicalTablePath, batchException);
         }
 
         if (finalState.compareAndSet(null, tryFinalState)) {
@@ -242,7 +244,7 @@ public abstract class WriteBatch {
                 LOG.debug(
                         "ProduceLogResponse returned {} for {} after batch has already been {}.",
                         tryFinalState,
-                        tableBucket,
+                        physicalTablePath,
                         finalState.get());
             } else {
                 // FAILED --> FAILED transitions are ignored.

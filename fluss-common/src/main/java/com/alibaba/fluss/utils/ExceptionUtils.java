@@ -262,6 +262,15 @@ public final class ExceptionUtils {
         }
     }
 
+    /** Converts a {@link Throwable} to an {@link Exception}. */
+    public static Exception toException(Throwable t) {
+        if (t instanceof Exception) {
+            return (Exception) t;
+        } else {
+            return new Exception(t);
+        }
+    }
+
     /**
      * Tries to throw the given exception if not null.
      *

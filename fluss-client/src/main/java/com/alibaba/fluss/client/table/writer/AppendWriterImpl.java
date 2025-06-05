@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.client.table.writer;
 
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.write.WriteRecord;
 import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.metadata.DataLakeFormat;
@@ -46,12 +45,8 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private final IndexedRowEncoder indexedRowEncoder;
     private final FieldGetter[] fieldGetters;
 
-    AppendWriterImpl(
-            TablePath tablePath,
-            TableInfo tableInfo,
-            MetadataUpdater metadataUpdater,
-            WriterClient writerClient) {
-        super(tablePath, tableInfo, metadataUpdater, writerClient);
+    AppendWriterImpl(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
+        super(tablePath, tableInfo, writerClient);
         List<String> bucketKeys = tableInfo.getBucketKeys();
         if (bucketKeys.isEmpty()) {
             this.bucketKeyEncoder = null;
@@ -86,7 +81,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
             // ARROW format supports general internal row
             record = WriteRecord.forArrowAppend(physicalPath, row, bucketKey);
         }
-        return send(record).thenApply(r -> APPEND_SUCCESS);
+        return send(record).thenApply(ignored -> APPEND_SUCCESS);
     }
 
     private IndexedRow encodeIndexedRow(InternalRow row) {

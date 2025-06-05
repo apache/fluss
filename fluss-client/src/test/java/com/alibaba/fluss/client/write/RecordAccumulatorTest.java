@@ -149,7 +149,7 @@ class RecordAccumulatorTest {
 
         // drain batches from 2 nodes: node1 => tb1, node2 => tb3, because the max request size is
         // full after the first batch drained
-        Map<Integer, List<WriteBatch>> batches1 =
+        Map<Integer, List<ReadyWriteBatch>> batches1 =
                 accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
         verifyTableBucketInBatches(batches1, tb1, tb3);
 
@@ -160,12 +160,12 @@ class RecordAccumulatorTest {
         // drain batches from 2 nodes: node1 => tb2, node2 => tb4, because the max request size is
         // full after the first batch drained. The drain index should start from next table bucket,
         // that is, node1 => tb2, node2 => tb4
-        Map<Integer, List<WriteBatch>> batches2 =
+        Map<Integer, List<ReadyWriteBatch>> batches2 =
                 accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
         verifyTableBucketInBatches(batches2, tb2, tb4);
 
         // make sure in next run, the drain index will start from the beginning.
-        Map<Integer, List<WriteBatch>> batches3 =
+        Map<Integer, List<ReadyWriteBatch>> batches3 =
                 accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
         verifyTableBucketInBatches(batches3, tb1, tb3);
     }
@@ -193,7 +193,7 @@ class RecordAccumulatorTest {
         }
 
         // all 3 buckets are located in node1
-        Map<Integer, List<WriteBatch>> batches =
+        Map<Integer, List<ReadyWriteBatch>> batches =
                 accum.drain(cluster, Collections.singleton(node1), batchSize * bucketNum);
         // the compression ratio is smaller than 1.0,
         // so bucketNum * batch_size should contain all compressed batches for each bucket
@@ -202,7 +202,9 @@ class RecordAccumulatorTest {
         assertThat(batchCount).isBetween(bucketNum - 1, bucketNum);
 
         double averageBatchSize =
-                batches.get(node1.id()).stream().mapToInt(b -> b.build().getBytesLength()).sum()
+                batches.get(node1.id()).stream()
+                                .mapToInt(b -> b.writeBatch().build().getBytesLength())
+                                .sum()
                         / (batchCount * 1.0);
         assertThat(averageBatchSize).isBetween(batchSize * 0.8, batchSize * 1.1);
     }
@@ -211,9 +213,9 @@ class RecordAccumulatorTest {
             throws Exception {
         while (true) {
             appendUntilBatchFull(accum, 0);
-            Map<Integer, List<WriteBatch>> batches =
+            Map<Integer, List<ReadyWriteBatch>> batches =
                     accum.drain(cluster, Collections.singleton(node1), Integer.MAX_VALUE);
-            WriteBatch batch = batches.get(node1.id()).get(0);
+            WriteBatch batch = batches.get(node1.id()).get(0).writeBatch();
             int actualSize = batch.build().getBytesLength();
             if (actualSize > batchSize * ArrowWriter.BUFFER_USAGE_RATIO) {
                 return;
@@ -244,7 +246,8 @@ class RecordAccumulatorTest {
         for (int i = 0; i < appends; i++) {
             // append to the first batch
             accum.append(createRecord(row), writeCallback, cluster, 0, false);
-            Deque<WriteBatch> writeBatches = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1);
+            Deque<WriteBatch> writeBatches =
+                    accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
             assertThat(writeBatches).hasSize(1);
 
             WriteBatch batch = writeBatches.peekFirst();
@@ -256,18 +259,19 @@ class RecordAccumulatorTest {
         // this appends doesn't fit in the first batch, so a new batch is created and the first
         // batch is closed.
         accum.append(createRecord(row), writeCallback, cluster, 0, false);
-        Deque<WriteBatch> writeBatches = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1);
+        Deque<WriteBatch> writeBatches =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
         assertThat(writeBatches).hasSize(2);
         Iterator<WriteBatch> bucketBatchesIterator = writeBatches.iterator();
         assertThat(bucketBatchesIterator.next().isClosed()).isTrue();
         // Bucket's leader should be ready.
         assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
 
-        List<WriteBatch> batches =
+        List<ReadyWriteBatch> batches =
                 accum.drain(cluster, Collections.singleton(node1), Integer.MAX_VALUE)
                         .get(node1.id());
         assertThat(batches.size()).isEqualTo(1);
-        WriteBatch batch = batches.get(0);
+        WriteBatch batch = batches.get(0).writeBatch();
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
         MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(batch.build());
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
@@ -298,7 +302,8 @@ class RecordAccumulatorTest {
         // bucket's leader should be ready for bucket0.
         assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
 
-        Deque<WriteBatch> writeBatches = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1);
+        Deque<WriteBatch> writeBatches =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
         assertThat(writeBatches).hasSize(1);
         WriteBatch batch = writeBatches.peek();
         assertThat(batch).isInstanceOf(IndexedLogWriteBatch.class);
@@ -400,7 +405,7 @@ class RecordAccumulatorTest {
         }
 
         assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
-        List<WriteBatch> batches =
+        List<ReadyWriteBatch> batches =
                 accum.drain(cluster, Collections.singleton(node1), 1024).get(node1.id());
         // Due to size bound only one bucket should have been retrieved.
         assertThat(batches.size()).isEqualTo(1);
@@ -420,13 +425,13 @@ class RecordAccumulatorTest {
 
         accum.beginFlush();
         // drain and deallocate all batches.
-        Map<Integer, List<WriteBatch>> results =
+        Map<Integer, List<ReadyWriteBatch>> results =
                 accum.drain(cluster, accum.ready(cluster).readyNodes, Integer.MAX_VALUE);
         assertThat(accum.hasIncomplete()).isTrue();
 
-        for (List<WriteBatch> batches : results.values()) {
-            for (WriteBatch batch : batches) {
-                accum.deallocate(batch);
+        for (List<ReadyWriteBatch> batches : results.values()) {
+            for (ReadyWriteBatch readyWriteBatch : batches) {
+                accum.deallocate(readyWriteBatch.writeBatch());
             }
         }
 
@@ -579,13 +584,13 @@ class RecordAccumulatorTest {
     }
 
     private void verifyTableBucketInBatches(
-            Map<Integer, List<WriteBatch>> nodeBatches, TableBucket... tb) {
+            Map<Integer, List<ReadyWriteBatch>> nodeBatches, TableBucket... tb) {
         List<TableBucket> tableBucketsInBatch = new ArrayList<>();
         nodeBatches.forEach(
                 (bucket, batches) -> {
                     List<TableBucket> tbList =
                             batches.stream()
-                                    .map(WriteBatch::tableBucket)
+                                    .map(ReadyWriteBatch::tableBucket)
                                     .collect(Collectors.toList());
                     tableBucketsInBatch.addAll(tbList);
                 });
@@ -635,9 +640,12 @@ class RecordAccumulatorTest {
     }
 
     private int getBatchNumInAccum(RecordAccumulator accum) {
-        Deque<WriteBatch> bucketBatches1 = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1);
-        Deque<WriteBatch> bucketBatches2 = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb2);
-        Deque<WriteBatch> bucketBatches3 = accum.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb3);
+        Deque<WriteBatch> bucketBatches1 =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+        Deque<WriteBatch> bucketBatches2 =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb2.getBucket());
+        Deque<WriteBatch> bucketBatches3 =
+                accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb3.getBucket());
         return (bucketBatches1 == null ? 0 : bucketBatches1.size())
                 + (bucketBatches2 == null ? 0 : bucketBatches2.size())
                 + (bucketBatches3 == null ? 0 : bucketBatches3.size());

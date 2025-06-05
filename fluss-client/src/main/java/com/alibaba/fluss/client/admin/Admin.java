@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -36,6 +37,8 @@ import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -255,6 +258,10 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link PartitionAlreadyExistsException} if the partition already exists and {@code
      *       ignoreIfExists} is false.
      *   <li>{@link InvalidPartitionException} if the input partition spec is invalid.
+     *   <li>{@link TooManyPartitionsException} if the number of partitions is larger than the
+     *       maximum number of partitions of one table, see {@link ConfigOptions#MAX_PARTITION_NUM}.
+     *   <li>{@link TooManyBucketsException} if the number of buckets is larger than the maximum
+     *       number of buckets of one table, see {@link ConfigOptions#MAX_BUCKET_NUM}.
      * </ul>
      *
      * @param tablePath The table path of the table.

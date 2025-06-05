@@ -73,8 +73,7 @@ public class FlussTable implements Table {
                 !hasPrimaryKey,
                 "Table %s is not a Log Table and doesn't support AppendWriter.",
                 tablePath);
-        return new TableAppend(
-                tablePath, tableInfo, conn.getMetadataUpdater(), conn.getOrCreateWriterClient());
+        return new TableAppend(tablePath, tableInfo, conn.getOrCreateWriterClient());
     }
 
     @Override
@@ -83,8 +82,7 @@ public class FlussTable implements Table {
                 hasPrimaryKey,
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
-        return new TableUpsert(
-                tablePath, tableInfo, conn.getMetadataUpdater(), conn.getOrCreateWriterClient());
+        return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
     }
 
     @Override

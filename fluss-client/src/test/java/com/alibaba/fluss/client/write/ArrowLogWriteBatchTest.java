@@ -121,7 +121,7 @@ public class ArrowLogWriteBatchTest {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
         ArrowLogWriteBatch arrowLogWriteBatch =
                 new ArrowLogWriteBatch(
-                        tb,
+                        tb.getBucket(),
                         DATA1_PHYSICAL_TABLE_PATH,
                         DATA1_TABLE_INFO.getSchemaId(),
                         writerProvider.getOrCreateWriter(
@@ -197,7 +197,7 @@ public class ArrowLogWriteBatchTest {
 
             ArrowLogWriteBatch arrowLogWriteBatch =
                     new ArrowLogWriteBatch(
-                            tb,
+                            tb.getBucket(),
                             DATA1_PHYSICAL_TABLE_PATH,
                             DATA1_TABLE_INFO.getSchemaId(),
                             arrowWriter,
@@ -292,7 +292,7 @@ public class ArrowLogWriteBatchTest {
 
     private ArrowLogWriteBatch createArrowLogWriteBatch(TableBucket tb, int maxSizeInBytes) {
         return new ArrowLogWriteBatch(
-                tb,
+                tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writerProvider.getOrCreateWriter(

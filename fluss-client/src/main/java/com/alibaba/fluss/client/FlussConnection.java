@@ -119,7 +119,9 @@ public final class FlussConnection implements Connection {
         if (writerClient == null) {
             synchronized (this) {
                 if (writerClient == null) {
-                    writerClient = new WriterClient(conf, metadataUpdater, clientMetricGroup);
+                    writerClient =
+                            new WriterClient(
+                                    conf, metadataUpdater, clientMetricGroup, this.getAdmin());
                 }
             }
         }
