@@ -29,80 +29,95 @@ import com.alibaba.fluss.utils.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.concurrent.GuardedBy;
+import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
+import static com.alibaba.fluss.utils.ExceptionUtils.stripCompletionException;
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** A creator to create partition when dynamic partition create enable for table. */
+@ThreadSafe
 public class DynamicPartitionCreator {
     private static final Logger LOG = LoggerFactory.getLogger(DynamicPartitionCreator.class);
 
     private final MetadataUpdater metadataUpdater;
-    private final Admin admin;
     private final boolean dynamicPartitionEnabled;
+    private final Admin admin;
+    private final Consumer<Throwable> fatalErrorHandler;
 
-    private final Object inflightPartitionsLock = new Object();
-
-    @GuardedBy("inflightPartitionsLock")
-    private final Set<PhysicalTablePath> inflightPartitionsToCreate = new HashSet<>();
-
-    private volatile Throwable cachedCreatePartitionException = null;
+    private final Set<PhysicalTablePath> inflightPartitionsToCreate = ConcurrentHashMap.newKeySet();
 
     public DynamicPartitionCreator(
-            MetadataUpdater metadataUpdater, Admin admin, boolean dynamicPartitionEnabled) {
+            MetadataUpdater metadataUpdater,
+            Admin admin,
+            boolean dynamicPartitionEnabled,
+            Consumer<Throwable> fatalErrorHandler) {
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
         this.dynamicPartitionEnabled = dynamicPartitionEnabled;
+        this.fatalErrorHandler = fatalErrorHandler;
     }
 
-    public void createPartitionIfNeed(PhysicalTablePath physicalTablePath) {
-        if (cachedCreatePartitionException != null) {
-            throw new FlussRuntimeException(cachedCreatePartitionException);
-        }
-
-        TableInfo tableInfo =
-                metadataUpdater.getTableInfoOrElseThrow(physicalTablePath.getTablePath());
-        if (!tableInfo.isPartitioned()) {
+    public void checkAndCreatePartitionAsync(PhysicalTablePath physicalTablePath) {
+        String partitionName = physicalTablePath.getPartitionName();
+        if (partitionName == null) {
+            // no need to check and create partition
             return;
         }
 
         Optional<Long> partitionIdOpt = metadataUpdater.getPartitionId(physicalTablePath);
         // first try to update metadata info if not exists.
-        boolean isExists = partitionIdOpt.isPresent();
-        if (!partitionIdOpt.isPresent()) {
-            try {
-                isExists = metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
-            } catch (Exception e) {
-                Throwable t = ExceptionUtils.stripExecutionException(e);
-                if (t.getCause() instanceof PartitionNotExistException) {
-                    if (!dynamicPartitionEnabled) {
-                        throw new PartitionNotExistException(
-                                String.format(
-                                        "Table partition '%s' does not exist.", physicalTablePath));
-                    }
+        boolean idExist = partitionIdOpt.isPresent();
+        if (!idExist) {
+            if (inflightPartitionsToCreate.contains(physicalTablePath)) {
+                // if the partition is already in inflightPartitionsToCreate, we should skip
+                // creating it.
+                LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
+            } else if (forceCheckPartitionExist(physicalTablePath)) {
+                // if the partition exists, we should skip creating it.
+                LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
+            } else {
+                // create partition if not exists.
+                // partition may not exist, we should try to create it.
+                if (inflightPartitionsToCreate.add(physicalTablePath)) {
+                    // if the partition is not in inflightPartitionsToCreate, we should create it.
+                    // this means that the partition is not being created by other threads.
+                    LOG.info("Dynamically creating partition partition for {}", physicalTablePath);
+                    createPartition(physicalTablePath);
                 } else {
-                    throw new FlussRuntimeException(e);
+                    // if the partition is already in inflightPartitionsToCreate, we should skip
+                    // creating it.
+                    LOG.debug(
+                            "Partition {} is already being created, skipping.", physicalTablePath);
                 }
             }
         }
+    }
 
-        synchronized (inflightPartitionsLock) {
-            if (isExists) {
-                if (dynamicPartitionEnabled) {
-                    inflightPartitionsToCreate.remove(physicalTablePath);
+    private boolean forceCheckPartitionExist(PhysicalTablePath physicalTablePath) {
+        boolean idExist = false;
+        // force an IO to check whether the partition exists
+        try {
+            // force an IO to check whether the partition exists
+            idExist = metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (t.getCause() instanceof PartitionNotExistException) {
+                if (!dynamicPartitionEnabled) {
+                    throw new PartitionNotExistException(
+                            String.format(
+                                    "Table partition '%s' does not exist.", physicalTablePath));
                 }
             } else {
-                if (!inflightPartitionsToCreate.contains(physicalTablePath)) {
-                    inflightPartitionsToCreate.add(physicalTablePath);
-                    createPartition(physicalTablePath);
-                }
+                throw new FlussRuntimeException(e.getMessage(), e);
             }
         }
+        return idExist;
     }
 
     private void createPartition(PhysicalTablePath physicalTablePath) {
@@ -116,18 +131,32 @@ public class DynamicPartitionCreator {
 
         admin.createPartition(tablePath, resolvedPartitionSpec.toPartitionSpec(), true)
                 .whenComplete(
-                        (partitionId, throwable) -> {
+                        (ignore, throwable) -> {
                             if (throwable != null) {
                                 // If encounter TooManyPartitionsException or
                                 // TooManyBucketsException, we should set
                                 // cachedCreatePartitionException to make the next createPartition
                                 // call failed.
-                                LOG.error(
-                                        "Failed to dynamic create partition for {}",
-                                        physicalTablePath,
-                                        throwable);
-                                cachedCreatePartitionException = throwable;
+                                onPartitionCreationFailed(physicalTablePath, throwable);
+                            } else {
+                                onPartitionCreationSuccess(physicalTablePath);
                             }
                         });
+    }
+
+    private void onPartitionCreationSuccess(PhysicalTablePath physicalTablePath) {
+        inflightPartitionsToCreate.remove(physicalTablePath);
+        // TODO: trigger to update metadata here when metadataUpdater supports async update
+        // metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
+        LOG.info("Successfully created partition {}", physicalTablePath);
+    }
+
+    private void onPartitionCreationFailed(
+            PhysicalTablePath physicalTablePath, Throwable throwable) {
+        inflightPartitionsToCreate.remove(physicalTablePath);
+        fatalErrorHandler.accept(
+                new FlussRuntimeException(
+                        "Failed to dynamically create partition " + physicalTablePath,
+                        stripCompletionException(throwable)));
     }
 }

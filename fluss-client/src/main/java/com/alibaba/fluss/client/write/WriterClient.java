@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
+import static com.alibaba.fluss.utils.ExceptionUtils.toException;
 
 /**
  * A client that write records to server.
@@ -111,7 +112,8 @@ public class WriterClient {
                     new DynamicPartitionCreator(
                             metadataUpdater,
                             admin,
-                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED));
+                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED),
+                            this::maybeAbortBatches);
         } catch (Throwable t) {
             close(Duration.ofMillis(0));
             throw new FlussRuntimeException("Failed to construct writer", t);
@@ -157,7 +159,7 @@ public class WriterClient {
             throwIfWriterClosed();
 
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
-            dynamicPartitionCreator.createPartitionIfNeed(physicalTablePath);
+            dynamicPartitionCreator.checkAndCreatePartitionAsync(physicalTablePath);
 
             // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
@@ -193,15 +195,14 @@ public class WriterClient {
                 // TODO add the wakeup logic refer to Kafka.
             }
         } catch (Exception e) {
-            maybeAbortBatches(e);
             throw new FlussRuntimeException(e);
         }
     }
 
-    private void maybeAbortBatches(Exception exception) {
+    private void maybeAbortBatches(Throwable t) {
         if (accumulator.hasIncomplete()) {
-            LOG.error("Aborting write batches due to fatal error", exception);
-            accumulator.abortBatches(exception);
+            LOG.error("Aborting all pending write batches due to fatal error", t);
+            accumulator.abortBatches(toException(t));
         }
     }
 

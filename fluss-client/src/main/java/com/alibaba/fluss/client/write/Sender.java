@@ -24,6 +24,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.InvalidMetadataException;
 import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -210,7 +211,18 @@ public class Sender implements Runnable {
 
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
-            metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
+            try {
+                metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
+            } catch (Exception e) {
+                // TODO: this try-catch is not needed when we don't update metadata for
+                //  unready partitions
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                if (t.getCause() instanceof PartitionNotExistException) {
+                    // ignore this exception, this is probably happen because the partition
+                } else {
+                    throw e;
+                }
+            }
             LOG.debug(
                     "Client update metadata due to unknown leader tables from the batched records: {}",
                     readyCheckResult.unknownLeaderTables);

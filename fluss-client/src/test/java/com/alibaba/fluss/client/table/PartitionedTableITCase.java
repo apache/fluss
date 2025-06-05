@@ -224,7 +224,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         retry(
                 Duration.ofMinutes(1),
                 () ->
-                        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")))
+                        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")).get())
                                 .rootCause()
                                 .isInstanceOf(TooManyPartitionsException.class)
                                 .hasMessageContaining(

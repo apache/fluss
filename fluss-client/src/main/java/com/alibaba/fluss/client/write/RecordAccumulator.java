@@ -442,6 +442,8 @@ public final class RecordAccumulator {
                 LOG.debug(
                         "Partition not exists for {}, bucket will not be set to ready",
                         physicalTablePath);
+                // TODO: we shouldn't add unready partitions to unknownLeaderTables,
+                //  because it cases PartitionNotExistException later
                 unknownLeaderTables.add(physicalTablePath);
                 return nextReadyCheckDelayMs;
             }
