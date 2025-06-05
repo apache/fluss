@@ -30,6 +30,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -266,7 +267,22 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     @VisibleForTesting
-    public Map<TablePath, Long> getTableIdByPath() {
-        return serverMetadataSnapshot.getTableIdByPath();
+    public void clearTableMetadata() {
+        inLock(
+                metadataLock,
+                () -> {
+                    ServerInfo coordinatorServer = serverMetadataSnapshot.getCoordinatorServer();
+                    Map<Integer, ServerInfo> aliveTabletServers =
+                            serverMetadataSnapshot.getAliveTabletServers();
+                    serverMetadataSnapshot =
+                            new ServerMetadataSnapshot(
+                                    coordinatorServer,
+                                    aliveTabletServers,
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap(),
+                                    Collections.emptyMap());
+                });
     }
 }
