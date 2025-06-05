@@ -20,6 +20,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 
 import java.util.List;
+import java.util.Objects;
 
 /** This entity used to describe the table metadata. */
 public class TableMetadata {
@@ -61,5 +62,35 @@ public class TableMetadata {
 
     public List<BucketMetadata> getBucketMetadataList() {
         return bucketMetadataList;
+    }
+
+    @Override
+    public String toString() {
+        return "TableMetadata{"
+                + "tableInfo="
+                + tableInfo
+                + ", bucketMetadataList="
+                + bucketMetadataList
+                + '}';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        TableMetadata that = (TableMetadata) o;
+        if (!tableInfo.equals(that.tableInfo)) {
+            return false;
+        }
+        return bucketMetadataList.equals(that.bucketMetadataList);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(tableInfo, bucketMetadataList);
     }
 }

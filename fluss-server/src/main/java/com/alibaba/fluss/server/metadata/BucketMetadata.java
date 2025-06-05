@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.metadata;
 import javax.annotation.Nullable;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.OptionalInt;
 
 /** This entity used to describe the bucket metadata. */
@@ -53,5 +54,39 @@ public class BucketMetadata {
 
     public List<Integer> getReplicas() {
         return replicas;
+    }
+
+    @Override
+    public String toString() {
+        return "BucketMetadata{"
+                + "bucketId="
+                + bucketId
+                + ", leaderId="
+                + leaderId
+                + ", leaderEpoch="
+                + leaderEpoch
+                + ", replicas="
+                + replicas
+                + '}';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        BucketMetadata that = (BucketMetadata) o;
+        return bucketId == that.bucketId
+                && Objects.equals(leaderId, that.leaderId)
+                && Objects.equals(leaderEpoch, that.leaderEpoch)
+                && replicas.equals(that.replicas);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(bucketId, leaderId, leaderEpoch, replicas);
     }
 }

@@ -27,6 +27,7 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidUpdateVersionException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -336,7 +337,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             zooKeeperClient.getPartitionNameAndIds(tablePath);
                     for (Map.Entry<String, Long> partition : partitions.entrySet()) {
                         // put partition info to coordinator context
-                        coordinatorContext.putPartition(partition.getValue(), partition.getKey());
+                        coordinatorContext.putPartition(
+                                partition.getValue(),
+                                PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()));
                     }
                     // if the table is auto partition, put the partitions info
                     if (tableInfo
