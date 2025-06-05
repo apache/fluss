@@ -524,8 +524,16 @@ public class FlinkSourceEnumerator
 
     private void handleSplitsAdd(List<SourceSplitBase> splits, Throwable t) {
         if (t != null) {
-            throw new FlinkRuntimeException(
-                    String.format("Failed to list splits for %s to read due to ", tablePath), t);
+            if (isPartitioned && streaming && scanPartitionDiscoveryIntervalMs > 0) {
+                // it means continuously read new partition splits, not throw exception, temporally
+                // warn it to avoid job fail. TODO: fix me in #288
+                LOG.warn("Failed to list splits for {}.", tablePath, t);
+                return;
+            } else {
+                throw new FlinkRuntimeException(
+                        String.format("Failed to list splits for %s to read due to ", tablePath),
+                        t);
+            }
         }
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {
