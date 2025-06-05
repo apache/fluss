@@ -783,7 +783,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<Stat> getStat(String path) throws Exception {
         try {
             Stat stat = zkClient.checkExists().forPath(path);
-            return Optional.of(stat);
+            return Optional.ofNullable(stat);
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }

@@ -23,10 +23,13 @@ import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionStateListener;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.SessionConnectionStateErrorPolicy;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerConfig;
+import com.alibaba.fluss.utils.function.ThrowingRunnable;
 
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -146,6 +149,53 @@ public class ZooKeeperUtils {
         cf.getUnhandledErrorListenable().addListener(unhandledErrorListener);
         cf.start();
         return new CuratorFrameworkWithUnhandledErrorListener(cf, unhandledErrorListener);
+    }
+
+    public static void registerZookeeperClientReInitSessionListener(
+            ZooKeeperClient zooKeeperClient,
+            ThrowingRunnable<Exception> reInitSessionCallback,
+            FatalErrorHandler fatalErrorHandler) {
+        zooKeeperClient
+                .getCuratorClient()
+                .getConnectionStateListenable()
+                .addListener(
+                        new ZookeeperClientSessionReInitListener(
+                                reInitSessionCallback, fatalErrorHandler));
+    }
+
+    private static class ZookeeperClientSessionReInitListener implements ConnectionStateListener {
+        private final ThrowingRunnable<Exception> reInitSessionCallback;
+        private final FatalErrorHandler fatalErrorHandler;
+        private volatile boolean sessionExpired = false;
+
+        public ZookeeperClientSessionReInitListener(
+                ThrowingRunnable<Exception> reInitSessionCallback,
+                FatalErrorHandler fatalErrorHandler) {
+            this.reInitSessionCallback = reInitSessionCallback;
+            this.fatalErrorHandler = fatalErrorHandler;
+        }
+
+        public void stateChanged(
+                CuratorFramework curatorFramework, ConnectionState connectionState) {
+            switch (connectionState) {
+                case LOST:
+                    sessionExpired = true;
+                    break;
+                case RECONNECTED:
+                    if (sessionExpired) {
+                        LOG.info("Zookeeper session re-initialized.");
+                        try {
+                            reInitSessionCallback.run();
+                        } catch (Exception e) {
+                            fatalErrorHandler.onFatalError(e);
+                        }
+                        sessionExpired = false;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 
     /** Creates a ZooKeeper path of the form "/a/b/.../z". */
