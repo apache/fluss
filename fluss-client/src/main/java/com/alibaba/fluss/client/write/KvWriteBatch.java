@@ -22,7 +22,6 @@ import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.KvRecordBatchBuilder;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.BinaryRow;
@@ -52,16 +51,15 @@ public class KvWriteBatch extends WriteBatch {
     private final @Nullable int[] targetColumns;
 
     public KvWriteBatch(
-            TableBucket tableBucket,
+            int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             KvFormat kvFormat,
             int writeLimit,
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
-            long createdMs,
-            boolean isPartitionedTable) {
-        super(tableBucket, physicalTablePath, createdMs, isPartitionedTable);
+            long createdMs) {
+        super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);

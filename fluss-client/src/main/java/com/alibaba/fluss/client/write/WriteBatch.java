@@ -20,7 +20,6 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.bytesview.BytesView;
 
@@ -45,7 +44,7 @@ public abstract class WriteBatch {
     private final long createdMs;
     private final PhysicalTablePath physicalTablePath;
     private final RequestFuture requestFuture;
-    private final boolean isPartitionedTable;
+    private final int bucketId;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
@@ -53,17 +52,11 @@ public abstract class WriteBatch {
     protected boolean reopened;
     protected int recordCount;
     private long drainedMs;
-    private TableBucket tableBucket;
 
-    public WriteBatch(
-            TableBucket tableBucket,
-            PhysicalTablePath physicalTablePath,
-            long createdMs,
-            boolean isPartitionedTable) {
+    public WriteBatch(int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
         this.createdMs = createdMs;
-        this.tableBucket = tableBucket;
-        this.isPartitionedTable = isPartitionedTable;
+        this.bucketId = bucketId;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
@@ -122,15 +115,6 @@ public abstract class WriteBatch {
         return batchSequence() != LogRecordBatch.NO_BATCH_SEQUENCE;
     }
 
-    public @Nullable Long getPartitionId() {
-        return tableBucket.getPartitionId();
-    }
-
-    public void setPartitionId(long partitionId) {
-        this.tableBucket =
-                new TableBucket(tableBucket.getTableId(), partitionId, tableBucket.getBucket());
-    }
-
     public void resetWriterState(long writerId, int batchSequence) {
         LOG.info(
                 "Resetting batch sequence of batch with current batch sequence {} for table path {} to {}",
@@ -147,7 +131,7 @@ public abstract class WriteBatch {
                     "Batch has already been completed in final stata " + finalState.get());
         }
 
-        LOG.trace("Abort batch for tableBucket {}", tableBucket, exception);
+        LOG.trace("Abort batch for table path {}", physicalTablePath, exception);
         completeFutureAndFireCallbacks(exception);
     }
 
@@ -155,21 +139,8 @@ public abstract class WriteBatch {
         return reopened;
     }
 
-    public boolean isPartitionedTable() {
-        return isPartitionedTable;
-    }
-
-    public TableBucket tableBucket() {
-        if (isPartitionedTable) {
-            if (tableBucket.getPartitionId() == null) {
-                throw new IllegalStateException(
-                        "Partition id is not set for partitioned table when writeBatch ready.");
-            } else {
-                return tableBucket;
-            }
-        } else {
-            return tableBucket;
-        }
+    public int bucketId() {
+        return bucketId;
     }
 
     public PhysicalTablePath physicalTablePath() {

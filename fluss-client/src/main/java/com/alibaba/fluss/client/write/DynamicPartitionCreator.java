@@ -44,6 +44,7 @@ public class DynamicPartitionCreator {
 
     private final MetadataUpdater metadataUpdater;
     private final Admin admin;
+    private final boolean dynamicPartitionEnabled;
 
     private final Object inflightPartitionsLock = new Object();
 
@@ -52,9 +53,11 @@ public class DynamicPartitionCreator {
 
     private volatile Throwable cachedCreatePartitionException = null;
 
-    public DynamicPartitionCreator(MetadataUpdater metadataUpdater, Admin admin) {
+    public DynamicPartitionCreator(
+            MetadataUpdater metadataUpdater, Admin admin, boolean dynamicPartitionEnabled) {
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
+        this.dynamicPartitionEnabled = dynamicPartitionEnabled;
     }
 
     public void createPartitionIfNeed(PhysicalTablePath physicalTablePath) {
@@ -68,7 +71,6 @@ public class DynamicPartitionCreator {
             return;
         }
 
-        boolean dynamicPartitionEnabled = tableInfo.getTableConfig().isDynamicPartitionEnabled();
         Optional<Long> partitionIdOpt = metadataUpdater.getPartitionId(physicalTablePath);
         // first try to update metadata info if not exists.
         boolean isExists = partitionIdOpt.isPresent();

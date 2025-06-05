@@ -83,8 +83,9 @@ public class IdempotenceBucketMap {
      * unequivocally failed by the tablet serve, i.e. it has received a confirmed fatal status code
      * like 'Message Too Large' or something similar.
      */
-    void adjustSequencesDueToFailedBatch(WriteBatch batch) {
-        TableBucket tableBucket = batch.tableBucket();
+    void adjustSequencesDueToFailedBatch(ReadyWriteBatch readyBatch) {
+        TableBucket tableBucket = readyBatch.tableBucket();
+        WriteBatch batch = readyBatch.writeBatch();
         if (!contains(tableBucket)) {
             // Batch sequence are not being tracked for this bucket. This could happen if the
             // writer id was just reset due to a previous OutOfOrderSequenceException.
@@ -109,7 +110,7 @@ public class IdempotenceBucketMap {
         return get(tableBucket).nextBatchBySequence();
     }
 
-    void removeInFlightBatch(WriteBatch batch) {
-        get(batch.tableBucket()).removeInFlightBatch(batch);
+    void removeInFlightBatch(ReadyWriteBatch readyBatch) {
+        get(readyBatch.tableBucket()).removeInFlightBatch(readyBatch.writeBatch());
     }
 }

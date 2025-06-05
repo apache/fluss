@@ -23,7 +23,7 @@ import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.write.KvWriteBatch;
-import com.alibaba.fluss.client.write.WriteBatch;
+import com.alibaba.fluss.client.write.ReadyWriteBatch;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
@@ -48,7 +48,6 @@ import com.alibaba.fluss.rpc.messages.PbKvSnapshot;
 import com.alibaba.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
-import com.alibaba.fluss.rpc.messages.PbPhysicalTablePath;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
@@ -77,19 +76,19 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
 public class ClientRpcMessageUtils {
 
     public static ProduceLogRequest makeProduceLogRequest(
-            long tableId, int acks, int maxRequestTimeoutMs, List<WriteBatch> batches) {
+            long tableId, int acks, int maxRequestTimeoutMs, List<ReadyWriteBatch> readyBatches) {
         ProduceLogRequest request =
                 new ProduceLogRequest()
                         .setTableId(tableId)
                         .setAcks(acks)
                         .setTimeoutMs(maxRequestTimeoutMs);
-        batches.forEach(
-                batch -> {
+        readyBatches.forEach(
+                readyBatch -> {
+                    TableBucket tableBucket = readyBatch.tableBucket();
                     PbProduceLogReqForBucket pbProduceLogReqForBucket =
                             request.addBucketsReq()
-                                    .setBucketId(batch.tableBucket().getBucket())
-                                    .setRecordsBytesView(batch.build());
-                    TableBucket tableBucket = batch.tableBucket();
+                                    .setBucketId(tableBucket.getBucket())
+                                    .setRecordsBytesView(readyBatch.writeBatch().build());
                     if (tableBucket.getPartitionId() != null) {
                         pbProduceLogReqForBucket.setPartitionId(tableBucket.getPartitionId());
                     }
@@ -97,19 +96,11 @@ public class ClientRpcMessageUtils {
         return request;
     }
 
-    public static PbPhysicalTablePath fromPhysicalTablePath(PhysicalTablePath physicalPath) {
-        PbPhysicalTablePath pbPath =
-                new PbPhysicalTablePath()
-                        .setDatabaseName(physicalPath.getDatabaseName())
-                        .setTableName(physicalPath.getTableName());
-        if (physicalPath.getPartitionName() != null) {
-            pbPath.setPartitionName(physicalPath.getPartitionName());
-        }
-        return pbPath;
-    }
-
     public static PutKvRequest makePutKvRequest(
-            long tableId, int acks, int maxRequestTimeoutMs, List<WriteBatch> batches) {
+            long tableId,
+            int acks,
+            int maxRequestTimeoutMs,
+            List<ReadyWriteBatch> readyWriteBatches) {
         PutKvRequest request =
                 new PutKvRequest()
                         .setTableId(tableId)
@@ -117,9 +108,11 @@ public class ClientRpcMessageUtils {
                         .setTimeoutMs(maxRequestTimeoutMs);
         // check the target columns in the batch list should be the same. If not same,
         // we throw exception directly currently.
-        int[] targetColumns = ((KvWriteBatch) batches.get(0)).getTargetColumns();
-        for (int i = 1; i < batches.size(); i++) {
-            int[] currentBatchTargetColumns = ((KvWriteBatch) batches.get(i)).getTargetColumns();
+        int[] targetColumns =
+                ((KvWriteBatch) readyWriteBatches.get(0).writeBatch()).getTargetColumns();
+        for (int i = 1; i < readyWriteBatches.size(); i++) {
+            int[] currentBatchTargetColumns =
+                    ((KvWriteBatch) readyWriteBatches.get(i).writeBatch()).getTargetColumns();
             if (!Arrays.equals(targetColumns, currentBatchTargetColumns)) {
                 throw new IllegalStateException(
                         String.format(
@@ -132,13 +125,13 @@ public class ClientRpcMessageUtils {
         if (targetColumns != null) {
             request.setTargetColumns(targetColumns);
         }
-        batches.forEach(
-                batch -> {
+        readyWriteBatches.forEach(
+                readyBatch -> {
+                    TableBucket tableBucket = readyBatch.tableBucket();
                     PbPutKvReqForBucket pbPutKvReqForBucket =
                             request.addBucketsReq()
-                                    .setBucketId(batch.tableBucket().getBucket())
-                                    .setRecordsBytesView(batch.build());
-                    TableBucket tableBucket = batch.tableBucket();
+                                    .setBucketId(tableBucket.getBucket())
+                                    .setRecordsBytesView(readyBatch.writeBatch().build());
                     if (tableBucket.getPartitionId() != null) {
                         pbPutKvReqForBucket.setPartitionId(tableBucket.getPartitionId());
                     }
@@ -353,14 +346,6 @@ public class ClientRpcMessageUtils {
                 .collect(
                         java.util.stream.Collectors.toMap(
                                 PbKeyValue::getKey, PbKeyValue::getValue));
-    }
-
-    public static PbPartitionSpec makePbPartitionSpec(PartitionSpec partitionSpec) {
-        Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
-        List<PbKeyValue> pbKeyValues = new ArrayList<>(partitionSpecMap.size());
-        partitionSpecMap.forEach(
-                (key, value) -> pbKeyValues.add(new PbKeyValue().setKey(key).setValue(value)));
-        return new PbPartitionSpec().addAllPartitionKeyValues(pbKeyValues);
     }
 
     public static ResolvedPartitionSpec toResolvedPartitionSpec(PbPartitionSpec pbPartitionSpec) {

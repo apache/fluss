@@ -150,17 +150,17 @@ public class IdempotenceManager {
         return idempotenceBucketMap.lastAckedBatchSequence(tableBucket);
     }
 
-    synchronized void addInFlightBatch(WriteBatch batch) {
+    synchronized void addInFlightBatch(WriteBatch batch, TableBucket tableBucket) {
         if (!batch.hasBatchSequence()) {
             throw new IllegalStateException(
                     "Can't track batch for bucket "
-                            + batch.tableBucket()
+                            + tableBucket
                             + " when batch sequence is not set.");
         }
-        idempotenceBucketMap.get(batch.tableBucket()).addInflightBatch(batch);
+        idempotenceBucketMap.get(tableBucket).addInflightBatch(batch);
     }
 
-    synchronized void removeInFlightBatch(WriteBatch batch) {
+    synchronized void removeInFlightBatch(ReadyWriteBatch batch) {
         if (hasInflightBatches(batch.tableBucket())) {
             idempotenceBucketMap.removeInFlightBatch(batch);
         }
@@ -182,8 +182,9 @@ public class IdempotenceManager {
         return batch == null ? LogRecordBatch.NO_BATCH_SEQUENCE : batch.batchSequence();
     }
 
-    synchronized void handleCompletedBatch(WriteBatch batch) {
-        TableBucket tableBucket = batch.tableBucket();
+    synchronized void handleCompletedBatch(ReadyWriteBatch readyWriteBatch) {
+        TableBucket tableBucket = readyWriteBatch.tableBucket();
+        WriteBatch batch = readyWriteBatch.writeBatch();
         if (!hasWriterId(batch.writerId())) {
             LOG.debug(
                     "Ignoring completed batch {} with writer id {}, and batch sequence {} "
@@ -200,11 +201,12 @@ public class IdempotenceManager {
                 batch.writerId(),
                 tableBucket,
                 lastAckedSequence);
-        removeInFlightBatch(batch);
+        removeInFlightBatch(readyWriteBatch);
     }
 
     synchronized void handleFailedBatch(
-            WriteBatch batch, Exception exception, boolean adjustSequenceNumbers) {
+            ReadyWriteBatch readyWriteBatch, Exception exception, boolean adjustSequenceNumbers) {
+        WriteBatch batch = readyWriteBatch.writeBatch();
         if (!hasWriterId(batch.writerId())) {
             LOG.debug(
                     "Ignoring failed batch {} with writer id {}, and batch sequence {} "
@@ -221,7 +223,7 @@ public class IdempotenceManager {
             LOG.error(
                     "The server returned {} for table-bucket {} with writer id {} and batch sequence {}.",
                     exception,
-                    batch.tableBucket(),
+                    readyWriteBatch.tableBucket(),
                     batch.writerId(),
                     batch.batchSequence());
             // Reset the writer state since we have hit an irrecoverable exception and cannot make
@@ -229,9 +231,9 @@ public class IdempotenceManager {
             // the writer id and batch sequence for all existing buckets.
             resetWriterId();
         } else {
-            removeInFlightBatch(batch);
+            removeInFlightBatch(readyWriteBatch);
             if (adjustSequenceNumbers) {
-                idempotenceBucketMap.adjustSequencesDueToFailedBatch(batch);
+                idempotenceBucketMap.adjustSequencesDueToFailedBatch(readyWriteBatch);
             }
         }
     }
@@ -249,12 +251,11 @@ public class IdempotenceManager {
         return idempotenceBucketMap.getOrCreate(tableBucket).inflightBatchSize();
     }
 
-    synchronized boolean canRetry(WriteBatch batch, Errors error) {
+    synchronized boolean canRetry(WriteBatch batch, TableBucket tableBucket, Errors error) {
         if (!isWriterIdValid()) {
             return false;
         }
 
-        TableBucket tableBucket = batch.tableBucket();
         if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
                 && (batch.sequenceHasBeenReset()
                         || !isNextSequence(tableBucket, batch.batchSequence()))) {

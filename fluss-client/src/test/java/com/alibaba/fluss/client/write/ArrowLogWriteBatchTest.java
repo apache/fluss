@@ -121,7 +121,7 @@ public class ArrowLogWriteBatchTest {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
         ArrowLogWriteBatch arrowLogWriteBatch =
                 new ArrowLogWriteBatch(
-                        tb,
+                        tb.getBucket(),
                         DATA1_PHYSICAL_TABLE_PATH,
                         DATA1_TABLE_INFO.getSchemaId(),
                         writerProvider.getOrCreateWriter(
@@ -131,8 +131,7 @@ public class ArrowLogWriteBatchTest {
                                 DATA1_ROW_TYPE,
                                 DEFAULT_COMPRESSION),
                         new PreAllocatedPagedOutputView(memorySegmentList),
-                        System.currentTimeMillis(),
-                        false);
+                        System.currentTimeMillis());
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
 
         int count = 0;
@@ -198,13 +197,12 @@ public class ArrowLogWriteBatchTest {
 
             ArrowLogWriteBatch arrowLogWriteBatch =
                     new ArrowLogWriteBatch(
-                            tb,
+                            tb.getBucket(),
                             DATA1_PHYSICAL_TABLE_PATH,
                             DATA1_TABLE_INFO.getSchemaId(),
                             arrowWriter,
                             new PreAllocatedPagedOutputView(memorySegmentList),
-                            System.currentTimeMillis(),
-                            false);
+                            System.currentTimeMillis());
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
@@ -294,7 +292,7 @@ public class ArrowLogWriteBatchTest {
 
     private ArrowLogWriteBatch createArrowLogWriteBatch(TableBucket tb, int maxSizeInBytes) {
         return new ArrowLogWriteBatch(
-                tb,
+                tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writerProvider.getOrCreateWriter(
@@ -304,8 +302,7 @@ public class ArrowLogWriteBatchTest {
                         DATA1_ROW_TYPE,
                         DEFAULT_COMPRESSION),
                 new UnmanagedPagedOutputView(128),
-                System.currentTimeMillis(),
-                false);
+                System.currentTimeMillis());
     }
 
     private WriteCallback newWriteCallback() {

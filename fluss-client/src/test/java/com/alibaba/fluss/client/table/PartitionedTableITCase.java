@@ -22,6 +22,7 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
@@ -38,11 +39,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.InternalRowAssert.assertThatRow;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -140,7 +143,8 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteToNonExistsPartitionWhenDisabledDynamicPartition() throws Exception {
-        createPartitionedTable(DATA1_TABLE_PATH_PK, true, false);
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED, false);
+        createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
 
         // test write to not exist partition when enable dynamic create partition
@@ -166,24 +170,29 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         for (int i = 0; i < partitionSize; i++) {
             String partitionName = String.valueOf(i);
             InternalRow row = row(i, "a" + i, partitionName);
-            appendWriter.append(row).get();
+            appendWriter.append(row);
             expectPartitionNameAndAppendRows
                     .computeIfAbsent(partitionName, k -> new ArrayList<>())
                     .add(row);
         }
         appendWriter.flush();
 
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    List<PartitionInfo> partitionInfos =
-                            admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
-                    assertThat(partitionInfos.size()).isEqualTo(partitionSize);
-                });
-
-        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
+        List<PartitionInfo> partitionInfoList =
+                waitValue(
+                        () -> {
+                            List<PartitionInfo> partitionInfos =
+                                    admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
+                            if (partitionInfos.size() == partitionSize) {
+                                return Optional.of(partitionInfos);
+                            }
+                            {
+                                return Optional.empty();
+                            }
+                        },
+                        Duration.ofMinutes(1),
+                        "Fail to wait for the partition created.");
         Map<Long, List<InternalRow>> expectPartitionIdAndAppendRows = new HashMap<>();
-        for (PartitionInfo partitionInfo : partitionInfos) {
+        for (PartitionInfo partitionInfo : partitionInfoList) {
             expectPartitionIdAndAppendRows.put(
                     partitionInfo.getPartitionId(),
                     expectPartitionNameAndAppendRows.get(partitionInfo.getPartitionName()));
@@ -197,7 +206,6 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
     void testCreatePartitionExceedMaxPartitionNumber() throws Exception {
         // test make partition number exceed max partition number 10 (set in
         // ClientToServerITCaseBase).
-
         createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
 
@@ -209,24 +217,22 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
             upsertWriter.upsert(row).get();
         }
 
-        // TODO this case will let client hang forever, wait pr:
-        // https://github.com/alibaba/fluss/pull/932
-        //        // add one row will not throw TooManyPartitionsException immediately.
-        //        upsertWriter.upsert(row(10, "a" + 10, "10"));
-        //
-        //        // append another one will get the cached TooManyPartitionsException.
-        //        while (true) {
-        //            upsertWriter.upsert(row(10, "a" + 10, "10"));
-        //        }
+        // add one row will not throw TooManyPartitionsException immediately.
+        upsertWriter.upsert(row(10, "a" + 10, "10"));
+
+        // add another rows will throw TooManyPartitionsException final.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")))
+                                .rootCause()
+                                .isInstanceOf(TooManyPartitionsException.class)
+                                .hasMessageContaining(
+                                        "Exceed the maximum number of partitions for table "
+                                                + "test_db_1.test_pk_table_1, only allow 10 partitions."));
     }
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
-            throws Exception {
-        return createPartitionedTable(tablePath, isPrimaryTable, true);
-    }
-
-    private Schema createPartitionedTable(
-            TablePath tablePath, boolean isPrimaryTable, boolean isDynamicPartition)
             throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
@@ -244,11 +250,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         Schema schema = schemaBuilder.build();
 
         TableDescriptor partitionTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .partitionedBy("c")
-                        .property(ConfigOptions.TABLE_DYNAMIC_PARTITION_ENABLED, isDynamicPartition)
-                        .build();
+                TableDescriptor.builder().schema(schema).partitionedBy("c").build();
         createTable(tablePath, partitionTableDescriptor, false);
         return schema;
     }

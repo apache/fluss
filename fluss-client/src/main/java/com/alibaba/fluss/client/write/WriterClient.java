@@ -107,7 +107,11 @@ public class WriterClient {
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
 
-            this.dynamicPartitionCreator = new DynamicPartitionCreator(metadataUpdater, admin);
+            this.dynamicPartitionCreator =
+                    new DynamicPartitionCreator(
+                            metadataUpdater,
+                            admin,
+                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED));
         } catch (Throwable t) {
             close(Duration.ofMillis(0));
             throw new FlussRuntimeException("Failed to construct writer", t);
@@ -189,7 +193,15 @@ public class WriterClient {
                 // TODO add the wakeup logic refer to Kafka.
             }
         } catch (Exception e) {
+            maybeAbortBatches(e);
             throw new FlussRuntimeException(e);
+        }
+    }
+
+    private void maybeAbortBatches(Exception exception) {
+        if (accumulator.hasIncomplete()) {
+            LOG.error("Aborting write batches due to fatal error", exception);
+            accumulator.abortBatches(exception);
         }
     }
 

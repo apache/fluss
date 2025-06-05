@@ -918,6 +918,15 @@ public class ConfigOptions {
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
                                     + "requests to complete before sending out new requests.");
 
+    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_PARTITION_ENABLED =
+            key("client.writer.dynamic-partition.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether enable dynamic partition for client writer. Enable by default."
+                                    + " Dynamic partition strategy refers to creating partitions based on the data "
+                                    + "being written for partitioned table if the wrote partition don't exists.");
+
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
                     .durationType()
@@ -1112,14 +1121,6 @@ public class ConfigOptions {
                     .withDescription(
                             "The format of the kv records in kv store. The default value is `compacted`. "
                                     + "The supported formats are `compacted` and `indexed`.");
-
-    public static final ConfigOption<Boolean> TABLE_DYNAMIC_PARTITION_ENABLED =
-            key("table.dynamic-partition.enabled")
-                    .booleanType()
-                    .defaultValue(true)
-                    .withDescription(
-                            "Whether enable dynamic partition for the table. Enable by default."
-                                    + " Dynamic partition strategy refers to creating partitions based on the data being written, if the partition does not exist while write data to the table.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")

@@ -21,7 +21,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.MemoryLogRecordsIndexedBuilder;
 import com.alibaba.fluss.record.bytesview.BytesView;
@@ -49,14 +48,13 @@ public final class IndexedLogWriteBatch extends WriteBatch {
     private final MemoryLogRecordsIndexedBuilder recordsBuilder;
 
     public IndexedLogWriteBatch(
-            TableBucket tableBucket,
+            int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             int writeLimit,
             AbstractPagedOutputView outputView,
-            long createdMs,
-            boolean isPartitionedTable) {
-        super(tableBucket, physicalTablePath, createdMs, isPartitionedTable);
+            long createdMs) {
+        super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);

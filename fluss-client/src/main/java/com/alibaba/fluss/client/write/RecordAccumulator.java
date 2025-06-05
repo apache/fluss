@@ -61,7 +61,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -275,18 +274,18 @@ public final class RecordAccumulator {
      * @param cluster The current cluster metadata
      * @param nodes The list of node to drain
      * @param maxSize The maximum number of bytes to drain
-     * @return A list of {@link WriteBatch} for each node specified with total size less than the
-     *     requested maxSize.
+     * @return A list of {@link ReadyWriteBatch} for each node specified with total size less than
+     *     the requested maxSize.
      */
-    public Map<Integer, List<WriteBatch>> drain(Cluster cluster, Set<ServerNode> nodes, int maxSize)
-            throws Exception {
+    public Map<Integer, List<ReadyWriteBatch>> drain(
+            Cluster cluster, Set<ServerNode> nodes, int maxSize) throws Exception {
         if (nodes.isEmpty()) {
             return Collections.emptyMap();
         }
 
-        Map<Integer, List<WriteBatch>> batches = new HashMap<>();
+        Map<Integer, List<ReadyWriteBatch>> batches = new HashMap<>();
         for (ServerNode node : nodes) {
-            List<WriteBatch> ready = drainBatchesForOneNode(cluster, node, maxSize);
+            List<ReadyWriteBatch> ready = drainBatchesForOneNode(cluster, node, maxSize);
             if (!ready.isEmpty()) {
                 batches.put(node.id(), ready);
             }
@@ -294,14 +293,14 @@ public final class RecordAccumulator {
         return batches;
     }
 
-    public void reEnqueue(WriteBatch batch) {
+    public void reEnqueue(ReadyWriteBatch readyWriteBatch) {
+        WriteBatch batch = readyWriteBatch.writeBatch();
         batch.reEnqueued();
         Deque<WriteBatch> deque =
-                getOrCreateDeque(
-                        batch.tableBucket(), batch.physicalTablePath(), batch.isPartitionedTable());
+                getOrCreateDeque(readyWriteBatch.tableBucket(), batch.physicalTablePath());
         synchronized (deque) {
             if (idempotenceManager.idempotenceEnabled()) {
-                insertInSequenceOrder(deque, batch);
+                insertInSequenceOrder(deque, batch, readyWriteBatch.tableBucket());
             } else {
                 deque.addFirst(batch);
             }
@@ -311,7 +310,7 @@ public final class RecordAccumulator {
     /** Abort all incomplete batches (whether they have been sent or not). */
     public void abortBatches(final Exception reason) {
         for (WriteBatch batch : incomplete.copyAll()) {
-            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.tableBucket());
+            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId(), true);
             synchronized (dq) {
                 batch.abortRecordAppends();
                 dq.remove(batch);
@@ -323,9 +322,7 @@ public final class RecordAccumulator {
 
     /** Get the deque for the given table-bucket, creating it if necessary. */
     private Deque<WriteBatch> getOrCreateDeque(
-            TableBucket tableBucket,
-            PhysicalTablePath physicalTablePath,
-            boolean isPartitionedTable) {
+            TableBucket tableBucket, PhysicalTablePath physicalTablePath) {
         BucketAndWriteBatches bucketAndWriteBatches =
                 writeBatches.computeIfAbsent(
                         physicalTablePath,
@@ -333,7 +330,7 @@ public final class RecordAccumulator {
                                 new BucketAndWriteBatches(
                                         tableBucket.getTableId(),
                                         tableBucket.getPartitionId(),
-                                        isPartitionedTable));
+                                        physicalTablePath.getPartitionName() != null));
         return bucketAndWriteBatches.batches.computeIfAbsent(
                 tableBucket.getBucket(), k -> new ArrayDeque<>());
     }
@@ -387,12 +384,21 @@ public final class RecordAccumulator {
     }
 
     @VisibleForTesting
-    public Deque<WriteBatch> getDeque(PhysicalTablePath path, TableBucket tableBucket) {
+    public Deque<WriteBatch> getDeque(
+            PhysicalTablePath path, int bucketId, boolean ignoreUnReadyPartitionTable) {
         BucketAndWriteBatches bucketAndWriteBatches = writeBatches.get(path);
         if (bucketAndWriteBatches == null) {
             return null;
         }
-        return bucketAndWriteBatches.batches.get(tableBucket.getBucket());
+
+        // for these partitioned tables, we need to check partitionId first.
+        if (!ignoreUnReadyPartitionTable
+                && bucketAndWriteBatches.isPartitionedTable
+                && bucketAndWriteBatches.partitionId == null) {
+            return null;
+        }
+
+        return bucketAndWriteBatches.batches.get(bucketId);
     }
 
     public Set<PhysicalTablePath> getPhysicalTablePathsInBatches() {
@@ -544,15 +550,6 @@ public final class RecordAccumulator {
         }
 
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
-
-        long tableId = cluster.getTableId(physicalTablePath.getTablePath());
-        Optional<Long> partitionIdOpt = cluster.getPartitionId(physicalTablePath);
-
-        // For partition table without partition id (Waiting to be created by
-        // dynamicPartitionCreator), we set to null for this batch, it will be set when the
-        // partition is created by call WriteBatch#setPartitionId().
-        TableBucket tb = new TableBucket(tableId, partitionIdOpt.orElse(null), bucketId);
-
         PreAllocatedPagedOutputView outputView = new PreAllocatedPagedOutputView(segments);
         int schemaId = tableInfo.getSchemaId();
         WriteFormat writeFormat = writeRecord.getWriteFormat();
@@ -561,15 +558,14 @@ public final class RecordAccumulator {
         if (writeFormat == WriteFormat.KV) {
             batch =
                     new KvWriteBatch(
-                            tb,
+                            bucketId,
                             physicalTablePath,
                             schemaId,
                             tableInfo.getTableConfig().getKvFormat(),
                             outputView.getPreAllocatedSize(),
                             outputView,
                             writeRecord.getTargetColumns(),
-                            clock.milliseconds(),
-                            tableInfo.isPartitioned());
+                            clock.milliseconds());
         } else if (writeFormat == WriteFormat.ARROW_LOG) {
             ArrowWriter arrowWriter =
                     arrowWriterPool.getOrCreateWriter(
@@ -580,23 +576,21 @@ public final class RecordAccumulator {
                             tableInfo.getTableConfig().getArrowCompressionInfo());
             batch =
                     new ArrowLogWriteBatch(
-                            tb,
+                            bucketId,
                             physicalTablePath,
                             schemaId,
                             arrowWriter,
                             outputView,
-                            clock.milliseconds(),
-                            tableInfo.isPartitioned());
+                            clock.milliseconds());
         } else {
             batch =
                     new IndexedLogWriteBatch(
-                            tb,
+                            bucketId,
                             physicalTablePath,
                             schemaId,
                             outputView.getPreAllocatedSize(),
                             outputView,
-                            clock.milliseconds(),
-                            tableInfo.isPartitioned());
+                            clock.milliseconds());
         }
 
         batch.tryAppend(writeRecord, callback);
@@ -623,11 +617,11 @@ public final class RecordAccumulator {
         return null;
     }
 
-    private List<WriteBatch> drainBatchesForOneNode(Cluster cluster, ServerNode node, int maxSize)
-            throws Exception {
+    private List<ReadyWriteBatch> drainBatchesForOneNode(
+            Cluster cluster, ServerNode node, int maxSize) throws Exception {
         int size = 0;
         List<BucketLocation> buckets = getAllBucketsInCurrentNode(node, cluster);
-        List<WriteBatch> ready = new ArrayList<>();
+        List<ReadyWriteBatch> ready = new ArrayList<>();
         if (buckets.isEmpty()) {
             return ready;
         }
@@ -636,11 +630,12 @@ public final class RecordAccumulator {
         int start = drainIndex = drainIndex % buckets.size();
         do {
             BucketLocation bucket = buckets.get(drainIndex);
+            PhysicalTablePath physicalTablePath = bucket.getPhysicalTablePath();
             TableBucket tableBucket = bucket.getTableBucket();
             updateDrainIndex(node.id(), drainIndex);
             drainIndex = (drainIndex + 1) % buckets.size();
 
-            Deque<WriteBatch> deque = getDeque(bucket.getPhysicalTablePath(), tableBucket);
+            Deque<WriteBatch> deque = getDeque(physicalTablePath, tableBucket.getBucket(), false);
             if (deque == null) {
                 continue;
             }
@@ -666,16 +661,6 @@ public final class RecordAccumulator {
                 }
 
                 batch = deque.pollFirst();
-
-                // reset partition id for partition table without partition id.'
-                checkArgument(batch != null, "batch should not be null");
-                if (batch.isPartitionedTable() && batch.getPartitionId() == null) {
-                    Optional<Long> partitionId =
-                            cluster.getPartitionId(bucket.getPhysicalTablePath());
-                    checkArgument(partitionId.isPresent(), "Partition id is null.");
-                    batch.setPartitionId(partitionId.get());
-                }
-
                 long writerId =
                         idempotenceManager.idempotenceEnabled()
                                 ? idempotenceManager.writerId()
@@ -704,7 +689,7 @@ public final class RecordAccumulator {
                             writerId,
                             batch.batchSequence(),
                             tableBucket);
-                    idempotenceManager.addInFlightBatch(batch);
+                    idempotenceManager.addInFlightBatch(batch, tableBucket);
                 }
             }
 
@@ -712,7 +697,7 @@ public final class RecordAccumulator {
             checkNotNull(batch, "batch should not be null");
             batch.close();
             size += batch.estimatedSizeInBytes();
-            ready.add(batch);
+            ready.add(new ReadyWriteBatch(tableBucket, batch));
             // mark the batch as drained.
             batch.drained(System.currentTimeMillis());
         } while (start != drainIndex);
@@ -797,7 +782,8 @@ public final class RecordAccumulator {
      * sequence also have the current writer id. We will not attempt to reorder messages if the
      * writer id has changed.
      */
-    private void insertInSequenceOrder(Deque<WriteBatch> deque, WriteBatch batch) {
+    private void insertInSequenceOrder(
+            Deque<WriteBatch> deque, WriteBatch batch, TableBucket tableBucket) {
         // When we are re-enqueue and have enabled idempotence, the re-enqueued batch must always
         // have a batch sequence.
         if (batch.batchSequence() == LogRecordBatch.NO_BATCH_SEQUENCE) {
@@ -806,7 +792,6 @@ public final class RecordAccumulator {
                             + "though idempotence is enabled.");
         }
 
-        TableBucket tableBucket = batch.tableBucket();
         if (idempotenceManager.nextBatchBySequence(tableBucket) == null) {
             throw new IllegalStateException(
                     "We are re-enqueueing a batch which is not tracked as part of the in flight "
