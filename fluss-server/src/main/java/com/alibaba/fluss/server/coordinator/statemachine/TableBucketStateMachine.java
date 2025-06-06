@@ -20,6 +20,8 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.server.coordinator.CoordinatorContext;
 import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
+import com.alibaba.fluss.server.entity.BatchRegisterLeadAndIsr;
+import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Sets;
@@ -29,8 +31,10 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -112,8 +116,14 @@ public class TableBucketStateMachine {
     public void handleStateChange(Set<TableBucket> tableBuckets, BucketState targetState) {
         try {
             coordinatorRequestBatch.newBatch();
-            for (TableBucket tableBucket : tableBuckets) {
-                doHandleStateChange(tableBucket, targetState);
+
+            if (checkIfCreateTablePartitionRequest(tableBuckets, targetState)) {
+                // batch register table bucket lead and isr
+                batchHandleOnlineChangeAndInitLeader(tableBuckets);
+            } else {
+                for (TableBucket tableBucket : tableBuckets) {
+                    doHandleStateChange(tableBucket, targetState);
+                }
             }
             coordinatorRequestBatch.sendRequestToTabletServers(
                     coordinatorContext.getCoordinatorEpoch());
@@ -242,7 +252,138 @@ public class TableBucketStateMachine {
         }
     }
 
+    private boolean checkIfCreateTablePartitionRequest(
+            Set<TableBucket> tableBuckets, BucketState targetState) {
+        // Check if the state is from NewBucket -> OnlineBucket
+        // and all buckets belong to a same table (partition).
+        // If so, we will merge the register zk requests to speed up
+        if (targetState != BucketState.OnlineBucket) {
+            return false;
+        }
+
+        if (tableBuckets.isEmpty()) {
+            return false;
+        }
+
+        TableBucket first = tableBuckets.iterator().next();
+
+        for (TableBucket tableBucket : tableBuckets) {
+            BucketState currentState = coordinatorContext.getBucketState(tableBucket);
+            if (currentState != BucketState.NewBucket) {
+                return false;
+            }
+
+            if (tableBucket.getTableId() != first.getTableId()
+                    || !Objects.equals(tableBucket.getPartitionId(), first.getPartitionId())) {
+                // not belong to the same table(partition).
+                return false;
+            }
+        }
+        return true;
+    }
+
     private Optional<ElectionResult> initLeaderForTableBuckets(
+            TableBucket tableBucket, List<Integer> assignedServers) {
+        Optional<ElectionResult> optionalElectionResult =
+                doInitElectionForBucket(tableBucket, assignedServers);
+        if (optionalElectionResult.isPresent()) {
+            ElectionResult electionResult = optionalElectionResult.get();
+            LeaderAndIsr leaderAndIsr = electionResult.leaderAndIsr;
+            try {
+                zooKeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+            } catch (Exception e) {
+                LOG.error(
+                        "Fail to create state node for table bucket {} in zookeeper.",
+                        stringifyBucket(tableBucket),
+                        e);
+                return Optional.empty();
+            }
+            coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+        }
+        return optionalElectionResult;
+    }
+
+    public void batchHandleOnlineChangeAndInitLeader(Set<TableBucket> tableBuckets) {
+        if (tableBuckets.isEmpty()) {
+            return;
+        }
+
+        TableBucket first = tableBuckets.iterator().next();
+        BatchRegisterLeadAndIsr batchRegister =
+                new BatchRegisterLeadAndIsr(first.getTableId(), first.getPartitionId());
+        for (TableBucket tableBucket : tableBuckets) {
+            // precheck partition name
+            BucketState currentState = coordinatorContext.getBucketState(tableBucket);
+            String partitionName = null;
+            if (tableBucket.getPartitionId() != null) {
+                partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
+                if (partitionName == null) {
+                    LOG.error(
+                            "Can't find partition name for partition: {}.",
+                            tableBucket.getBucket());
+                    logFailedStateChange(tableBucket, currentState, BucketState.OnlineBucket);
+                    continue;
+                }
+            }
+
+            List<Integer> assignedServers = coordinatorContext.getAssignment(tableBucket);
+
+            Optional<ElectionResult> optionalElectionResult =
+                    doInitElectionForBucket(tableBucket, assignedServers);
+            if (!optionalElectionResult.isPresent()) {
+                logFailedStateChange(tableBucket, currentState, BucketState.OnlineBucket);
+                continue;
+            }
+            ElectionResult electionResult = optionalElectionResult.get();
+
+            batchRegister.add(
+                    tableBucket,
+                    electionResult.leaderAndIsr,
+                    partitionName,
+                    electionResult.liveReplicas);
+        }
+
+        List<RegisterTableBucketLeadAndIsrInfo> registerSuccessList = new ArrayList<>();
+        List<RegisterTableBucketLeadAndIsrInfo> tableBucketLeadAndIsrInfos =
+                batchRegister.getRegisterList();
+
+        // Register the initial leader and isr.
+        if (!tableBucketLeadAndIsrInfos.isEmpty()) {
+            try {
+                zooKeeperClient.batchRegisterLeaderAndIsrForTablePartition(
+                        tableBucketLeadAndIsrInfos);
+                registerSuccessList.addAll(tableBucketLeadAndIsrInfos);
+            } catch (Exception e) {
+                LOG.error(
+                        "Fail to batch create state node for table buckets in zookeeper. The first bucket info: {}",
+                        stringifyBucket(tableBucketLeadAndIsrInfos.get(0).getTableBucket()),
+                        e);
+                // Failed in batch mode, try to register one by one.
+                registerSuccessList.addAll(
+                        tryRegisterLeaderAndIsrOneByOne(tableBucketLeadAndIsrInfos));
+            }
+        }
+
+        for (RegisterTableBucketLeadAndIsrInfo info : registerSuccessList) {
+            TableBucket tableBucket = info.getTableBucket();
+            LeaderAndIsr leaderAndIsr = info.getLeaderAndIsr();
+            coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+
+            // transmit state
+            doStateChange(tableBucket, BucketState.OnlineBucket);
+            // then send request to the tablet servers
+            coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                    new HashSet<>(info.getLiveReplicas()),
+                    PhysicalTablePath.of(
+                            coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                            info.getPartitionName()),
+                    tableBucket,
+                    coordinatorContext.getAssignment(tableBucket),
+                    leaderAndIsr);
+        }
+    }
+
+    private Optional<ElectionResult> doInitElectionForBucket(
             TableBucket tableBucket, List<Integer> assignedServers) {
         // filter out the live servers
         List<Integer> liveServers =
@@ -286,17 +427,25 @@ public class TableBucketStateMachine {
         // Register the initial leader and isr.
         LeaderAndIsr leaderAndIsr =
                 new LeaderAndIsr(leader, 0, isr, coordinatorContext.getCoordinatorEpoch(), 0);
-        try {
-            zooKeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
-        } catch (Exception e) {
-            LOG.error(
-                    "Fail to create state node for table bucket {} in zookeeper.",
-                    stringifyBucket(tableBucket),
-                    e);
-            return Optional.empty();
-        }
-        coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+
         return Optional.of(new ElectionResult(liveServers, leaderAndIsr));
+    }
+
+    private List<RegisterTableBucketLeadAndIsrInfo> tryRegisterLeaderAndIsrOneByOne(
+            List<RegisterTableBucketLeadAndIsrInfo> registerList) {
+        List<RegisterTableBucketLeadAndIsrInfo> registerSuccessList = new ArrayList<>();
+        for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
+            try {
+                zooKeeperClient.registerLeaderAndIsr(info.getTableBucket(), info.getLeaderAndIsr());
+                registerSuccessList.add(info);
+            } catch (Exception e) {
+                LOG.error(
+                        "Fail to create state node for table bucket {} in zookeeper.",
+                        stringifyBucket(info.getTableBucket()),
+                        e);
+            }
+        }
+        return registerSuccessList;
     }
 
     private Optional<ElectionResult> electNewLeaderForTableBuckets(TableBucket tableBucket) {

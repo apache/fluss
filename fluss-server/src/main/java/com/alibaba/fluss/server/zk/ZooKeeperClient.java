@@ -26,6 +26,7 @@ import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceType;
 import com.alibaba.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
+import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
@@ -37,6 +38,7 @@ import com.alibaba.fluss.server.zk.data.ResourceAcl;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
+import com.alibaba.fluss.server.zk.data.ZkData;
 import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketIdsZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
@@ -62,6 +64,7 @@ import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TablesZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.WriterIdZNode;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
@@ -91,7 +94,7 @@ public class ZooKeeperClient implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperClient.class);
     public static final int UNKNOWN_VERSION = -2;
-
+    private static final int MAX_BATCH_SIZE = 1024;
     private final CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper;
 
     private final CuratorFramework zkClient;
@@ -242,6 +245,53 @@ public class ZooKeeperClient implements AutoCloseable {
                 .withMode(CreateMode.PERSISTENT)
                 .forPath(path, LeaderAndIsrZNode.encode(leaderAndIsr));
         LOG.info("Registered {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
+    }
+
+    public void batchRegisterLeaderAndIsrForTablePartition(
+            List<RegisterTableBucketLeadAndIsrInfo> registerList) throws Exception {
+        if (registerList.isEmpty()) {
+            return;
+        }
+
+        List<CuratorOp> ops = new ArrayList<>(registerList.size());
+        // In transaction API, it is not allowed to use "creatingParentsIfNeeded()"
+        // So we have to create parent dictionary in advance.
+        RegisterTableBucketLeadAndIsrInfo firstInfo = registerList.get(0);
+        String bucketsParentPath = BucketIdsZNode.path(firstInfo.getTableBucket());
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(bucketsParentPath);
+
+        for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
+            byte[] data = LeaderAndIsrZNode.encode(info.getLeaderAndIsr());
+            // create direct parent node
+            CuratorOp parentNodeCreate =
+                    zkClient.transactionOp()
+                            .create()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(ZkData.BucketIdZNode.path(info.getTableBucket()));
+            // create current node
+            CuratorOp currentNodeCreate =
+                    zkClient.transactionOp()
+                            .create()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(LeaderAndIsrZNode.path(info.getTableBucket()), data);
+            ops.add(parentNodeCreate);
+            ops.add(currentNodeCreate);
+            if (ops.size() == MAX_BATCH_SIZE) {
+                zkClient.transaction().forOperations(ops);
+                ops.clear();
+            }
+        }
+        if (!ops.isEmpty()) {
+            zkClient.transaction().forOperations(ops);
+        }
+        LOG.info(
+                "Batch registered leadAndIsr for tableId: {}, partitionId: {}, partitionName: {}  in Zookeeper.",
+                firstInfo.getTableBucket().getTableId(),
+                firstInfo.getTableBucket().getPartitionId(),
+                firstInfo.getPartitionName());
     }
 
     /** Get the bucket LeaderAndIsr in ZK. */

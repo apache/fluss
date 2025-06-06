@@ -25,6 +25,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
@@ -46,6 +47,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -168,6 +170,50 @@ class ZooKeeperClientTest {
         // test delete
         zookeeperClient.deleteLeaderAndIsr(tableBucket);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
+    }
+
+    @Test
+    void testBatchCreateLeaderAndIsr() throws Exception {
+        List<RegisterTableBucketLeadAndIsrInfo> noPartitionTableBucket = new ArrayList<>();
+        // non-partition table
+        List<LeaderAndIsr> noPartitionleaderAndIsrList = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            TableBucket tableBucket = new TableBucket(1, i);
+            LeaderAndIsr leaderAndIsr =
+                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+            noPartitionleaderAndIsrList.add(leaderAndIsr);
+            noPartitionTableBucket.add(
+                    new RegisterTableBucketLeadAndIsrInfo(tableBucket, leaderAndIsr, null, null));
+        }
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(noPartitionTableBucket);
+
+        for (int i = 0; i < 100; i++) {
+            Optional<LeaderAndIsr> optionalLeaderAndIsr =
+                    zookeeperClient.getLeaderAndIsr(noPartitionTableBucket.get(i).getTableBucket());
+            assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
+            assertThat(optionalLeaderAndIsr.get()).isIn(noPartitionleaderAndIsrList);
+        }
+
+        List<RegisterTableBucketLeadAndIsrInfo> partitionTableBucket = new ArrayList<>();
+        // partition table
+        List<LeaderAndIsr> partitionleaderAndIsrList = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            TableBucket tableBucket = new TableBucket(1, 2L, i);
+            LeaderAndIsr leaderAndIsr =
+                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+            partitionleaderAndIsrList.add(leaderAndIsr);
+            partitionTableBucket.add(
+                    new RegisterTableBucketLeadAndIsrInfo(
+                            tableBucket, leaderAndIsr, "partition" + i, null));
+        }
+
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(partitionTableBucket);
+        for (int i = 0; i < 100; i++) {
+            Optional<LeaderAndIsr> optionalLeaderAndIsr =
+                    zookeeperClient.getLeaderAndIsr(partitionTableBucket.get(i).getTableBucket());
+            assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
+            assertThat(optionalLeaderAndIsr.get()).isIn(partitionleaderAndIsrList);
+        }
     }
 
     @Test
