@@ -28,6 +28,8 @@ import org.apache.paimon.types.RowKind;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.Collections;
+import java.util.List;
 
 import static com.alibaba.fluss.record.ChangeType.APPEND_ONLY;
 import static com.alibaba.fluss.record.ChangeType.DELETE;
@@ -43,7 +45,9 @@ class FlussRecordAsPaimonRowTest {
     void testLogTableRecordAllTypes() {
         // Construct a FlussRecordAsPaimonRow instance
         int bucket = 0;
-        FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
+        List<String> partitionKeys = Collections.emptyList(); // No partitions for this test
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(bucket, partitionKeys);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(14);
@@ -62,7 +66,7 @@ class FlussRecordAsPaimonRowTest {
         genericRow.setField(12, new byte[] {1, 2, 3, 4});
         genericRow.setField(13, null);
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord, null); // Pass null partition string
 
         // verify FlussRecordAsPaimonRow normal columns
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
@@ -83,7 +87,8 @@ class FlussRecordAsPaimonRowTest {
                 .isEqualTo(1698235273182L);
         assertThat(flussRecordAsPaimonRow.getBinary(12)).isEqualTo(new byte[] {1, 2, 3, 4});
         assertThat(flussRecordAsPaimonRow.isNullAt(13)).isTrue();
-        // verify FlussRecordAsPaimonRow system columns
+
+        // verify FlussRecordAsPaimonRow system columns (no partition fields, so indices stay same)
         assertThat(flussRecordAsPaimonRow.getInt(14)).isEqualTo(bucket);
         assertThat(flussRecordAsPaimonRow.getLong(15)).isEqualTo(logOffset);
         assertThat(flussRecordAsPaimonRow.getLong(16)).isEqualTo(timeStamp);
@@ -92,24 +97,22 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
 
         assertThat(flussRecordAsPaimonRow.getFieldCount())
-                .isEqualTo(
-                        14
-                                +
-                                // 3 is for system columns
-                                3);
+                .isEqualTo(14 + 0 + 3); // business + partition + system = 14 + 0 + 3 = 17
     }
 
     @Test
     void testPrimaryKeyTableRecord() {
         int bucket = 0;
-        FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
+        List<String> partitionKeys = Collections.emptyList();
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(bucket, partitionKeys);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
         genericRow.setField(0, true);
 
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, INSERT, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
 
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
         // normal columns + system columns
@@ -118,15 +121,15 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
 
         logRecord = new GenericRecord(logOffset, timeStamp, UPDATE_BEFORE, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.UPDATE_BEFORE);
 
         logRecord = new GenericRecord(logOffset, timeStamp, UPDATE_AFTER, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.UPDATE_AFTER);
 
         logRecord = new GenericRecord(logOffset, timeStamp, DELETE, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.DELETE);
     }
 }

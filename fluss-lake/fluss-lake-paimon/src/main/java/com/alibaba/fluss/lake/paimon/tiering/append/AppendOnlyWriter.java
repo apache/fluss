@@ -26,25 +26,31 @@ import org.apache.paimon.table.sink.TableWriteImpl;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+
 import static com.alibaba.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 
 /** A {@link RecordWriter} to write to Paimon's append-only table. */
 public class AppendOnlyWriter extends RecordWriter<InternalRow> {
 
     public AppendOnlyWriter(
-            FileStoreTable fileStoreTable, TableBucket tableBucket, @Nullable String partition) {
+            FileStoreTable fileStoreTable,
+            TableBucket tableBucket,
+            @Nullable String partition,
+            List<String> partitionKeys) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
                         // todo: set ioManager to support write-buffer-spillable
                         fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER),
                 tableBucket,
-                partition);
+                partition,
+                partitionKeys);
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record);
+        flussRecordAsPaimonRow.setFlussRecord(record, partitionString);
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
         // which may be costly
