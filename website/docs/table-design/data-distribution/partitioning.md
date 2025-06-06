@@ -24,10 +24,12 @@ sidebar_position: 2
 ## Partitioned Tables
 In Fluss, a **Partitioned Table** organizes data based on one or more partition keys, providing a way to improve query performance and manageability for large datasets. Partitions allow the system to divide data into distinct segments, each corresponding to specific values of the partition keys.
 
-For partitioned tables, Fluss not only supports manage partitions by users, like create/drop partitions, but also supports automatic manage partitions.
-   - For manually managing partitions, user can create new partitions or drop exists partitions. Learn how to create or drop partitions please refer to [Add Partition](engine-flink/ddl.md#add-partition) and [Drop Partition](engine-flink/ddl.md#drop-partition).
-   - For automatically managing partitions, the partitions will be created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data not expanding unlimited. See [Auto Partitioning Options](table-design/data-distribution/partitioning.md#auto-partitioning-options).
-   - Manual management and automated management are orthogonal and can coexist on the same table
+For partitioned tables, Fluss supports three strategies of managing partitions.
+   - **Manual management partitions**, user can create new partitions or drop exists partitions. Learn how to create or drop partitions please refer to [Add Partition](engine-flink/ddl.md#add-partition) and [Drop Partition](engine-flink/ddl.md#drop-partition).
+   - **Auto management partitions**, the partitions will be created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data not expanding unlimited. See [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
+   - **Dynamic create partitions**, the partitions will be created automatically based on the data being written to the table. See [Dynamic Partitioning](table-design/data-distribution/partitioning.md#dynamic-partitioning).
+   
+The three strategies are and can coexist on the same table.
 
 ### Key Benefits of Partitioned Tables
 - **Improved Query Performance:** By narrowing down the query scope to specific partitions, the system reads fewer data, reducing query execution time.
@@ -40,7 +42,7 @@ For partitioned tables, Fluss not only supports manage partitions by users, like
 - If the table is a primary key table, the partition key must be a subset of the primary key.
 - Auto-partitioning rules can only be configured at the time of creating the partitioned table; modifying the auto-partitioning rules after table creation is not supported.
 
-## Auto Partitioning Options
+## Auto Partitioning
 ### Example
 The auto-partitioning rules are configured through table options. The following example demonstrates creating a table named `site_access` that supports automatic partitioning using Flink SQL.
 ```sql title="Flink SQL"
@@ -89,6 +91,14 @@ Below are the configuration items related to Fluss cluster and automatic partiti
 | Option                        | Type     | Default    | Description                                            |
 |-------------------------------|------------------|------------|------------------------------------------------|
 | auto-partition.check.interval | Duration | 10 minutes    | The interval of auto partition check. The time interval for automatic partition checking is set to 10 minutes by default, meaning that it checks the table partition status every 10 minutes to see if it meets the automatic partitioning criteria. If it does not meet the criteria, partitions will be automatically created or deleted.    |
+
+## Dynamic Partitioning
+Dynamic-partitioning is a default enabled feature that allows the system to automatically create partitions based on the data being written to the table. This feature is particularly useful for scenarios where the data being written to the table is not known in advance, or the data is being written to the table in a streaming manner.
+Please also note that number of partition is also subject to the limitation of `max.partition.num`.
+### Options
+| Option                             | Type    | Required | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+|------------------------------------|---------|----------|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| table.dynamic-partition.enabled    | Boolean | no       | true                 | Whether enable dynamic partition for the table. Enable by default. Dynamic partition strategy refers to creating partitions based on the data being written, if the partition does not exist while write data to the table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 
 

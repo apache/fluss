@@ -174,7 +174,7 @@ CREATE TABLE my_auto_part_log_table (
 );
 ```
 
-For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning Options](table-design/data-distribution/partitioning.md#auto-partitioning-options).
+For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
 
 ### Options
 
