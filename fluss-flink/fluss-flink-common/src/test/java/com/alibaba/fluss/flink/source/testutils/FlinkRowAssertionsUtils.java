@@ -32,19 +32,45 @@ public class FlinkRowAssertionsUtils {
 
     public static void assertResultsIgnoreOrder(
             CloseableIterator<Row> iterator, List<String> expected, boolean closeIterator) {
+        List<String> actual = collectRowsWithTimeout(iterator, expected.size(), closeIterator);
+        assertThat(actual)
+                .as(
+                        "Expected %d records but got %d after waiting. Actual results: %s",
+                        expected.size(), actual.size(), actual)
+                .containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    public static void assertQueryResultExactOrder(
+            TableEnvironment env, String query, List<String> expected) throws Exception {
+        try (CloseableIterator<Row> rowIter = env.executeSql(query).collect()) {
+            List<String> actual = collectRowsWithTimeout(rowIter, expected.size(), true);
+            assertThat(actual)
+                    .as(
+                            "Expected %d records in exact order but got %d after waiting. Query: %s, Actual results: %s",
+                            expected.size(), actual.size(), query, actual)
+                    .containsExactlyElementsOf(expected);
+        }
+    }
+
+    private static List<String> collectRowsWithTimeout(
+            CloseableIterator<Row> iterator, int expectedCount, boolean closeIterator) {
+        List<String> actual = new ArrayList<>(expectedCount);
+        long startTime = System.currentTimeMillis();
+        int maxWaitTime = 60000; // 60 seconds
+
         try {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-
-            long startTime = System.currentTimeMillis();
-            int maxWaitTime = 60000; // 60 seconds
-
-            for (int i = 0; i < expectRecords; i++) {
+            for (int i = 0; i < expectedCount; i++) {
                 // Wait for next record with timeout
                 while (!iterator.hasNext()) {
-                    if (System.currentTimeMillis() - startTime > maxWaitTime) {
-                        // Timeout reached - stop waiting
-                        break;
+                    long elapsedTime = System.currentTimeMillis() - startTime;
+                    if (elapsedTime > maxWaitTime) {
+                        // Timeout reached - provide detailed failure info
+                        throw new AssertionError(
+                                String.format(
+                                        "Timeout after waiting %d ms for Flink job results. "
+                                                + "Expected %d records but only received %d. "
+                                                + "This might indicate a job hang or insufficient data generation.",
+                                        elapsedTime, expectedCount, actual.size()));
                     }
                     Thread.sleep(10);
                 }
@@ -57,19 +83,27 @@ public class FlinkRowAssertionsUtils {
                 }
             }
 
-            assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+            return actual;
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Test interrupted", e);
+            throw new RuntimeException("Test interrupted while waiting for Flink job results", e);
+        } catch (AssertionError e) {
+            // Re-throw our timeout assertion errors
+            throw e;
         } catch (Exception e) {
             // Handle job completion gracefully
-            if (e.getCause() instanceof IllegalStateException
-                    && e.getMessage() != null
-                    && e.getMessage().contains("MiniCluster")) {
-                // Expected for finite jobs - do nothing
+            if (isMiniClusterCompletionException(e)) {
+                // Job completed normally - return what we have
+                return actual;
             } else {
-                throw e;
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                throw new RuntimeException(
+                        String.format(
+                                "Unexpected error after waiting %d ms for Flink job results. "
+                                        + "Expected %d records but got %d before error occurred.",
+                                elapsedTime, expectedCount, actual.size()),
+                        e);
             }
         } finally {
             if (closeIterator) {
@@ -82,51 +116,9 @@ public class FlinkRowAssertionsUtils {
         }
     }
 
-    // expects exact order
-    public static void assertQueryResultExactOrder(
-            TableEnvironment env, String query, List<String> expected) throws Exception {
-        try (CloseableIterator<Row> rowIter = env.executeSql(query).collect()) {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-
-            // Add timeout logic
-            long startTime = System.currentTimeMillis();
-            int maxWaitTime = 60000; // 60 seconds
-
-            for (int i = 0; i < expectRecords; i++) {
-                // Wait for next record with timeout
-                while (!rowIter.hasNext()) {
-                    if (System.currentTimeMillis() - startTime > maxWaitTime) {
-                        // Timeout reached - stop waiting
-                        break;
-                    }
-                    Thread.sleep(10);
-                }
-
-                if (rowIter.hasNext()) {
-                    Row r = rowIter.next();
-                    String row = r.toString();
-                    actual.add(row);
-                } else {
-                    // No more records available
-                    break;
-                }
-            }
-
-            assertThat(actual).containsExactlyElementsOf(expected);
-
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Test interrupted", e);
-        } catch (Exception e) {
-            // Handle job completion gracefully
-            if (e.getCause() instanceof IllegalStateException
-                    && e.getMessage() != null
-                    && e.getMessage().contains("MiniCluster")) {
-                // Expected for finite jobs - do nothing
-            } else {
-                throw e;
-            }
-        }
+    private static boolean isMiniClusterCompletionException(Exception e) {
+        return e.getCause() instanceof IllegalStateException
+                && e.getMessage() != null
+                && e.getMessage().contains("MiniCluster");
     }
 }
