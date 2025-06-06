@@ -49,9 +49,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
+import static com.alibaba.fluss.record.TestData.DATA2_TABLE_PATH;
 import static com.alibaba.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable;
@@ -90,10 +92,19 @@ class MetadataUpdateITCase {
         FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
         Map<Long, TableContext> expectedTablePathById = new HashMap<>();
-        long tableId =
+        // create non-partitioned table
+        long tableId1 =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId, new TableContext(false, false, DATA1_TABLE_PATH, tableId, null));
+                tableId1, new TableContext(false, false, DATA1_TABLE_PATH, tableId1, null));
+        // create partitioned table
+        long tableId2 =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA2_TABLE_PATH,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR);
+        expectedTablePathById.put(
+                tableId2, new TableContext(false, true, DATA2_TABLE_PATH, tableId2, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->

@@ -615,38 +615,10 @@ public class CoordinatorRequestBatch {
         List<TableMetadata> tableMetadataList = new ArrayList<>();
         updateMetadataRequestBucketMap.forEach(
                 (tableId, bucketMetadataList) -> {
-                    TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-                    boolean tableQueuedForDeletion =
-                            coordinatorContext.isTableQueuedForDeletion(tableId);
-                    TableInfo newTableInfo;
-                    if (tableInfo == null) {
-                        if (tableQueuedForDeletion) {
-                            newTableInfo =
-                                    TableInfo.of(
-                                            DELETED_TABLE_PATH,
-                                            tableId,
-                                            0,
-                                            EMPTY_TABLE_DESCRIPTOR,
-                                            -1L,
-                                            -1L);
-                        } else {
-                            throw new IllegalStateException(
-                                    "Table info is null for table " + tableId);
-                        }
-                    } else {
-                        newTableInfo =
-                                tableQueuedForDeletion
-                                        ? TableInfo.of(
-                                                tableInfo.getTablePath(),
-                                                DELETED_TABLE_ID,
-                                                0,
-                                                EMPTY_TABLE_DESCRIPTOR,
-                                                -1L,
-                                                -1L)
-                                        : tableInfo;
+                    TableInfo tableInfo = getTableInfo(tableId);
+                    if (tableInfo != null) {
+                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
                     }
-
-                    tableMetadataList.add(new TableMetadata(newTableInfo, bucketMetadataList));
                 });
 
         List<PartitionMetadata> partitionMetadataList = new ArrayList<>();
@@ -682,7 +654,14 @@ public class CoordinatorRequestBatch {
                                                     : partitionId,
                                             kvEntry.getValue());
                         }
+                        // table
                         partitionMetadataList.add(partitionMetadata);
+                    }
+                    // no bucket metadata, use empty metadata list
+                    TableInfo tableInfo = getTableInfo(tableId);
+                    if (tableInfo != null) {
+                        tableMetadataList.add(
+                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
                     }
                 });
 
@@ -693,5 +672,34 @@ public class CoordinatorRequestBatch {
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
                 partitionMetadataList);
+    }
+
+    @Nullable
+    private TableInfo getTableInfo(long tableId) {
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        boolean tableQueuedForDeletion = coordinatorContext.isTableQueuedForDeletion(tableId);
+        if (tableInfo == null) {
+            if (tableQueuedForDeletion) {
+                return TableInfo.of(
+                        DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
+            } else {
+                // it may happen that the table is dropped, but the partition still exists
+                // when coordinator restarts, it won't consider it as deleted table,
+                // and will still send partition bucket metadata to tablet server after startup,
+                // which will fail into this code patch, not throw exception, just return null.
+                // TODO: FIX ME, it shouldn't come into here
+                return null;
+            }
+        } else {
+            return tableQueuedForDeletion
+                    ? TableInfo.of(
+                            tableInfo.getTablePath(),
+                            DELETED_TABLE_ID,
+                            0,
+                            EMPTY_TABLE_DESCRIPTOR,
+                            -1L,
+                            -1L)
+                    : tableInfo;
+        }
     }
 }
