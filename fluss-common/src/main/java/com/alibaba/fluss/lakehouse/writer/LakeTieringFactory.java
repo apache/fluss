@@ -17,10 +17,12 @@
 package com.alibaba.fluss.lakehouse.writer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.lakehouse.committer.CommitterInitContext;
 import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
 import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
 
 import java.io.IOException;
+import java.io.Serializable;
 
 /**
  * The LakeTieringFactory interface defines how to create lake writers and committers. It provides
@@ -32,7 +34,7 @@ import java.io.IOException;
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeTieringFactory<WriteResult, CommitableT> {
+public interface LakeTieringFactory<WriteResult, CommitableT> extends Serializable {
 
     /**
      * Creates a lake writer to write Fluss's rows to Paimon/Iceberg rows.
@@ -57,7 +59,8 @@ public interface LakeTieringFactory<WriteResult, CommitableT> {
      * @return the lake committer
      * @throws IOException if an I/O error occurs
      */
-    LakeCommitter<WriteResult, CommitableT> createLakeCommitter() throws IOException;
+    LakeCommitter<WriteResult, CommitableT> createLakeCommitter(
+            CommitterInitContext committerInitContext) throws IOException;
 
     /**
      * Returns the serializer for committable objects.

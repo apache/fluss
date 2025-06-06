@@ -48,7 +48,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
     public static class TestingPaimonLakeStorage implements LakeStorage {
 
         @Override
-        public LakeTieringFactory createLakeTieringFactory() {
+        public LakeTieringFactory<?, ?> createLakeTieringFactory() {
             throw new UnsupportedOperationException("createLakeTieringFactory is not supported.");
         }
 

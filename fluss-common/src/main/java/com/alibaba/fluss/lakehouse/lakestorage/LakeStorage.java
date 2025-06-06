@@ -33,7 +33,7 @@ public interface LakeStorage {
      *
      * @return the lake tiering factory
      */
-    LakeTieringFactory createLakeTieringFactory();
+    LakeTieringFactory<?, ?> createLakeTieringFactory();
 
     /** Create lake catalog. */
     LakeCatalog createLakeCatalog();
