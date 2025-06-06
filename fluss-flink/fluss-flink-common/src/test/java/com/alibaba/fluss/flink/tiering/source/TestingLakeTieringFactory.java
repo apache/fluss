@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.flink.tiering.source;
 
+import com.alibaba.fluss.lakehouse.committer.CommitterInitContext;
 import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
 import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
 import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
@@ -40,7 +41,8 @@ class TestingLakeTieringFactory implements LakeTieringFactory<TestingWriteResult
     }
 
     @Override
-    public LakeCommitter<TestingWriteResult, Integer> createLakeCommitter() throws IOException {
+    public LakeCommitter<TestingWriteResult, Integer> createLakeCommitter(
+            CommitterInitContext committerInitContext) throws IOException {
         throw new UnsupportedOperationException("method createLakeCommitter is not supported.");
     }
 
