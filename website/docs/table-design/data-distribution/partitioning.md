@@ -29,7 +29,7 @@ For partitioned tables, Fluss supports three strategies of managing partitions.
    - **Auto management partitions**, the partitions will be created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data not expanding unlimited. See [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
    - **Dynamic create partitions**, the partitions will be created automatically based on the data being written to the table. See [Dynamic Partitioning](table-design/data-distribution/partitioning.md#dynamic-partitioning).
    
-The three strategies are and can coexist on the same table.
+These three strategies are orthogonal and can coexist on the same table.
 
 ### Key Benefits of Partitioned Tables
 - **Improved Query Performance:** By narrowing down the query scope to specific partitions, the system reads fewer data, reducing query execution time.
