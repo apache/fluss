@@ -419,6 +419,13 @@ public class MetadataManager {
             zookeeperClient.registerPartition(tablePath, tableId, partitionName, partitionId);
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
+        } catch (KeeperException.NodeExistsException nodeExistsException) {
+            if (!ignoreIfExists) {
+                throw new PartitionAlreadyExistsException(
+                        String.format(
+                                "Partition '%s' already exists for table %s",
+                                partition.getPartitionQualifiedName(), tablePath));
+            }
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
