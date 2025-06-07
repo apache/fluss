@@ -1,5 +1,10 @@
 <p align="center">
-  <img src="website/static/img/logo/svg/colored_logo.svg"/>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="website/static/img/logo/svg/white_color_logo.svg">
+      <source media="(prefers-color-scheme: light)" srcset="website/static/img/logo/svg/colored_logo.svg">
+      <!-- Fall back to version that works for dark and light mode -->
+      <img alt="Fluss logo" src="website/static/img/logo/svg/white_filled.svg">
+    </picture>
 </p>
 
 <p align="center">
