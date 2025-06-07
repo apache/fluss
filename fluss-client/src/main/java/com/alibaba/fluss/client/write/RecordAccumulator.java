@@ -138,11 +138,9 @@ public final class RecordAccumulator {
         this.nodesDrainIndex = new HashMap<>();
         this.dynamicWriteBatchSizeEstimator =
                 new DynamicWriteBatchSizeEstimator(
+                        conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED),
                         batchSize,
-                        (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes(),
-                        (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes(),
-                        conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ESTIMATE_INTERVAL)
-                                .toMillis());
+                        (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes());
         this.idempotenceManager = idempotenceManager;
         this.clock = clock;
         registerMetrics(writerMetricGroup);
@@ -206,7 +204,7 @@ public final class RecordAccumulator {
                 return new RecordAppendResult(true, false, true);
             }
 
-            memorySegments = allocateMemorySegments(writeRecord);
+            memorySegments = allocateMemorySegments(writeRecord, physicalTablePath);
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
@@ -433,7 +431,8 @@ public final class RecordAccumulator {
                 Math.max(
                         1,
                         MathUtils.ceilDiv(
-                                dynamicWriteBatchSizeEstimator.batchSize(physicalTablePath),
+                                dynamicWriteBatchSizeEstimator.getEstimatedBatchSize(
+                                        physicalTablePath),
                                 writerBufferPool.pageSize()));
 
         if (writeRecord.getWriteFormat() == WriteFormat.ARROW_LOG) {
@@ -730,8 +729,8 @@ public final class RecordAccumulator {
             batch.close();
             int currentBatchSize = batch.estimatedSizeInBytes();
             size += currentBatchSize;
-            dynamicWriteBatchSizeEstimator.recordNewBatchSize(physicalTablePath, currentBatchSize);
-
+            dynamicWriteBatchSizeEstimator.setEstimatedBatchSize(
+                    physicalTablePath, currentBatchSize);
 
             ready.add(new ReadyWriteBatch(tableBucket, batch));
             // mark the batch as drained.

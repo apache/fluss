@@ -19,7 +19,6 @@ package com.alibaba.fluss.client.write;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import static com.alibaba.fluss.client.write.DynamicWriteBatchSizeEstimator.INCREASE_RATIO;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,64 +29,49 @@ public class DynamicWriteBatchSizeEstimatorTest {
 
     @BeforeEach
     public void setup() {
-        estimator = new DynamicWriteBatchSizeEstimator(1024, 1024 * 10, 128, 0);
+        estimator = new DynamicWriteBatchSizeEstimator(true, 1000, 100);
     }
 
     @Test
     void testEstimator() {
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1024);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
+        estimator = new DynamicWriteBatchSizeEstimator(false, 1000, 100);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
 
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 500);
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1024);
+        estimator = new DynamicWriteBatchSizeEstimator(true, 1000, 100);
+        // test decrease 10%
+        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 450);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(900);
 
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1024 / 2);
+        // test decrease 5%
+        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, (int) (900 * 0.9) - 10);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(855);
+
+        // test increase 1%
+        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 852);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
+                .isEqualTo((int) (855 * 1.1));
     }
 
     @Test
-    void testZeroProtected() {
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 0);
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(512);
+    void testMinDecreaseToPageSize() {
+        int estimatedSize = estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH);
+        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 1000);
+        while (estimatedSize > 100) {
+            estimator.setEstimatedBatchSize(
+                    DATA1_PHYSICAL_TABLE_PATH, (int) (estimatedSize * 0.5) - 10);
+            estimatedSize = estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH);
+        }
 
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 0);
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(256);
-
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 0);
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(128);
-
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 0);
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(128);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(100);
+        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 0);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(100);
     }
 
     @Test
-    void testDynamicAdjustmentWithinThreshold() {
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 950);
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 960);
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 940);
-
-        // Buffer Should increase by INCREASE_RATIO.
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH))
-                .isEqualTo((int) Math.round(1024 * (1 + INCREASE_RATIO)));
-    }
-
-    @Test
-    void testDynamicAdjustmentBeyondThreshold() {
-        // Setup test data with difference > DIFF_RATIO_THRESHOLD.
-        DynamicWriteBatchSizeEstimator estimator =
-                new DynamicWriteBatchSizeEstimator(1024, 1024 * 10, 128, 0);
-
-        // Setup test data with difference >10%
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 500);
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 550);
-        estimator.recordNewBatchSize(DATA1_PHYSICAL_TABLE_PATH, 450);
-
-        // Buffer should decrease to max(current/2, 2*pageSize).
-        estimator.dynamicEstimateBatchSize();
-        assertThat(estimator.batchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1024 / 2);
+    void testMaxIncreaseToMaxBatchSize() {
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
+        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 2000);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
     }
 }

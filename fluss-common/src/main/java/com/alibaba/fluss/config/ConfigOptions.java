@@ -813,6 +813,18 @@ public class ConfigOptions {
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
 
+    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED =
+            key("client.writer.dynamic-batch-size.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether enable dynamic batch size estimate for client writer. Enable by default."
+                                    + " Dynamic batch size strategy refers to adjust the "
+                                    + CLIENT_WRITER_BATCH_SIZE.key()
+                                    + " setting based on the Based on the actual batch size recently written to "
+                                    + "this table. By doing so, the writer can adjust the batch size to better "
+                                    + "fit the actual write throughput.");
+
     public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_TIMEOUT =
             key("client.writer.batch-timeout")
                     .durationType()
@@ -926,14 +938,6 @@ public class ConfigOptions {
                             "Whether enable dynamic create partition for client writer. Enable by default."
                                     + " Dynamic partition strategy refers to creating partitions based on the data "
                                     + "being written for partitioned table if the wrote partition don't exists.");
-
-    public static final ConfigOption<Duration> CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ESTIMATE_INTERVAL =
-            key("client.writer.dynamic-batch-size-estimate.interval")
-                    .durationType()
-                    .defaultValue(Duration.ofMinutes(2))
-                    .withDescription(
-                            "The interval for dynamic batch size estimate for the writer's DynamicWriteBatchSizeEstimator. "
-                                    + "To disable dynamic batch size estimate, set this setting to 0s.");
 
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
