@@ -249,7 +249,6 @@ public class LogFetchCollector {
             CompletedFetch completedFetch, Errors error, String errorMessage) {
         TableBucket tb = completedFetch.tableBucket;
         long fetchOffset = completedFetch.nextFetchOffset();
-
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.LOG_STORAGE_EXCEPTION
                 || error == Errors.KV_STORAGE_EXCEPTION
