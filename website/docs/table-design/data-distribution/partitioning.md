@@ -31,6 +31,12 @@ For partitioned tables, Fluss supports three strategies of managing partitions.
    
 These three strategies are orthogonal and can coexist on the same table.
 
+### Mulit-fields Partitioned Tables
+
+Partition tables (PrimaryKey/Log) support configuring partition keys as multiple fields.  Users can segment data based on the values of multiple fields, thereby achieving more granular data management and querying.
+
+For example, for a `Order` primary key table, the partition key can be set to `(date, region)`, and the data will be stored in the partition where `date=xxx, region=xxx`. Users can read specific `region` data by the partitioning pushdown.
+
 ### Key Benefits of Partitioned Tables
 - **Improved Query Performance:** By narrowing down the query scope to specific partitions, the system reads fewer data, reducing query execution time.
 - **Data Organization:** Partitions help in logically organizing data, making it easier to manage and query.

@@ -106,7 +106,7 @@ CREATE TABLE my_log_table (
 ### Partitioned (PrimaryKey/Log) Table
 
 :::note
-1. Currently, Fluss only supports one partitioned field with `STRING` type
+1. Currently, Fluss only supports partitioned field with `STRING` type
 2. For the Partitioned PrimaryKey Table, the partitioned field (`dt` in this case) must be a subset of the primary key (`dt, shop_id, user_id` in this case)
 :::
 
