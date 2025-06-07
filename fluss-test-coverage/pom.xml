@@ -290,9 +290,6 @@
                                         <exclude>com.alibaba.fluss.flink.source.*
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.catalog.FlinkCatalog
-                                        </exclude>
-                                        <exclude>
                                             com.alibaba.fluss.flink.catalog.FlinkCatalogOptions
                                         </exclude>
                                         <exclude>

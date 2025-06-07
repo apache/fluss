@@ -18,6 +18,7 @@ package com.alibaba.fluss.flink.catalog;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.IllegalConfigurationException;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.ExceptionUtils;
 
@@ -38,11 +39,16 @@ import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
+import org.apache.flink.table.catalog.exceptions.FunctionNotExistException;
+import org.apache.flink.table.catalog.exceptions.PartitionAlreadyExistsException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
+import org.apache.flink.table.catalog.stats.CatalogColumnStatistics;
+import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
+import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -55,7 +61,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
@@ -111,7 +119,7 @@ class FlinkCatalogTest {
                 new FlinkCatalog(
                         CATALOG_NAME,
                         DEFAULT_DB,
-                        String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
+                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
                         Thread.currentThread().getContextClassLoader(),
                         Collections.emptyMap());
         catalog.open();
@@ -221,6 +229,19 @@ class FlinkCatalogTest {
         expectedTable = addOptions(table2, addedOptions);
 
         checkEqualsRespectSchema((CatalogTable) tableCreated, expectedTable);
+
+        assertThatThrownBy(() -> catalog.renameTable(this.tableInDefaultDb, "newName", false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.alterTable(this.tableInDefaultDb, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        // Test lake table handling - should throw TableNotExistException for non-existent lake
+        // table
+        ObjectPath lakePath = new ObjectPath(DEFAULT_DB, "regularTable$lake");
+        assertThatThrownBy(() -> catalog.getTable(lakePath))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("regularTable$lake does not exist");
     }
 
     @Test
@@ -394,6 +415,21 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
+        assertThatThrownBy(() -> catalog.alterDatabase("db2", null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(catalog.getDefaultDatabase()).isEqualTo(DEFAULT_DB);
+
+        // Test catalog with null default database
+        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        Catalog catalogWithoutDefault =
+                new FlinkCatalog(
+                        "test-catalog-no-default",
+                        null, // null default database
+                        String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
+
+        assertThat(catalogWithoutDefault.getDefaultDatabase()).isNull();
     }
 
     @Test
@@ -433,6 +469,51 @@ class FlinkCatalogTest {
         List<CatalogPartitionSpec> catalogPartitionSpecs = catalog.listPartitions(path2);
         assertThat(catalogPartitionSpecs).hasSize(1);
         assertThat(catalogPartitionSpecs.get(0).getPartitionSpec()).containsEntry("first", "1");
+        // NEW: Test dropPartition functionality
+        CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
+        catalog.dropPartition(path2, firstPartSpec, false);
+
+        // Verify partition is gone
+        assertThat(catalog.listPartitions(path2)).isEmpty();
+
+        // Recreate partition for further testing
+        catalog.createPartition(path2, firstPartSpec, null, false);
+
+        // Test dropping non-existent partition
+        CatalogPartitionSpec nonExistentSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "999"));
+        assertThatThrownBy(() -> catalog.dropPartition(path2, nonExistentSpec, false))
+                .isInstanceOf(
+                        org.apache.flink.table.catalog.exceptions.PartitionNotExistException.class);
+
+        // Should not throw with ignoreIfNotExists = true
+        catalog.dropPartition(path2, nonExistentSpec, true);
+
+        // NEW: Test partition creation exceptions
+        // Try to create duplicate partition
+        assertThatThrownBy(() -> catalog.createPartition(path2, firstPartSpec, null, false))
+                .isInstanceOf(PartitionAlreadyExistsException.class);
+
+        // NEW: Test unsupported partition operations
+        assertThatThrownBy(() -> catalog.getPartition(path2, firstPartSpec))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.partitionExists(path2, firstPartSpec))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.alterPartition(path2, firstPartSpec, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        CatalogPartitionSpec testSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "test"));
+        assertThatThrownBy(() -> catalog.listPartitions(path2, testSpec))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.listPartitionsByFilter(path2, Collections.emptyList()))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        // Clean up the partition we created for testing
+        catalog.dropPartition(path2, firstPartSpec, false);
     }
 
     private void createAndCheckAndDropTable(
@@ -443,5 +524,168 @@ class FlinkCatalogTest {
         CatalogBaseTable tableCreated = catalog.getTable(tablePath);
         checkEqualsRespectSchema((CatalogTable) tableCreated, table);
         catalog.dropTable(tablePath, false);
+    }
+
+    @Test
+    void testConnectionFailureHandling() {
+        // Create a catalog with invalid connection settings
+        Catalog badCatalog =
+                new FlinkCatalog(
+                        "bad-catalog",
+                        "default",
+                        "invalid-bootstrap-server:9092",
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
+
+        // Test open() throws proper exception
+        assertThatThrownBy(() -> badCatalog.open())
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("No resolvable bootstrap urls");
+    }
+
+    @Test
+    void testStatisticsOperations() throws Exception {
+        //  Statistics testing
+        CatalogTable table = newCatalogTable(Collections.emptyMap());
+        ObjectPath tablePath = new ObjectPath(DEFAULT_DB, "statsTable");
+        catalog.createTable(tablePath, table, false);
+
+        // Test table statistics - should return UNKNOWN for existing tables
+        CatalogTableStatistics tableStats = catalog.getTableStatistics(tablePath);
+        assertThat(tableStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
+
+        CatalogColumnStatistics columnStats = catalog.getTableColumnStatistics(tablePath);
+        assertThat(columnStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
+
+        // Test that statistics methods return UNKNOWN even for non-existent tables
+        ObjectPath nonExistent = new ObjectPath(DEFAULT_DB, "nonexistent");
+        CatalogTableStatistics nonExistentStats = catalog.getTableStatistics(nonExistent);
+        assertThat(nonExistentStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
+
+        CatalogColumnStatistics nonExistentColStats = catalog.getTableColumnStatistics(nonExistent);
+        assertThat(nonExistentColStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
+
+        // Create partitioned table for partition statistics testing
+        ResolvedSchema schema = createSchema();
+        CatalogTable partTable =
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(schema).build(),
+                                "partitioned table for stats",
+                                Collections.singletonList("first"),
+                                Collections.emptyMap()),
+                        schema);
+
+        ObjectPath partTablePath = new ObjectPath(DEFAULT_DB, "partStatsTable");
+        catalog.createTable(partTablePath, partTable, false);
+
+        CatalogPartitionSpec partSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "value"));
+        catalog.createPartition(partTablePath, partSpec, null, false);
+
+        // Test partition statistics - should return UNKNOWN
+        CatalogTableStatistics partStats = catalog.getPartitionStatistics(partTablePath, partSpec);
+        assertThat(partStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
+
+        CatalogColumnStatistics partColStats =
+                catalog.getPartitionColumnStatistics(partTablePath, partSpec);
+        assertThat(partColStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
+
+        // Test unsupported statistics operations
+        assertThatThrownBy(() -> catalog.alterTableStatistics(tablePath, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.alterTableColumnStatistics(tablePath, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.alterPartitionStatistics(
+                                        partTablePath, partSpec, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.alterPartitionColumnStatistics(
+                                        partTablePath, partSpec, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        // Clean up
+        catalog.dropPartition(partTablePath, partSpec, false);
+        catalog.dropTable(partTablePath, false);
+        catalog.dropTable(tablePath, false);
+    }
+
+    @Test
+    void testViewsAndFunctions() throws Exception {
+
+        List<String> views = catalog.listViews(DEFAULT_DB);
+        assertThat(views).isEmpty();
+
+        // Test functions operations
+        List<String> functions = catalog.listFunctions(DEFAULT_DB);
+        assertThat(functions).isEmpty();
+
+        ObjectPath functionPath = new ObjectPath(DEFAULT_DB, "testFunction");
+        assertThat(catalog.functionExists(functionPath)).isFalse();
+
+        // Test getFunction - should always throw FunctionNotExistException
+        assertThatThrownBy(() -> catalog.getFunction(functionPath))
+                .isInstanceOf(FunctionNotExistException.class);
+
+        // Test unsupported function operations
+        assertThatThrownBy(() -> catalog.createFunction(functionPath, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.alterFunction(functionPath, null, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        assertThatThrownBy(() -> catalog.dropFunction(functionPath, false))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testGetFactory() {
+        Optional<Factory> factory = catalog.getFactory();
+        assertThat(factory).isPresent();
+        assertThat(factory.get()).isInstanceOf(FlinkTableFactory.class);
+    }
+
+    @Test
+    void testSecurityConfigsIntegration() throws Exception {
+        Map<String, String> securityConfigs = new HashMap<>();
+        securityConfigs.put("security.protocol", "SASL_SSL");
+        securityConfigs.put("sasl.mechanism", "PLAIN");
+
+        // Create catalog with security configs
+        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        Catalog securedCatalog =
+                new FlinkCatalog(
+                        "secured-catalog",
+                        DEFAULT_DB,
+                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
+                        Thread.currentThread().getContextClassLoader(),
+                        securityConfigs);
+        securedCatalog.open();
+
+        try {
+            securedCatalog.createDatabase(
+                    DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
+
+            Map<String, String> tableOptions = new HashMap<>();
+            CatalogTable table = newCatalogTable(tableOptions);
+            securedCatalog.createTable(tableInDefaultDb, table, false);
+
+            // Get table and verify security configs are included
+            CatalogBaseTable retrievedTable = securedCatalog.getTable(tableInDefaultDb);
+            Map<String, String> actualOptions = retrievedTable.getOptions();
+
+            assertThat(actualOptions).containsEntry("security.protocol", "SASL_SSL");
+            assertThat(actualOptions).containsEntry("sasl.mechanism", "PLAIN");
+            assertThat(actualOptions).containsKey(BOOTSTRAP_SERVERS.key());
+
+        } finally {
+            securedCatalog.close();
+        }
     }
 }
