@@ -813,6 +813,21 @@ public class ConfigOptions {
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
 
+    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED =
+            key("client.writer.dynamic-batch-size.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Controls whether the client writer dynamically adjusts the batch size based on actual write throughput. Enabled by default. "
+                                    + "With dynamic batch sizing enabled, the writer adapts memory allocation per batch according to historical write sizes for the target table or partition. This ensures better memory utilization and performance under varying throughput conditions. The dynamic batch size is bounded: it will not exceed `"
+                                    + CLIENT_WRITER_BATCH_SIZE.key()
+                                    + "`, nor fall below `"
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + "`."
+                                    + "When disabled, the writer uses a fixed batch size (`"
+                                    + CLIENT_WRITER_BATCH_SIZE.key()
+                                    + "`) for all batches, this may lead to frequent memory waits and suboptimal write performance if the incoming data rate is inconsistent across partitions.");
+
     public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_TIMEOUT =
             key("client.writer.batch-timeout")
                     .durationType()
