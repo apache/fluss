@@ -818,12 +818,15 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(true)
                     .withDescription(
-                            "Whether enable dynamic batch size estimate for client writer. Enable by default."
-                                    + " Dynamic batch size strategy refers to adjust the "
+                            "Controls whether the client writer dynamically adjusts the batch size based on actual write throughput. Enabled by default. "
+                                    + "With dynamic batch sizing enabled, the writer adapts memory allocation per batch according to historical write sizes for the target table or partition. This ensures better memory utilization and performance under varying throughput conditions. The dynamic batch size is bounded: it will not exceed `"
                                     + CLIENT_WRITER_BATCH_SIZE.key()
-                                    + " setting based on the Based on the actual batch size recently written to "
-                                    + "this table. By doing so, the writer can adjust the batch size to better "
-                                    + "fit the actual write throughput.");
+                                    + "`, nor fall below `"
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + "`."
+                                    + "When disabled, the writer uses a fixed batch size (`"
+                                    + CLIENT_WRITER_BATCH_SIZE.key()
+                                    + "`) for all batches, this may lead to frequent memory waits and suboptimal write performance if the incoming data rate is inconsistent across partitions.");
 
     public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_TIMEOUT =
             key("client.writer.batch-timeout")

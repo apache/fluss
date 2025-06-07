@@ -109,7 +109,7 @@ public final class RecordAccumulator {
 
     private final IdempotenceManager idempotenceManager;
     private final Clock clock;
-    private final DynamicWriteBatchSizeEstimator dynamicWriteBatchSizeEstimator;
+    private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
@@ -136,7 +136,7 @@ public final class RecordAccumulator {
         this.arrowWriterPool = new ArrowWriterPool(bufferAllocator);
         this.incomplete = new IncompleteBatches();
         this.nodesDrainIndex = new HashMap<>();
-        this.dynamicWriteBatchSizeEstimator =
+        this.batchSizeEstimator =
                 new DynamicWriteBatchSizeEstimator(
                         conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED),
                         batchSize,
@@ -431,8 +431,7 @@ public final class RecordAccumulator {
                 Math.max(
                         1,
                         MathUtils.ceilDiv(
-                                dynamicWriteBatchSizeEstimator.getEstimatedBatchSize(
-                                        physicalTablePath),
+                                batchSizeEstimator.getEstimatedBatchSize(physicalTablePath),
                                 writerBufferPool.pageSize()));
 
         if (writeRecord.getWriteFormat() == WriteFormat.ARROW_LOG) {
@@ -729,8 +728,7 @@ public final class RecordAccumulator {
             batch.close();
             int currentBatchSize = batch.estimatedSizeInBytes();
             size += currentBatchSize;
-            dynamicWriteBatchSizeEstimator.setEstimatedBatchSize(
-                    physicalTablePath, currentBatchSize);
+            batchSizeEstimator.updateEstimation(physicalTablePath, currentBatchSize);
 
             ready.add(new ReadyWriteBatch(tableBucket, batch));
             // mark the batch as drained.

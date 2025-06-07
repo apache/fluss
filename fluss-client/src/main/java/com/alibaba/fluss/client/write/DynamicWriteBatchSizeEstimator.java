@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** An estimator to estimate the buffer usage of a writeBatch. */
 @Internal
@@ -40,7 +40,7 @@ public class DynamicWriteBatchSizeEstimator {
     private final int pageSize;
     private final boolean dynamicBatchSizeEnabled;
 
-    private final Map<PhysicalTablePath, Integer> estimatedBatchSizeMap;
+    private final ConcurrentHashMap<PhysicalTablePath, Integer> estimatedBatchSizeMap;
 
     public DynamicWriteBatchSizeEstimator(
             boolean dynamicBatchSizeEnabled, int maxBatchSize, int pageSize) {
@@ -56,7 +56,7 @@ public class DynamicWriteBatchSizeEstimator {
         this.pageSize = pageSize;
     }
 
-    public void setEstimatedBatchSize(PhysicalTablePath physicalTablePath, int observedBatchSize) {
+    public void updateEstimation(PhysicalTablePath physicalTablePath, int observedBatchSize) {
         if (!dynamicBatchSizeEnabled) {
             return;
         }
@@ -87,7 +87,7 @@ public class DynamicWriteBatchSizeEstimator {
 
     public int getEstimatedBatchSize(PhysicalTablePath physicalTablePath) {
         return dynamicBatchSizeEnabled
-                ? estimatedBatchSizeMap.computeIfAbsent(physicalTablePath, k -> maxBatchSize)
+                ? estimatedBatchSizeMap.getOrDefault(physicalTablePath, maxBatchSize)
                 : maxBatchSize;
     }
 }

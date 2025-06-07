@@ -40,15 +40,15 @@ public class DynamicWriteBatchSizeEstimatorTest {
 
         estimator = new DynamicWriteBatchSizeEstimator(true, 1000, 100);
         // test decrease 10%
-        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 450);
+        estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 450);
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(900);
 
         // test decrease 5%
-        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, (int) (900 * 0.9) - 10);
+        estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, (int) (900 * 0.9) - 10);
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(855);
 
         // test increase 1%
-        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 852);
+        estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 852);
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
                 .isEqualTo((int) (855 * 1.1));
     }
@@ -56,22 +56,21 @@ public class DynamicWriteBatchSizeEstimatorTest {
     @Test
     void testMinDecreaseToPageSize() {
         int estimatedSize = estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH);
-        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 1000);
+        estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 1000);
         while (estimatedSize > 100) {
-            estimator.setEstimatedBatchSize(
-                    DATA1_PHYSICAL_TABLE_PATH, (int) (estimatedSize * 0.5) - 10);
+            estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, (int) (estimatedSize * 0.5) - 10);
             estimatedSize = estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH);
         }
 
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(100);
-        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 0);
+        estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 0);
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(100);
     }
 
     @Test
     void testMaxIncreaseToMaxBatchSize() {
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
-        estimator.setEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH, 2000);
+        estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 2000);
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
     }
 }
