@@ -35,9 +35,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link FlinkCatalogFactory}. */
 public class FlinkCatalogFactoryTest {
 
-    private static String CATALOG_NAME = "my_catalog";
-    private static String BOOTSTRAP_SERVERS_NAME = "localhost:9092";
-    private static String DB_NAME = "my_db";
+    private static final String CATALOG_NAME = "my_catalog";
+    private static final String BOOTSTRAP_SERVERS_NAME = "localhost:9092";
+    private static final String DB_NAME = "my_db";
 
     @Test
     public void testCreateCatalog() {
