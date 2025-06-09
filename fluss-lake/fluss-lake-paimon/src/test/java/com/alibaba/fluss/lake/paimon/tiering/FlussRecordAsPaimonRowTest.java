@@ -95,7 +95,7 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
 
         assertThat(flussRecordAsPaimonRow.getFieldCount())
-                .isEqualTo(14 + 0 + 3); // business + partition + system = 14 + 0 + 3 = 17
+                .isEqualTo(14 + 3); // business  + system = 14 + 0 + 3 = 17
     }
 
     @Test

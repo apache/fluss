@@ -284,7 +284,7 @@ class PaimonTieringTest {
             throws Exception {
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
-            // check normal columns:
+            // check business columns:
             assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
@@ -393,7 +393,7 @@ class PaimonTieringTest {
             throws Exception {
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
-            // check normal columns:
+            // check business columns:
             assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
