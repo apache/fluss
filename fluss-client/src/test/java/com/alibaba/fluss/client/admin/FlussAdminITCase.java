@@ -29,6 +29,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
@@ -521,7 +522,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .comment("test table")
                         .distributedBy(3, "id")
                         .partitionedBy("pt", "secondary_partition")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "pt")
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
@@ -530,7 +531,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TablePath partitionedTablePath = TablePath.of(dbName, "test_partitioned_table");
         // create table
         admin.createTable(partitionedTablePath, partitionedTable, true).get();
-        // add two partitions.
+        // add three partitions.
         admin.createPartition(
                         partitionedTablePath,
                         newPartitionSpec(
@@ -545,9 +546,13 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 Arrays.asList("2025", "11")),
                         false)
                 .get();
-        // auto create partitions.
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
+        admin.createPartition(
+                        partitionedTablePath,
+                        newPartitionSpec(
+                                Arrays.asList("pt", "secondary_partition"),
+                                Arrays.asList("2026", "12")),
+                        false)
+                .get();
 
         // run listPartitionInfos by partition spec with valid partition name.
         PartitionSpec partitionSpec = newPartitionSpec("pt", "2025");
@@ -555,11 +560,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         List<PartitionInfo> partitionInfos =
                 admin.listPartitionInfos(partitionedTablePath, partitionSpec).get();
 
-        assertThat(partitionInfos).hasSize(partitionIdByNames.size());
-        for (PartitionInfo partitionInfo : partitionInfos) {
-            assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
-                    .isEqualTo(partitionInfo.getPartitionId());
-        }
+        List<String> actualPartitionNames =
+                partitionInfos.stream()
+                        .map(PartitionInfo::getPartitionName)
+                        .collect(Collectors.toList());
+        assertThat(actualPartitionNames).containsAll(Arrays.asList("2025$10", "2025$11"));
 
         // run listPartitionInfos by partition spec with invalid partition name.
         PartitionSpec invalidNamePartitionSpec = newPartitionSpec("pt", "2024");
@@ -574,9 +579,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 admin.listPartitionInfos(partitionedTablePath, invalidPartitionSpec)
                                         .get())
                 .cause()
-                .isInstanceOf(InvalidPartitionException.class)
-                .hasMessageContaining(
-                        "test_db.test_partitioned_tabletable don't contains this partitionKey: pt1");
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("table don't contains this partitionKey: pt1");
     }
 
     @Test

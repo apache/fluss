@@ -251,6 +251,18 @@ abstract class FlinkCatalogITCase {
                         .collect();
         expectedShowPartitionsResult = Arrays.asList("+I[b=2/dt=1]", "+I[b=3/dt=1]");
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table partition (b = 3)")
+                        .collect();
+        expectedShowPartitionsResult = Arrays.asList("+I[b=3/dt=1]");
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1,b = 3)")
+                        .collect();
+        expectedShowPartitionsResult = Arrays.asList("+I[b=3/dt=1]");
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
     }
 
     @Test

@@ -441,28 +441,29 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Get the partition and the id for the partitions of a table in ZK. */
     public Map<String, Long> getPartitionNameAndIds(TablePath tablePath) throws Exception {
-        return getPartitionNameAndIds(tablePath, Collections.emptyList(), null);
+        Map<String, Long> partitions = new HashMap<>();
+        for (String partitionName : getPartitions(tablePath)) {
+            Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+            optPartition.ifPresent(
+                    partition -> partitions.put(partitionName, partition.getPartitionId()));
+        }
+        return partitions;
     }
 
     /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
     public Map<String, Long> getPartitionNameAndIds(
             TablePath tablePath,
             List<String> partitionKeys,
-            ResolvedPartitionSpec partitionSpecFromRequest)
+            ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
         Map<String, Long> partitions = new HashMap<>();
 
         for (String partitionName : getPartitions(tablePath)) {
-            Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-            if (partitionKeys.size() > 0 && partitionSpecFromRequest != null) {
-                ResolvedPartitionSpec resolvedPartitionSpecFromZK =
-                        fromPartitionName(partitionKeys, partitionName);
-                boolean contains = resolvedPartitionSpecFromZK.contains(partitionSpecFromRequest);
-                if (contains) {
-                    optPartition.ifPresent(
-                            partition -> partitions.put(partitionName, partition.getPartitionId()));
-                }
-            } else {
+            ResolvedPartitionSpec resolvedPartitionSpecFromZK =
+                    fromPartitionName(partitionKeys, partitionName);
+            boolean contains = resolvedPartitionSpecFromZK.contains(partialPartitionSpec);
+            if (contains) {
+                Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
                 optPartition.ifPresent(
                         partition -> partitions.put(partitionName, partition.getPartitionId()));
             }

@@ -177,18 +177,19 @@ public class MetadataManager {
                     "Table '" + tablePath + "' is not a partitioned table.");
         }
         try {
-            return zookeeperClient.getPartitionNameAndIds(
-                    tablePath, tableInfo.getPartitionKeys(), partitionSpecFromRequest);
-        } catch (Exception e) {
-            if (e instanceof InvalidPartitionException) {
-                throw new InvalidPartitionException(tablePath + e.getMessage());
+            if (partitionSpecFromRequest == null) {
+                return zookeeperClient.getPartitionNameAndIds(tablePath);
             } else {
-                throw new FlussRuntimeException(
-                        String.format(
-                                "Fail to list partitions for table: %s, partitionSpec: %s.",
-                                tablePath, partitionSpecFromRequest),
-                        e);
+
+                return zookeeperClient.getPartitionNameAndIds(
+                        tablePath, tableInfo.getPartitionKeys(), partitionSpecFromRequest);
             }
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Fail to list partitions for table: %s, partitionSpec: %s.",
+                            tablePath, partitionSpecFromRequest),
+                    e);
         }
     }
 

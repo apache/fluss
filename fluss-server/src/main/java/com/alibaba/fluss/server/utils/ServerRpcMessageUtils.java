@@ -1402,7 +1402,7 @@ public class ServerRpcMessageUtils {
             listPartitionsResponse
                     .addPartitionsInfo()
                     .setPartitionId(partitionNameAndId.getValue())
-                    .setPartitionSpec(makePbPartitionSpec(spec));
+                    .setPartialPartitionSpec(makePbPartitionSpec(spec));
         }
         return listPartitionsResponse;
     }

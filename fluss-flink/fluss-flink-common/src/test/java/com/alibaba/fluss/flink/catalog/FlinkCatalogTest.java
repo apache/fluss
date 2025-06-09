@@ -19,6 +19,7 @@ package com.alibaba.fluss.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
+import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.ExceptionUtils;
@@ -42,7 +43,6 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.FunctionNotExistException;
 import org.apache.flink.table.catalog.exceptions.PartitionAlreadyExistsException;
-import org.apache.flink.table.catalog.exceptions.PartitionSpecInvalidException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
@@ -486,13 +486,19 @@ class FlinkCatalogTest {
         assertThat(catalogPartitionSpecs).hasSize(1);
         assertThat(catalogPartitionSpecs.get(0).getPartitionSpec()).containsEntry("first", "1");
 
-        // test list partition by partitionSpec
         CatalogPartitionSpec testSpec =
+                new CatalogPartitionSpec(Collections.singletonMap("first", "1"));
+        List<CatalogPartitionSpec> catalogPartitionSpecs1 = catalog.listPartitions(path2, testSpec);
+        assertThat(catalogPartitionSpecs1).hasSize(1);
+        assertThat(catalogPartitionSpecs1.get(0).getPartitionSpec()).containsEntry("first", "1");
+
+        // test list partition by partitionSpec
+        CatalogPartitionSpec invalidTestSpec =
                 new CatalogPartitionSpec(Collections.singletonMap("second", ""));
-        assertThatThrownBy(() -> catalog.listPartitions(path2, testSpec))
-                .isInstanceOf(PartitionSpecInvalidException.class)
+        assertThatThrownBy(() -> catalog.listPartitions(path2, invalidTestSpec))
+                .isInstanceOf(CatalogException.class)
                 .hasMessage(
-                        "PartitionSpec CatalogPartitionSpec{{second=}} does not match partition keys [] of table default.partitioned_t1 in catalog test-catalog.");
+                        "Failed to list partitions of table default.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
 
         // NEW: Test dropPartition functionality
         CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
@@ -545,7 +551,6 @@ class FlinkCatalogTest {
 
     @Test
     void testCreatePartitions() throws Exception {
-
         ObjectPath nonPartitionedPath = new ObjectPath(DEFAULT_DB, "non_partitioned_table1");
         ResolvedSchema resolvedSchema = this.createSchema();
         // test TableNotExistException
@@ -592,19 +597,19 @@ class FlinkCatalogTest {
                         resolvedSchema);
         catalog.createTable(partitionedPath, partitionedTable, false);
 
-        // test TableNotPartitionedException
+        // test InvalidPartitionException
         assertThatThrownBy(
                         () ->
                                 catalog.createPartition(
                                         partitionedPath,
                                         new CatalogPartitionSpec(
-                                                Collections.singletonMap("first", "")),
+                                                Collections.singletonMap("first", "**")),
                                         null,
                                         false))
-                .isInstanceOf(PartitionSpecInvalidException.class)
+                .rootCause()
+                .isInstanceOf(InvalidPartitionException.class)
                 .hasMessage(
-                        "PartitionSpec CatalogPartitionSpec{{%s}} does not match partition keys [first] of table %s in catalog %s.",
-                        "first=", partitionedPath, CATALOG_NAME);
+                        "The partition value ** is invalid: '**' contains one or more characters other than ASCII alphanumerics, '_' and '-'");
 
         // create partition success
         catalog.createPartition(

@@ -443,7 +443,7 @@ public class FlinkCatalog implements Catalog {
                 throw new CatalogException(
                         String.format(
                                 "Failed to list partitions of table %s in %s, by partitionSpec %s",
-                                objectPath, getName(), catalogPartitionSpec.getPartitionSpec()),
+                                objectPath, getName(), catalogPartitionSpec),
                         t);
             }
         }
@@ -494,13 +494,6 @@ public class FlinkCatalog implements Catalog {
                     TableInfo tableInfo = admin.getTableInfo(tablePath).get();
                     partitionKeys = tableInfo.getPartitionKeys();
                 } catch (Exception ee) {
-                    // ignore.
-                }
-                if (partitionKeys != null) {
-                    // throw specific partition exception if getting partition keys success.
-                    throw new PartitionSpecInvalidException(
-                            getName(), partitionKeys, objectPath, catalogPartitionSpec, e);
-                } else {
                     // throw general exception if getting partition keys failed.
                     throw new CatalogException(
                             String.format(
@@ -508,6 +501,17 @@ public class FlinkCatalog implements Catalog {
                                     partitionSpec, objectPath.getFullName(), catalogName),
                             e);
                 }
+
+                if (partitionKeys != null
+                        && !partitionKeys.containsAll(
+                                catalogPartitionSpec.getPartitionSpec().keySet())) {
+                    // throw specific partition exception if getting partition keys success.
+                    throw new PartitionSpecInvalidException(
+                            getName(), partitionKeys, objectPath, catalogPartitionSpec, e);
+                }
+
+                throw new CatalogException("The partition value is invalid, " + e.getMessage(), e);
+
             } else if (isPartitionAlreadyExists(t)) {
                 throw new PartitionAlreadyExistsException(
                         getName(), objectPath, catalogPartitionSpec);
