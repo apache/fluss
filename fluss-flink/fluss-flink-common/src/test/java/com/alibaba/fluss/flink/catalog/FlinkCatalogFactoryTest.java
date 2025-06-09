@@ -111,7 +111,7 @@ public class FlinkCatalogFactoryTest {
                                 new Configuration(),
                                 Thread.currentThread().getContextClassLoader());
 
-        assertThat(actualCatalog.getDefaultDatabase()).isEqualTo(DB_NAME);
+        assertThat(actualCatalog.getDefaultDatabase()).isEqualTo(FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue());
     }
 
     private static void checkEquals(FlinkCatalog c1, FlinkCatalog c2) {
