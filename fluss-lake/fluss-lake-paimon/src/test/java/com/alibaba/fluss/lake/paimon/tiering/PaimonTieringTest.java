@@ -261,25 +261,28 @@ class PaimonTieringTest {
 
         // gen +I, -U, +U
         rows = genKvRow(partition, bucket, 1, 4, 7);
+        long currentTime = System.currentTimeMillis();
         writtenLogRecords.addAll(
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
                         toRecord(++offset, rows.get(1), UPDATE_BEFORE),
-                        toRecord(++offset, rows.get(2), UPDATE_AFTER)));
-        expectLogRecords.add(toRecord(offset, rows.get(2), UPDATE_AFTER));
+                        toRecord(++offset, currentTime, rows.get(2), UPDATE_AFTER)));
+        expectLogRecords.add(toRecord(offset, currentTime, rows.get(2), UPDATE_AFTER));
 
         // gen +I, +U
         rows = genKvRow(partition, bucket, 2, 7, 9);
+        currentTime = System.currentTimeMillis();
         writtenLogRecords.addAll(
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
-                        toRecord(++offset, rows.get(1), UPDATE_AFTER)));
-        expectLogRecords.add(toRecord(offset, rows.get(1), UPDATE_AFTER));
+                        toRecord(++offset, currentTime, rows.get(1), UPDATE_AFTER)));
+        expectLogRecords.add(toRecord(offset, currentTime, rows.get(1), UPDATE_AFTER));
 
         // gen +I
         rows = genKvRow(partition, bucket, 3, 9, 10);
-        writtenLogRecords.add(toRecord(++offset, rows.get(0), INSERT));
-        expectLogRecords.add(toRecord(offset, rows.get(0), INSERT));
+        currentTime = System.currentTimeMillis();
+        writtenLogRecords.add(toRecord(++offset, currentTime, rows.get(0), INSERT));
+        expectLogRecords.add(toRecord(offset, currentTime, rows.get(0), INSERT));
 
         return Tuple2.of(writtenLogRecords, expectLogRecords);
     }
@@ -302,7 +305,12 @@ class PaimonTieringTest {
     }
 
     private GenericRecord toRecord(long offset, GenericRow row, ChangeType changeType) {
-        return new GenericRecord(offset, System.currentTimeMillis(), changeType, row);
+        return toRecord(offset, System.currentTimeMillis(), row, changeType);
+    }
+
+    private GenericRecord toRecord(
+            long offset, long timestamp, GenericRow row, ChangeType changeType) {
+        return new GenericRecord(offset, timestamp, changeType, row);
     }
 
     private CloseableIterator<InternalRow> getPaimonRows(
