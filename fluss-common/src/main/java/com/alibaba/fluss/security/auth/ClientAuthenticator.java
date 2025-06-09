@@ -33,6 +33,19 @@ public interface ClientAuthenticator extends Closeable {
     /** Initialize the authenticator. */
     default void initialize(AuthenticateContext context) throws AuthenticationException {}
 
+    /**
+     * Determines whether the client authenticator should proactively send an initial token to the
+     * server.
+     *
+     * <p>When this method returns {@code true}, it indicates that the client is the initiator of
+     * the authentication exchange and should actively call {@link #authenticate(byte[])
+     * authenticate(new byte[0])} to generate and send the initial token without waiting for a
+     * challenge from the server.
+     *
+     * @return {@code true} if the client should initiate authentication by sending an initial
+     *     token; {@code false} if the client expects to receive the first token or challenge from
+     *     the server.
+     */
     default boolean hasInitialTokenResponse() {
         return true;
     }

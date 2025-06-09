@@ -67,20 +67,20 @@ public class SaslServerFactory {
                                     () ->
                                             Sasl.createSaslServer(
                                                     mechanism,
-                                                    "kafka",
+                                                    "fluss",
                                                     hostName,
                                                     props,
                                                     callbackHandler));
             if (saslServer == null) {
                 throw new SaslException(
-                        "Kafka Server failed to create a SaslServer to interact with a client during session authentication with server mechanism "
+                        "Fluss Server failed to create a SaslServer to interact with a client during session authentication with server mechanism "
                                 + mechanism);
             }
 
             return saslServer;
         } catch (PrivilegedActionException e) {
             throw new SaslException(
-                    "Kafka Server failed to create a SaslServer to interact with a client during session authentication with server mechanism "
+                    "Fluss Server failed to create a SaslServer to interact with a client during session authentication with server mechanism "
                             + mechanism,
                     e.getCause());
         }
@@ -107,7 +107,6 @@ public class SaslServerFactory {
                                     serviceName,
                                     hostAddress,
                                     props,
-                                    // todo: 支持不同mechanism的callbackHandler
                                     new SaslClientCallbackHandler());
                         });
     }

@@ -49,7 +49,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
                     .noDefaultValue()
                     .withDescription(
                             "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
-                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\")");
+                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\")");
     private final String mechanism;
     private final Map<String, String> pros;
     private final String jaasConfig;
