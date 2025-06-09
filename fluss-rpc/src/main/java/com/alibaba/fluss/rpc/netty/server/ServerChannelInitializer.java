@@ -19,6 +19,7 @@ package com.alibaba.fluss.rpc.netty.server;
 import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
+import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import com.alibaba.fluss.utils.MathUtils;
@@ -83,5 +84,11 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
                                 isInternal,
                                 requestsMetrics,
                                 serverAuthenticator));
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        LOG.error("Unexpected exception caught in server channel initializer.", cause);
+        super.exceptionCaught(ctx, cause);
     }
 }
