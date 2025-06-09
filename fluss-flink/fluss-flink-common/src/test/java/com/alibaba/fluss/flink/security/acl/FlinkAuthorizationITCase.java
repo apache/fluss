@@ -16,9 +16,6 @@
 
 package com.alibaba.fluss.flink.security.acl;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
@@ -26,24 +23,19 @@ import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.flink.catalog.FlinkCatalogOptions;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.AccessControlEntryFilter;
-import com.alibaba.fluss.security.acl.AclBinding;
-import com.alibaba.fluss.security.acl.AclBindingFilter;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.acl.OperationType;
-import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.acl.ResourceFilter;
+import com.alibaba.fluss.security.acl.ResourceType;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,7 +47,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static com.alibaba.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
@@ -80,9 +74,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
+    static final String ADMIN_CATALOG_NAME = "test_admin_catalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
-    static Admin rootAdmin;
-    static Connection rootConn;
     static FlussPrincipal guest = new FlussPrincipal("guest", "USER");
     static Configuration clientConf;
 
@@ -93,26 +86,10 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
     static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT");
         clientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
-        Configuration rootConf = new Configuration(clientConf);
-        rootConf.setString("client.security.username_password.username", "root");
-        rootConf.setString("client.security.username_password.password", "password");
-        rootConn = ConnectionFactory.createConnection(rootConf);
-        rootAdmin = rootConn.getAdmin();
-    }
-
-    @AfterAll
-    static void afterAll() throws Exception {
-        if (rootAdmin != null) {
-            rootAdmin.close();
-        }
-
-        if (rootConn != null) {
-            rootConn.close();
-        }
     }
 
     @BeforeEach
-    void before() {
+    void before() throws ExecutionException, InterruptedException {
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // create table environment
         tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
@@ -132,11 +109,22 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         tBatchEnv.executeSql(createCatalogDDL);
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         tBatchEnv.executeSql("use catalog " + CATALOG_NAME);
+        String createAminCatalogDDL =
+                String.format(
+                        "create catalog %s with ( \n"
+                                + "'type' = 'fluss', \n"
+                                + "'bootstrap.servers' = '%s', \n"
+                                + "'client.security.protocol' = 'username_password', \n"
+                                + "'client.security.username_password.username' = 'root', \n"
+                                + "'client.security.username_password.password' = 'password' \n"
+                                + ")",
+                        ADMIN_CATALOG_NAME, bootstrapServers);
+        tEnv.executeSql(createAminCatalogDDL).await();
     }
 
     @AfterEach
     void after() throws ExecutionException, InterruptedException {
-        rootAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
+        dropAcl(Resource.any(), OperationType.ANY);
     }
 
     @Test
@@ -399,30 +387,56 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 Arrays.asList("+I[1, beijing, zhangsan]", "+I[2, shanghai, lisi]"));
     }
 
+    @Test
+    void testListAcls() throws Exception {
+        assertThat(listAcl(Resource.any(), OperationType.ANY)).isEmpty();
+        addAcl(Resource.table(TablePath.of(DEFAULT_DB, "test_table")), READ);
+        assertThat(listAcl(Resource.any(), OperationType.ANY))
+                .containsExactly(
+                        "+I[| TABLE | fluss.test_table | ALLOW | FlussPrincipal{name='guest', type='USER'} | READ | * |]");
+    }
+
     void addAcl(Resource resource, OperationType operationType)
             throws ExecutionException, InterruptedException {
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        resource,
-                                        new AccessControlEntry(
-                                                guest, "*", operationType, PermissionType.ALLOW))))
-                .all()
-                .get();
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.acl('ADD', '%s', 'ALLOW', '%s' , '%s')",
+                                ADMIN_CATALOG_NAME,
+                                getProcedureResourceString(resource),
+                                ResourceType.ANY == resource.getType()
+                                        ? "ANY"
+                                        : String.format("%s:%s", guest.getType(), guest.getName()),
+                                operationType.name()))
+                .await();
+    }
+
+    List<String> listAcl(Resource resource, OperationType operationType) {
+        TableResult tableResult =
+                tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.acl('LIST', '%s', 'ALLOW', '%s', '%s')",
+                                ADMIN_CATALOG_NAME,
+                                getProcedureResourceString(resource),
+                                ResourceType.ANY == resource.getType()
+                                        ? "ANY"
+                                        : String.format("%s:%s", guest.getType(), guest.getName()),
+                                operationType.name()));
+        List<Row> rows = CollectionUtil.iteratorToList(tableResult.collect());
+        return rows.stream().map(Row::toString).collect(Collectors.toList());
     }
 
     void dropAcl(Resource resource, OperationType operationType)
             throws ExecutionException, InterruptedException {
-        rootAdmin
-                .dropAcls(
-                        Collections.singletonList(
-                                new AclBindingFilter(
-                                        new ResourceFilter(resource.getType(), resource.getName()),
-                                        new AccessControlEntryFilter(
-                                                guest, null, operationType, PermissionType.ALLOW))))
-                .all()
-                .get();
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.acl('DROP', '%s', 'ANY', '%s', '%s')",
+                                ADMIN_CATALOG_NAME,
+                                getProcedureResourceString(resource),
+                                ResourceType.ANY == resource.getType()
+                                        ? "ANY"
+                                        : String.format("%s:%s", guest.getType(), guest.getName()),
+                                operationType.name()))
+                .await();
     }
 
     private static Configuration initConfig() {
@@ -445,5 +459,19 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         conf.set(ConfigOptions.SUPER_USERS, "USER:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
+    }
+
+    private String getProcedureResourceString(Resource resource) {
+        switch (resource.getType()) {
+            case ANY:
+                return "ANY";
+            case CLUSTER:
+                return "fluss-cluster";
+            case DATABASE:
+            case TABLE:
+                return String.format("fluss-cluster.%s", resource.getName());
+            default:
+                return "";
+        }
     }
 }

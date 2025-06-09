@@ -327,6 +327,7 @@
                                         <exclude>com.alibaba.fluss.rocksdb.RocksIteratorWrapper
                                         </exclude>
                                         <exclude>com.alibaba.fluss.plugin.PluginUtils</exclude>
+                                        <exclude>com.alibaba.fluss.flink.procedure.ProcedureUtil</exclude>
                                         <!-- start exclude for metric -->
                                         <exclude>com.alibaba.fluss.metrics.*</exclude>
                                         <!-- end exclude for metric -->
