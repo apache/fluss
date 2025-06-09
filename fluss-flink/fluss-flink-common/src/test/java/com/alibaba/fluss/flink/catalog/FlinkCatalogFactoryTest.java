@@ -20,6 +20,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.CommonCatalogOptions;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.junit.jupiter.api.Test;
@@ -29,35 +30,36 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkCatalogFactory}. */
 public class FlinkCatalogFactoryTest {
 
+    private static String CATALOG_NAME = "my_catalog";
+    private static String BOOTSTRAP_SERVERS_NAME = "localhost:9092";
+    private static String DB_NAME = "my_db";
+
     @Test
     public void testCreateCatalog() {
-        String catalogName = "my_catalog";
-        String bootstrapServers = "localhost:9092";
-        String dbName = "my_db";
-
         Map<String, String> options = new HashMap<>();
-        options.put(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
-        options.put(FlinkCatalogOptions.DEFAULT_DATABASE.key(), dbName);
+        options.put(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), BOOTSTRAP_SERVERS_NAME);
+        options.put(FlinkCatalogOptions.DEFAULT_DATABASE.key(), DB_NAME);
         options.put(CommonCatalogOptions.CATALOG_TYPE.key(), FlinkCatalogFactory.IDENTIFIER);
 
         // test create catalog
         FlinkCatalog actualCatalog =
                 (FlinkCatalog)
                         FactoryUtil.createCatalog(
-                                catalogName,
+                                CATALOG_NAME,
                                 options,
                                 new Configuration(),
                                 Thread.currentThread().getContextClassLoader());
 
         FlinkCatalog flinkCatalog =
                 new FlinkCatalog(
-                        catalogName,
-                        dbName,
-                        bootstrapServers,
+                        CATALOG_NAME,
+                        DB_NAME,
+                        BOOTSTRAP_SERVERS_NAME,
                         Thread.currentThread().getContextClassLoader(),
                         Collections.emptyMap());
 
@@ -73,12 +75,43 @@ public class FlinkCatalogFactoryTest {
         FlinkCatalog actualCatalog2 =
                 (FlinkCatalog)
                         FactoryUtil.createCatalog(
-                                catalogName,
+                                CATALOG_NAME,
                                 options,
                                 new Configuration(),
                                 Thread.currentThread().getContextClassLoader());
 
         assertThat(actualCatalog2.getSecurityConfigs()).isEqualTo(securityMap);
+    }
+
+    @Test
+    public void testOptions() {
+        Map<String, String> options = new HashMap<>();
+        options.put(CommonCatalogOptions.CATALOG_TYPE.key(), FlinkCatalogFactory.IDENTIFIER);
+
+        // test required options
+        assertThatThrownBy(
+                        () ->
+                                FactoryUtil.createCatalog(
+                                        CATALOG_NAME,
+                                        options,
+                                        new Configuration(),
+                                        Thread.currentThread().getContextClassLoader()))
+                .rootCause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "Missing required options are:\n" + "\n" + "bootstrap.servers");
+
+        // test op options
+        options.put(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), BOOTSTRAP_SERVERS_NAME);
+        FlinkCatalog actualCatalog =
+                (FlinkCatalog)
+                        FactoryUtil.createCatalog(
+                                CATALOG_NAME,
+                                options,
+                                new Configuration(),
+                                Thread.currentThread().getContextClassLoader());
+
+        assertThat(actualCatalog.getDefaultDatabase()).isEqualTo(DB_NAME);
     }
 
     private static void checkEquals(FlinkCatalog c1, FlinkCatalog c2) {

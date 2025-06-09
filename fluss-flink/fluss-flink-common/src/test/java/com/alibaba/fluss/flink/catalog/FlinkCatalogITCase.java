@@ -513,6 +513,31 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testFactoryCannotFindForCreateTemporaryTable() {
+        // create fluss temporary table is not supported
+        tEnv.executeSql(
+                "create temporary table test_temp_table (a int, b int)"
+                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092')");
+        assertThatThrownBy(() -> tEnv.executeSql("insert into test_temp_table values (1, 2)"))
+                .cause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessage("Cannot discover a connector using option: 'connector'='fluss'");
+    }
+
+    @Test
+    void testFactoryCannotFindForCreateCatalogTable() {
+        // create fluss table under non-fluss catalog is not supported
+        tEnv.executeSql("use catalog " + TableConfigOptions.TABLE_CATALOG_NAME.defaultValue());
+        tEnv.executeSql(
+                "create table test_catalog_table (a int, b int)"
+                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092')");
+        assertThatThrownBy(() -> tEnv.executeSql("insert into test_catalog_table values (1, 2)"))
+                .cause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessage("Cannot discover a connector using option: 'connector'='fluss'");
+    }
+
+    @Test
     void testCreateTableWithUnknownOptions() {
         // create fluss table with unknown options whose prefix is 'table.*' or 'client.*'
         tEnv.executeSql(
