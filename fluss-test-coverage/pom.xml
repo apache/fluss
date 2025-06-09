@@ -94,13 +94,6 @@
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
-
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-auth-sasl</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
     </dependencies>
 
     <profiles>
@@ -290,6 +283,7 @@
                                         <exclude>com.alibaba.fluss.Bucket</exclude>
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
                                         <exclude>com.alibaba.fluss.compression.*</exclude>
+                                        <exclude>com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.flink.catalog.*
                                         </exclude>
@@ -348,8 +342,6 @@
                                         <!-- exclude for fluss-dist -->
                                         <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
                                         <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
-                                        <!-- exclude for fluss-auth-sasl -->
-                                        <exclude>com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory</exclude>
                                         <!-- start exclude for flink tiering service -->
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringWriterInitContext</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceReader</exclude>

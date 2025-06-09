@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.security.auth.sasl.authenticator;
 
-import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
@@ -29,27 +28,12 @@ import javax.security.sasl.SaslClient;
 
 import java.util.Map;
 
-import static com.alibaba.fluss.config.ConfigBuilder.key;
-import static com.alibaba.fluss.security.auth.sasl.jaas.JaasContext.SASL_JAAS_CONFIG;
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_MECHANISM;
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
 import static com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory.createSaslClient;
 
 /** An authenticator that uses SASL to authenticate with a server. */
 public class SaslClientAuthenticator implements ClientAuthenticator {
-    public static final String CLIENT_SECURITY_PREFIX = "client.security.sasl.";
-    private static final ConfigOption<String> CLIENT_MECHANISM =
-            key(CLIENT_SECURITY_PREFIX + "mechanism")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "SASL mechanism to use for authentication.Currently, we only support plain.");
-
-    private static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
-            key(CLIENT_SECURITY_PREFIX + SASL_JAAS_CONFIG)
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
-                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\")");
     private final String mechanism;
     private final Map<String, String> pros;
     private final String jaasConfig;

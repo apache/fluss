@@ -77,7 +77,6 @@
         <module>fluss-lakehouse</module>
         <module>fluss-kafka</module>
         <module>tools/ci/fluss-ci-tools</module>
-        <module>fluss-auth</module>
     </modules>
 
     <properties>

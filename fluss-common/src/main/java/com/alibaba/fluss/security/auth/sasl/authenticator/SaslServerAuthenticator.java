@@ -16,7 +16,6 @@
 
 package com.alibaba.fluss.security.auth.sasl.authenticator;
 
-import com.alibaba.fluss.config.ConfigOption;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
@@ -35,7 +34,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.config.ConfigBuilder.key;
+import static com.alibaba.fluss.config.ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG;
 import static com.alibaba.fluss.security.auth.sasl.authenticator.SaslAuthenticationPlugin.SASL_AUTH_PROTOCOL;
 import static com.alibaba.fluss.security.auth.sasl.jaas.JaasContext.SASL_JAAS_CONFIG;
 import static com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory.createSaslServer;
@@ -44,11 +43,6 @@ import static com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory.create
 public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
-    private static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
-            key(SERVER_AUTHENTICATOR_PREFIX + "enabled.mechanisms")
-                    .stringType()
-                    .asList()
-                    .noDefaultValue();
     private final List<String> enabledMechanisms;
     private SaslServer saslServer;
     private final Map<String, String> configs;

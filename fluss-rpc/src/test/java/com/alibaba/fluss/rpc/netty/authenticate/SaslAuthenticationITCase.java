@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.security.auth.sasl.authenticator;
+package com.alibaba.fluss.rpc.netty.authenticate;
 
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;

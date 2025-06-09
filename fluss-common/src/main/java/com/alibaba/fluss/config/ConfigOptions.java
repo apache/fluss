@@ -40,6 +40,7 @@ import static com.alibaba.fluss.config.ConfigOptions.CompactionStyle.UNIVERSAL;
 import static com.alibaba.fluss.config.ConfigOptions.InfoLogLevel.INFO_LEVEL;
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
+import static com.alibaba.fluss.security.auth.sasl.jaas.JaasContext.SASL_JAAS_CONFIG;
 
 /**
  * Config options for Fluss.
@@ -176,6 +177,9 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of buckets that can be created for a table."
                                     + "The default value is 128000");
+
+    public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
+            key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
@@ -1088,6 +1092,21 @@ public class ConfigOptions {
                     .withDescription(
                             "Enable metrics for client. When metrics is enabled, the client "
                                     + "will collect metrics and report by the JMX metrics reporter.");
+
+    public static final ConfigOption<String> CLIENT_MECHANISM =
+            key("client.security.sasl.mechanism")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "SASL mechanism to use for authentication.Currently, we only support plain.");
+
+    public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
+            key("client.security.sasl." + SASL_JAAS_CONFIG)
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
+                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\")");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
