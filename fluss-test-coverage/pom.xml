@@ -249,9 +249,6 @@
                                         <exclude>com.alibaba.fluss.memory.*</exclude>
                                         <exclude>com.alibaba.fluss.utils.*</exclude>
                                         <exclude>com.alibaba.fluss.exception.*</exclude>
-                                        <exclude>
-                                            com.alibaba.fluss.utils.concurrent.FutureUtils.Timeout
-                                        </exclude>
                                         <exclude>com.alibaba.fluss.row.arrow.*</exclude>
                                         <exclude>
                                             com.alibaba.fluss.row.columnar.BytesColumnVector.Bytes
