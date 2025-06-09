@@ -55,7 +55,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record, partitionString);
+        flussRecordAsPaimonRow.setFlussRecord(record);
         rowKeyExtractor.setRecord(flussRecordAsPaimonRow);
         keyValue.replace(
                 rowKeyExtractor.trimmedPrimaryKey(),

@@ -41,16 +41,15 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
-                        // todo: set ioManager to support write-buffer-spillable
                         fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER),
                 tableBucket,
                 partition,
-                partitionKeys);
+                partitionKeys); // Pass to parent
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record, partitionString);
+        flussRecordAsPaimonRow.setFlussRecord(record);
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
         // which may be costly

@@ -27,42 +27,32 @@ import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 
-import javax.annotation.Nullable;
-
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
 import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow implements InternalRow {
 
     private final int bucket;
-    private final List<String> partitionKeys;
-    private final int partitionFieldCount;
-
     private LogRecord logRecord;
     private int originRowFieldCount;
     private com.alibaba.fluss.row.InternalRow internalRow;
-    private Map<String, String> partitionValues;
 
-    public FlussRecordAsPaimonRow(int bucket, List<String> partitionKeys) {
+    public FlussRecordAsPaimonRow(int bucket) {
         this.bucket = bucket;
-        this.partitionKeys = partitionKeys;
-        this.partitionFieldCount = partitionKeys.size();
     }
 
-    public void setFlussRecord(LogRecord logRecord, @Nullable String partitionString) {
+    public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
         this.originRowFieldCount = internalRow.getFieldCount();
-        this.partitionValues = parsePartitionString(partitionString);
     }
 
     @Override
     public int getFieldCount() {
-        return originRowFieldCount + partitionFieldCount + 3; // business + partition + system
+        return
+        //  business (including partitions) + system (three system fields: bucket, offset,
+        // timestamp)
+        originRowFieldCount + 3;
     }
 
     @Override
@@ -78,141 +68,93 @@ public class FlussRecordAsPaimonRow implements InternalRow {
     @Override
     public boolean isNullAt(int pos) {
         if (pos < originRowFieldCount) {
-            return internalRow.isNullAt(pos); // Business fields
-        } else if (pos < originRowFieldCount + partitionFieldCount) {
-            return getPartitionValue(pos) == null; // Partition fields
-        } else {
-            return false; // System fields (never null)
+            return internalRow.isNullAt(pos);
         }
+        // is the last three system fields: bucket, offset, timestamp which are never null
+        return false;
     }
 
     @Override
     public boolean getBoolean(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getBoolean(pos);
-        } else {
-            throw new UnsupportedOperationException("Partition and system fields are not boolean");
-        }
+        return internalRow.getBoolean(pos);
     }
 
     @Override
     public byte getByte(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getByte(pos);
-        } else {
-            throw new UnsupportedOperationException("Partition and system fields are not byte");
-        }
+        return internalRow.getByte(pos);
     }
 
     @Override
     public short getShort(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getShort(pos);
-        } else {
-            throw new UnsupportedOperationException("Partition and system fields are not short");
-        }
+        return internalRow.getShort(pos);
     }
 
     @Override
     public int getInt(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getInt(pos); // Business fields
-        } else if (pos < originRowFieldCount + partitionFieldCount) {
-            throw new UnsupportedOperationException("Partition fields are strings, not ints");
-        } else if (pos == originRowFieldCount + partitionFieldCount) {
-            return bucket; // System field: bucket
-        } else {
-            throw new UnsupportedOperationException("Invalid field position for int: " + pos);
+        if (pos == originRowFieldCount) {
+            // bucket system column
+            return bucket;
         }
+        return internalRow.getInt(pos);
     }
 
     @Override
     public long getLong(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getLong(pos); // Business fields
-        } else if (pos < originRowFieldCount + partitionFieldCount) {
-            throw new UnsupportedOperationException("Partition fields are strings, not longs");
-        } else if (pos == originRowFieldCount + partitionFieldCount + 1) {
-            return logRecord.logOffset(); // System field: offset
-        } else if (pos == originRowFieldCount + partitionFieldCount + 2) {
-            return logRecord.timestamp(); // System field: timestamp
-        } else {
-            throw new UnsupportedOperationException("Invalid field position for long: " + pos);
+        if (pos == originRowFieldCount + 1) {
+            //  offset system column
+            return logRecord.logOffset();
+        } else if (pos == originRowFieldCount + 2) {
+            //  timestamp system column
+            return logRecord.timestamp();
         }
+        //  the origin RowData
+        return internalRow.getLong(pos);
     }
 
     @Override
     public float getFloat(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getFloat(pos);
-        } else {
-            throw new UnsupportedOperationException("Partition and system fields are not float");
-        }
+        return internalRow.getFloat(pos);
     }
 
     @Override
     public double getDouble(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getDouble(pos);
-        } else {
-            throw new UnsupportedOperationException("Partition and system fields are not double");
-        }
+        return internalRow.getDouble(pos);
     }
 
     @Override
     public BinaryString getString(int pos) {
-        if (pos < originRowFieldCount) {
-            return BinaryString.fromBytes(internalRow.getString(pos).toBytes()); // Business fields
-        } else if (pos < originRowFieldCount + partitionFieldCount) {
-            String partitionValue = getPartitionValue(pos); // Partition fields
-            return partitionValue != null ? BinaryString.fromString(partitionValue) : null;
-        } else {
-            throw new UnsupportedOperationException("System fields are not strings");
-        }
+        return BinaryString.fromBytes(internalRow.getString(pos).toBytes());
     }
 
     @Override
     public Decimal getDecimal(int pos, int precision, int scale) {
-        if (pos < originRowFieldCount) {
-            com.alibaba.fluss.row.Decimal flussDecimal =
-                    internalRow.getDecimal(pos, precision, scale);
-            if (flussDecimal.isCompact()) {
-                return Decimal.fromUnscaledLong(flussDecimal.toUnscaledLong(), precision, scale);
-            } else {
-                return Decimal.fromBigDecimal(flussDecimal.toBigDecimal(), precision, scale);
-            }
+        com.alibaba.fluss.row.Decimal flussDecimal = internalRow.getDecimal(pos, precision, scale);
+        if (flussDecimal.isCompact()) {
+            return Decimal.fromUnscaledLong(flussDecimal.toUnscaledLong(), precision, scale);
         } else {
-            throw new UnsupportedOperationException("Partition and system fields are not decimal");
+            return Decimal.fromBigDecimal(flussDecimal.toBigDecimal(), precision, scale);
         }
     }
 
     @Override
     public Timestamp getTimestamp(int pos, int precision) {
-        if (pos < originRowFieldCount) {
-            if (TimestampLtz.isCompact(precision)) {
-                return Timestamp.fromEpochMillis(
-                        internalRow.getTimestampLtz(pos, precision).getEpochMillisecond());
-            } else {
-                TimestampLtz timestampLtz = internalRow.getTimestampLtz(pos, precision);
-                return Timestamp.fromEpochMillis(
-                        timestampLtz.getEpochMillisecond(), timestampLtz.getNanoOfMillisecond());
-            }
-        } else if (pos < originRowFieldCount + partitionFieldCount) {
-            throw new UnsupportedOperationException("Partition fields are not timestamp");
-        } else if (pos == originRowFieldCount + partitionFieldCount + 2) {
-            return Timestamp.fromEpochMillis(logRecord.timestamp()); // System field: timestamp
+        // it's timestamp system column
+        if (pos == originRowFieldCount + 2) {
+            return Timestamp.fromEpochMillis(logRecord.timestamp());
+        }
+        if (TimestampLtz.isCompact(precision)) {
+            return Timestamp.fromEpochMillis(
+                    internalRow.getTimestampLtz(pos, precision).getEpochMillisecond());
         } else {
-            throw new UnsupportedOperationException("Invalid field position for timestamp: " + pos);
+            TimestampLtz timestampLtz = internalRow.getTimestampLtz(pos, precision);
+            return Timestamp.fromEpochMillis(
+                    timestampLtz.getEpochMillisecond(), timestampLtz.getNanoOfMillisecond());
         }
     }
 
     @Override
     public byte[] getBinary(int pos) {
-        if (pos < originRowFieldCount) {
-            return internalRow.getBytes(pos);
-        } else {
-            throw new UnsupportedOperationException("Partition and system fields are not binary");
-        }
+        return internalRow.getBytes(pos);
     }
 
     @Override
@@ -231,40 +173,5 @@ public class FlussRecordAsPaimonRow implements InternalRow {
     public InternalRow getRow(int pos, int pos1) {
         throw new UnsupportedOperationException(
                 "getRow is not support for Fluss record currently.");
-    }
-
-    private String getPartitionValue(int pos) {
-        int partitionIndex = pos - originRowFieldCount;
-        if (partitionIndex >= 0 && partitionIndex < partitionKeys.size()) {
-            String partitionKey = partitionKeys.get(partitionIndex);
-            return partitionValues.get(partitionKey);
-        }
-        return null;
-    }
-
-    private Map<String, String> parsePartitionString(@Nullable String partitionString) {
-        Map<String, String> values = new LinkedHashMap<>();
-
-        if (partitionString == null || partitionKeys.isEmpty()) {
-            return values;
-        }
-
-        if (partitionKeys.size() == 1) {
-            // Single partition: entire string is the value
-            values.put(partitionKeys.get(0), partitionString);
-        } else {
-            // Multi-partition: parse "key1=value1/key2=value2"
-            String[] parts = partitionString.split("/");
-            for (String part : parts) {
-                String[] keyValue = part.split("=", 2);
-                if (keyValue.length == 2) {
-                    String key = keyValue[0].trim();
-                    String value = keyValue[1].trim();
-                    values.put(key, value);
-                }
-            }
-        }
-
-        return values;
     }
 }

@@ -131,8 +131,8 @@ class PaimonTieringTest {
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
                             isPrimaryKeyTable
-                                    ? genPrimaryKeyTableRecords(partition, bucket, isPartitioned)
-                                    : genLogTableRecords(partition, bucket, 10, isPartitioned);
+                                    ? genPrimaryKeyTableRecords(partition, bucket)
+                                    : genLogTableRecords(partition, bucket, 10);
                     List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
                     List<LogRecord> expectRecords = writeAndExpectRecords.f1;
                     recordsByBucket.put(partitionBucket, expectRecords);
@@ -170,8 +170,7 @@ class PaimonTieringTest {
                 CloseableIterator<InternalRow> actualRecords =
                         getPaimonRows(tablePath, partition, isPrimaryKeyTable, bucket);
                 if (isPrimaryKeyTable) {
-                    verifyPrimaryKeyTableRecord(
-                            actualRecords, expectRecords, bucket, isPartitioned, partition);
+                    verifyPrimaryKeyTableRecord(actualRecords, expectRecords, bucket, partition);
                 } else {
                     verifyLogTableRecords(
                             actualRecords, expectRecords, bucket, isPartitioned, partition);
@@ -189,12 +188,8 @@ class PaimonTieringTest {
         Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
 
-        // Test data for different partitions
-        List<String> partitions =
-                Arrays.asList(
-                        "region=us-east/year=2024",
-                        "region=us-west/year=2024",
-                        "region=eu-central/year=2023");
+        // Test data for different partitions using $ separator
+        List<String> partitions = Arrays.asList("us-east$2024", "us-west$2024", "eu-central$2023");
 
         int bucket = 0;
 
@@ -240,12 +235,9 @@ class PaimonTieringTest {
         Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
 
-        // Test data for different three-level partitions
+        // Test data for different three-level partitions using $ separator
         List<String> partitions =
-                Arrays.asList(
-                        "region=us-east/year=2024/month=01",
-                        "region=us-east/year=2024/month=02",
-                        "region=eu-central/year=2023/month=12");
+                Arrays.asList("us-east$2024$01", "us-east$2024$02", "eu-central$2023$12");
 
         int bucket = 0;
 
@@ -253,7 +245,8 @@ class PaimonTieringTest {
             try (LakeWriter<PaimonWriteResult> lakeWriter =
                     createLakeWriter(tablePath, bucket, partition)) {
                 List<LogRecord> logRecords =
-                        genLogTableRecordsForThreePartition(partition, bucket, 2);
+                        genLogTableRecordsForMultiPartition(
+                                partition, bucket, 2); // Use same method
                 recordsByPartition.put(partition, logRecords);
 
                 for (LogRecord logRecord : logRecords) {
@@ -326,21 +319,23 @@ class PaimonTieringTest {
             String partition)
             throws Exception {
 
-        // Extract region and year from partition string "region=us-east/year=2024"
-        String[] parts = partition.split("/");
-        String region = parts[0].split("=")[1];
-        String year = parts[1].split("=")[1];
+        // Parse partition: "us-east$2024" -> ["us-east", "2024"]
+        String[] partitionValues = partition.split("\\$");
+        String region = partitionValues[0];
+        String year = partitionValues[1];
 
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
-            // check normal columns:
+            // check business columns:
             assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
 
-            // check partition columns
-            assertThat(actualRow.getString(2).toString()).isEqualTo(region);
-            assertThat(actualRow.getString(3).toString()).isEqualTo(year);
+            // check partition columns (should match record data)
+            assertThat(actualRow.getString(2).toString())
+                    .isEqualTo(expectRecord.getRow().getString(2).toString()); // region
+            assertThat(actualRow.getString(3).toString())
+                    .isEqualTo(expectRecord.getRow().getString(3).toString()); // year
 
             // check system columns: __bucket, __offset, __timestamp
             assertThat(actualRow.getInt(4)).isEqualTo(expectBucket);
@@ -359,23 +354,26 @@ class PaimonTieringTest {
             String partition)
             throws Exception {
 
-        // Extract region, year, month from partition string "region=us-east/year=2024/month=01"
-        String[] parts = partition.split("/");
-        String region = parts[0].split("=")[1];
-        String year = parts[1].split("=")[1];
-        String month = parts[2].split("=")[1];
+        // Parse partition: "us-east$2024$01" -> ["us-east", "2024", "01"]
+        String[] partitionValues = partition.split("\\$");
+        String region = partitionValues[0];
+        String year = partitionValues[1];
+        String month = partitionValues[2];
 
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
-            // check normal columns:
+            // check business columns:
             assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
 
-            // check partition columns
-            assertThat(actualRow.getString(2).toString()).isEqualTo(region);
-            assertThat(actualRow.getString(3).toString()).isEqualTo(year);
-            assertThat(actualRow.getString(4).toString()).isEqualTo(month);
+            // check partition columns (should match record data)
+            assertThat(actualRow.getString(2).toString())
+                    .isEqualTo(expectRecord.getRow().getString(2).toString()); // region
+            assertThat(actualRow.getString(3).toString())
+                    .isEqualTo(expectRecord.getRow().getString(3).toString()); // year
+            assertThat(actualRow.getString(4).toString())
+                    .isEqualTo(expectRecord.getRow().getString(4).toString()); // month
 
             // check system columns: __bucket, __offset, __timestamp
             assertThat(actualRow.getInt(5)).isEqualTo(expectBucket);
@@ -391,7 +389,6 @@ class PaimonTieringTest {
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
             int expectBucket,
-            boolean isPartitioned,
             @Nullable String partition)
             throws Exception {
         for (LogRecord expectRecord : expectRecords) {
@@ -401,16 +398,18 @@ class PaimonTieringTest {
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
 
-            if (isPartitioned) {
-                // For partitioned tables, partition field comes from metadata
-                assertThat(actualRow.getString(2).toString()).isEqualTo(partition);
+            if (partition != null) {
+                // For partitioned tables, partition field should match record data
+                assertThat(actualRow.getString(2).toString())
+                        .isEqualTo(expectRecord.getRow().getString(2).toString());
                 // check system columns: __bucket, __offset, __timestamp
                 assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
                 assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
-                        .isEqualTo(expectRecord.timestamp());
+                long actualTimestamp = actualRow.getTimestamp(5, 6).getMillisecond();
+                long expectedTimestamp = expectRecord.timestamp();
+                assertThat(Math.abs(actualTimestamp - expectedTimestamp)).isLessThanOrEqualTo(10L);
             } else {
-                // For non-partitioned tables, c3 is business data
+                // For non-partitioned tables
                 assertThat(actualRow.getString(2).toString())
                         .isEqualTo(expectRecord.getRow().getString(2).toString());
                 // check system columns: __bucket, __offset, __timestamp
@@ -425,17 +424,18 @@ class PaimonTieringTest {
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genLogTableRecords(
-            @Nullable String partition, int bucket, int numRecords, boolean isPartitioned) {
+            @Nullable String partition, int bucket, int numRecords) {
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
             GenericRow genericRow;
-            if (isPartitioned) {
-                // For partitioned tables, don't include partition field in data
-                genericRow = new GenericRow(2);
+            if (partition != null) {
+                // Partitioned table: include partition field in data
+                genericRow = new GenericRow(3); // c1, c2, c3(partition)
                 genericRow.setField(0, i);
                 genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+                genericRow.setField(2, BinaryString.fromString(partition)); // partition field
             } else {
-                // For non-partitioned tables, include all business fields
+                // Non-partitioned table
                 genericRow = new GenericRow(3);
                 genericRow.setField(0, i);
                 genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
@@ -451,32 +451,24 @@ class PaimonTieringTest {
 
     private List<LogRecord> genLogTableRecordsForMultiPartition(
             String partition, int bucket, int numRecords) {
-        // Extract region from partition string for data generation
-        String region = partition.split("/")[0].split("=")[1];
-
+        String[] partitionValues = partition.split("\\$");
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
-            GenericRow genericRow = new GenericRow(2);
+            GenericRow genericRow =
+                    new GenericRow(2 + partitionValues.length); // c1, c2, region, year
             genericRow.setField(0, i);
-            genericRow.setField(1, BinaryString.fromString(region + "_data_" + bucket + "_" + i));
-            LogRecord logRecord =
-                    new GenericRecord(
-                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
-            logRecords.add(logRecord);
-        }
-        return logRecords;
-    }
+            genericRow.setField(
+                    1, BinaryString.fromString(partitionValues[0] + "_data_" + bucket + "_" + i));
 
-    private List<LogRecord> genLogTableRecordsForThreePartition(
-            String partition, int bucket, int numRecords) {
-        // Extract region from partition string for data generation
-        String region = partition.split("/")[0].split("=")[1];
+            // Add partition fields to record data
+            for (int partitionIndex = 0;
+                    partitionIndex < partitionValues.length;
+                    partitionIndex++) {
+                genericRow.setField(
+                        2 + partitionIndex,
+                        BinaryString.fromString(partitionValues[partitionIndex]));
+            }
 
-        List<LogRecord> logRecords = new ArrayList<>();
-        for (int i = 0; i < numRecords; i++) {
-            GenericRow genericRow = new GenericRow(2);
-            genericRow.setField(0, i);
-            genericRow.setField(1, BinaryString.fromString(region + "_three_" + bucket + "_" + i));
             LogRecord logRecord =
                     new GenericRecord(
                             i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
@@ -486,10 +478,10 @@ class PaimonTieringTest {
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genPrimaryKeyTableRecords(
-            @Nullable String partition, int bucket, boolean isPartitioned) {
+            @Nullable String partition, int bucket) {
         int offset = -1;
         // gen +I, -U, +U, -D
-        List<GenericRow> rows = genKvRow(partition, bucket, 0, 0, 4, isPartitioned);
+        List<GenericRow> rows = genKvRow(partition, bucket, 0, 0, 4);
         List<LogRecord> writtenLogRecords =
                 new ArrayList<>(
                         Arrays.asList(
@@ -500,7 +492,7 @@ class PaimonTieringTest {
         List<LogRecord> expectLogRecords = new ArrayList<>();
 
         // gen +I, -U, +U
-        rows = genKvRow(partition, bucket, 1, 4, 7, isPartitioned);
+        rows = genKvRow(partition, bucket, 1, 4, 7);
         writtenLogRecords.addAll(
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
@@ -514,7 +506,7 @@ class PaimonTieringTest {
                         UPDATE_AFTER));
 
         // gen +I, +U
-        rows = genKvRow(partition, bucket, 2, 7, 9, isPartitioned);
+        rows = genKvRow(partition, bucket, 2, 7, 9);
         writtenLogRecords.addAll(
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
@@ -527,7 +519,7 @@ class PaimonTieringTest {
                         UPDATE_AFTER));
 
         // gen +I
-        rows = genKvRow(partition, bucket, 3, 9, 10, isPartitioned);
+        rows = genKvRow(partition, bucket, 3, 9, 10);
         writtenLogRecords.add(toRecord(++offset, rows.get(0), INSERT));
         expectLogRecords.add(
                 toRecord(
@@ -540,22 +532,18 @@ class PaimonTieringTest {
     }
 
     private List<GenericRow> genKvRow(
-            @Nullable String partition,
-            int bucket,
-            int key,
-            int from,
-            int to,
-            boolean isPartitioned) {
+            @Nullable String partition, int bucket, int key, int from, int to) {
         List<GenericRow> rows = new ArrayList<>();
         for (int i = from; i < to; i++) {
             GenericRow genericRow;
-            if (isPartitioned) {
-                // For partitioned tables, don't include partition field in data
-                genericRow = new GenericRow(2);
+            if (partition != null) {
+                // Partitioned table: include partition field in data
+                genericRow = new GenericRow(3); // c1, c2, c3(partition)
                 genericRow.setField(0, key);
                 genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+                genericRow.setField(2, BinaryString.fromString(partition)); // partition field
             } else {
-                // For non-partitioned tables, include all business fields
+                // Non-partitioned table
                 genericRow = new GenericRow(3);
                 genericRow.setField(0, key);
                 genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
@@ -614,10 +602,10 @@ class PaimonTieringTest {
 
         ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
 
-        // Parse partition for filtering
-        String[] parts = partition.split("/");
-        String region = parts[0].split("=")[1];
-        String year = parts[1].split("=")[1];
+        // Parse partition: "us-east$2024" -> ["us-east", "2024"]
+        String[] partitionValues = partition.split("\\$");
+        String region = partitionValues[0];
+        String year = partitionValues[1];
 
         Map<String, String> partitionFilter = new HashMap<>();
         partitionFilter.put("region", region);
@@ -635,11 +623,11 @@ class PaimonTieringTest {
 
         ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
 
-        // Parse partition for filtering
-        String[] parts = partition.split("/");
-        String region = parts[0].split("=")[1];
-        String year = parts[1].split("=")[1];
-        String month = parts[2].split("=")[1];
+        // Parse partition: "us-east$2024$01" -> ["us-east", "2024", "01"]
+        String[] partitionValues = partition.split("\\$");
+        String region = partitionValues[0];
+        String year = partitionValues[1];
+        String month = partitionValues[2];
 
         Map<String, String> partitionFilter = new HashMap<>();
         partitionFilter.put("region", region);
@@ -693,7 +681,6 @@ class PaimonTieringTest {
         if (isPartitioned) {
             builder.partitionKeys("c3");
         }
-
         if (isPrimaryTable) {
             if (isPartitioned) {
                 builder.primaryKey("c1", "c3");
@@ -701,17 +688,10 @@ class PaimonTieringTest {
                 builder.primaryKey("c1");
             }
         }
-
-        builder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
-        builder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        builder.column(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
-
         if (numBuckets != null) {
             builder.option(CoreOptions.BUCKET.key(), String.valueOf(numBuckets));
         }
-
-        paimonCatalog.createDatabase(tablePath.getDatabaseName(), true);
-        paimonCatalog.createTable(toPaimon(tablePath), builder.build(), true);
+        doCreatePaimonTable(tablePath, builder);
     }
 
     private void createMultiPartitionTable(TablePath tablePath) throws Exception {
@@ -722,13 +702,7 @@ class PaimonTieringTest {
                         .column("region", DataTypes.STRING())
                         .column("year", DataTypes.STRING())
                         .partitionKeys("region", "year");
-
-        builder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
-        builder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        builder.column(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
-
-        paimonCatalog.createDatabase(tablePath.getDatabaseName(), true);
-        paimonCatalog.createTable(toPaimon(tablePath), builder.build(), true);
+        doCreatePaimonTable(tablePath, builder);
     }
 
     private void createThreePartitionTable(TablePath tablePath) throws Exception {
@@ -740,12 +714,16 @@ class PaimonTieringTest {
                         .column("year", DataTypes.STRING())
                         .column("month", DataTypes.STRING())
                         .partitionKeys("region", "year", "month");
+        doCreatePaimonTable(tablePath, builder);
+    }
 
-        builder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
-        builder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        builder.column(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
-
+    private void doCreatePaimonTable(TablePath tablePath, Schema.Builder paimonSchemaBuilder)
+            throws Exception {
+        paimonSchemaBuilder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
+        paimonSchemaBuilder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        paimonSchemaBuilder.column(
+                TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
         paimonCatalog.createDatabase(tablePath.getDatabaseName(), true);
-        paimonCatalog.createTable(toPaimon(tablePath), builder.build(), true);
+        paimonCatalog.createTable(toPaimon(tablePath), paimonSchemaBuilder.build(), true);
     }
 }

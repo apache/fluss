@@ -45,9 +45,7 @@ class FlussRecordAsPaimonRowTest {
     void testLogTableRecordAllTypes() {
         // Construct a FlussRecordAsPaimonRow instance
         int bucket = 0;
-        List<String> partitionKeys = Collections.emptyList(); // No partitions for this test
-        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(bucket, partitionKeys);
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(14);
@@ -66,7 +64,7 @@ class FlussRecordAsPaimonRowTest {
         genericRow.setField(12, new byte[] {1, 2, 3, 4});
         genericRow.setField(13, null);
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord, null); // Pass null partition string
+        flussRecordAsPaimonRow.setFlussRecord(logRecord); // Pass null partition string
 
         // verify FlussRecordAsPaimonRow normal columns
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
@@ -104,15 +102,14 @@ class FlussRecordAsPaimonRowTest {
     void testPrimaryKeyTableRecord() {
         int bucket = 0;
         List<String> partitionKeys = Collections.emptyList();
-        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(bucket, partitionKeys);
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
         genericRow.setField(0, true);
 
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, INSERT, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
 
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
         // normal columns + system columns
@@ -121,15 +118,15 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
 
         logRecord = new GenericRecord(logOffset, timeStamp, UPDATE_BEFORE, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.UPDATE_BEFORE);
 
         logRecord = new GenericRecord(logOffset, timeStamp, UPDATE_AFTER, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.UPDATE_AFTER);
 
         logRecord = new GenericRecord(logOffset, timeStamp, DELETE, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord, null);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.DELETE);
     }
 }

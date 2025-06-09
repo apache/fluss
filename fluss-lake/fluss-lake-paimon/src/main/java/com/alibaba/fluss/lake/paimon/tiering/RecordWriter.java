@@ -36,7 +36,6 @@ public abstract class RecordWriter<T> implements AutoCloseable {
     protected final TableWriteImpl<T> tableWrite;
     protected final int bucket;
     @Nullable protected final BinaryRow partition;
-    @Nullable protected final String partitionString;
     protected final FlussRecordAsPaimonRow flussRecordAsPaimonRow;
 
     public RecordWriter(
@@ -47,9 +46,7 @@ public abstract class RecordWriter<T> implements AutoCloseable {
         this.tableWrite = tableWrite;
         this.bucket = tableBucket.getBucket();
         this.partition = toPaimonPartitionBinaryRow(partitionKeys, partition);
-        this.partitionString = partition; // Store for FlussRecordAsPaimonRow
-        this.flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket.getBucket(), partitionKeys);
+        this.flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(tableBucket.getBucket());
     }
 
     public abstract void write(LogRecord record) throws Exception;
