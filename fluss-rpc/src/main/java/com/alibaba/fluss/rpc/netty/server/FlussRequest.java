@@ -21,6 +21,10 @@ import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.RequestType;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
 import java.util.concurrent.CompletableFuture;
@@ -29,6 +33,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Represents a request received from Fluss protocol channel. */
 public final class FlussRequest implements RpcRequest {
+    private static final Logger LOG = LoggerFactory.getLogger(FlussRequest.class);
 
     private final short apiKey;
     private final short apiVersion;
@@ -101,7 +106,7 @@ public final class FlussRequest implements RpcRequest {
 
     public void releaseBuffer() {
         if (message.isLazilyParsed()) {
-            buffer.release();
+            ReferenceCountUtil.safeRelease(buffer);
         }
     }
 
