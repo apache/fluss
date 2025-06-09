@@ -14,3 +14,4 @@
 # limitations under the License.
 #
 com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin
+com.alibaba.fluss.security.auth.sasl.authenticator.SaslAuthenticationPlugin

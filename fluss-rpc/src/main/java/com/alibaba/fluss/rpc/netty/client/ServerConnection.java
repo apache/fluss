@@ -50,12 +50,15 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.IOException;
 import java.net.ConnectException;
+import java.net.InetSocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+
+import static com.alibaba.fluss.utils.IOUtils.closeQuietly;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
 @ThreadSafe
@@ -203,6 +206,7 @@ final class ServerConnection {
             connectionMetricGroup.close();
         }
 
+        closeQuietly(authenticator);
         return closeFuture;
     }
 
@@ -380,15 +384,25 @@ final class ServerConnection {
     }
 
     private void sendInitialToken() {
-        authenticator.initialize(new DefaultAuthenticateContext());
+        try {
+            authenticator.initialize(new DefaultAuthenticateContext());
+        } catch (Exception e) {
+            LOG.error("Failed to initialize authenticator", e);
+            close(e);
+            return;
+        }
+
         LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
-        sendAuthenticateRequest(new byte[0]);
+        sendAuthenticateRequest(new byte[0], true);
     }
 
-    private void sendAuthenticateRequest(byte[] challenge) {
+    private void sendAuthenticateRequest(byte[] challenge, boolean initialToken) {
         try {
             if (!authenticator.isCompleted()) {
-                byte[] token = authenticator.authenticate(challenge);
+                byte[] token =
+                        initialToken && !authenticator.hasInitialTokenResponse()
+                                ? challenge
+                                : authenticator.authenticate(challenge);
                 if (token != null) {
                     switchState(ConnectionState.AUTHENTICATING);
                     AuthenticateRequest request =
@@ -405,10 +419,7 @@ final class ServerConnection {
             switchState(ConnectionState.READY);
 
         } catch (Exception e) {
-            LOG.error(
-                    "Authentication failed when authenticating challenge: {}",
-                    new String(challenge),
-                    e);
+            LOG.error("Authentication failed when authenticating challenge。", e);
             close(
                     new FlussRuntimeException(
                             "Authentication failed when authenticating challenge", e));
@@ -437,7 +448,7 @@ final class ServerConnection {
 
             AuthenticateResponse authenticateResponse = (AuthenticateResponse) response;
             if (authenticateResponse.hasChallenge()) {
-                sendAuthenticateRequest(((AuthenticateResponse) response).getChallenge());
+                sendAuthenticateRequest(((AuthenticateResponse) response).getChallenge(), false);
             } else if (authenticator.isCompleted()) {
                 switchState(ConnectionState.READY);
             } else {
@@ -544,6 +555,10 @@ final class ServerConnection {
         }
     }
 
-    private static class DefaultAuthenticateContext
-            implements ClientAuthenticator.AuthenticateContext {}
+    private class DefaultAuthenticateContext implements ClientAuthenticator.AuthenticateContext {
+        @Override
+        public String ipAddress() {
+            return ((InetSocketAddress) channel.remoteAddress()).getAddress().getHostAddress();
+        }
+    }
 }

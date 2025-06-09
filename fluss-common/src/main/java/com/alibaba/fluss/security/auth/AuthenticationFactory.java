@@ -56,8 +56,6 @@ import java.util.stream.Collectors;
  */
 @PublicEvolving
 public class AuthenticationFactory {
-    private static final String SERVER_AUTHENTICATOR_PREFIX = "security.";
-
     /**
      * Loads a supplier for a client authenticator based on the configuration.
      *

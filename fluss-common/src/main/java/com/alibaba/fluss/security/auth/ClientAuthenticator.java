@@ -21,15 +21,34 @@ import com.alibaba.fluss.exception.AuthenticationException;
 
 import javax.annotation.Nullable;
 
+import java.io.Closeable;
+
 /** Authenticator for client side. */
 @PublicEvolving
-public interface ClientAuthenticator {
+public interface ClientAuthenticator extends Closeable {
 
     /** The protocol name of the authenticator, which will send in the AuthenticateRequest. */
     String protocol();
 
     /** Initialize the authenticator. */
-    default void initialize(AuthenticateContext context) {}
+    default void initialize(AuthenticateContext context) throws AuthenticationException {}
+
+    /**
+     * Determines whether the client authenticator should proactively send an initial token to the
+     * server.
+     *
+     * <p>When this method returns {@code true}, it indicates that the client is the initiator of
+     * the authentication exchange and should actively call {@link #authenticate(byte[])
+     * authenticate(new byte[0])} to generate and send the initial token without waiting for a
+     * challenge from the server.
+     *
+     * @return {@code true} if the client should initiate authentication by sending an initial
+     *     token; {@code false} if the client expects to receive the first token or challenge from
+     *     the server.
+     */
+    default boolean hasInitialTokenResponse() {
+        return true;
+    }
 
     /**
      * * Generates the initial token or calculates a token based on the server's challenge, then
@@ -79,6 +98,10 @@ public interface ClientAuthenticator {
     /** Checks if the authentication from client side is completed. */
     boolean isCompleted();
 
+    default void close() {}
+
     /** The context of the authentication process. */
-    interface AuthenticateContext {}
+    interface AuthenticateContext {
+        String ipAddress();
+    }
 }

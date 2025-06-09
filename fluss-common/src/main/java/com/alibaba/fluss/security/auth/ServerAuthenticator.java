@@ -20,15 +20,27 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 
+import java.io.Closeable;
+import java.io.IOException;
+
 /**
  * Authenticator for server side.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface ServerAuthenticator {
+public interface ServerAuthenticator extends Closeable {
 
     String protocol();
+
+    default void matchProtocol(String protocol) throws AuthenticationException {
+        if (!protocol().equalsIgnoreCase(protocol)) {
+            throw new AuthenticationException(
+                    String.format(
+                            "Authenticate protocol not match: protocol of server is '%s' while protocol of client is '%s'",
+                            protocol(), protocol));
+        }
+    }
 
     /** Initialize the authenticator. */
     default void initialize(AuthenticateContext context) {}
@@ -83,6 +95,15 @@ public interface ServerAuthenticator {
      */
     FlussPrincipal createPrincipal();
 
+    /** Close the authenticator. */
+    default void close() throws IOException {}
+
     /** The context of the authentication process. */
-    interface AuthenticateContext {}
+    interface AuthenticateContext {
+        String ipAddress();
+
+        String listenerName();
+
+        String protocol();
+    }
 }
