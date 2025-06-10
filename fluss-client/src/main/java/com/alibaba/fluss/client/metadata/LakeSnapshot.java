@@ -47,4 +47,14 @@ public class LakeSnapshot {
     public Map<TableBucket, Long> getTableBucketsOffset() {
         return tableBucketsOffset;
     }
+
+    @Override
+    public String toString() {
+        return "LakeSnapshot{"
+                + "snapshotId="
+                + snapshotId
+                + ", tableBucketsOffset="
+                + tableBucketsOffset
+                + '}';
+    }
 }
