@@ -48,7 +48,7 @@ public class AclProcedure extends ProcedureBase {
      * through the Flink SQL procedure interface. It delegates execution to the internalCall method.
      *
      * @param context The procedure context used for execution environment and resource access.
-     * @param aclType Type of ACL operation to perform. Valid values are:
+     * @param action Actoion of ACL operation to perform. Valid values are:
      *     <ul>
      *       <li>{@code ADD}: Adds an ACL entry.
      *       <li>{@code DROP}: Removes an ACL entry.
@@ -62,7 +62,7 @@ public class AclProcedure extends ProcedureBase {
      *       <li>{@code fluss-cluster.db_name.table_name} - table level
      *     </ul>
      *
-     * @param permissionType Permission type to grant or revoke. Common values include in {@link
+     * @param permission Permission type to grant or revoke. Common values include in {@link
      *     PermissionType}.
      * @param principal Principal (user or role) to apply the ACL to. Accepts:
      *     <ul>
@@ -85,23 +85,23 @@ public class AclProcedure extends ProcedureBase {
      */
     public String[] call(
             ProcedureContext context,
-            String aclType,
+            String action,
             String resource,
-            String permissionType,
+            String permission,
             String principal,
             String operation)
             throws ExecutionException, InterruptedException {
-        return internalCall(aclType, resource, permissionType, principal, operation);
+        return internalCall(action, resource, permission, principal, operation);
     }
 
     private String[] internalCall(
-            String aclType,
+            String action,
             String resource,
             String permissionType,
             String principal,
             String operation)
             throws ExecutionException, InterruptedException {
-        AclType type = AclType.valueOf(aclType);
+        Action type = Action.valueOf(action);
         PermissionType permission = PermissionType.valueOf(permissionType);
         FlussPrincipal flussPrincipal = parsePrincipal(principal);
         OperationType operationType = OperationType.valueOf(operation);
@@ -222,7 +222,7 @@ public class AclProcedure extends ProcedureBase {
         return resource;
     }
 
-    private enum AclType {
+    private enum Action {
         ADD,
         LIST,
         DROP

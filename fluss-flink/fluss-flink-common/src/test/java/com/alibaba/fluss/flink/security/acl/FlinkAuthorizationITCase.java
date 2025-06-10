@@ -414,12 +414,10 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         TableResult tableResult =
                 tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.acl('LIST', '%s', 'ALLOW', '%s', '%s')",
+                                "CALL %s.sys.acl( action => 'LIST', resource => '%s', permission => 'ALLOW', principal => '%s', operation  => '%s')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
-                                ResourceType.ANY == resource.getType()
-                                        ? "ANY"
-                                        : String.format("%s:%s", guest.getType(), guest.getName()),
+                                String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()));
         List<Row> rows = CollectionUtil.iteratorToList(tableResult.collect());
         return rows.stream().map(Row::toString).collect(Collectors.toList());
@@ -432,9 +430,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 "CALL %s.sys.acl('DROP', '%s', 'ANY', '%s', '%s')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
-                                ResourceType.ANY == resource.getType()
-                                        ? "ANY"
-                                        : String.format("%s:%s", guest.getType(), guest.getName()),
+                                String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()))
                 .await();
     }
