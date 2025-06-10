@@ -28,6 +28,7 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitMessage;
 
 import java.io.IOException;
+import java.util.List;
 
 import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
@@ -43,16 +44,20 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
         this.paimonCatalog = paimonCatalogProvider.get();
         FileStoreTable fileStoreTable = getTable(writerInitContext.tablePath());
 
+        List<String> partitionKeys = fileStoreTable.partitionKeys();
+
         this.recordWriter =
                 fileStoreTable.primaryKeys().isEmpty()
                         ? new AppendOnlyWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
-                                writerInitContext.partition())
+                                writerInitContext.partition(),
+                                partitionKeys)
                         : new MergeTreeWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
-                                writerInitContext.partition());
+                                writerInitContext.partition(),
+                                partitionKeys);
     }
 
     @Override

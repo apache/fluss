@@ -50,7 +50,8 @@ public class FlussRecordAsPaimonRow implements InternalRow {
     @Override
     public int getFieldCount() {
         return
-        // three system fields: bucket, offset, timestamp
+        //  business (including partitions) + system (three system fields: bucket, offset,
+        // timestamp)
         originRowFieldCount + 3;
     }
 

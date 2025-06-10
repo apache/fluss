@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.lake.paimon.utils;
 
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.ChangeType;
 
@@ -26,6 +27,8 @@ import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.types.RowKind;
 
 import javax.annotation.Nullable;
+
+import java.util.List;
 
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
@@ -50,14 +53,28 @@ public class PaimonConversions {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    public static BinaryRow toPaimonBinaryRow(@Nullable String value) {
-        if (value == null) {
+    public static BinaryRow toPaimonPartitionBinaryRow(
+            List<String> partitionKeys, @Nullable String partitionName) {
+        if (partitionName == null || partitionKeys.isEmpty()) {
             return BinaryRow.EMPTY_ROW;
         }
-        BinaryRow binaryRow = new BinaryRow(1);
-        BinaryRowWriter writer = new BinaryRowWriter(binaryRow);
-        writer.writeString(0, BinaryString.fromString(value));
+
+        //  Fluss's existing utility
+        ResolvedPartitionSpec resolvedPartitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+
+        BinaryRow partitionBinaryRow = new BinaryRow(partitionKeys.size());
+        BinaryRowWriter writer = new BinaryRowWriter(partitionBinaryRow);
+
+        List<String> partitionValues = resolvedPartitionSpec.getPartitionValues();
+        for (int i = 0; i < partitionKeys.size(); i++) {
+            // Todo Currently, partition column must be String datatype, so we can always use
+            // `BinaryString.fromString` to convert to Paimon's data structure. Revisit here when
+            // #489 is finished.
+            writer.writeString(i, BinaryString.fromString(partitionValues.get(i)));
+        }
+
         writer.complete();
-        return binaryRow;
+        return partitionBinaryRow;
     }
 }

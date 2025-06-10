@@ -83,7 +83,8 @@ class FlussRecordAsPaimonRowTest {
                 .isEqualTo(1698235273182L);
         assertThat(flussRecordAsPaimonRow.getBinary(12)).isEqualTo(new byte[] {1, 2, 3, 4});
         assertThat(flussRecordAsPaimonRow.isNullAt(13)).isTrue();
-        // verify FlussRecordAsPaimonRow system columns
+
+        // verify FlussRecordAsPaimonRow system columns (no partition fields, so indices stay same)
         assertThat(flussRecordAsPaimonRow.getInt(14)).isEqualTo(bucket);
         assertThat(flussRecordAsPaimonRow.getLong(15)).isEqualTo(logOffset);
         assertThat(flussRecordAsPaimonRow.getLong(16)).isEqualTo(timeStamp);
@@ -92,11 +93,7 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
 
         assertThat(flussRecordAsPaimonRow.getFieldCount())
-                .isEqualTo(
-                        14
-                                +
-                                // 3 is for system columns
-                                3);
+                .isEqualTo(14 + 3); // business  + system = 14 + 0 + 3 = 17
     }
 
     @Test

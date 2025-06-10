@@ -46,6 +46,7 @@ import org.apache.paimon.table.source.Split;
 import org.apache.paimon.types.DataTypes;
 import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -169,32 +170,200 @@ class PaimonTieringTest {
                 CloseableIterator<InternalRow> actualRecords =
                         getPaimonRows(tablePath, partition, isPrimaryKeyTable, bucket);
                 if (isPrimaryKeyTable) {
-                    verifyPrimaryKeyTableRecord(actualRecords, expectRecords, bucket);
+                    verifyPrimaryKeyTableRecord(actualRecords, expectRecords, bucket, partition);
                 } else {
-                    verifyLogTableRecords(actualRecords, expectRecords, bucket);
+                    verifyLogTableRecords(
+                            actualRecords, expectRecords, bucket, isPartitioned, partition);
                 }
             }
+        }
+    }
+
+    @Test
+    void testMultiPartitionTiering() throws Exception {
+        // Test multiple partitions: region + year
+        TablePath tablePath = TablePath.of("paimon", "test_multi_partition");
+        createMultiPartitionTable(tablePath);
+
+        Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
+        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+
+        // Test data for different partitions using $ separator
+        List<String> partitions = Arrays.asList("us-east$2024", "us-west$2024", "eu-central$2023");
+
+        int bucket = 0;
+
+        for (String partition : partitions) {
+            try (LakeWriter<PaimonWriteResult> lakeWriter =
+                    createLakeWriter(tablePath, bucket, partition)) {
+                List<LogRecord> logRecords =
+                        genLogTableRecordsForMultiPartition(partition, bucket, 3);
+                recordsByPartition.put(partition, logRecords);
+
+                for (LogRecord logRecord : logRecords) {
+                    lakeWriter.write(logRecord);
+                }
+
+                PaimonWriteResult result = lakeWriter.complete();
+                paimonWriteResults.add(result);
+            }
+        }
+
+        // Commit all data
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath)) {
+            PaimonCommittable committable = lakeCommitter.toCommitable(paimonWriteResults);
+            long snapshot = lakeCommitter.commit(committable);
+            assertThat(snapshot).isEqualTo(1);
+        }
+
+        // Verify data for each partition
+        for (String partition : partitions) {
+            List<LogRecord> expectRecords = recordsByPartition.get(partition);
+            CloseableIterator<InternalRow> actualRecords =
+                    getPaimonRowsMultiPartition(tablePath, partition);
+            verifyLogTableRecordsMultiPartition(actualRecords, expectRecords, bucket);
+        }
+    }
+
+    @Test
+    void testThreePartitionTiering() throws Exception {
+        // Test three partitions: region + year + month
+        TablePath tablePath = TablePath.of("paimon", "test_three_partition");
+        createThreePartitionTable(tablePath);
+
+        Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
+        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+
+        // Test data for different three-level partitions using $ separator
+        List<String> partitions =
+                Arrays.asList("us-east$2024$01", "us-east$2024$02", "eu-central$2023$12");
+
+        int bucket = 0;
+
+        for (String partition : partitions) {
+            try (LakeWriter<PaimonWriteResult> lakeWriter =
+                    createLakeWriter(tablePath, bucket, partition)) {
+                List<LogRecord> logRecords =
+                        genLogTableRecordsForMultiPartition(
+                                partition, bucket, 2); // Use same method
+                recordsByPartition.put(partition, logRecords);
+
+                for (LogRecord logRecord : logRecords) {
+                    lakeWriter.write(logRecord);
+                }
+
+                PaimonWriteResult result = lakeWriter.complete();
+                paimonWriteResults.add(result);
+            }
+        }
+
+        // Commit all data
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath)) {
+            PaimonCommittable committable = lakeCommitter.toCommitable(paimonWriteResults);
+            long snapshot = lakeCommitter.commit(committable);
+            assertThat(snapshot).isEqualTo(1);
+        }
+
+        // Verify data for each partition
+        for (String partition : partitions) {
+            List<LogRecord> expectRecords = recordsByPartition.get(partition);
+            CloseableIterator<InternalRow> actualRecords =
+                    getPaimonRowsThreePartition(tablePath, partition);
+            verifyLogTableRecordsThreePartition(actualRecords, expectRecords, bucket);
         }
     }
 
     private void verifyLogTableRecords(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
+            int expectBucket,
+            boolean isPartitioned,
+            @Nullable String partition)
+            throws Exception {
+        for (LogRecord expectRecord : expectRecords) {
+            InternalRow actualRow = actualRecords.next();
+            // check business columns:
+            assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
+            assertThat(actualRow.getString(1).toString())
+                    .isEqualTo(expectRecord.getRow().getString(1).toString());
+
+            if (isPartitioned) {
+                // For partitioned tables, partition field comes from metadata
+                assertThat(actualRow.getString(2).toString()).isEqualTo(partition);
+                // check system columns: __bucket, __offset, __timestamp
+                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
+                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
+                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
+                        .isEqualTo(expectRecord.timestamp());
+            } else {
+                // For non-partitioned tables, c3 is business data
+                assertThat(actualRow.getString(2).toString())
+                        .isEqualTo(expectRecord.getRow().getString(2).toString());
+                // check system columns: __bucket, __offset, __timestamp
+                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
+                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
+                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
+                        .isEqualTo(expectRecord.timestamp());
+            }
+        }
+        assertThat(actualRecords.hasNext()).isFalse();
+        actualRecords.close();
+    }
+
+    private void verifyLogTableRecordsMultiPartition(
+            CloseableIterator<InternalRow> actualRecords,
+            List<LogRecord> expectRecords,
             int expectBucket)
             throws Exception {
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
-            // check normal columns:
+            // check business columns:
             assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
+
+            // check partition columns (should match record data)
             assertThat(actualRow.getString(2).toString())
-                    .isEqualTo(expectRecord.getRow().getString(2).toString());
+                    .isEqualTo(expectRecord.getRow().getString(2).toString()); // region
+            assertThat(actualRow.getString(3).toString())
+                    .isEqualTo(expectRecord.getRow().getString(3).toString()); // year
 
             // check system columns: __bucket, __offset, __timestamp
-            assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
-            assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-            assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
+            assertThat(actualRow.getInt(4)).isEqualTo(expectBucket);
+            assertThat(actualRow.getLong(5)).isEqualTo(expectRecord.logOffset());
+            assertThat(actualRow.getTimestamp(6, 6).getMillisecond())
+                    .isEqualTo(expectRecord.timestamp());
+        }
+        assertThat(actualRecords.hasNext()).isFalse();
+        actualRecords.close();
+    }
+
+    private void verifyLogTableRecordsThreePartition(
+            CloseableIterator<InternalRow> actualRecords,
+            List<LogRecord> expectRecords,
+            int expectBucket)
+            throws Exception {
+        for (LogRecord expectRecord : expectRecords) {
+            InternalRow actualRow = actualRecords.next();
+            // check business columns:
+            assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
+            assertThat(actualRow.getString(1).toString())
+                    .isEqualTo(expectRecord.getRow().getString(1).toString());
+
+            // check partition columns (should match record data)
+            assertThat(actualRow.getString(2).toString())
+                    .isEqualTo(expectRecord.getRow().getString(2).toString()); // region
+            assertThat(actualRow.getString(3).toString())
+                    .isEqualTo(expectRecord.getRow().getString(3).toString()); // year
+            assertThat(actualRow.getString(4).toString())
+                    .isEqualTo(expectRecord.getRow().getString(4).toString()); // month
+
+            // check system columns: __bucket, __offset, __timestamp
+            assertThat(actualRow.getInt(5)).isEqualTo(expectBucket);
+            assertThat(actualRow.getLong(6)).isEqualTo(expectRecord.logOffset());
+            assertThat(actualRow.getTimestamp(7, 6).getMillisecond())
                     .isEqualTo(expectRecord.timestamp());
         }
         assertThat(actualRecords.hasNext()).isFalse();
@@ -204,22 +373,36 @@ class PaimonTieringTest {
     private void verifyPrimaryKeyTableRecord(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
-            int expectBucket)
+            int expectBucket,
+            @Nullable String partition)
             throws Exception {
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
-            // check normal columns:
+            // check business columns:
             assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
-            assertThat(actualRow.getString(2).toString())
-                    .isEqualTo(expectRecord.getRow().getString(2).toString());
 
-            // check system columns: __bucket, __offset, __timestamp
-            assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
-            assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-            assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
-                    .isEqualTo(expectRecord.timestamp());
+            if (partition != null) {
+                // For partitioned tables, partition field should match record data
+                assertThat(actualRow.getString(2).toString())
+                        .isEqualTo(expectRecord.getRow().getString(2).toString());
+                // check system columns: __bucket, __offset, __timestamp
+                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
+                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
+                long actualTimestamp = actualRow.getTimestamp(5, 6).getMillisecond();
+                long expectedTimestamp = expectRecord.timestamp();
+                assertThat(Math.abs(actualTimestamp - expectedTimestamp)).isLessThanOrEqualTo(10L);
+            } else {
+                // For non-partitioned tables
+                assertThat(actualRow.getString(2).toString())
+                        .isEqualTo(expectRecord.getRow().getString(2).toString());
+                // check system columns: __bucket, __offset, __timestamp
+                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
+                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
+                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
+                        .isEqualTo(expectRecord.timestamp());
+            }
         }
         assertThat(actualRecords.hasNext()).isFalse();
         actualRecords.close();
@@ -229,20 +412,54 @@ class PaimonTieringTest {
             @Nullable String partition, int bucket, int numRecords) {
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
-            GenericRow genericRow = new GenericRow(3);
-            genericRow.setField(0, i);
-            genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
-            genericRow.setField(
-                    2,
-                    partition == null
-                            ? BinaryString.fromString("bucket" + bucket)
-                            : BinaryString.fromString(partition));
+            GenericRow genericRow;
+            if (partition != null) {
+                // Partitioned table: include partition field in data
+                genericRow = new GenericRow(3); // c1, c2, c3(partition)
+                genericRow.setField(0, i);
+                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+                genericRow.setField(2, BinaryString.fromString(partition)); // partition field
+            } else {
+                // Non-partitioned table
+                genericRow = new GenericRow(3);
+                genericRow.setField(0, i);
+                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+                genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            }
             LogRecord logRecord =
                     new GenericRecord(
                             i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
             logRecords.add(logRecord);
         }
         return Tuple2.of(logRecords, logRecords);
+    }
+
+    private List<LogRecord> genLogTableRecordsForMultiPartition(
+            String partition, int bucket, int numRecords) {
+        String[] partitionValues = partition.split("\\$");
+        List<LogRecord> logRecords = new ArrayList<>();
+        for (int i = 0; i < numRecords; i++) {
+            GenericRow genericRow =
+                    new GenericRow(2 + partitionValues.length); // c1, c2, region, year
+            genericRow.setField(0, i);
+            genericRow.setField(
+                    1, BinaryString.fromString(partitionValues[0] + "_data_" + bucket + "_" + i));
+
+            // Add partition fields to record data
+            for (int partitionIndex = 0;
+                    partitionIndex < partitionValues.length;
+                    partitionIndex++) {
+                genericRow.setField(
+                        2 + partitionIndex,
+                        BinaryString.fromString(partitionValues[partitionIndex]));
+            }
+
+            LogRecord logRecord =
+                    new GenericRecord(
+                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+            logRecords.add(logRecord);
+        }
+        return logRecords;
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genPrimaryKeyTableRecords(
@@ -266,12 +483,7 @@ class PaimonTieringTest {
                         toRecord(++offset, rows.get(0), INSERT),
                         toRecord(++offset, rows.get(1), UPDATE_BEFORE),
                         toRecord(++offset, rows.get(2), UPDATE_AFTER)));
-        expectLogRecords.add(
-                toRecord(
-                        offset,
-                        writtenLogRecords.get(writtenLogRecords.size() - 1).timestamp(),
-                        rows.get(2),
-                        UPDATE_AFTER));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         // gen +I, +U
         rows = genKvRow(partition, bucket, 2, 7, 9);
@@ -279,22 +491,12 @@ class PaimonTieringTest {
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
                         toRecord(++offset, rows.get(1), UPDATE_AFTER)));
-        expectLogRecords.add(
-                toRecord(
-                        offset,
-                        writtenLogRecords.get(writtenLogRecords.size() - 1).timestamp(),
-                        rows.get(1),
-                        UPDATE_AFTER));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         // gen +I
         rows = genKvRow(partition, bucket, 3, 9, 10);
         writtenLogRecords.add(toRecord(++offset, rows.get(0), INSERT));
-        expectLogRecords.add(
-                toRecord(
-                        offset,
-                        writtenLogRecords.get(writtenLogRecords.size() - 1).timestamp(),
-                        rows.get(0),
-                        INSERT));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         return Tuple2.of(writtenLogRecords, expectLogRecords);
     }
@@ -303,26 +505,27 @@ class PaimonTieringTest {
             @Nullable String partition, int bucket, int key, int from, int to) {
         List<GenericRow> rows = new ArrayList<>();
         for (int i = from; i < to; i++) {
-            GenericRow genericRow = new GenericRow(3);
-            genericRow.setField(0, key);
-            genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
-            genericRow.setField(
-                    2,
-                    partition == null
-                            ? BinaryString.fromString("bucket" + bucket)
-                            : BinaryString.fromString(partition));
+            GenericRow genericRow;
+            if (partition != null) {
+                // Partitioned table: include partition field in data
+                genericRow = new GenericRow(3); // c1, c2, c3(partition)
+                genericRow.setField(0, key);
+                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+                genericRow.setField(2, BinaryString.fromString(partition)); // partition field
+            } else {
+                // Non-partitioned table
+                genericRow = new GenericRow(3);
+                genericRow.setField(0, key);
+                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+                genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            }
             rows.add(genericRow);
         }
         return rows;
     }
 
     private GenericRecord toRecord(long offset, GenericRow row, ChangeType changeType) {
-        return toRecord(offset, System.currentTimeMillis(), row, changeType);
-    }
-
-    private GenericRecord toRecord(
-            long offset, long timestamp, GenericRow row, ChangeType changeType) {
-        return new GenericRecord(offset, timestamp, changeType, row);
+        return new GenericRecord(offset, System.currentTimeMillis(), changeType, row);
     }
 
     private CloseableIterator<InternalRow> getPaimonRows(
@@ -354,6 +557,50 @@ class PaimonTieringTest {
                 }
             }
         }
+        return readBuilder.newRead().createReader(splits).toCloseableIterator();
+    }
+
+    private CloseableIterator<InternalRow> getPaimonRowsMultiPartition(
+            TablePath tablePath, String partition) throws Exception {
+        Identifier identifier = toPaimon(tablePath);
+        FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
+
+        ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
+
+        // Parse partition: "us-east$2024" -> ["us-east", "2024"]
+        String[] partitionValues = partition.split("\\$");
+        String region = partitionValues[0];
+        String year = partitionValues[1];
+
+        Map<String, String> partitionFilter = new HashMap<>();
+        partitionFilter.put("region", region);
+        partitionFilter.put("year", year);
+        readBuilder = readBuilder.withPartitionFilter(partitionFilter);
+
+        List<Split> splits = readBuilder.newScan().plan().splits();
+        return readBuilder.newRead().createReader(splits).toCloseableIterator();
+    }
+
+    private CloseableIterator<InternalRow> getPaimonRowsThreePartition(
+            TablePath tablePath, String partition) throws Exception {
+        Identifier identifier = toPaimon(tablePath);
+        FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
+
+        ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
+
+        // Parse partition: "us-east$2024$01" -> ["us-east", "2024", "01"]
+        String[] partitionValues = partition.split("\\$");
+        String region = partitionValues[0];
+        String year = partitionValues[1];
+        String month = partitionValues[2];
+
+        Map<String, String> partitionFilter = new HashMap<>();
+        partitionFilter.put("region", region);
+        partitionFilter.put("year", year);
+        partitionFilter.put("month", month);
+        readBuilder = readBuilder.withPartitionFilter(partitionFilter);
+
+        List<Split> splits = readBuilder.newScan().plan().splits();
         return readBuilder.newRead().createReader(splits).toCloseableIterator();
     }
 
@@ -399,7 +646,6 @@ class PaimonTieringTest {
         if (isPartitioned) {
             builder.partitionKeys("c3");
         }
-
         if (isPrimaryTable) {
             if (isPartitioned) {
                 builder.primaryKey("c1", "c3");
@@ -407,16 +653,42 @@ class PaimonTieringTest {
                 builder.primaryKey("c1");
             }
         }
-
-        builder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
-        builder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        builder.column(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
-
         if (numBuckets != null) {
             builder.option(CoreOptions.BUCKET.key(), String.valueOf(numBuckets));
         }
+        doCreatePaimonTable(tablePath, builder);
+    }
 
+    private void createMultiPartitionTable(TablePath tablePath) throws Exception {
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("region", DataTypes.STRING())
+                        .column("year", DataTypes.STRING())
+                        .partitionKeys("region", "year");
+        doCreatePaimonTable(tablePath, builder);
+    }
+
+    private void createThreePartitionTable(TablePath tablePath) throws Exception {
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("region", DataTypes.STRING())
+                        .column("year", DataTypes.STRING())
+                        .column("month", DataTypes.STRING())
+                        .partitionKeys("region", "year", "month");
+        doCreatePaimonTable(tablePath, builder);
+    }
+
+    private void doCreatePaimonTable(TablePath tablePath, Schema.Builder paimonSchemaBuilder)
+            throws Exception {
+        paimonSchemaBuilder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
+        paimonSchemaBuilder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
+        paimonSchemaBuilder.column(
+                TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
         paimonCatalog.createDatabase(tablePath.getDatabaseName(), true);
-        paimonCatalog.createTable(toPaimon(tablePath), builder.build(), true);
+        paimonCatalog.createTable(toPaimon(tablePath), paimonSchemaBuilder.build(), true);
     }
 }

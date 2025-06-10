@@ -27,6 +27,8 @@ import org.apache.paimon.table.sink.TableWriteImpl;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+
 import static com.alibaba.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 
@@ -38,8 +40,11 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
     private final RowKeyExtractor rowKeyExtractor;
 
     public MergeTreeWriter(
-            FileStoreTable fileStoreTable, TableBucket tableBucket, @Nullable String partition) {
-        super(createTableWrite(fileStoreTable), tableBucket, partition);
+            FileStoreTable fileStoreTable,
+            TableBucket tableBucket,
+            @Nullable String partition,
+            List<String> partitionKeys) {
+        super(createTableWrite(fileStoreTable), tableBucket, partition, partitionKeys);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
     }
 
