@@ -158,10 +158,15 @@ public class RemoteLogDownloader implements Closeable {
             LOG.info(
                     "Start to download remote log segment file {} to local.",
                     fsPathAndFileName.getFileName());
+            long startTime = System.currentTimeMillis();
             remoteFileDownloader.transferAllToDirectory(
                     Collections.singletonList(fsPathAndFileName),
                     segmentPath,
                     new CloseableRegistry());
+            LOG.info(
+                    "Download remote log segment file {} to local cost {} ms.",
+                    fsPathAndFileName.getFileName(),
+                    System.currentTimeMillis() - startTime);
             File localFile = new File(segmentPath.toFile(), fsPathAndFileName.getFileName());
             scannerMetricGroup.remoteFetchBytes().inc(localFile.length());
             String segmentId = request.segment.remoteLogSegmentId().toString();

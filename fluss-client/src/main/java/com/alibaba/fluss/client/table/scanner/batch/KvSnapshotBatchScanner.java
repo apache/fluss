@@ -195,10 +195,15 @@ public class KvSnapshotBatchScanner implements BatchScanner {
                                         LOG.info(
                                                 "Start to download kv snapshot files to local directory for bucket {}.",
                                                 tableBucket);
+                                        long startTime = System.currentTimeMillis();
                                         remoteFileDownloader.transferAllToDirectory(
                                                 fsPathAndFileNames,
                                                 snapshotLocalDirectory,
                                                 closeableRegistry);
+                                        LOG.info(
+                                                "Download kv snapshot files to local directory for bucket {} cost {} ms.",
+                                                tableBucket,
+                                                System.currentTimeMillis() - startTime);
                                         snapshotFilesReader =
                                                 new SnapshotFilesReader(
                                                         kvFormat,
