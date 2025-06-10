@@ -338,6 +338,11 @@
                                         <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
                                         <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
                                         <!-- start exclude for flink tiering service -->
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceOptions</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource.Builder</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringWriterInitContext</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceReader</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultEmitter</exclude>
