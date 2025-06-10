@@ -234,7 +234,7 @@ public class PojoToRowConverterTest {
         assertThatThrownBy(() -> new PojoToRowConverter<>(ProductWithPrice.class, rowType))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
-                        "Field Java type class java.lang.Long for field id is not supported, the supported Java types are [int, class java.lang.Integer]");
+                        "Field Java type class java.lang.Long for field id is not supported, the supported Java types are [class java.lang.Integer, int]");
     }
 
     @Test
