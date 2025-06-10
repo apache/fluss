@@ -28,8 +28,6 @@ import org.apache.paimon.types.RowKind;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
-import java.util.Collections;
-import java.util.List;
 
 import static com.alibaba.fluss.record.ChangeType.APPEND_ONLY;
 import static com.alibaba.fluss.record.ChangeType.DELETE;
@@ -64,7 +62,7 @@ class FlussRecordAsPaimonRowTest {
         genericRow.setField(12, new byte[] {1, 2, 3, 4});
         genericRow.setField(13, null);
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord); // Pass null partition string
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
 
         // verify FlussRecordAsPaimonRow normal columns
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
@@ -101,7 +99,6 @@ class FlussRecordAsPaimonRowTest {
     @Test
     void testPrimaryKeyTableRecord() {
         int bucket = 0;
-        List<String> partitionKeys = Collections.emptyList();
         FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();

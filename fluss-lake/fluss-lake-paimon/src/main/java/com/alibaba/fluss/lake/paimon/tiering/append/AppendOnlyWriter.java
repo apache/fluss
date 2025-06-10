@@ -41,6 +41,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
+                        // todo: set ioManager to support write-buffer-spillable
                         fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER),
                 tableBucket,
                 partition,

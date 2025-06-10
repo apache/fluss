@@ -28,7 +28,6 @@ import org.apache.paimon.types.RowKind;
 
 import javax.annotation.Nullable;
 
-import java.util.Arrays;
 import java.util.List;
 
 /** Utils for conversion between Paimon and Fluss. */
@@ -77,9 +76,5 @@ public class PaimonConversions {
 
         writer.complete();
         return partitionBinaryRow;
-    }
-
-    public static BinaryRow toPaimonBinaryRow(@Nullable String value) {
-        return toPaimonPartitionBinaryRow(Arrays.asList("partition"), value);
     }
 }

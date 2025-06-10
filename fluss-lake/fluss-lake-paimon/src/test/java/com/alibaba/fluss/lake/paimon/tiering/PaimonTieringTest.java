@@ -221,8 +221,8 @@ class PaimonTieringTest {
         for (String partition : partitions) {
             List<LogRecord> expectRecords = recordsByPartition.get(partition);
             CloseableIterator<InternalRow> actualRecords =
-                    getPaimonRowsMultiPartition(tablePath, partition, bucket);
-            verifyLogTableRecordsMultiPartition(actualRecords, expectRecords, bucket, partition);
+                    getPaimonRowsMultiPartition(tablePath, partition);
+            verifyLogTableRecordsMultiPartition(actualRecords, expectRecords, bucket);
         }
     }
 
@@ -270,8 +270,8 @@ class PaimonTieringTest {
         for (String partition : partitions) {
             List<LogRecord> expectRecords = recordsByPartition.get(partition);
             CloseableIterator<InternalRow> actualRecords =
-                    getPaimonRowsThreePartition(tablePath, partition, bucket);
-            verifyLogTableRecordsThreePartition(actualRecords, expectRecords, bucket, partition);
+                    getPaimonRowsThreePartition(tablePath, partition);
+            verifyLogTableRecordsThreePartition(actualRecords, expectRecords, bucket);
         }
     }
 
@@ -315,15 +315,8 @@ class PaimonTieringTest {
     private void verifyLogTableRecordsMultiPartition(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
-            int expectBucket,
-            String partition)
+            int expectBucket)
             throws Exception {
-
-        // Parse partition: "us-east$2024" -> ["us-east", "2024"]
-        String[] partitionValues = partition.split("\\$");
-        String region = partitionValues[0];
-        String year = partitionValues[1];
-
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
             // check business columns:
@@ -350,16 +343,8 @@ class PaimonTieringTest {
     private void verifyLogTableRecordsThreePartition(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
-            int expectBucket,
-            String partition)
+            int expectBucket)
             throws Exception {
-
-        // Parse partition: "us-east$2024$01" -> ["us-east", "2024", "01"]
-        String[] partitionValues = partition.split("\\$");
-        String region = partitionValues[0];
-        String year = partitionValues[1];
-        String month = partitionValues[2];
-
         for (LogRecord expectRecord : expectRecords) {
             InternalRow actualRow = actualRecords.next();
             // check business columns:
@@ -498,12 +483,7 @@ class PaimonTieringTest {
                         toRecord(++offset, rows.get(0), INSERT),
                         toRecord(++offset, rows.get(1), UPDATE_BEFORE),
                         toRecord(++offset, rows.get(2), UPDATE_AFTER)));
-        expectLogRecords.add(
-                toRecord(
-                        offset,
-                        writtenLogRecords.get(writtenLogRecords.size() - 1).timestamp(),
-                        rows.get(2),
-                        UPDATE_AFTER));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         // gen +I, +U
         rows = genKvRow(partition, bucket, 2, 7, 9);
@@ -511,22 +491,12 @@ class PaimonTieringTest {
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
                         toRecord(++offset, rows.get(1), UPDATE_AFTER)));
-        expectLogRecords.add(
-                toRecord(
-                        offset,
-                        writtenLogRecords.get(writtenLogRecords.size() - 1).timestamp(),
-                        rows.get(1),
-                        UPDATE_AFTER));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         // gen +I
         rows = genKvRow(partition, bucket, 3, 9, 10);
         writtenLogRecords.add(toRecord(++offset, rows.get(0), INSERT));
-        expectLogRecords.add(
-                toRecord(
-                        offset,
-                        writtenLogRecords.get(writtenLogRecords.size() - 1).timestamp(),
-                        rows.get(0),
-                        INSERT));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         return Tuple2.of(writtenLogRecords, expectLogRecords);
     }
@@ -555,12 +525,7 @@ class PaimonTieringTest {
     }
 
     private GenericRecord toRecord(long offset, GenericRow row, ChangeType changeType) {
-        return toRecord(offset, System.currentTimeMillis(), row, changeType);
-    }
-
-    private GenericRecord toRecord(
-            long offset, long timestamp, GenericRow row, ChangeType changeType) {
-        return new GenericRecord(offset, timestamp, changeType, row);
+        return new GenericRecord(offset, System.currentTimeMillis(), changeType, row);
     }
 
     private CloseableIterator<InternalRow> getPaimonRows(
@@ -596,7 +561,7 @@ class PaimonTieringTest {
     }
 
     private CloseableIterator<InternalRow> getPaimonRowsMultiPartition(
-            TablePath tablePath, String partition, int bucket) throws Exception {
+            TablePath tablePath, String partition) throws Exception {
         Identifier identifier = toPaimon(tablePath);
         FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
 
@@ -617,7 +582,7 @@ class PaimonTieringTest {
     }
 
     private CloseableIterator<InternalRow> getPaimonRowsThreePartition(
-            TablePath tablePath, String partition, int bucket) throws Exception {
+            TablePath tablePath, String partition) throws Exception {
         Identifier identifier = toPaimon(tablePath);
         FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
 
