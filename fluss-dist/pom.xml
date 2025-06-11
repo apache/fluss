@@ -81,14 +81,6 @@
             <scope>provided</scope>
         </dependency>
 
-
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-lakehouse-paimon</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-lake-paimon</artifactId>
@@ -276,18 +268,6 @@
                         <configuration>
                             <descriptors>
                                 <descriptor>src/main/assemblies/plugins.xml</descriptor>
-                            </descriptors>
-                        </configuration>
-                    </execution>
-                    <execution>
-                        <id>opt</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>single</goal>
-                        </goals>
-                        <configuration>
-                            <descriptors>
-                                <descriptor>src/main/assemblies/opt.xml</descriptor>
                             </descriptors>
                         </configuration>
                     </execution>

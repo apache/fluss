@@ -361,10 +361,6 @@ Apache Kafka
 Apache Paimon
 ./fluss-common/src/main/java/com/alibaba/fluss/row/encode/paimon/PaimonBinaryRowWriter.java
 ./fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lakehouse/paimon/reader/PaimonSnapshotScanner.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/PaimonMultiTableSink.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/committable/PaimonMultiTableCommittableSerializer.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/committer/PaimonStoreMultiCommitter.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/operator/PaimonMultiWriterOperator.java
 
 Apache Spark
 ./fluss-rpc/src/main/java/com/alibaba/fluss/rpc/netty/NettyLogger.java
