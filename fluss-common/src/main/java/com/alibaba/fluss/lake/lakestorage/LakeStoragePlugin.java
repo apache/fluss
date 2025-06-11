@@ -14,27 +14,32 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.writer;
+package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.lakehouse.batch.RecordBatch;
-
-import java.io.IOException;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.plugin.Plugin;
 
 /**
- * The SupportsRecordBatchWrite interface for writing batches of records. It provides a method to
- * write a batch of records to the underlying storage.
+ * A Plugin to create instances of {@link LakeStorage}.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface SupportsRecordBatchWrite {
+public interface LakeStoragePlugin extends Plugin {
 
     /**
-     * Writes a batch of records.
+     * Returns a unique identifier among {@link LakeStoragePlugin} implementations.
      *
-     * @param recordBatch the batch of records to write
-     * @throws IOException if an I/O error occurs
+     * @return the identifier
      */
-    void write(RecordBatch recordBatch) throws IOException;
+    String identifier();
+
+    /**
+     * Creates a new instance of {@link LakeStorage}.
+     *
+     * @param configuration the configuration for LakeStorage
+     * @return the lake storage instance
+     */
+    LakeStorage createLakeStorage(final Configuration configuration);
 }

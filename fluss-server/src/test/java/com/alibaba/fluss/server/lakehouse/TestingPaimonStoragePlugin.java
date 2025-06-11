@@ -18,10 +18,10 @@ package com.alibaba.fluss.server.lakehouse;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStorage;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;

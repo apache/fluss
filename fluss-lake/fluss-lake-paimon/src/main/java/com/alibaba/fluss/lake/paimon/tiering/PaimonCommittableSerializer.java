@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.manifest.ManifestCommittableSerializer;

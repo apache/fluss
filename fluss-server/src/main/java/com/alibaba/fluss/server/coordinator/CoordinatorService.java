@@ -27,7 +27,7 @@ import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
+import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionSpec;

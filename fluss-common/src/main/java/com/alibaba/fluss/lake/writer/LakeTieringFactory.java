@@ -14,12 +14,12 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.writer;
+package com.alibaba.fluss.lake.writer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.lakehouse.committer.CommitterInitContext;
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.committer.CommitterInitContext;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import java.io.IOException;
 import java.io.Serializable;

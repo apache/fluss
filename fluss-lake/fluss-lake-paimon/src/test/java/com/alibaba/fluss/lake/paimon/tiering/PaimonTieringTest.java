@@ -17,10 +17,10 @@
 package com.alibaba.fluss.lake.paimon.tiering;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
-import com.alibaba.fluss.lakehouse.writer.LakeWriter;
-import com.alibaba.fluss.lakehouse.writer.WriterInitContext;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.writer.LakeWriter;
+import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.ChangeType;

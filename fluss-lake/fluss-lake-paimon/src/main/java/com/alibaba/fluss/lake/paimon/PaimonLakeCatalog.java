@@ -19,7 +19,7 @@ package com.alibaba.fluss.lake.paimon;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
+import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.IOUtils;

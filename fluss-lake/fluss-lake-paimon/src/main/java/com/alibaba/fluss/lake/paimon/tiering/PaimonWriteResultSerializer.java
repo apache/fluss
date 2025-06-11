@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.paimon.table.sink.CommitMessage;
 import org.apache.paimon.table.sink.CommitMessageSerializer;

@@ -22,7 +22,7 @@ import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplitSerializer;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.shaded.guava32.com.google.common.hash.HashFunction;
 import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hasher;
 import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hashing;

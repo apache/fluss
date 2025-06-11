@@ -17,7 +17,7 @@
 package com.alibaba.fluss.flink.tiering.source;
 
 import com.alibaba.fluss.flink.tiering.TestingWriteResult;
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;

@@ -17,11 +17,11 @@
 package com.alibaba.fluss.lake.paimon;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
 import com.alibaba.fluss.lake.paimon.tiering.PaimonCommittable;
 import com.alibaba.fluss.lake.paimon.tiering.PaimonLakeTieringFactory;
 import com.alibaba.fluss.lake.paimon.tiering.PaimonWriteResult;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStorage;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 
 /** Paimon implementation of {@link LakeStorage}. */
 public class PaimonLakeStorage implements LakeStorage {

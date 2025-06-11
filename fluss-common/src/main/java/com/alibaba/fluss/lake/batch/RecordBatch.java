@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.batch;
+package com.alibaba.fluss.lake.batch;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 

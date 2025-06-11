@@ -20,9 +20,9 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
 import com.alibaba.fluss.flink.tiering.source.TieringSource;
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
-import com.alibaba.fluss.lakehouse.writer.LakeWriter;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.writer.LakeWriter;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 

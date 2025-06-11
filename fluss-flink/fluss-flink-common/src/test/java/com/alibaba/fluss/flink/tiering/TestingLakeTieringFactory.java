@@ -18,12 +18,12 @@ package com.alibaba.fluss.flink.tiering;
 
 import com.alibaba.fluss.flink.tiering.committer.TestingCommittable;
 import com.alibaba.fluss.flink.tiering.source.TestingWriteResultSerializer;
-import com.alibaba.fluss.lakehouse.committer.CommitterInitContext;
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
-import com.alibaba.fluss.lakehouse.writer.LakeWriter;
-import com.alibaba.fluss.lakehouse.writer.WriterInitContext;
+import com.alibaba.fluss.lake.committer.CommitterInitContext;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.writer.LakeWriter;
+import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.record.LogRecord;
 
 import java.io.IOException;
