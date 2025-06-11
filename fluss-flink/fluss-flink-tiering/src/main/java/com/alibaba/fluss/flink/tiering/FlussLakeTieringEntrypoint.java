@@ -64,14 +64,13 @@ public class FlussLakeTieringEntrypoint {
                 StreamExecutionEnvironment.getExecutionEnvironment();
 
         // build lake tiering job
-        LakeTieringJobBuilder.newBuilder(
-                        execEnv,
-                        Configuration.fromMap(flussConfigMap),
-                        Configuration.fromMap(lakeConfigMap),
-                        dataLake)
-                .build();
-
-        JobClient jobClient = execEnv.executeAsync();
+        JobClient jobClient =
+                LakeTieringJobBuilder.newBuilder(
+                                execEnv,
+                                Configuration.fromMap(flussConfigMap),
+                                Configuration.fromMap(lakeConfigMap),
+                                dataLake)
+                        .build();
 
         System.out.printf(
                 "Starting data tiering service from Fluss to %s, jobId is %s.....%n",

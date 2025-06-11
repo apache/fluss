@@ -126,7 +126,7 @@ public class FlinkPaimonTieringTestBase {
 
     protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
         Configuration flussConfig = new Configuration(clientConf);
-        flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500));
+        flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
         return LakeTieringJobBuilder.newBuilder(
                         execEnv,
                         flussConfig,
