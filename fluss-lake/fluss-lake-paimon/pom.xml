@@ -42,6 +42,12 @@
         </dependency>
 
         <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-lake-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.paimon</groupId>
             <artifactId>paimon-bundle</artifactId>
             <version>${paimon.version}</version>
