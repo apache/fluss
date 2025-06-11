@@ -414,7 +414,10 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         TableResult tableResult =
                 tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.acl( action => 'LIST', resource => '%s', permission => 'ALLOW', principal => '%s', operation  => '%s')",
+                                // Flink 1.18 not support index argument.
+                                // "CALL %s.sys.acl( action => 'LIST', resource => '%s', permission
+                                // => 'ALLOW', principal => '%s', operation  => '%s')",
+                                "CALL %s.sys.acl('LIST', '%s', 'ALLOW', '%s', '%s')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
                                 String.format("%s:%s", guest.getType(), guest.getName()),
