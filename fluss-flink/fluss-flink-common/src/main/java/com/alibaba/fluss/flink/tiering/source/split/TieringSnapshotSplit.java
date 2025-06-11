@@ -43,7 +43,19 @@ public class TieringSnapshotSplit extends TieringSplit {
             @Nullable String partitionName,
             long snapshotId,
             long logOffsetOfSnapshot) {
-        super(tablePath, tableBucket, partitionName);
+        super(tablePath, tableBucket, partitionName, UNKNOWN_NUMBER_OF_SPLITS);
+        this.snapshotId = snapshotId;
+        this.logOffsetOfSnapshot = logOffsetOfSnapshot;
+    }
+
+    public TieringSnapshotSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long logOffsetOfSnapshot,
+            int numberOfSplits) {
+        super(tablePath, tableBucket, partitionName, numberOfSplits);
         this.snapshotId = snapshotId;
         this.logOffsetOfSnapshot = logOffsetOfSnapshot;
     }
@@ -75,7 +87,20 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + snapshotId
                 + ", logOffsetOfSnapshot="
                 + logOffsetOfSnapshot
+                + ", numberOfSplits="
+                + numberOfSplits
                 + '}';
+    }
+
+    @Override
+    public TieringSnapshotSplit copy(int numberOfSplits) {
+        return new TieringSnapshotSplit(
+                tablePath,
+                tableBucket,
+                partitionName,
+                snapshotId,
+                logOffsetOfSnapshot,
+                numberOfSplits);
     }
 
     @Override

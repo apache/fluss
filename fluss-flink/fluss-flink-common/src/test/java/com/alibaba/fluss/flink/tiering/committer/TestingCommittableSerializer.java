@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.source;
+package com.alibaba.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.flink.tiering.TestingWriteResult;
 import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
 
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
-/** Simple serializer for int values. */
-public class TestingWriteResultSerializer implements SimpleVersionedSerializer<TestingWriteResult> {
+/** Simple serializer for int array for testing purpose. */
+class TestingCommittableSerializer implements SimpleVersionedSerializer<TestingCommittable> {
 
     @Override
     public int getVersion() {
@@ -33,15 +34,23 @@ public class TestingWriteResultSerializer implements SimpleVersionedSerializer<T
     }
 
     @Override
-    public byte[] serialize(TestingWriteResult obj) throws IOException {
+    public byte[] serialize(TestingCommittable obj) throws IOException {
         final DataOutputSerializer out = new DataOutputSerializer(256);
-        out.writeInt(obj.getWriteResult());
+        out.writeInt(obj.writeResults().size());
+        for (Integer integer : obj.writeResults()) {
+            out.writeInt(integer);
+        }
         return out.getCopyOfBuffer();
     }
 
     @Override
-    public TestingWriteResult deserialize(int version, byte[] serialized) throws IOException {
+    public TestingCommittable deserialize(int version, byte[] serialized) throws IOException {
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
-        return new TestingWriteResult(in.readInt());
+        int numResults = in.readInt();
+        List<Integer> writeResults = new ArrayList<>(numResults);
+        for (int i = 0; i < numResults; i++) {
+            writeResults.add(in.readInt());
+        }
+        return new TestingCommittable(writeResults);
     }
 }

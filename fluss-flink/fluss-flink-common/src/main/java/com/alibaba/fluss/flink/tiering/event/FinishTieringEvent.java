@@ -14,18 +14,22 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.source;
+package com.alibaba.fluss.flink.tiering.event;
 
-/** A WriteResult for testing purpose. */
-public class TestingWriteResult {
+import org.apache.flink.api.connector.source.SourceEvent;
 
-    private final int writeResult;
+/** SourceEvent used to represent a Fluss table has been tiered finished. */
+public class FinishTieringEvent implements SourceEvent {
 
-    public TestingWriteResult(int writeResult) {
-        this.writeResult = writeResult;
+    private static final long serialVersionUID = 1L;
+
+    private final long tableId;
+
+    public FinishTieringEvent(long tableId) {
+        this.tableId = tableId;
     }
 
-    public int getWriteResult() {
-        return writeResult;
+    public long getTableId() {
+        return tableId;
     }
 }

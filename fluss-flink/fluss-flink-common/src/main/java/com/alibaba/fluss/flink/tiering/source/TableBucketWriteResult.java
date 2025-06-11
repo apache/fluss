@@ -26,8 +26,9 @@ import java.io.Serializable;
 
 /**
  * This class contains the {@link WriteResult} of {@link LakeWriter}, the table path and the bucket
- * that the write result is for, the end log offset of tiering. It'll be passed to downstream
- * operators to collect all the write results of a table and do commit.
+ * that the write result is for, the end log offset of tiering, the total number of write results in
+ * one round of tiering. It'll be passed to downstream committer operator to collect all the write
+ * results of a table and do commit.
  */
 public class TableBucketWriteResult<WriteResult> implements Serializable {
 
@@ -37,20 +38,28 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
 
     private final TableBucket tableBucket;
 
+    // will be null when no any data write, such as for tiering a empty log split
     @Nullable private final WriteResult writeResult;
 
     // the end offset of tiering, should be the last tiered record's offset + 1
     private final long logEndOffset;
 
+    // the total number of write results in one round of tiering,
+    // used for downstream commiter operator to determine when all write results
+    // for the round of tiering is finished
+    private final int numberOfWriteResults;
+
     public TableBucketWriteResult(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable WriteResult writeResult,
-            long logEndOffset) {
+            long logEndOffset,
+            int numberOfWriteResults) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.writeResult = writeResult;
         this.logEndOffset = logEndOffset;
+        this.numberOfWriteResults = numberOfWriteResults;
     }
 
     public TablePath tablePath() {
@@ -64,6 +73,10 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     @Nullable
     public WriteResult writeResult() {
         return writeResult;
+    }
+
+    public int numberOfWriteResults() {
+        return numberOfWriteResults;
     }
 
     public long logEndOffset() {

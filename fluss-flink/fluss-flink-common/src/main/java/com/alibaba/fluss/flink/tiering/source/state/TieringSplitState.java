@@ -43,7 +43,8 @@ public class TieringSplitState {
                     split.getTableBucket(),
                     split.getPartitionName(),
                     split.getSnapshotId(),
-                    split.getLogOffsetOfSnapshot());
+                    split.getLogOffsetOfSnapshot(),
+                    split.getNumberOfSplits());
         } else {
             final TieringLogSplit split = (TieringLogSplit) tieringSplit;
             return new TieringLogSplit(
@@ -51,7 +52,8 @@ public class TieringSplitState {
                     split.getTableBucket(),
                     split.getPartitionName(),
                     split.getStartingOffset(),
-                    split.getStoppingOffset());
+                    split.getStoppingOffset(),
+                    split.getNumberOfSplits());
         }
     }
 }

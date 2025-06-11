@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.source;
+package com.alibaba.fluss.flink.tiering;
 
+import com.alibaba.fluss.flink.tiering.committer.TestingCommittable;
+import com.alibaba.fluss.flink.tiering.source.TestingWriteResultSerializer;
 import com.alibaba.fluss.lakehouse.committer.CommitterInitContext;
 import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
 import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
@@ -25,9 +27,12 @@ import com.alibaba.fluss.lakehouse.writer.WriterInitContext;
 import com.alibaba.fluss.record.LogRecord;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
-class TestingLakeTieringFactory implements LakeTieringFactory<TestingWriteResult, Integer> {
+public class TestingLakeTieringFactory
+        implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
 
     @Override
     public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)
@@ -41,13 +46,13 @@ class TestingLakeTieringFactory implements LakeTieringFactory<TestingWriteResult
     }
 
     @Override
-    public LakeCommitter<TestingWriteResult, Integer> createLakeCommitter(
+    public LakeCommitter<TestingWriteResult, TestingCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        throw new UnsupportedOperationException("method createLakeCommitter is not supported.");
+        return new TestingLakeCommitter();
     }
 
     @Override
-    public SimpleVersionedSerializer<Integer> getCommitableSerializer() {
+    public SimpleVersionedSerializer<TestingCommittable> getCommitableSerializer() {
         throw new UnsupportedOperationException("method getCommitableSerializer is not supported.");
     }
 
@@ -67,5 +72,29 @@ class TestingLakeTieringFactory implements LakeTieringFactory<TestingWriteResult
 
         @Override
         public void close() throws IOException {}
+    }
+
+    private static final class TestingLakeCommitter
+            implements LakeCommitter<TestingWriteResult, TestingCommittable> {
+
+        private long currentSnapshot = 0;
+
+        @Override
+        public TestingCommittable toCommitable(List<TestingWriteResult> testingWriteResults)
+                throws IOException {
+            List<Integer> writeResults = new ArrayList<>();
+            for (TestingWriteResult testingWriteResult : testingWriteResults) {
+                writeResults.add(testingWriteResult.getWriteResult());
+            }
+            return new TestingCommittable(writeResults);
+        }
+
+        @Override
+        public long commit(TestingCommittable committable) throws IOException {
+            return currentSnapshot++;
+        }
+
+        @Override
+        public void close() throws Exception {}
     }
 }

@@ -23,6 +23,7 @@ import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
+import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -50,7 +51,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,7 +61,6 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
 import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
-import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.finishedTableHeartBeat;
 import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
 import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
@@ -181,7 +181,23 @@ public class TieringSourceEnumerator
 
     @Override
     public void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
-        // TODO: deal with finished table and failed table later via SourceEvent
+        // TODO: deal with failed table later via SourceEvent
+        if (sourceEvent instanceof FinishTieringEvent) {
+            FinishTieringEvent finishTieringEvent = (FinishTieringEvent) sourceEvent;
+            long finishedTableId = finishTieringEvent.getTableId();
+            Long tieringEpoch = tieringTableEpochs.remove(finishedTableId);
+            if (tieringEpoch == null) {
+                // shouldn't happen, warn it
+                LOG.warn(
+                        "The finished table {} is not in tiering table, won't report it to Fluss to mark as finished.",
+                        finishedTableId);
+            } else {
+                finishedTableEpochs.put(finishedTableId, tieringEpoch);
+                // call one round of heartbeat to notify table has been finished
+                this.context.callAsync(
+                        this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+            }
+        }
     }
 
     private void generateAndAssignSplits(
@@ -216,9 +232,15 @@ public class TieringSourceEnumerator
     }
 
     private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
+        Map<Long, Long> currentFinishedTableEpochs = new HashMap<>(this.finishedTableEpochs);
         LakeTieringHeartbeatRequest tieringHeartbeatRequest =
                 tieringTableHeartBeat(
-                        basicHeartBeat(), this.tieringTableEpochs, this.flussCoordinatorEpoch);
+                        basicHeartBeat(),
+                        this.tieringTableEpochs,
+                        currentFinishedTableEpochs,
+                        this.flussCoordinatorEpoch);
+
+        Tuple3<Long, Long, TablePath> lakeTieringInfo = null;
 
         if (pendingSplits.isEmpty() && !readersAwaitingSplit.isEmpty()) {
             // report heartbeat with request table to fluss coordinator
@@ -228,12 +250,13 @@ public class TieringSourceEnumerator
                                     heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest)));
             if (heartbeatResponse.hasTieringTable()) {
                 PbLakeTieringTableInfo tieringTable = heartbeatResponse.getTieringTable();
-                return Tuple3.of(
-                        tieringTable.getTableId(),
-                        tieringTable.getTieringEpoch(),
-                        TablePath.of(
-                                tieringTable.getTablePath().getDatabaseName(),
-                                tieringTable.getTablePath().getTableName()));
+                lakeTieringInfo =
+                        Tuple3.of(
+                                tieringTable.getTableId(),
+                                tieringTable.getTieringEpoch(),
+                                TablePath.of(
+                                        tieringTable.getTablePath().getDatabaseName(),
+                                        tieringTable.getTablePath().getTableName()));
             } else {
                 LOG.info("No available Tiering table found, will poll later.");
             }
@@ -241,7 +264,10 @@ public class TieringSourceEnumerator
             // report heartbeat to fluss coordinator
             waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
         }
-        return null;
+
+        // if come to here, we can remove currentFinishedTableEpochs to avoid send in next round
+        currentFinishedTableEpochs.forEach(finishedTableEpochs::remove);
+        return lakeTieringInfo;
     }
 
     private void generateTieringSplits(Tuple3<Long, Long, TablePath> tieringTable)
@@ -252,7 +278,9 @@ public class TieringSourceEnumerator
         long start = System.currentTimeMillis();
         LOG.info("Generate Tiering splits for table {}.", tieringTable.f2);
         try {
-            List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tieringTable.f2);
+            List<TieringSplit> tieringSplits =
+                    populateNumberOfTieringSplits(
+                            splitGenerator.generateTableSplits(tieringTable.f2));
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),
@@ -273,6 +301,13 @@ public class TieringSourceEnumerator
                             "Generate Tiering splits for table %s failed due to:", tieringTable.f1),
                     e);
         }
+    }
+
+    private List<TieringSplit> populateNumberOfTieringSplits(List<TieringSplit> tieringSplits) {
+        int numberOfSplits = tieringSplits.size();
+        return tieringSplits.stream()
+                .map(split -> split.copy(numberOfSplits))
+                .collect(Collectors.toList());
     }
 
     @Override
@@ -336,46 +371,6 @@ public class TieringSourceEnumerator
         }
     }
 
-    /**
-     * Report finished table to Fluss coordinator via HeartBeat, this method should be called when
-     * receives finished table from downstream lake committer.
-     */
-    private void reportFinishedTable(
-            LakeTieringHeartbeatRequest heartbeatRequest, Map<Long, Long> finishedTableEpochs)
-            throws FlinkRuntimeException {
-        try {
-            waitHeartbeatResponse(
-                    coordinatorGateway.lakeTieringHeartbeat(
-                            finishedTableHeartBeat(
-                                    heartbeatRequest, finishedTableEpochs, flussCoordinatorEpoch)));
-            LOG.info("Report finished table to Fluss Coordinator success");
-        } catch (Exception e) {
-            LOG.error("Errors happens when report finished table to Fluss cluster.", e);
-            throw new FlinkRuntimeException(
-                    "Errors happens when report finished table to Fluss cluster.", e);
-        }
-    }
-
-    @VisibleForTesting
-    int getFlussCoordinatorEpoch() {
-        return flussCoordinatorEpoch;
-    }
-
-    @VisibleForTesting
-    Map<Long, Long> getTieringTableEpochs() {
-        return tieringTableEpochs;
-    }
-
-    @VisibleForTesting
-    Map<Long, Long> getFailedTableEpochs() {
-        return failedTableEpochs;
-    }
-
-    @VisibleForTesting
-    Map<Long, Long> getFinishedTableEpochs() {
-        return finishedTableEpochs;
-    }
-
     /** A helper class to build heartbeat request. */
     @VisibleForTesting
     static class HeartBeatHelper {
@@ -394,45 +389,29 @@ public class TieringSourceEnumerator
         static LakeTieringHeartbeatRequest tieringTableHeartBeat(
                 LakeTieringHeartbeatRequest heartbeatRequest,
                 Map<Long, Long> tieringTableEpochs,
+                Map<Long, Long> finishedTableEpochs,
                 int coordinatorEpoch) {
             if (!tieringTableEpochs.isEmpty()) {
-                Set<PbHeartbeatReqForTable> tieringTables =
-                        tieringTableEpochs.entrySet().stream()
-                                .map(
-                                        tieringTableEpoch ->
-                                                new PbHeartbeatReqForTable()
-                                                        .setTableId(tieringTableEpoch.getKey())
-                                                        .setCoordinatorEpoch(coordinatorEpoch)
-                                                        .setTieringEpoch(
-                                                                tieringTableEpoch.getValue()))
-                                .collect(Collectors.toSet());
-                heartbeatRequest.addAllTieringTables(tieringTables);
+                heartbeatRequest.addAllTieringTables(
+                        toPbHeartbeatReqForTable(tieringTableEpochs, coordinatorEpoch));
+            }
+            if (!finishedTableEpochs.isEmpty()) {
+                heartbeatRequest.addAllFinishedTables(
+                        toPbHeartbeatReqForTable(finishedTableEpochs, coordinatorEpoch));
             }
             return heartbeatRequest;
         }
 
-        /**
-         * Report finished table to Fluss coordinator via HeartBeat, this method should be called
-         * when receives finished table from downstream lake committer.
-         */
-        @VisibleForTesting
-        static LakeTieringHeartbeatRequest finishedTableHeartBeat(
-                LakeTieringHeartbeatRequest lakeTieringHeartbeatRequest,
-                Map<Long, Long> finishedTieringTableEpochs,
-                int coordinatorEpoch) {
-            if (!finishedTieringTableEpochs.isEmpty()) {
-                Set<PbHeartbeatReqForTable> finishedTables =
-                        finishedTieringTableEpochs.entrySet().stream()
-                                .map(
-                                        entry ->
-                                                new PbHeartbeatReqForTable()
-                                                        .setTableId(entry.getKey())
-                                                        .setTieringEpoch(entry.getValue())
-                                                        .setCoordinatorEpoch(coordinatorEpoch))
-                                .collect(Collectors.toSet());
-                lakeTieringHeartbeatRequest.addAllFinishedTables(finishedTables);
-            }
-            return lakeTieringHeartbeatRequest;
+        private static Set<PbHeartbeatReqForTable> toPbHeartbeatReqForTable(
+                Map<Long, Long> tableEpochs, int coordinatorEpoch) {
+            return tableEpochs.entrySet().stream()
+                    .map(
+                            tieringTableEpoch ->
+                                    new PbHeartbeatReqForTable()
+                                            .setTableId(tieringTableEpoch.getKey())
+                                            .setCoordinatorEpoch(coordinatorEpoch)
+                                            .setTieringEpoch(tieringTableEpoch.getValue()))
+                    .collect(Collectors.toSet());
         }
 
         /**
@@ -440,28 +419,17 @@ public class TieringSourceEnumerator
          * {@link TieringSourceEnumerator} is closed or receives failed table from downstream lake
          * committer.
          */
-        @VisibleForTesting
         static LakeTieringHeartbeatRequest failedTableHeartBeat(
                 LakeTieringHeartbeatRequest lakeTieringHeartbeatRequest,
                 Map<Long, Long> failedTieringTableEpochs,
                 int coordinatorEpoch) {
             if (!failedTieringTableEpochs.isEmpty()) {
-                Set<PbHeartbeatReqForTable> failedTables = new HashSet<>();
-                failedTables =
-                        failedTieringTableEpochs.entrySet().stream()
-                                .map(
-                                        entry ->
-                                                new PbHeartbeatReqForTable()
-                                                        .setTableId(entry.getKey())
-                                                        .setCoordinatorEpoch(coordinatorEpoch)
-                                                        .setTieringEpoch(entry.getValue()))
-                                .collect(Collectors.toSet());
-                lakeTieringHeartbeatRequest.addAllFailedTables(failedTables);
+                lakeTieringHeartbeatRequest.addAllFailedTables(
+                        toPbHeartbeatReqForTable(failedTieringTableEpochs, coordinatorEpoch));
             }
             return lakeTieringHeartbeatRequest;
         }
 
-        @VisibleForTesting
         static LakeTieringHeartbeatResponse waitHeartbeatResponse(
                 CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
             try {

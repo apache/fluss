@@ -85,6 +85,7 @@ public class TieringSplitReader<WriteResult>
     private final Queue<TieringSnapshotSplit> currentPendingSnapshotSplits;
     @Nullable private BoundedSplitReader currentSnapshotSplitReader;
     @Nullable private TieringSnapshotSplit currentSnapshotSplit;
+    @Nullable private Integer currentTableNumberOfSplits;
 
     // map from table bucket to split id
     private final Map<TableBucket, String> currentTableSplitsByBucket;
@@ -220,6 +221,7 @@ public class TieringSplitReader<WriteResult>
             currentTable = connection.getTable(tablePath);
             currentTablePath = tablePath;
             currentTableId = split.getTableBucket().getTableId();
+            currentTableNumberOfSplits = split.getNumberOfSplits();
             TableInfo currentTableInfo = checkNotNull(currentTable).getTableInfo();
             // check currentTable's id for the table path is same with table id of the tiering
             // split, if not, it means the tiering split is for a previous dropped table. let's fail
@@ -306,7 +308,12 @@ public class TieringSplitReader<WriteResult>
         LakeWriter<WriteResult> lakeWriter = lakeWriters.remove(bucket);
         WriteResult writeResult = lakeWriter.complete();
         lakeWriter.close();
-        return toTableBucketWriteResult(currentTablePath, bucket, writeResult, logEndOffset);
+        return toTableBucketWriteResult(
+                currentTablePath,
+                bucket,
+                writeResult,
+                logEndOffset,
+                checkNotNull(currentTableNumberOfSplits));
     }
 
     private TableBucketWriteResultWithSplitIds forEmptySplits(Set<TieringLogSplit> emptySplits) {
@@ -321,7 +328,8 @@ public class TieringSplitReader<WriteResult>
                             logSplit.getTablePath(),
                             tableBucket,
                             null,
-                            logSplit.getStoppingOffset()));
+                            logSplit.getStoppingOffset(),
+                            logSplit.getNumberOfSplits()));
         }
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
@@ -338,11 +346,12 @@ public class TieringSplitReader<WriteResult>
         TableBucket tableBucket = currentSnapshotSplit.getTableBucket();
         long logEndOffset = currentSnapshotSplit.getLogOffsetOfSnapshot();
         String splitId = currentTableSplitsByBucket.remove(tableBucket);
+        TableBucketWriteResult<WriteResult> writeResult =
+                completeLakeWriter(tableBucket, logEndOffset);
         closeCurrentSnapshotSplit();
         mayFinishCurrentTable();
         return new TableBucketWriteResultWithSplitIds(
-                Collections.singletonMap(
-                        tableBucket, completeLakeWriter(tableBucket, logEndOffset)),
+                Collections.singletonMap(tableBucket, writeResult),
                 Collections.singletonMap(tableBucket, splitId));
     }
 
@@ -394,6 +403,7 @@ public class TieringSplitReader<WriteResult>
         // before switch to a new table, mark all as empty or null
         currentTableId = null;
         currentTablePath = null;
+        currentTableNumberOfSplits = null;
         currentPendingSnapshotSplits.clear();
         currentTableStoppingOffsets.clear();
         currentTableEmptyLogSplits.clear();
@@ -453,8 +463,10 @@ public class TieringSplitReader<WriteResult>
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable WriteResult writeResult,
-            long endLogOffset) {
-        return new TableBucketWriteResult<>(tablePath, tableBucket, writeResult, endLogOffset);
+            long endLogOffset,
+            int numberOfSplits) {
+        return new TableBucketWriteResult<>(
+                tablePath, tableBucket, writeResult, endLogOffset, numberOfSplits);
     }
 
     private class TableBucketWriteResultWithSplitIds

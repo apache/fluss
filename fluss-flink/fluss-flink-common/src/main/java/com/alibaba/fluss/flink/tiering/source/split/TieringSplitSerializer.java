@@ -73,6 +73,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
             out.writeBoolean(false);
         }
 
+        // write number of splits
+        out.writeInt(split.getNumberOfSplits());
         if (split.isTieringSnapshotSplit()) {
             // Snapshot split
             TieringSnapshotSplit tieringSnapshotSplit = split.asTieringSnapshotSplit();
@@ -123,20 +125,33 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         }
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
+        // deserialize number of splits
+        int numberOfSplits = in.readInt();
+
         if (splitKind == TIERING_SNAPSHOT_SPLIT_FLAG) {
             // deserialize snapshot id
             long snapshotId = in.readLong();
             // deserialize log offset of snapshot
             long logOffsetOfSnapshot = in.readLong();
             return new TieringSnapshotSplit(
-                    tablePath, tableBucket, partitionName, snapshotId, logOffsetOfSnapshot);
+                    tablePath,
+                    tableBucket,
+                    partitionName,
+                    snapshotId,
+                    logOffsetOfSnapshot,
+                    numberOfSplits);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();
             // deserialize starting offset
             long stoppingOffset = in.readLong();
             return new TieringLogSplit(
-                    tablePath, tableBucket, partitionName, startingOffset, stoppingOffset);
+                    tablePath,
+                    tableBucket,
+                    partitionName,
+                    startingOffset,
+                    stoppingOffset,
+                    numberOfSplits);
         }
     }
 }

@@ -35,7 +35,7 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringSnapshotSplitState and TieringSnapshotSplit
         TieringSnapshotSplit tieringSnapshotSplit =
-                new TieringSnapshotSplit(tablePath, tableBucket, "partition1", 0L, 200L);
+                new TieringSnapshotSplit(tablePath, tableBucket, "partition1", 0L, 200L, 10);
         TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
         assertThat(tieringSnapshotSplitState.toSourceSplit()).isEqualTo(tieringSnapshotSplit);
     }
@@ -47,7 +47,7 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringLogSplitState and TieringLogSplit
         TieringLogSplit tieringLogSplit =
-                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L);
+                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20);
         TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
         assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(tieringLogSplit);
     }

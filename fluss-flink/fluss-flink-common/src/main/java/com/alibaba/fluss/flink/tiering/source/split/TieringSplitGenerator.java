@@ -19,7 +19,7 @@ package com.alibaba.fluss.flink.tiering.source.split;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
-import com.alibaba.fluss.exception.UnknownServerException;
+import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
 import com.alibaba.fluss.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -68,9 +68,7 @@ public class TieringSplitGenerator {
             LOG.info("Last committed lake table snapshot info is:{}", lakeSnapshotInfo);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (t instanceof UnknownServerException
-                    && t.getMessage().contains("LakeTableSnapshotNotExistException")) {
-                // TODO: we can improve here without judging by specific exception int the future
+            if (t instanceof LakeTableSnapshotNotExistException) {
                 lakeSnapshotInfo = null;
             } else {
                 throw new FlinkRuntimeException(

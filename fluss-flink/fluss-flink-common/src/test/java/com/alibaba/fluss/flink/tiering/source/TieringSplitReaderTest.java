@@ -21,6 +21,8 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.TableWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.client.write.HashBucketAssigner;
+import com.alibaba.fluss.flink.tiering.TestingLakeTieringFactory;
+import com.alibaba.fluss.flink.tiering.TestingWriteResult;
 import com.alibaba.fluss.flink.tiering.source.split.TieringLogSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
@@ -322,13 +324,13 @@ class TieringSplitReaderTest extends FlinkTestBase {
             long startingOffset,
             long stoppingOffset) {
         TableBucket tableBucket = new TableBucket(tableId, bucket);
-        return new TieringLogSplit(tablePath, tableBucket, null, startingOffset, stoppingOffset);
+        return new TieringLogSplit(tablePath, tableBucket, null, startingOffset, stoppingOffset, 3);
     }
 
     private TieringSnapshotSplit createSnapshotSplit(
             TablePath tablePath, long tableId, int bucket, long snapshotId) {
         TableBucket tableBucket = new TableBucket(tableId, bucket);
-        return new TieringSnapshotSplit(tablePath, tableBucket, null, snapshotId, 10);
+        return new TieringSnapshotSplit(tablePath, tableBucket, null, snapshotId, 10, 3);
     }
 
     private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows)

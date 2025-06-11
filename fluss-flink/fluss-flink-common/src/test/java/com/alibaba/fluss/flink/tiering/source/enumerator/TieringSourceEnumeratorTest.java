@@ -17,6 +17,7 @@
 package com.alibaba.fluss.flink.tiering.source.enumerator;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.TieringTestBase;
 import com.alibaba.fluss.flink.tiering.source.split.TieringLogSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSnapshotSplit;
@@ -38,6 +39,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,8 +47,6 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
-import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
-import static com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.finishedTableHeartBeat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
@@ -65,6 +65,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         TablePath tablePath = DEFAULT_TABLE_PATH;
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
+        int expectNumberOfSplits = 3;
         // test get snapshot split & log split and the assignment
         try (MockSplitEnumeratorContext<TieringSplit> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
@@ -88,7 +89,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 new TableBucket(tableId, bucketId),
                                 null,
                                 EARLIEST_OFFSET,
-                                0));
+                                0,
+                                expectNumberOfSplits));
             }
             List<TieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
@@ -114,11 +116,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     bucketOffsetOfEarliest,
                                     bucketOffsetOfInitialWrite))
                     .get();
-            coordinatorGateway.lakeTieringHeartbeat(
-                    finishedTableHeartBeat(
-                            basicHeartBeat(),
-                            enumerator.getTieringTableEpochs(),
-                            enumerator.getFlussCoordinatorEpoch()));
+
+            enumerator.handleSourceEvent(1, new FinishTieringEvent(tableId));
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
@@ -142,7 +141,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         null,
                                         bucketOffsetOfInitialWrite.get(tableBucket),
                                         bucketOffsetOfInitialWrite.get(tableBucket)
-                                                + bucketOffsetOfSecondWrite.get(tableBucket))));
+                                                + bucketOffsetOfSecondWrite.get(tableBucket),
+                                        expectNumberOfSplits)));
             }
             Map<Integer, List<TieringSplit>> actualLogAssignment = new HashMap<>();
             for (SplitsAssignment<TieringSplit> a : context.getSplitsAssignmentSequence()) {
@@ -161,6 +161,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
         long snapshotId = 0;
         waitUntilSnapshot(tableId, snapshotId);
+
+        int expectNumberOfSplits = 3;
 
         // test get snapshot split assignment
         try (MockSplitEnumeratorContext<TieringSplit> context =
@@ -188,7 +190,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         new TableBucket(tableId, tableBucket),
                                         null,
                                         snapshotId,
-                                        bucketOffsetOfInitialWrite.get(tableBucket))));
+                                        bucketOffsetOfInitialWrite.get(tableBucket),
+                                        expectNumberOfSplits)));
             }
             Map<Integer, List<TieringSplit>> actualSnapshotAssignment = new HashMap<>();
             for (SplitsAssignment<TieringSplit> a : context.getSplitsAssignmentSequence()) {
@@ -212,11 +215,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     initialBucketOffsets,
                                     bucketOffsetOfInitialWrite))
                     .get();
-            coordinatorGateway.lakeTieringHeartbeat(
-                    finishedTableHeartBeat(
-                            basicHeartBeat(),
-                            enumerator.getTieringTableEpochs(),
-                            enumerator.getFlussCoordinatorEpoch()));
+
+            enumerator.handleSourceEvent(1, new FinishTieringEvent(tableId));
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 10, 20);
@@ -242,7 +242,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         null,
                                         bucketOffsetOfInitialWrite.get(tableBucket),
                                         bucketOffsetOfInitialWrite.get(tableBucket)
-                                                + bucketOffsetOfSecondWrite.get(tableBucket))));
+                                                + bucketOffsetOfSecondWrite.get(tableBucket),
+                                        expectNumberOfSplits)));
             }
             Map<Integer, List<TieringSplit>> actualLogAssignment = new HashMap<>();
             for (SplitsAssignment<TieringSplit> a : context.getSplitsAssignmentSequence()) {
@@ -257,6 +258,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
+        int expectNumberOfSplits = 3;
         // test get log split and the assignment
         try (MockSplitEnumeratorContext<TieringSplit> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
@@ -281,7 +283,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 new TableBucket(tableId, bucketId),
                                 null,
                                 EARLIEST_OFFSET,
-                                0L));
+                                0L,
+                                expectNumberOfSplits));
             }
             List<TieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
@@ -307,11 +310,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     bucketOffsetOfEarliest,
                                     bucketOffsetOfInitialWrite))
                     .get();
-            coordinatorGateway.lakeTieringHeartbeat(
-                    finishedTableHeartBeat(
-                            basicHeartBeat(),
-                            enumerator.getTieringTableEpochs(),
-                            enumerator.getFlussCoordinatorEpoch()));
+            enumerator.handleSourceEvent(1, new FinishTieringEvent(tableId));
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
@@ -334,7 +333,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                         null,
                                         bucketOffsetOfInitialWrite.get(tableBucket),
                                         bucketOffsetOfInitialWrite.get(tableBucket)
-                                                + bucketOffsetOfSecondWrite.get(tableBucket))));
+                                                + bucketOffsetOfSecondWrite.get(tableBucket),
+                                        expectNumberOfSplits)));
             }
             Map<Integer, List<TieringSplit>> actualLogAssignment = new HashMap<>();
             for (SplitsAssignment<TieringSplit> a : context.getSplitsAssignmentSequence()) {
@@ -360,6 +360,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         waitUntilPartitionTableSnapshot(tableId, partitionNameByIds, snapshotId);
 
         int numSubtasks = 6;
+        int expectNumberOfSplits = 6;
         // test get snapshot split assignment
         try (MockSplitEnumeratorContext<TieringSplit> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
@@ -387,7 +388,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     new TableBucket(tableId, partitionId, tableBucket),
                                     partitionNameById.getKey(),
                                     snapshotId,
-                                    bucketOffsetOfInitialWrite.get(partitionId).get(tableBucket)));
+                                    bucketOffsetOfInitialWrite.get(partitionId).get(tableBucket),
+                                    expectNumberOfSplits));
                 }
             }
             List<TieringSplit> actualSnapshotAssignment = new ArrayList<>();
@@ -418,11 +420,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         .get();
             }
             // notify this table tiering task finished
-            coordinatorGateway.lakeTieringHeartbeat(
-                    finishedTableHeartBeat(
-                            basicHeartBeat(),
-                            enumerator.getTieringTableEpochs(),
-                            enumerator.getFlussCoordinatorEpoch()));
+            enumerator.handleSourceEvent(1, new FinishTieringEvent(tableId));
 
             Map<Long, Map<Integer, Long>> bucketOffsetOfSecondWrite =
                     upsertRowForPartitionedTable(
@@ -450,7 +448,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     bucketOffsetOfInitialWrite.get(partionId).get(tableBucket)
                                             + bucketOffsetOfSecondWrite
                                                     .get(partionId)
-                                                    .get(tableBucket)));
+                                                    .get(tableBucket),
+                                    expectNumberOfSplits));
                 }
             }
             List<TieringSplit> actualLogAssignment = new ArrayList<>();
@@ -473,6 +472,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         tablePath, TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
 
         int numSubtasks = 6;
+        int expectNumberOfSplits = 6;
         // test get log split assignment
         try (MockSplitEnumeratorContext<TieringSplit> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
@@ -500,7 +500,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     new TableBucket(tableId, partitionId, tableBucket),
                                     partitionNameById.getKey(),
                                     EARLIEST_OFFSET,
-                                    0L));
+                                    0L,
+                                    expectNumberOfSplits));
                 }
             }
             List<TieringSplit> actualAssignment = new ArrayList<>();
@@ -534,11 +535,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         .get();
             }
             // notify this table tiering task finished
-            coordinatorGateway.lakeTieringHeartbeat(
-                    finishedTableHeartBeat(
-                            basicHeartBeat(),
-                            enumerator.getTieringTableEpochs(),
-                            enumerator.getFlussCoordinatorEpoch()));
+            enumerator.handleSourceEvent(1, new FinishTieringEvent(tableId));
 
             Map<Long, Map<Integer, Long>> bucketOffsetOfSecondWrite =
                     appendRowForPartitionedTable(
@@ -568,7 +565,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                     bucketOffsetOfInitialWrite.get(partionId).get(tableBucket)
                                             + bucketOffsetOfSecondWrite
                                                     .get(partionId)
-                                                    .get(tableBucket)));
+                                                    .get(tableBucket),
+                                    expectNumberOfSplits));
                 }
             }
             List<TieringSplit> actualLogAssignment = new ArrayList<>();
@@ -631,7 +629,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     private static List<TieringSplit> sortSplits(List<TieringSplit> splits) {
         return splits.stream()
-                .sorted((o1, o2) -> o1.toString().compareTo(o2.toString()))
+                .sorted(Comparator.comparing(Object::toString))
                 .collect(Collectors.toList());
     }
 }

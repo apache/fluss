@@ -42,6 +42,7 @@ import com.alibaba.fluss.exception.InvalidUpdateVersionException;
 import com.alibaba.fluss.exception.KvSnapshotNotExistException;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LakeStorageNotConfiguredException;
+import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
 import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.exception.LogStorageException;
@@ -210,7 +211,9 @@ public enum Errors {
             "Authentication failed with retriable exception. ",
             RetriableAuthenticationException::new),
     INVALID_SERVER_RACK_INFO_EXCEPTION(
-            52, "The server rack info is invalid.", InvalidServerRackInfoException::new);
+            52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
+    LAKE_SNAPSHOT_NOT_EXIST(
+            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.flink.tiering.source;
 
+import com.alibaba.fluss.flink.tiering.TestingWriteResult;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -40,7 +41,7 @@ class TableBucketWriteResultSerializerTest {
         TableBucket tableBucket =
                 isPartitioned ? new TableBucket(1, 2) : new TableBucket(1, 1000L, 2);
         TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                new TableBucketWriteResult<>(tablePath, tableBucket, testingWriteResult, 10);
+                new TableBucketWriteResult<>(tablePath, tableBucket, testingWriteResult, 10, 20);
 
         // test serialize and deserialize
         byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
@@ -54,9 +55,10 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserializedWriteResult).isNotNull();
         assertThat(deserializedWriteResult.getWriteResult())
                 .isEqualTo(testingWriteResult.getWriteResult());
+        assertThat(deserialized.numberOfWriteResults()).isEqualTo(20);
 
         // verify when writeResult is null
-        tableBucketWriteResult = new TableBucketWriteResult<>(tablePath, tableBucket, null, 20);
+        tableBucketWriteResult = new TableBucketWriteResult<>(tablePath, tableBucket, null, 20, 30);
         serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
         deserialized =
                 tableBucketWriteResultSerializer.deserialize(
@@ -64,5 +66,6 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserialized.tablePath()).isEqualTo(tablePath);
         assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
         assertThat(deserialized.writeResult()).isNull();
+        assertThat(deserialized.numberOfWriteResults()).isEqualTo(30);
     }
 }
