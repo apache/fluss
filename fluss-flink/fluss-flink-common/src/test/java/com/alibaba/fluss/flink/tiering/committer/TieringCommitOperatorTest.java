@@ -20,13 +20,21 @@ import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
 import com.alibaba.fluss.flink.tiering.TestingLakeTieringFactory;
 import com.alibaba.fluss.flink.tiering.TestingWriteResult;
+import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
 import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.operators.coordination.MockOperatorEventGateway;
+import org.apache.flink.runtime.operators.coordination.OperatorEvent;
+import org.apache.flink.runtime.operators.coordination.OperatorEventDispatcher;
+import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
+import org.apache.flink.runtime.operators.coordination.OperatorEventHandler;
 import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
+import org.apache.flink.runtime.source.event.SourceEventWrapper;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.SourceOperatorStreamTask;
@@ -40,6 +48,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
@@ -50,16 +59,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TieringCommitOperatorTest extends FlinkTestBase {
 
     private TieringCommitOperator<TestingWriteResult, TestingCommittable> committerOperator;
+    private MockOperatorEventGateway mockOperatorEventGateway;
 
     @BeforeEach
     void beforeEach() throws Exception {
+        mockOperatorEventGateway = new MockOperatorEventGateway();
+        MockOperatorEventDispatcher mockOperatorEventDispatcher =
+                new MockOperatorEventDispatcher(mockOperatorEventGateway);
         StreamOperatorParameters<CommittableMessage<TestingCommittable>> parameters =
                 new StreamOperatorParameters<>(
                         new SourceOperatorStreamTask<String>(new DummyEnvironment()),
                         new MockStreamConfig(new Configuration(), 1),
                         new MockOutput<>(new ArrayList<>()),
                         null,
-                        null,
+                        mockOperatorEventDispatcher,
                         null);
 
         committerOperator =
@@ -119,7 +132,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         expectedLogEndOffsets.put(t1b0, 11L);
         expectedLogEndOffsets.put(t1b1, 12L);
         expectedLogEndOffsets.put(t1b2, 13L);
-        verifyLakeSnapshot(tablePath1, 0, expectedLogEndOffsets);
+        verifyLakeSnapshot(tablePath1, tableId1, 0, expectedLogEndOffsets);
 
         // add table2, bucket2
         TableBucket t2b2 = new TableBucket(tableId2, 2);
@@ -130,7 +143,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         expectedLogEndOffsets.put(t2b0, 21L);
         expectedLogEndOffsets.put(t2b1, 22L);
         expectedLogEndOffsets.put(t2b2, 23L);
-        verifyLakeSnapshot(tablePath2, 0, expectedLogEndOffsets);
+        verifyLakeSnapshot(tablePath2, tableId2, 0, expectedLogEndOffsets);
 
         // let's process one round of TableBucketWriteResult again
         expectedLogEndOffsets = new HashMap<>();
@@ -142,7 +155,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                             tablePath1, tableBucket, bucket, offset, numberOfWriteResults));
             expectedLogEndOffsets.put(tableBucket, offset);
         }
-        verifyLakeSnapshot(tablePath1, 0, expectedLogEndOffsets);
+        verifyLakeSnapshot(tablePath1, tableId1, 0, expectedLogEndOffsets);
     }
 
     @Test
@@ -165,7 +178,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 expectedLogEndOffsets.put(tableBucket, currentOffset);
             }
             if (bucket == 2) {
-                verifyLakeSnapshot(tablePath, 0, expectedLogEndOffsets);
+                verifyLakeSnapshot(tablePath, tableId, 0, expectedLogEndOffsets);
             } else {
                 verifyNoLakeSnapshot(tablePath);
             }
@@ -207,7 +220,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
         expectedLogEndOffsets.put(new TableBucket(tableId, 1), 1L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 2), 2L);
-        verifyLakeSnapshot(tablePath1, 0, expectedLogEndOffsets);
+        verifyLakeSnapshot(tablePath1, tableId, 0, expectedLogEndOffsets);
     }
 
     private StreamRecord<TableBucketWriteResult<TestingWriteResult>>
@@ -235,11 +248,40 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     private void verifyLakeSnapshot(
             TablePath tablePath,
+            long tableId,
             long expectedSnapshotId,
             Map<TableBucket, Long> expectedLogEndOffsets)
             throws Exception {
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(expectedSnapshotId);
         assertThat(lakeSnapshot.getTableBucketsOffset()).isEqualTo(expectedLogEndOffsets);
+
+        // check the tableId has been send to mark finished
+        List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
+        SourceEventWrapper sourceEventWrapper =
+                (SourceEventWrapper) operatorEvents.get(operatorEvents.size() - 1);
+        FinishTieringEvent finishTieringEvent =
+                (FinishTieringEvent) sourceEventWrapper.getSourceEvent();
+        assertThat(finishTieringEvent.getTableId()).isEqualTo(tableId);
+    }
+
+    private static class MockOperatorEventDispatcher implements OperatorEventDispatcher {
+
+        private final OperatorEventGateway operatorEventGateway;
+
+        public MockOperatorEventDispatcher(MockOperatorEventGateway mockOperatorEventGateway) {
+            this.operatorEventGateway = mockOperatorEventGateway;
+        }
+
+        @Override
+        public void registerEventHandler(
+                OperatorID operatorID, OperatorEventHandler operatorEventHandler) {
+            // do nothing
+        }
+
+        @Override
+        public OperatorEventGateway getOperatorEventGateway(OperatorID operatorID) {
+            return operatorEventGateway;
+        }
     }
 }

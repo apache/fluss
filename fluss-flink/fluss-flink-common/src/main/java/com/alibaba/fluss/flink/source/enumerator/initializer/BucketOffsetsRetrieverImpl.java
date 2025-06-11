@@ -22,6 +22,7 @@ import com.alibaba.fluss.client.admin.OffsetSpec;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 
 import javax.annotation.Nullable;
@@ -81,7 +82,8 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
                     "Interrupted while listing offsets for table buckets: " + buckets, e);
         } catch (ExecutionException e) {
             throw new FlinkRuntimeException(
-                    "Failed to list offsets for table buckets: " + buckets + " due to", e);
+                    "Failed to list offsets for table buckets: " + buckets + " due to",
+                    ExceptionUtils.stripExecutionException(e));
         }
     }
 }

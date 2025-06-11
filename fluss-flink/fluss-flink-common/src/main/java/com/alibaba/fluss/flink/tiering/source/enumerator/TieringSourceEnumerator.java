@@ -233,11 +233,13 @@ public class TieringSourceEnumerator
 
     private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
         Map<Long, Long> currentFinishedTableEpochs = new HashMap<>(this.finishedTableEpochs);
+        Map<Long, Long> currentFailedTableEpochs = new HashMap<>(this.failedTableEpochs);
         LakeTieringHeartbeatRequest tieringHeartbeatRequest =
                 tieringTableHeartBeat(
                         basicHeartBeat(),
                         this.tieringTableEpochs,
                         currentFinishedTableEpochs,
+                        currentFailedTableEpochs,
                         this.flussCoordinatorEpoch);
 
         Tuple3<Long, Long, TablePath> lakeTieringInfo = null;
@@ -265,8 +267,10 @@ public class TieringSourceEnumerator
             waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
         }
 
-        // if come to here, we can remove currentFinishedTableEpochs to avoid send in next round
+        // if come to here, we can remove currentFinishedTableEpochs/failedTableEpochs to avoid send
+        // in next round
         currentFinishedTableEpochs.forEach(finishedTableEpochs::remove);
+        currentFailedTableEpochs.forEach(failedTableEpochs::remove);
         return lakeTieringInfo;
     }
 
@@ -296,10 +300,8 @@ public class TieringSourceEnumerator
                 pendingSplits.addAll(tieringSplits);
             }
         } catch (Exception e) {
-            throw new FlinkRuntimeException(
-                    String.format(
-                            "Generate Tiering splits for table %s failed due to:", tieringTable.f1),
-                    e);
+            LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
+            failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
         }
     }
 
@@ -385,11 +387,11 @@ public class TieringSourceEnumerator
             return heartbeatRequest;
         }
 
-        @VisibleForTesting
         static LakeTieringHeartbeatRequest tieringTableHeartBeat(
                 LakeTieringHeartbeatRequest heartbeatRequest,
                 Map<Long, Long> tieringTableEpochs,
                 Map<Long, Long> finishedTableEpochs,
+                Map<Long, Long> failedTableEpochs,
                 int coordinatorEpoch) {
             if (!tieringTableEpochs.isEmpty()) {
                 heartbeatRequest.addAllTieringTables(
@@ -399,7 +401,8 @@ public class TieringSourceEnumerator
                 heartbeatRequest.addAllFinishedTables(
                         toPbHeartbeatReqForTable(finishedTableEpochs, coordinatorEpoch));
             }
-            return heartbeatRequest;
+            // add failed tiering table to heart beat request
+            return failedTableHeartBeat(heartbeatRequest, failedTableEpochs, coordinatorEpoch);
         }
 
         private static Set<PbHeartbeatReqForTable> toPbHeartbeatReqForTable(

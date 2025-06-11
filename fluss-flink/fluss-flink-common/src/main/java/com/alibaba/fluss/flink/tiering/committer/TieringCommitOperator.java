@@ -17,6 +17,7 @@
 package com.alibaba.fluss.flink.tiering.committer;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
 import com.alibaba.fluss.flink.tiering.source.TieringSource;
 import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
@@ -25,6 +26,8 @@ import com.alibaba.fluss.lakehouse.writer.LakeWriter;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
+import org.apache.flink.runtime.source.event.SourceEventWrapper;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -67,6 +70,9 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
     private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
 
+    // gateway to send event to flink source coordinator
+    private final OperatorEventGateway operatorEventGateway;
+
     // tableid -> write results
     private final Map<Long, List<TableBucketWriteResult<WriteResult>>>
             collectedTableBucketWriteResults;
@@ -82,6 +88,10 @@ public class TieringCommitOperator<WriteResult, Committable>
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
                 parameters.getOutput());
+        operatorEventGateway =
+                parameters
+                        .getOperatorEventDispatcher()
+                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
     }
 
     @Override
@@ -106,9 +116,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                     commitWriteResults(
                             tableId, tableBucketWriteResult.tablePath(), committableWriteResults);
             collectedTableBucketWriteResults.remove(tableId);
-            // todo: uncomment it in next pr // notify that the table id has been finished tier
-            //            operatorEventGateway.sendEventToCoordinator(
-            //                    new SourceEventWrapper(new FinishTieringEvent(tableId)));
+            // notify that the table id has been finished tier
+            operatorEventGateway.sendEventToCoordinator(
+                    new SourceEventWrapper(new FinishTieringEvent(tableId)));
             // only emit when committable is not-null
             if (committable != null) {
                 output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));

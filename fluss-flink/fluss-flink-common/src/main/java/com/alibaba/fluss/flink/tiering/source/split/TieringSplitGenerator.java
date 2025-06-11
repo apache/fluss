@@ -253,7 +253,8 @@ public class TieringSplitGenerator {
                                 tableBucket,
                                 partitionName,
                                 EARLIEST_OFFSET,
-                                latestBucketOffset));
+                                latestBucketOffset,
+                                0));
             } else {
                 // bucket with snapshot, read kv to latest snapshotId + latestOffsetOfSnapshot
                 checkState(latestOffsetOfSnapshot != null);
@@ -263,7 +264,8 @@ public class TieringSplitGenerator {
                                 tableBucket,
                                 partitionName,
                                 latestSnapshotId,
-                                latestOffsetOfSnapshot));
+                                latestOffsetOfSnapshot,
+                                0));
             }
         } else {
             // the bucket has been tiered, read bounded log
@@ -274,7 +276,8 @@ public class TieringSplitGenerator {
                                 tableBucket,
                                 partitionName,
                                 lastCommittedBucketOffset,
-                                latestBucketOffset));
+                                latestBucketOffset,
+                                0));
             } else {
                 return Optional.empty();
             }
@@ -297,7 +300,8 @@ public class TieringSplitGenerator {
                             tableBucket,
                             partitionName,
                             EARLIEST_OFFSET,
-                            latestBucketOffset));
+                            latestBucketOffset,
+                            0));
         } else {
             // the bucket has been tiered, scan remain fluss log
             if (lastCommittedBucketOffset < latestBucketOffset) {
@@ -307,7 +311,8 @@ public class TieringSplitGenerator {
                                 tableBucket,
                                 partitionName,
                                 lastCommittedBucketOffset,
-                                latestBucketOffset));
+                                latestBucketOffset,
+                                0));
             }
         }
         LOG.info(

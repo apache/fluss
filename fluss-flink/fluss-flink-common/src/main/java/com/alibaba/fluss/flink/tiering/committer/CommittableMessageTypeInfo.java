@@ -80,13 +80,13 @@ public class CommittableMessageTypeInfo<Committable>
     @Override
     public TypeSerializer<CommittableMessage<Committable>> createSerializer(
             ExecutionConfig executionConfig) {
-        // no copy, so that data from writer is directly going into upstream operator while chaining
-        SimpleVersionedSerializer<Committable> committableSerializer =
-                committableSerializerFactory.get();
         return new SimpleVersionedSerializerTypeSerializerProxy<CommittableMessage<Committable>>(
                 () ->
                         new org.apache.flink.core.io.SimpleVersionedSerializer<
                                 CommittableMessage<Committable>>() {
+                            private final SimpleVersionedSerializer<Committable>
+                                    committableSerializer = committableSerializerFactory.get();
+
                             @Override
                             public int getVersion() {
                                 return committableSerializer.getVersion();
@@ -123,7 +123,7 @@ public class CommittableMessageTypeInfo<Committable>
 
     @Override
     public String toString() {
-        return "LakeCommittableTypeInfo";
+        return "CommittableMessageTypeInfo";
     }
 
     @Override

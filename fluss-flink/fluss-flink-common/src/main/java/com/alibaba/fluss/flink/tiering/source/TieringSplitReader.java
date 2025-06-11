@@ -88,7 +88,7 @@ public class TieringSplitReader<WriteResult>
     @Nullable private Integer currentTableNumberOfSplits;
 
     // map from table bucket to split id
-    private final Map<TableBucket, String> currentTableSplitsByBucket;
+    private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
     private final Map<TableBucket, Long> currentTableStoppingOffsets;
     private final Set<TieringLogSplit> currentTableEmptyLogSplits;
 
@@ -169,7 +169,7 @@ public class TieringSplitReader<WriteResult>
     }
 
     private void addSplitToCurrentTable(TieringSplit split) {
-        this.currentTableSplitsByBucket.put(split.getTableBucket(), split.splitId());
+        this.currentTableSplitsByBucket.put(split.getTableBucket(), split);
         if (split.isTieringSnapshotSplit()) {
             this.currentPendingSnapshotSplits.add((TieringSnapshotSplit) split);
         } else if (split.isTieringLogSplit()) {
@@ -259,7 +259,9 @@ public class TieringSplitReader<WriteResult>
             if (stoppingOffset == null) {
                 continue;
             }
-            LakeWriter<WriteResult> lakeWriter = getOrCreateLakeWriter(bucket);
+            LakeWriter<WriteResult> lakeWriter =
+                    getOrCreateLakeWriter(
+                            bucket, currentTableSplitsByBucket.get(bucket).getPartitionName());
             for (ScanRecord record : bucketScanRecords) {
                 // if record is less than stopping offset
                 if (record.logOffset() < stoppingOffset) {
@@ -278,7 +280,7 @@ public class TieringSplitReader<WriteResult>
                 }
                 // put write result of the bucket
                 writeResults.put(bucket, completeLakeWriter(bucket, stoppingOffset));
-                String currentSplitId = currentTableSplitsByBucket.remove(bucket);
+                String currentSplitId = currentTableSplitsByBucket.remove(bucket).splitId();
                 // put split of the bucket
                 finishedSplitIds.put(bucket, currentSplitId);
                 LOG.info("Split {} has been finished.", currentSplitId);
@@ -292,12 +294,13 @@ public class TieringSplitReader<WriteResult>
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
 
-    private LakeWriter<WriteResult> getOrCreateLakeWriter(TableBucket bucket) throws IOException {
+    private LakeWriter<WriteResult> getOrCreateLakeWriter(
+            TableBucket bucket, @Nullable String partitionName) throws IOException {
         LakeWriter<WriteResult> lakeWriter = lakeWriters.get(bucket);
         if (lakeWriter == null) {
             lakeWriter =
                     lakeTieringFactory.createLakeWriter(
-                            new TieringWriterInitContext(currentTablePath, bucket));
+                            new TieringWriterInitContext(currentTablePath, bucket, partitionName));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;
@@ -345,7 +348,7 @@ public class TieringSplitReader<WriteResult>
     private TableBucketWriteResultWithSplitIds finishCurrentSnapshotSplit() throws IOException {
         TableBucket tableBucket = currentSnapshotSplit.getTableBucket();
         long logEndOffset = currentSnapshotSplit.getLogOffsetOfSnapshot();
-        String splitId = currentTableSplitsByBucket.remove(tableBucket);
+        String splitId = currentTableSplitsByBucket.remove(tableBucket).splitId();
         TableBucketWriteResult<WriteResult> writeResult =
                 completeLakeWriter(tableBucket, logEndOffset);
         closeCurrentSnapshotSplit();
@@ -357,7 +360,9 @@ public class TieringSplitReader<WriteResult>
 
     private TableBucketWriteResultWithSplitIds forSnapshotSplitRecords(
             TableBucket bucket, CloseableIterator<RecordAndPos> recordIterator) throws IOException {
-        LakeWriter<WriteResult> lakeWriter = getOrCreateLakeWriter(bucket);
+        LakeWriter<WriteResult> lakeWriter =
+                getOrCreateLakeWriter(
+                        bucket, checkNotNull(currentSnapshotSplit).getPartitionName());
         while (recordIterator.hasNext()) {
             ScanRecord scanRecord = recordIterator.next().record();
             lakeWriter.write(scanRecord);

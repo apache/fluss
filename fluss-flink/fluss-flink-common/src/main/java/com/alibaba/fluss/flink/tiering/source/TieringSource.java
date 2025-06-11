@@ -23,6 +23,9 @@ import com.alibaba.fluss.flink.tiering.source.split.TieringSplitSerializer;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
 import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.shaded.guava32.com.google.common.hash.HashFunction;
+import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hasher;
+import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hashing;
 
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
@@ -31,6 +34,10 @@ import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
+
+import java.nio.charset.StandardCharsets;
 
 import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 
@@ -42,6 +49,11 @@ import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.POLL_T
 public class TieringSource<WriteResult>
         implements Source<
                 TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
+
+    public static final String TIERING_SOURCE_TRANSFORMATION_UID =
+            "$$fluss_tiering_source_operator$$";
+    public static final OperatorID TIERING_SOURCE_OPERATOR_UID =
+            new OperatorID(generateOperatorHash());
 
     private final Configuration flussConf;
     private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
@@ -93,6 +105,14 @@ public class TieringSource<WriteResult>
     public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
             SourceReaderContext sourceReaderContext) throws Exception {
         return new TieringSourceReader<>(sourceReaderContext, flussConf, lakeTieringFactory);
+    }
+
+    /** This follows the operator uid hash generation logic of flink {@link StreamGraphHasherV2}. */
+    private static byte[] generateOperatorHash() {
+        final HashFunction hashFunction = Hashing.murmur3_128(0);
+        Hasher hasher = hashFunction.newHasher();
+        hasher.putString(TIERING_SOURCE_TRANSFORMATION_UID, StandardCharsets.UTF_8);
+        return hasher.hash().asBytes();
     }
 
     /** Builder for {@link TieringSource}. */

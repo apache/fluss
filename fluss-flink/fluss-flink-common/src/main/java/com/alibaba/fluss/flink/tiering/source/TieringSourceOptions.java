@@ -25,6 +25,8 @@ import static com.alibaba.fluss.config.ConfigBuilder.key;
 /** Configuration options for the {@link TieringSource}. */
 public class TieringSourceOptions {
 
+    public static final String DATA_LAKE_CONFIG_PREFIX = "datalake.";
+
     public static final ConfigOption<Duration> POLL_TIERING_TABLE_INTERVAL =
             key("tiering.poll.table.interval")
                     .durationType()

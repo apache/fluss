@@ -17,15 +17,19 @@
 package com.alibaba.fluss.flink.tiering.committer;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
 import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
+import org.apache.flink.streaming.api.operators.OneInputStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 
 /** The factory to create {@link TieringCommitOperator}. */
 public class TieringCommitOperatorFactory<WriteResult, Committable>
-        extends AbstractStreamOperatorFactory<CommittableMessage<Committable>> {
+        extends AbstractStreamOperatorFactory<CommittableMessage<Committable>>
+        implements OneInputStreamOperatorFactory<
+                TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
 
     private final Configuration flussConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
