@@ -6,7 +6,9 @@
       <img alt="Fluss logo" src="website/static/img/logo/svg/white_filled.svg">
     </picture>
 </p>
-
+<p align="center">
+  <a href="https://alibaba.github.io/fluss-docs/docs/intro/">Documentation</a> | <a href="https://alibaba.github.io/fluss-docs/docs/quickstart/flink/">QuickStart</a> | <a href="https://alibaba.github.io/fluss-docs/community/dev/ide-setup/">Development</a>
+</p>
 <p align="center">
   <a href="https://alibaba.github.io/fluss-docs/docs/intro/">Documentation</a> | <a href="https://alibaba.github.io/fluss-docs/docs/quickstart/flink/">QuickStart</a> | <a href="https://alibaba.github.io/fluss-docs/community/dev/ide-setup/">Development</a>
 </p>
