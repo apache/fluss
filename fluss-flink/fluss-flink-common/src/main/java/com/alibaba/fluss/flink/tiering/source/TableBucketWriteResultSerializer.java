@@ -34,11 +34,11 @@ public class TableBucketWriteResultSerializer<WriteResult>
 
     private static final int CURRENT_VERSION = 1;
 
-    private final com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer<WriteResult>
+    private final com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
             writeResultSerializer;
 
     public TableBucketWriteResultSerializer(
-            com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer<WriteResult>
+            com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
                     writeResultSerializer) {
         this.writeResultSerializer = writeResultSerializer;
     }

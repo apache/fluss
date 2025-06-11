@@ -20,7 +20,7 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSplitState;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 
 import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;

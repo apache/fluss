@@ -22,10 +22,10 @@ import com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo;
 import com.alibaba.fluss.flink.tiering.committer.TieringCommitOperatorFactory;
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo;
 import com.alibaba.fluss.flink.tiering.source.TieringSource;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStorage;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePluginSetUp;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePluginSetUp;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.core.execution.JobClient;

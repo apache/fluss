@@ -17,8 +17,8 @@
 package com.alibaba.fluss.lake.paimon;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStorage;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePlugin;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
 
 /** Paimon implementation of {@link LakeStoragePlugin}. */
 public class PaimonLakeStoragePlugin implements LakeStoragePlugin {

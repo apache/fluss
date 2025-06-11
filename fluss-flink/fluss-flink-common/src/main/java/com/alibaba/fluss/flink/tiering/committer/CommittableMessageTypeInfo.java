@@ -17,7 +17,7 @@
 package com.alibaba.fluss.flink.tiering.committer;
 
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
-import com.alibaba.fluss.lakehouse.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;

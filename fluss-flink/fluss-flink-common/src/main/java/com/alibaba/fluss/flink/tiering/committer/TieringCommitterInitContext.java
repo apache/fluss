@@ -16,8 +16,8 @@
 
 package com.alibaba.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.lakehouse.committer.CommitterInitContext;
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
+import com.alibaba.fluss.lake.committer.CommitterInitContext;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.metadata.TablePath;
 
 /** The {@link CommitterInitContext} implementation for {@link LakeCommitter}. */

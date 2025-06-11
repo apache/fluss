@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.flink.tiering.source;
 
-import com.alibaba.fluss.lakehouse.writer.WriterInitContext;
+import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 

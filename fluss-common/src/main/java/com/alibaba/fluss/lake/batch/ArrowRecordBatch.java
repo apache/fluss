@@ -14,27 +14,14 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.lakestorage;
+package com.alibaba.fluss.lake.batch;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
 
 /**
- * The LakeStorage interface defines how to implement lakehouse storage system such as Paimon and
- * Iceberg. It provides a method to create a lake tiering factory.
+ * The Arrow implementation of the RecordBatch interface.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeStorage {
-
-    /**
-     * Creates a lake tiering factory to create lake writers and committers.
-     *
-     * @return the lake tiering factory
-     */
-    LakeTieringFactory<?, ?> createLakeTieringFactory();
-
-    /** Create lake catalog. */
-    LakeCatalog createLakeCatalog();
-}
+public class ArrowRecordBatch implements RecordBatch {}

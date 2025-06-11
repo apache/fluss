@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.committer;
+package com.alibaba.fluss.lake.committer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 

@@ -14,14 +14,24 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.batch;
+package com.alibaba.fluss.lake.committer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.metadata.TablePath;
 
 /**
- * The Arrow implementation of the RecordBatch interface.
+ * The CommitterInitContext interface provides the context needed to create a LakeCommitter. It
+ * includes methods to obtain the table path.
  *
  * @since 0.7
  */
 @PublicEvolving
-public class ArrowRecordBatch implements RecordBatch {}
+public interface CommitterInitContext {
+
+    /**
+     * Returns the table path.
+     *
+     * @return the table path
+     */
+    TablePath tablePath();
+}

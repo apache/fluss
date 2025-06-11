@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.serializer;
+package com.alibaba.fluss.lake.serializer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 

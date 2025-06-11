@@ -16,7 +16,7 @@
 
 package com.alibaba.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.paimon.Snapshot;

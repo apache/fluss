@@ -14,32 +14,42 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.lakestorage;
+package com.alibaba.fluss.lake.writer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.plugin.Plugin;
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
+
+import javax.annotation.Nullable;
 
 /**
- * A Plugin to create instances of {@link LakeStorage}.
+ * The WriterInitContext interface provides the context needed to create a LakeWriter. It includes
+ * methods to obtain the table path, table bucket, and an optional partition.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeStoragePlugin extends Plugin {
+public interface WriterInitContext {
 
     /**
-     * Returns a unique identifier among {@link LakeStoragePlugin} implementations.
+     * Returns the table path.
      *
-     * @return the identifier
+     * @return the table path
      */
-    String identifier();
+    TablePath tablePath();
 
     /**
-     * Creates a new instance of {@link LakeStorage}.
+     * Returns the table bucket.
      *
-     * @param configuration the configuration for LakeStorage
-     * @return the lake storage instance
+     * @return the table bucket
      */
-    LakeStorage createLakeStorage(final Configuration configuration);
+    TableBucket tableBucket();
+
+    /**
+     * Returns the partition, or null if there is no partition.
+     *
+     * @return the partition, or null if there is no partition
+     */
+    @Nullable
+    String partition();
 }

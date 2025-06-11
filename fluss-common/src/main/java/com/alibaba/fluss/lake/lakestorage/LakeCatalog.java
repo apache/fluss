@@ -14,42 +14,33 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.writer;
+package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.exception.TableAlreadyExistException;
+import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 
-import javax.annotation.Nullable;
-
 /**
- * The WriterInitContext interface provides the context needed to create a LakeWriter. It includes
- * methods to obtain the table path, table bucket, and an optional partition.
+ * A catalog interface to modify metadata in external datalake.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface WriterInitContext {
+public interface LakeCatalog extends AutoCloseable {
 
     /**
-     * Returns the table path.
+     * Create a new table in lake.
      *
-     * @return the table path
+     * @param tablePath path of the table to be created
+     * @param tableDescriptor The descriptor of the table to be created
+     * @throws TableAlreadyExistException if the table already exists
      */
-    TablePath tablePath();
+    void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+            throws TableAlreadyExistException;
 
-    /**
-     * Returns the table bucket.
-     *
-     * @return the table bucket
-     */
-    TableBucket tableBucket();
-
-    /**
-     * Returns the partition, or null if there is no partition.
-     *
-     * @return the partition, or null if there is no partition
-     */
-    @Nullable
-    String partition();
+    @Override
+    default void close() throws Exception {
+        // default do nothing
+    }
 }

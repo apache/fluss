@@ -14,7 +14,7 @@
  *  limitations under the License.
  */
 
-package com.alibaba.fluss.lakehouse.writer;
+package com.alibaba.fluss.lake.writer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.record.LogRecord;

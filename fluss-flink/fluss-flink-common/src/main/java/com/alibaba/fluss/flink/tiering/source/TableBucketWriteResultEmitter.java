@@ -17,7 +17,7 @@
 package com.alibaba.fluss.flink.tiering.source;
 
 import com.alibaba.fluss.flink.tiering.source.state.TieringSplitState;
-import com.alibaba.fluss.lakehouse.committer.LakeCommitter;
+import com.alibaba.fluss.lake.committer.LakeCommitter;
 
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;

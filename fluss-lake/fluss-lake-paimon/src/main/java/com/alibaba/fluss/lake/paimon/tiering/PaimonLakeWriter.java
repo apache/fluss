@@ -18,8 +18,8 @@ package com.alibaba.fluss.lake.paimon.tiering;
 
 import com.alibaba.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import com.alibaba.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
-import com.alibaba.fluss.lakehouse.writer.LakeWriter;
-import com.alibaba.fluss.lakehouse.writer.WriterInitContext;
+import com.alibaba.fluss.lake.writer.LakeWriter;
+import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecord;
 
