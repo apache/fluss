@@ -33,13 +33,5 @@
             <destName>fluss-lakehouse-paimon-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
-
-        <!-- lakehouse-cli jars -->
-        <file>
-            <source>../fluss-lakehouse/fluss-lakehouse-cli/target/fluss-lakehouse-cli-${project.version}.jar</source>
-            <outputDirectory>opt</outputDirectory>
-            <destName>fluss-lakehouse-cli-${project.version}.jar</destName>
-            <fileMode>0644</fileMode>
-        </file>
     </files>
 </assembly>

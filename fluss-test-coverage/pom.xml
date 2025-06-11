@@ -329,7 +329,6 @@
                                         <exclude>com.alibaba.fluss.lakehouse.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.lakehouse.*</exclude>
                                         <!-- end exclude for lakehouse-paimon -->
-                                        <exclude>com.alibaba.fluss.lakehouse.cli.*</exclude>
                                         <exclude>com.alibaba.fluss.kafka.*</exclude>
                                         <exclude>com.alibaba.fluss.spark.*</exclude>
                                     </excludes>

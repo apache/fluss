@@ -29,7 +29,6 @@
     <name>Fluss : Lakehouse :</name>
     <modules>
         <module>fluss-lakehouse-paimon</module>
-        <module>fluss-lakehouse-cli</module>
     </modules>
 
     <properties>

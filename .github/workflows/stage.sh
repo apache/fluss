@@ -25,7 +25,6 @@ fluss-flink/fluss-flink-1.20,\
 fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18,\
 fluss-lakehouse,\
-fluss-lakehouse/fluss-lakehouse-cli,\
 fluss-lakehouse/fluss-lakehouse-paimon,\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon

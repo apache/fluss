@@ -14,10 +14,6 @@
 # limitations under the License.
 ################################################################################
 
-# These parameters are required to run ./bin/lakehouse.sh for Java 17 support.
-# They can be safely removed when using Java 8/11.
-env.java.opts.all: --add-opens=java.base/java.util=ALL-UNNAMED
-
 #==============================================================================
 # Zookeeper
 #==============================================================================
