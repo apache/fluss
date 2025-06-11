@@ -19,6 +19,7 @@ package com.alibaba.fluss.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
 
+import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.CommonCatalogOptions;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,5 +120,21 @@ public class FlinkCatalogFactoryTest {
     private static void checkEquals(FlinkCatalog c1, FlinkCatalog c2) {
         assertThat(c2.getName()).isEqualTo(c1.getName());
         assertThat(c2.getDefaultDatabase()).isEqualTo(c1.getDefaultDatabase());
+    }
+
+    @Test
+    public void testOptionalOptionsConfiguration() {
+        FlinkCatalogFactory factory = new FlinkCatalogFactory();
+
+        // Test that optionalOptions() correctly declares DEFAULT_DATABASE
+        Set<ConfigOption<?>> optionalOptions = factory.optionalOptions();
+        assertThat(optionalOptions)
+                .hasSize(1)
+                .containsExactly(FlinkCatalogOptions.DEFAULT_DATABASE);
+
+        ConfigOption<?> defaultDbOption = FlinkCatalogOptions.DEFAULT_DATABASE;
+        assertThat(defaultDbOption.key()).isEqualTo("default-database");
+        assertThat(defaultDbOption.hasDefaultValue()).isTrue();
+        assertThat(defaultDbOption.defaultValue()).isEqualTo("fluss");
     }
 }
