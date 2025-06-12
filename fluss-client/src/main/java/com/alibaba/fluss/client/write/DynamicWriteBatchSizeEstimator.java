@@ -34,7 +34,7 @@ public class DynamicWriteBatchSizeEstimator {
 
     private static final Logger LOG = LoggerFactory.getLogger(DynamicWriteBatchSizeEstimator.class);
 
-    private static final double RATIO_TO_INCREASE_BATCH_SIZE = 0.9d;
+    private static final double RATIO_TO_INCREASE_BATCH_SIZE = 0.8d;
     private static final double RATIO_TO_DECREASE_BATCH_SIZE = 0.5d;
     private final int maxBatchSize;
     private final int pageSize;
@@ -63,18 +63,14 @@ public class DynamicWriteBatchSizeEstimator {
 
         int estimatedBatchSize =
                 estimatedBatchSizeMap.getOrDefault(physicalTablePath, maxBatchSize);
-        int newEstimatedBatchSize;
+        int newEstimatedBatchSize = estimatedBatchSize;
         if (observedBatchSize >= estimatedBatchSize
                 || observedBatchSize > estimatedBatchSize * RATIO_TO_INCREASE_BATCH_SIZE) {
-            // To increase 1%
+            // To increase 10%
             newEstimatedBatchSize = Math.min((int) (estimatedBatchSize * 1.1), maxBatchSize);
-        } else if (observedBatchSize < estimatedBatchSize * RATIO_TO_INCREASE_BATCH_SIZE
-                && observedBatchSize > estimatedBatchSize * RATIO_TO_DECREASE_BATCH_SIZE) {
+        } else if (observedBatchSize < estimatedBatchSize * RATIO_TO_DECREASE_BATCH_SIZE) {
             // To decrease 5%
-            newEstimatedBatchSize = Math.max((int) (estimatedBatchSize * 0.95), pageSize);
-        } else {
-            // To decrease 10%
-            newEstimatedBatchSize = Math.max((int) (estimatedBatchSize * 0.9), pageSize);
+            newEstimatedBatchSize = Math.max((int) (estimatedBatchSize * 0.95), 2 * pageSize);
         }
 
         estimatedBatchSizeMap.put(physicalTablePath, newEstimatedBatchSize);
