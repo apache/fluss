@@ -34,7 +34,7 @@ If your cluster does not fulfill these software requirements you will need to in
 
 ### `JAVA_HOME` Configuration
 
-Flink requires the `JAVA_HOME` environment variable to be set on your
+Fluss requires the `JAVA_HOME` environment variable to be set on your
 test machine and point to the directory of your Java installation.
 
 ## Fluss Setup
