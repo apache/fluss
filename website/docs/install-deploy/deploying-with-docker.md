@@ -346,14 +346,14 @@ to interact with Fluss.
 You can start a Flink standalone cluster refer to [Flink Environment Preparation](engine-flink/getting-started.md#preparation-when-using-flink-sql-client)
 
 **Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
-```shell title="<FLINK_HOME>"
+```shell
 bin/start-cluster.sh 
 ```
 
 
 ### Enter into SQL-Client
 Use the following command to enter the Flink SQL CLI Container:
-```shell title="<FLINK_HOME>"
+```shell
 ./sql-client
 ```
 
