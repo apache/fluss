@@ -17,6 +17,7 @@
 package com.alibaba.fluss.lake.paimon.tiering;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
 import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 import com.alibaba.fluss.lake.writer.LakeWriter;
@@ -120,6 +121,12 @@ class PaimonTieringTest {
         SimpleVersionedSerializer<PaimonCommittable> committableSerializer =
                 paimonLakeTieringFactory.getCommitableSerializer();
 
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath)) {
+            // should no any missing snapshot
+            assertThat(lakeCommitter.getMissingLakeSnapshot(1L)).isNull();
+        }
+
         Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
         List<String> partitions =
                 isPartitioned ? Arrays.asList("p1", "p2", "p3") : Collections.singletonList(null);
@@ -176,6 +183,32 @@ class PaimonTieringTest {
                             actualRecords, expectRecords, bucket, isPartitioned, partition);
                 }
             }
+        }
+
+        // then, let's verify getMissingLakeSnapshot works
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath)) {
+            // use snapshot id 0 as the known snapshot id
+            CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(0L);
+            assertThat(committedLakeSnapshot).isNotNull();
+            Map<Tuple2<String, Integer>, Long> offsets = committedLakeSnapshot.getLogEndOffsets();
+            for (int bucket = 0; bucket < 3; bucket++) {
+                for (String partition : partitions) {
+                    // we only write 10 records, so expected log offset should be 9
+                    assertThat(offsets.get(Tuple2.of(partition, bucket))).isEqualTo(9);
+                }
+            }
+            assertThat(committedLakeSnapshot.getLakeSnapshotId()).isOne();
+
+            // use null as the known snapshot id
+            CommittedLakeSnapshot committedLakeSnapshot2 =
+                    lakeCommitter.getMissingLakeSnapshot(null);
+            assertThat(committedLakeSnapshot2).isEqualTo(committedLakeSnapshot);
+
+            // use snapshot id 1 as the known snapshot id
+            committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
+            // no any missing committed offset since the latest snapshot is 1L
+            assertThat(committedLakeSnapshot).isNull();
         }
     }
 
@@ -652,6 +685,9 @@ class PaimonTieringTest {
             } else {
                 builder.primaryKey("c1");
             }
+            builder.option(
+                    CoreOptions.CHANGELOG_PRODUCER.key(),
+                    CoreOptions.ChangelogProducer.INPUT.toString());
         }
         if (numBuckets != null) {
             builder.option(CoreOptions.BUCKET.key(), String.valueOf(numBuckets));

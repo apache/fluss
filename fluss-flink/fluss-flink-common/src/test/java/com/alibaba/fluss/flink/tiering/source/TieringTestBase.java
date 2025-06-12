@@ -159,7 +159,7 @@ public class TieringTestBase extends AbstractTestBase {
     }
 
     @BeforeEach
-    void beforeEach() throws Exception {
+    protected void beforeEach() throws Exception {
         admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 

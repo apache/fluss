@@ -18,6 +18,8 @@ package com.alibaba.fluss.lake.committer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -49,4 +51,24 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
      * @throws IOException if an I/O error occurs
      */
     long commit(CommittableT committable) throws IOException;
+
+    /**
+     * Aborts the given committable object.
+     *
+     * @param committable the committable object
+     * @throws IOException if an I/O error occurs
+     */
+    void abort(CommittableT committable) throws IOException;
+
+    /**
+     * Get missing lake snapshot that has been committed to lake but didn't commit to fluss.
+     *
+     * @param latestLakeSnapshotIdOfFluss the latest lake snapshot id in fluss, used to judge which
+     *     lake snapshot is missing.
+     * @return the missing lake snapshot, returns null if no any missing snapshot found
+     * @throws IOException if an I/O error occurs
+     */
+    @Nullable
+    CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
+            throws IOException;
 }

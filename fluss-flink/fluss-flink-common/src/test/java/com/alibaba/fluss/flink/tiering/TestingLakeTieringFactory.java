@@ -18,6 +18,7 @@ package com.alibaba.fluss.flink.tiering;
 
 import com.alibaba.fluss.flink.tiering.committer.TestingCommittable;
 import com.alibaba.fluss.flink.tiering.source.TestingWriteResultSerializer;
+import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
 import com.alibaba.fluss.lake.committer.CommitterInitContext;
 import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
@@ -26,6 +27,8 @@ import com.alibaba.fluss.lake.writer.LakeWriter;
 import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.record.LogRecord;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +36,16 @@ import java.util.List;
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
         implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
+
+    @Nullable private final TestingLakeCommitter testingLakeCommitter;
+
+    public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
+        this.testingLakeCommitter = testingLakeCommitter;
+    }
+
+    public TestingLakeTieringFactory() {
+        this(null);
+    }
 
     @Override
     public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)
@@ -48,7 +61,7 @@ public class TestingLakeTieringFactory
     @Override
     public LakeCommitter<TestingWriteResult, TestingCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return new TestingLakeCommitter();
+        return testingLakeCommitter == null ? new TestingLakeCommitter() : testingLakeCommitter;
     }
 
     @Override
@@ -74,10 +87,23 @@ public class TestingLakeTieringFactory
         public void close() throws IOException {}
     }
 
-    private static final class TestingLakeCommitter
+    /** A lake committer for testing purpose. */
+    public static final class TestingLakeCommitter
             implements LakeCommitter<TestingWriteResult, TestingCommittable> {
 
-        private long currentSnapshot = 0;
+        private long currentSnapshot;
+
+        @Nullable private final CommittedLakeSnapshot mockCommittedSnapshot;
+
+        public TestingLakeCommitter() {
+            this(null);
+        }
+
+        public TestingLakeCommitter(@Nullable CommittedLakeSnapshot mockCommittedSnapshot) {
+            this.mockCommittedSnapshot = mockCommittedSnapshot;
+            this.currentSnapshot =
+                    mockCommittedSnapshot == null ? 0 : mockCommittedSnapshot.getLakeSnapshotId();
+        }
 
         @Override
         public TestingCommittable toCommitable(List<TestingWriteResult> testingWriteResults)
@@ -91,7 +117,22 @@ public class TestingLakeTieringFactory
 
         @Override
         public long commit(TestingCommittable committable) throws IOException {
-            return currentSnapshot++;
+            return ++currentSnapshot;
+        }
+
+        @Override
+        public void abort(TestingCommittable committable) throws IOException {
+            // do nothing
+        }
+
+        @Override
+        public @Nullable CommittedLakeSnapshot getMissingLakeSnapshot(
+                @Nullable Long knownSnapshotId) throws IOException {
+            if (knownSnapshotId == null) {
+                return mockCommittedSnapshot;
+            } else {
+                return null;
+            }
         }
 
         @Override

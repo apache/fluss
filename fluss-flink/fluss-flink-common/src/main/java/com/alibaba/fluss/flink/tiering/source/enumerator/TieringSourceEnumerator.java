@@ -23,7 +23,8 @@ import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
-import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
+import com.alibaba.fluss.flink.tiering.event.FailedTieringEvent;
+import com.alibaba.fluss.flink.tiering.event.FinishedTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -181,10 +182,9 @@ public class TieringSourceEnumerator
 
     @Override
     public void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
-        // TODO: deal with failed table later via SourceEvent
-        if (sourceEvent instanceof FinishTieringEvent) {
-            FinishTieringEvent finishTieringEvent = (FinishTieringEvent) sourceEvent;
-            long finishedTableId = finishTieringEvent.getTableId();
+        if (sourceEvent instanceof FinishedTieringEvent) {
+            FinishedTieringEvent finishedTieringEvent = (FinishedTieringEvent) sourceEvent;
+            long finishedTableId = finishedTieringEvent.getTableId();
             Long tieringEpoch = tieringTableEpochs.remove(finishedTableId);
             if (tieringEpoch == null) {
                 // shouldn't happen, warn it
@@ -193,10 +193,31 @@ public class TieringSourceEnumerator
                         finishedTableId);
             } else {
                 finishedTableEpochs.put(finishedTableId, tieringEpoch);
-                // call one round of heartbeat to notify table has been finished
-                this.context.callAsync(
-                        this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
             }
+        }
+
+        if (sourceEvent instanceof FailedTieringEvent) {
+            FailedTieringEvent failedEvent = (FailedTieringEvent) sourceEvent;
+            long failedTableId = failedEvent.getTableId();
+            Long tieringEpoch = tieringTableEpochs.remove(failedTableId);
+            LOG.info(
+                    "Tiering table {} is failed, fail reason is {}.",
+                    tieringEpoch,
+                    failedEvent.failReason());
+            if (tieringEpoch == null) {
+                // shouldn't happen, warn it
+                LOG.warn(
+                        "The failed table {} is not in tiering table, won't report it to Fluss to mark as failed.",
+                        failedTableId);
+            } else {
+                failedTableEpochs.put(failedTableId, tieringEpoch);
+            }
+        }
+
+        if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {
+            // call one round of heartbeat to notify table has been finished or failed
+            this.context.callAsync(
+                    this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
         }
     }
 

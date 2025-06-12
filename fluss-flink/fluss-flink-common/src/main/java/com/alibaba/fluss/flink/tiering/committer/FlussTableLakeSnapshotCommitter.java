@@ -19,6 +19,7 @@ package com.alibaba.fluss.flink.tiering.committer;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
@@ -29,6 +30,9 @@ import com.alibaba.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import com.alibaba.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.types.Tuple2;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Map;
@@ -69,6 +73,38 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                             flussTableLakeSnapshot),
                     ExceptionUtils.stripExecutionException(e));
         }
+    }
+
+    public void commit(
+            long tableId,
+            @Nullable Map<String, Long> partitionIdByName,
+            CommittedLakeSnapshot committedLakeSnapshot)
+            throws IOException {
+        // construct lake snapshot to commit to Fluss
+        FlussTableLakeSnapshot flussTableLakeSnapshot =
+                new FlussTableLakeSnapshot(tableId, committedLakeSnapshot.getLakeSnapshotId());
+        for (Map.Entry<Tuple2<String, Integer>, Long> entry :
+                committedLakeSnapshot.getLogEndOffsets().entrySet()) {
+            Tuple2<String, Integer> partitionBucket = entry.getKey();
+            TableBucket tableBucket;
+            if (partitionBucket.f0 == null) {
+                tableBucket = new TableBucket(tableId, partitionBucket.f1);
+            } else {
+                String partitionName = partitionBucket.f0;
+                // todo: remove this
+                // in paimon 1.12, we can store this offsets(including partitionId) into snapshot
+                // properties, then, we won't need to get partitionId from partition name
+                Long partitionId = partitionIdByName.get(partitionName);
+                if (partitionId != null) {
+                    tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
+                } else {
+                    // let's skip the bucket
+                    continue;
+                }
+            }
+            flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
+        }
+        commit(flussTableLakeSnapshot);
     }
 
     private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(

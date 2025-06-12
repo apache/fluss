@@ -30,7 +30,7 @@ import java.io.IOException;
 public class PaimonLakeTieringFactory
         implements LakeTieringFactory<PaimonWriteResult, PaimonCommittable> {
 
-    public static final String FLUSS_LAKE_TIERING_COMMIT_USER = "fluss_lake_tiering";
+    public static final String FLUSS_LAKE_TIERING_COMMIT_USER = "__fluss_lake_tiering";
 
     private static final long serialVersionUID = 1L;
 

@@ -316,7 +316,7 @@ public class TieringSplitGenerator {
             }
         }
         LOG.info(
-                "The lastCommittedBucketOffset{} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",
+                "The lastCommittedBucketOffset {} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",
                 lastCommittedBucketOffset,
                 latestBucketOffset,
                 tableBucket);

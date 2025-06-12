@@ -18,6 +18,7 @@ package com.alibaba.fluss.flink.tiering.committer;
 
 import com.alibaba.fluss.metadata.TableBucket;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /** A lake snapshot for a Fluss table. */
@@ -28,6 +29,10 @@ public class FlussTableLakeSnapshot {
     private final long lakeSnapshotId;
 
     private final Map<TableBucket, Long> logEndOffsets;
+
+    public FlussTableLakeSnapshot(long tableId, long lakeSnapshotId) {
+        this(tableId, lakeSnapshotId, new HashMap<>());
+    }
 
     public FlussTableLakeSnapshot(
             long tableId, long lakeSnapshotId, Map<TableBucket, Long> logEndOffsets) {
@@ -46,6 +51,10 @@ public class FlussTableLakeSnapshot {
 
     public Map<TableBucket, Long> logEndOffsets() {
         return logEndOffsets;
+    }
+
+    public void addBucketOffset(TableBucket bucket, long offset) {
+        logEndOffsets.put(bucket, offset);
     }
 
     @Override

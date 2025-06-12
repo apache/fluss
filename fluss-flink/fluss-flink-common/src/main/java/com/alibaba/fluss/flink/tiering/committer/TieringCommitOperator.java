@@ -16,15 +16,24 @@
 
 package com.alibaba.fluss.flink.tiering.committer;
 
+import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.tiering.event.FinishTieringEvent;
+import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
+import com.alibaba.fluss.flink.tiering.event.FailedTieringEvent;
+import com.alibaba.fluss.flink.tiering.event.FinishedTieringEvent;
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
 import com.alibaba.fluss.flink.tiering.source.TieringSource;
+import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
 import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.lake.writer.LakeWriter;
+import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
@@ -67,8 +76,11 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     private static final long serialVersionUID = 1L;
 
+    private final Configuration flussConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
     private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
+    private Connection connection;
+    private Admin admin;
 
     // gateway to send event to flink source coordinator
     private final OperatorEventGateway operatorEventGateway;
@@ -84,6 +96,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         this.lakeTieringFactory = lakeTieringFactory;
         this.flussTableLakeSnapshotCommitter = new FlussTableLakeSnapshotCommitter(flussConf);
         this.collectedTableBucketWriteResults = new HashMap<>();
+        this.flussConfig = flussConf;
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
@@ -97,6 +110,8 @@ public class TieringCommitOperator<WriteResult, Committable>
     @Override
     public void open() {
         flussTableLakeSnapshotCommitter.open();
+        connection = ConnectionFactory.createConnection(flussConfig);
+        admin = connection.getAdmin();
     }
 
     @Override
@@ -112,16 +127,27 @@ public class TieringCommitOperator<WriteResult, Committable>
                 collectTableAllBucketWriteResult(tableId);
 
         if (committableWriteResults != null) {
-            Committable committable =
-                    commitWriteResults(
-                            tableId, tableBucketWriteResult.tablePath(), committableWriteResults);
-            collectedTableBucketWriteResults.remove(tableId);
-            // notify that the table id has been finished tier
-            operatorEventGateway.sendEventToCoordinator(
-                    new SourceEventWrapper(new FinishTieringEvent(tableId)));
-            // only emit when committable is not-null
-            if (committable != null) {
-                output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));
+            try {
+                Committable committable =
+                        commitWriteResults(
+                                tableId,
+                                tableBucketWriteResult.tablePath(),
+                                committableWriteResults);
+                // only emit when committable is not-null
+                if (committable != null) {
+                    output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));
+                }
+                // notify that the table id has been finished tier
+                operatorEventGateway.sendEventToCoordinator(
+                        new SourceEventWrapper(new FinishedTieringEvent(tableId)));
+            } catch (Exception e) {
+                // if any exception happens, send to source coordinator to mark it as failed
+                operatorEventGateway.sendEventToCoordinator(
+                        new SourceEventWrapper(
+                                new FailedTieringEvent(
+                                        tableId, ExceptionUtils.stringifyException(e))));
+            } finally {
+                collectedTableBucketWriteResults.remove(tableId);
             }
         }
     }
@@ -154,6 +180,8 @@ public class TieringCommitOperator<WriteResult, Committable>
                             .collect(Collectors.toList());
             // to committable
             Committable committable = lakeCommitter.toCommitable(writeResults);
+            // before commit to lake, check fluss not missing any lake snapshot commited by fluss
+            checkFlussNotMissingLakeSnapshot(tablePath, lakeCommitter, committable);
             long commitedSnapshotId = lakeCommitter.commit(committable);
             // commit to fluss
             Map<TableBucket, Long> logEndOffsets = new HashMap<>();
@@ -163,6 +191,61 @@ public class TieringCommitOperator<WriteResult, Committable>
             flussTableLakeSnapshotCommitter.commit(
                     new FlussTableLakeSnapshot(tableId, commitedSnapshotId, logEndOffsets));
             return committable;
+        }
+    }
+
+    private void checkFlussNotMissingLakeSnapshot(
+            TablePath tablePath,
+            LakeCommitter<WriteResult, Committable> lakeCommitter,
+            Committable committable)
+            throws Exception {
+        Long flussCurrentLakeSnapshot;
+        try {
+            flussCurrentLakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get().getSnapshotId();
+        } catch (Exception e) {
+            Throwable throwable = e.getCause();
+            if (throwable instanceof LakeTableSnapshotNotExistException) {
+                // do-nothing
+                flussCurrentLakeSnapshot = null;
+            } else {
+                throw e;
+            }
+        }
+
+        // get Fluss missing lake snapshot in Lake
+        CommittedLakeSnapshot missingCommittedSnapshot =
+                lakeCommitter.getMissingLakeSnapshot(flussCurrentLakeSnapshot);
+
+        // fluss's known snapshot is less than lake snapshot committed by fluss
+        // fail this commit since the data is read from the log end-offset of a invalid fluss
+        // known lake snapshot, which means the data already has been committed to lake,
+        // not to commit to lake to avoid data duplicated
+        if (missingCommittedSnapshot != null) {
+            // commit this missing snapshot to fluss
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            Map<String, Long> partitionIdByName = null;
+            if (tableInfo.isPartitioned()) {
+                partitionIdByName =
+                        admin.listPartitionInfos(tablePath).get().stream()
+                                .collect(
+                                        Collectors.toMap(
+                                                PartitionInfo::getPartitionName,
+                                                PartitionInfo::getPartitionId));
+            }
+            flussTableLakeSnapshotCommitter.commit(
+                    tableInfo.getTableId(), partitionIdByName, missingCommittedSnapshot);
+            // abort this committable to delete the written files
+            lakeCommitter.abort(committable);
+            throw new IllegalStateException(
+                    String.format(
+                            "The current Fluss's lake snapshot %d is less than"
+                                    + " lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d},"
+                                    + " missing snapshot: %s.",
+                            flussCurrentLakeSnapshot,
+                            missingCommittedSnapshot.getLakeSnapshotId(),
+                            tableInfo.getTablePath(),
+                            tableInfo.getTableId(),
+                            missingCommittedSnapshot));
         }
     }
 
@@ -214,5 +297,11 @@ public class TieringCommitOperator<WriteResult, Committable>
     @Override
     public void close() throws Exception {
         flussTableLakeSnapshotCommitter.close();
+        if (admin != null) {
+            admin.close();
+        }
+        if (connection != null) {
+            connection.close();
+        }
     }
 }

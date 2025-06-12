@@ -19,13 +19,13 @@ package com.alibaba.fluss.flink.tiering.event;
 import org.apache.flink.api.connector.source.SourceEvent;
 
 /** SourceEvent used to represent a Fluss table has been tiered finished. */
-public class FinishTieringEvent implements SourceEvent {
+public class FinishedTieringEvent implements SourceEvent {
 
     private static final long serialVersionUID = 1L;
 
     private final long tableId;
 
-    public FinishTieringEvent(long tableId) {
+    public FinishedTieringEvent(long tableId) {
         this.tableId = tableId;
     }
 
