@@ -59,7 +59,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     private int batchSequence;
     private int currentRecordNumber;
     private int sizeInBytes;
-    private boolean isClosed;
+    private volatile boolean isClosed;
     private boolean aborted = false;
 
     private MemoryLogRecordsIndexedBuilder(

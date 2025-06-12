@@ -639,6 +639,11 @@ public final class RecordAccumulator {
         if (last != null) {
             boolean success = last.tryAppend(writeRecord, callback);
             if (!success) {
+                // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
+                // logic), we need to avoid do that in an lock which locked dq. However, why we not
+                // remove build logic out of close for ArrowLogWriteBatch is that we want to release
+                // non-heap memory hold by arrowWriter as soon as possible to avoid OOM. Maybe we
+                // need to introduce a more reasonable way to solve these two problems.
                 last.close();
             } else {
                 return new RecordAppendResult(deque.size() > 1 || last.isClosed(), false, false);

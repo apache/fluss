@@ -53,7 +53,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private int batchSequence;
     private int currentRecordNumber;
     private int sizeInBytes;
-    private boolean isClosed;
+    private volatile boolean isClosed;
     private final KvFormat kvFormat;
     private boolean aborted = false;
 

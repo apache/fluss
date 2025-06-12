@@ -54,12 +54,13 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private final AbstractPagedOutputView pagedOutputView;
     private final boolean appendOnly;
 
-    private MultiBytesView bytesView = null;
+    private volatile MultiBytesView bytesView = null;
+
     private long writerId;
     private int batchSequence;
     private int estimatedSizeInBytes;
     private int recordCount;
-    private boolean isClosed;
+    private volatile boolean isClosed;
     private boolean reCalculateSizeInBytes = false;
     private boolean resetBatchHeader = false;
     private boolean aborted = false;
@@ -216,10 +217,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             return;
         }
 
+        isClosed = true;
+
         // Build arrowBatch when batch close to recycle arrow writer.
         build();
-
-        isClosed = true;
     }
 
     public void recycleArrowWriter() {
