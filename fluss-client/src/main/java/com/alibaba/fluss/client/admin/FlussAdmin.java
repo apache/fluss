@@ -286,7 +286,7 @@ public class FlussAdmin implements Admin {
 
         if (partitionSpec != null) {
             PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
-            request.setPartitionSpec(pbPartitionSpec);
+            request.setPartialPartitionSpec(pbPartitionSpec);
         }
         return gateway.listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);

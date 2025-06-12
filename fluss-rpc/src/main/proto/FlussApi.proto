@@ -378,7 +378,7 @@ message InitWriterResponse {
 
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
-  optional PbPartitionSpec partition_spec = 2;
+  optional PbPartitionSpec partial_partition_spec = 2;
 }
 
 message ListPartitionInfosResponse {
@@ -800,7 +800,7 @@ message PbRemoteLogSegment {
 
 message PbPartitionInfo {
   required int64 partition_id = 1;
-  required PbPartitionSpec partial_partition_spec = 2;
+  required PbPartitionSpec partition_spec = 2;
 }
 
 message PbPartitionSpec {
