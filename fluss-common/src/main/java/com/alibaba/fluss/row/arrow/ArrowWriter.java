@@ -284,6 +284,7 @@ public class ArrowWriter implements AutoCloseable {
     public void recycle(long epoch) {
         if (this.epoch == epoch) {
             root.clear();
+            recordsCount = 0;
             provider.recycleWriter(this);
         }
     }

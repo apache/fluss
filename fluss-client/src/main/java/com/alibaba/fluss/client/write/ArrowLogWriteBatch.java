@@ -70,7 +70,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
         checkArgument(writeRecord.getKey() == null, "key must be null for log record");
         checkNotNull(row != null, "row must not be null for log record");
         checkNotNull(callback, "write callback must be not null");
-        if (recordsBuilder.isFull() || recordsBuilder.isClosed()) {
+        if (recordsBuilder.isClosed() || recordsBuilder.isFull()) {
             return false;
         } else {
             recordsBuilder.append(ChangeType.APPEND_ONLY, row);
