@@ -325,7 +325,7 @@ public class ClientRpcMessageUtils {
                                 new PartitionInfo(
                                         pbPartitionInfo.getPartitionId(),
                                         toResolvedPartitionSpec(
-                                                pbPartitionInfo.getPartialPartitionSpec())))
+                                                pbPartitionInfo.getPartitionSpec())))
                 .collect(Collectors.toList());
     }
 
