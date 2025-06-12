@@ -1,5 +1,5 @@
 ---
-title: Exposing Fluss to External Clients
+title: Exposing a Fluss Cluster to External Clients
 sidebar_position: 2
 ---
 
@@ -19,13 +19,34 @@ sidebar_position: 2
  limitations under the License.
 -->
 
-# Exposing Fluss to External Clients (using `advertised.listeners`)
+# Exposing a Fluss Cluster to External Clients (using `advertised.listeners`)
+
+Clients must be able to connect to **all** CoordinatorServer and TabletServer instances of a Fluss cluster.
+This means that potential host names of all Fluss cluster components must be resolvable, and the IP addresses must routable from the machine where the client is running on.
+
+While there is no additional setup needed when clients are part of the same subnet as the Fluss cluster components, exposing a Fluss cluster to clients that are part of a different subnet ("external clients") requires additional configuration.
+This includes clients that are running on
+
+- the _same host_ but are part of a different subnet.   
+    Example: Fluss cluster components are deployed with Docker and are all part of an internal Docker network. The client is running directly on the host machine.
+- a _different host_ that is part of a different subnet.   
+    Example: Fluss cluster components are deployed in the cloud. The client is running on a different host and connects to the Fluss cluster over the public internet.
+
+In the following you can find
+
+- [A Primer on Fluss Networking](#a-primer-on-fluss-networking), which illustrates why additional configuration for external clients is needed. Furthermore, the most common networking configuration options are explained.
+- An example how to [Connect to a Fluss Cluster Deployed with Docker](#connect-to-a-fluss-cluster-deployed-with-docker), which shows the necessary steps to connect a client that is running directly on the host to a Fluss cluster that is deployed with Docker on the _same host_.
+
+:::note
+We do not give an example how to expose a Fluss cluster to external clients that are running on a _different host_ that is part of a different subnet, because the configuration highly depends on the used environment (on-premise, cloud provider). 
+However, the underlying principles explained in the following sections remain the same.
+:::
+
+
+## A Primer on Fluss Networking
 
 ...
 
-## Connecting to a Fluss Cluster Deployed with Docker
+## Connect to a Fluss Cluster Deployed with Docker
 
 ...
-
-## Connecting to a Fluss Cluster Deployed on Bare Machines in the Cloud
-
