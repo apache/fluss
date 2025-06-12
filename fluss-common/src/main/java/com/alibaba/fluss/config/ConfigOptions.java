@@ -1106,7 +1106,21 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
-                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\")");
+                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
+
+    public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =
+            key("client.security.sasl.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password to use for client-side SASL JAAS authentication.");
+
+    public static final ConfigOption<String> CLIENT_SASL_JAAS_PASSWORD =
+            key("client.security.sasl.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username to use for client-side SASL JAAS authentication.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
