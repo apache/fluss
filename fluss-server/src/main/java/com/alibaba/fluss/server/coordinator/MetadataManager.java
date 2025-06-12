@@ -169,7 +169,7 @@ public class MetadataManager {
      * <p>Return a map from partition name to partition id.
      */
     public Map<String, Long> listPartitions(
-            TablePath tablePath, ResolvedPartitionSpec partitionSpecFromRequest)
+            TablePath tablePath, ResolvedPartitionSpec partitionFilter)
             throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
         TableInfo tableInfo = getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
@@ -177,18 +177,18 @@ public class MetadataManager {
                     "Table '" + tablePath + "' is not a partitioned table.");
         }
         try {
-            if (partitionSpecFromRequest == null) {
+            if (partitionFilter == null) {
                 return zookeeperClient.getPartitionNameAndIds(tablePath);
             } else {
 
                 return zookeeperClient.getPartitionNameAndIds(
-                        tablePath, tableInfo.getPartitionKeys(), partitionSpecFromRequest);
+                        tablePath, tableInfo.getPartitionKeys(), partitionFilter);
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
                             "Fail to list partitions for table: %s, partitionSpec: %s.",
-                            tablePath, partitionSpecFromRequest),
+                            tablePath, partitionFilter),
                     e);
         }
     }

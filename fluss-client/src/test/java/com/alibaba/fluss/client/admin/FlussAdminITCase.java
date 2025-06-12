@@ -522,11 +522,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .comment("test table")
                         .distributedBy(3, "id")
                         .partitionedBy("pt", "secondary_partition")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "pt")
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
                         .build();
         TablePath partitionedTablePath = TablePath.of(dbName, "test_partitioned_table");
         // create table
@@ -564,7 +559,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 partitionInfos.stream()
                         .map(PartitionInfo::getPartitionName)
                         .collect(Collectors.toList());
-        assertThat(actualPartitionNames).containsAll(Arrays.asList("2025$10", "2025$11"));
+        assertThat(actualPartitionNames).containsExactlyInAnyOrder("2025$10", "2025$11");
 
         // run listPartitionInfos by partition spec with invalid partition name.
         PartitionSpec invalidNamePartitionSpec = newPartitionSpec("pt", "2024");

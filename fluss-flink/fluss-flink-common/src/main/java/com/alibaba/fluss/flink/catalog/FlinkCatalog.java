@@ -70,6 +70,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -494,24 +495,19 @@ public class FlinkCatalog implements Catalog {
                     TableInfo tableInfo = admin.getTableInfo(tablePath).get();
                     partitionKeys = tableInfo.getPartitionKeys();
                 } catch (Exception ee) {
-                    // throw general exception if getting partition keys failed.
-                    throw new CatalogException(
-                            String.format(
-                                    "PartitionSpec %s does not match partition keys of table %s in catalog %s.",
-                                    partitionSpec, objectPath.getFullName(), catalogName),
-                            e);
+                    // ignore
                 }
-
                 if (partitionKeys != null
-                        && !partitionKeys.containsAll(
-                                catalogPartitionSpec.getPartitionSpec().keySet())) {
+                        && !new HashSet<>(partitionKeys)
+                                .containsAll(catalogPartitionSpec.getPartitionSpec().keySet())) {
                     // throw specific partition exception if getting partition keys success.
                     throw new PartitionSpecInvalidException(
                             getName(), partitionKeys, objectPath, catalogPartitionSpec, e);
+                } else {
+                    // throw general exception
+                    throw new CatalogException(
+                            "The partition value is invalid, " + e.getMessage(), e);
                 }
-
-                throw new CatalogException("The partition value is invalid, " + e.getMessage(), e);
-
             } else if (isPartitionAlreadyExists(t)) {
                 throw new PartitionAlreadyExistsException(
                         getName(), objectPath, catalogPartitionSpec);

@@ -459,9 +459,9 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<String, Long> partitions = new HashMap<>();
 
         for (String partitionName : getPartitions(tablePath)) {
-            ResolvedPartitionSpec resolvedPartitionSpecFromZK =
+            ResolvedPartitionSpec resolvedPartitionSpec =
                     fromPartitionName(partitionKeys, partitionName);
-            boolean contains = resolvedPartitionSpecFromZK.contains(partialPartitionSpec);
+            boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
             if (contains) {
                 Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
                 optPartition.ifPresent(
