@@ -176,6 +176,21 @@ CREATE TABLE my_auto_part_log_table (
 
 For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
 
+Fluss also support Multi-Fields Partitioned Table, the following SQL statement creates a Multi-Fields Partitioned Log Table in Fluss:
+
+```sql title="Flink SQL"
+CREATE TABLE my_multi_fields_part_log_table (
+  order_id BIGINT,
+  item_id BIGINT,
+  amount INT,
+  address STRING,
+  dt STRING,
+  nation STRING
+) PARTITIONED BY (dt, nation);
+```
+
+For more details about Multi-Fields Partitioned Table, refer to [Multi-Fields Partitioning](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables).
+
 ### Options
 
 The supported option in `WITH` parameters when creating a table are listed in [Connector Options](engine-flink/options.md) page.
@@ -223,11 +238,13 @@ To show all the partitions of a partitioned table, run:
 SHOW PARTITIONS my_part_pk_table;
 ```
 
-For more details, refer to the [Flink SHOW PARTITIONS](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/show/#show-partitions) documentation.
+For Multi-Fields Partitioned Table, we can show partitions with the given partition spec, like:
 
-:::note
-Currently, we only support show all partitions of a partitioned table, but not support show partitions with the given partition spec.
-:::
+```sql title="Flink SQL"
+SHOW PARTITIONS my_multi_fields_part_log_table PARTITION (dt = '2025-03-05');
+```
+
+For more details, refer to the [Flink SHOW PARTITIONS](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/show/#show-partitions) documentation.
 
 ## Add Partition
 
@@ -238,6 +255,10 @@ or throw an exception.
 To add partitions, run:
 ```sql title="Flink SQL"
 ALTER TABLE my_part_pk_table ADD PARTITION (dt = '2025-03-05');
+```
+
+```sql title="Flink SQL"
+ALTER TABLE my_multi_fields_part_log_table ADD PARTITION (dt = '2025-03-05', nation = 'US');
 ```
 
 For more details, refer to the [Flink ALTER TABLE(ADD)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#add) documentation.
@@ -251,6 +272,10 @@ not exists, Fluss will ignore the request or throw an exception.
 To drop partitions, run:
 ```sql title="Flink SQL"
 ALTER TABLE my_part_pk_table DROP PARTITION (dt = '2025-03-05');
+```
+
+```sql title="Flink SQL"
+ALTER TABLE my_multi_fields_part_log_table DROP PARTITION (dt = '2025-03-05', nation = 'US');
 ```
 
 For more details, refer to the [Flink ALTER TABLE(DROP)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#drop) documentation.

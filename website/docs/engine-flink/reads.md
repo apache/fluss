@@ -115,7 +115,7 @@ CREATE TABLE `testcatalog`.`testdb`.`log_partitioned_table` (
     `c_custkey` INT NOT NULL,
     `c_name` STRING NOT NULL,
     `c_address` STRING NOT NULL,
-    `c_nationkey` INT NOT NULL,
+    `c_nationkey` STRING NOT NULL,
     `c_phone` STRING NOT NULL,
     `c_acctbal` DECIMAL(15, 2) NOT NULL,
     `c_mktsegment` STRING NOT NULL,
