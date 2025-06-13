@@ -83,7 +83,7 @@ public class PushdownUtils {
     /** Extract field equality information from expressions. */
     public static List<FieldEqual> extractFieldEquals(
             List<ResolvedExpression> expressions,
-            Map<Integer, LogicalType> primaryKeyColumn,
+            Map<Integer, LogicalType> fieldIndexToType,
             List<ResolvedExpression> acceptedFiltersResult,
             List<ResolvedExpression> remainingFiltersResult,
             ValueConversion valueConversion) {
@@ -107,7 +107,7 @@ public class PushdownUtils {
                                 extractFieldEqual(
                                         leftFieldRef,
                                         rightValue,
-                                        primaryKeyColumn,
+                                        fieldIndexToType,
                                         valueConversion);
                     } else if (left instanceof ValueLiteralExpression
                             && right instanceof FieldReferenceExpression) {
@@ -117,7 +117,7 @@ public class PushdownUtils {
                                 extractFieldEqual(
                                         rightFieldRef,
                                         leftValue,
-                                        primaryKeyColumn,
+                                        fieldIndexToType,
                                         valueConversion);
                     }
 
@@ -141,11 +141,11 @@ public class PushdownUtils {
     private static FieldEqual extractFieldEqual(
             FieldReferenceExpression fieldsRef,
             ValueLiteralExpression valueLiteral,
-            Map<Integer, LogicalType> primaryKeyColumn,
+            Map<Integer, LogicalType> fieldIndexToType,
             ValueConversion valueConversion) {
         int columnIndex = fieldsRef.getFieldIndex();
-        if (primaryKeyColumn.containsKey(columnIndex)) {
-            LogicalType expectedType = primaryKeyColumn.get(columnIndex);
+        if (fieldIndexToType.containsKey(columnIndex)) {
+            LogicalType expectedType = fieldIndexToType.get(columnIndex);
             if (expectedType.getTypeRoot()
                     != valueLiteral.getOutputDataType().getLogicalType().getTypeRoot()) {
                 return null;

@@ -56,6 +56,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
+
 /** A Flink {@link DynamicTableSink}. */
 public class FlinkTableSink
         implements DynamicTableSink,
@@ -263,7 +265,7 @@ public class FlinkTableSink
         List<ResolvedExpression> remainingFilters = new ArrayList<>();
         Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
         List<FieldEqual> fieldEquals =
-                PushdownUtils.extractFieldEquals(
+                extractFieldEquals(
                         filters,
                         primaryKeyTypes,
                         acceptedFilters,
