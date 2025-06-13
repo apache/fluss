@@ -1,8 +1,13 @@
 [
   {
     "versionName": "next",
-    "fullVersion": "0.7-SNAPSHOT",
-    "shortVersion": "0.7-SNAPSHOT"
+    "fullVersion": "0.8-SNAPSHOT",
+    "shortVersion": "0.8-SNAPSHOT"
+  },
+  {
+    "versionName": "version-0.7",
+    "fullVersion": "0.7.0",
+    "shortVersion": "0.7"
   },
   {
     "versionName": "version-0.6",
