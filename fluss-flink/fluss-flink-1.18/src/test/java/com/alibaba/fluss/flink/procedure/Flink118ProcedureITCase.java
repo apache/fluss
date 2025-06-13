@@ -18,9 +18,24 @@ package com.alibaba.fluss.flink.procedure;
 
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 /** IT case for authorization in Flink 1.18. */
 public class Flink118ProcedureITCase extends FlinkProcedureITCase {
 
     @Test
     void testIndexArgument() throws Exception {}
+
+    @Test
+    void testLackParams() {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.list_acl('ANY', 'ANY', 'ANY')",
+                                                        CATALOG_NAME))
+                                        .wait())
+                .hasMessageContaining(
+                        "No match found for function signature list_acl(<CHARACTER>, <CHARACTER>, <CHARACTER>)");
+    }
 }

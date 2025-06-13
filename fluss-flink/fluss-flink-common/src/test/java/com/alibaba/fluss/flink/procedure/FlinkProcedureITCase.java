@@ -181,19 +181,6 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
-    void testLackParams() {
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "Call %s.sys.list_acl('ANY', 'ANY', 'ANY')",
-                                                        CATALOG_NAME))
-                                        .wait())
-                .hasMessageContaining(
-                        " No match found for function signature list_acl(<CHARACTER>, <CHARACTER>, <CHARACTER>)");
-    }
-
-    @Test
     void testNotAllowFilterWhenAddAcl() {
         assertThatThrownBy(
                         () ->
