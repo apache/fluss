@@ -42,6 +42,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 /** The builder to build Flink lake tiering job. */
 public class LakeTieringJobBuilder {
 
+    private static final String DEFAULT_TIERING_SERVICE_JOB_NAME = "Fluss_Tiering_Service_Job";
+
     private final StreamExecutionEnvironment env;
     private final Configuration flussConfig;
     private final Configuration dataLakeConfig;
@@ -107,6 +109,6 @@ public class LakeTieringJobBuilder {
                 .setMaxParallelism(1)
                 .sinkTo(new DiscardingSink());
 
-        return env.executeAsync();
+        return env.executeAsync(DEFAULT_TIERING_SERVICE_JOB_NAME);
     }
 }
