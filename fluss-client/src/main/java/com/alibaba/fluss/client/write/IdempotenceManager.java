@@ -18,6 +18,7 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -27,6 +28,7 @@ import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.InitWriterRequest;
 import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +37,6 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
@@ -52,6 +53,10 @@ import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 @ThreadSafe
 public class IdempotenceManager {
     private static final Logger LOG = LoggerFactory.getLogger(IdempotenceManager.class);
+
+    // retry config for requesting writerId, maybe make it as configurable
+    private static final int RETRY_TIMES = 3;
+    private static final int RETRY_INTERVAL_MS = 100;
 
     private final boolean idempotenceEnabled;
     private final IdempotenceBucketMap idempotenceBucketMap;
@@ -283,13 +288,33 @@ public class IdempotenceManager {
         return false;
     }
 
-    void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths)
-            throws ExecutionException, InterruptedException {
-        if (!isWriterIdValid()) {
-            tabletServerGateway
-                    .initWriter(prepareInitWriterRequest(tablePaths))
-                    .thenAccept(response -> setWriterId(response.getWriterId()))
-                    .get(); // TODO: can optimize into async response handling.
+    void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
+        if (isWriterIdValid()) {
+            return;
+        }
+
+        int retryCount = 0;
+        while (true) {
+            try {
+                tabletServerGateway
+                        .initWriter(prepareInitWriterRequest(tablePaths))
+                        .thenAccept(response -> setWriterId(response.getWriterId()))
+                        .get(); // TODO: can optimize into async response handling.
+                return;
+            } catch (Exception e) {
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {
+                    throw t;
+                } else {
+                    LOG.warn(
+                            "Failed to init writer id, the retry count: {}, error message: {}",
+                            retryCount,
+                            t.getMessage());
+                    retryCount++;
+                    long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
+                    Thread.sleep(delayMs);
+                }
+            }
         }
     }
 

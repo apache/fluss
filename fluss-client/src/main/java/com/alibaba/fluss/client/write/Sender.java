@@ -178,9 +178,7 @@ public class Sender implements Runnable {
             // TODO: only request to init writer_id when we have valid target tables
             try {
                 idempotenceManager.maybeWaitForWriterId(targetTables);
-            } catch (Exception e) {
-                Throwable t = ExceptionUtils.stripExecutionException(e);
-
+            } catch (Throwable t) {
                 // TODO: If 'only request to init writer_id when we have valid target tables' have
                 // been down, this if check can be removed.
                 if (!targetTables.isEmpty()) {
