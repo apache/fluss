@@ -19,7 +19,7 @@ package com.alibaba.fluss.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.flink.procedure.AclProcedure;
+import com.alibaba.fluss.flink.procedure.AbstractAclProcedure;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.ExceptionUtils;
 
@@ -693,7 +693,7 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.getProcedure(ObjectPath.fromString("sys.no-procedure")))
                 .hasMessageContaining("Procedure sys.no-procedure does not exist in Catalog");
         assertThat(catalog.getProcedure(ObjectPath.fromString("sys.acl")))
-                .isInstanceOf(AclProcedure.class);
+                .isInstanceOf(AbstractAclProcedure.class);
     }
 
     private void createAndCheckAndDropTable(

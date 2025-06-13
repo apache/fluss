@@ -17,18 +17,14 @@
 package com.alibaba.fluss.flink.procedure;
 
 import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.plugin.Plugin;
 
 import org.apache.flink.table.procedures.Procedure;
 
 /** Base implementation for flink {@link Procedure}. */
-public abstract class ProcedureBase implements Procedure, Plugin {
+public abstract class ProcedureBase implements Procedure {
     protected Admin admin;
 
-    public ProcedureBase withAdmin(Admin admin) {
+    public void withAdmin(Admin admin) {
         this.admin = admin;
-        return this;
     }
-
-    public abstract String identifier();
 }

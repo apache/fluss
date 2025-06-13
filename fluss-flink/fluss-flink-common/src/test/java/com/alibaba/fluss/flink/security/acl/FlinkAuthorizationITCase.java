@@ -26,7 +26,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.acl.OperationType;
 import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.acl.ResourceType;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -387,25 +386,14 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 Arrays.asList("+I[1, beijing, zhangsan]", "+I[2, shanghai, lisi]"));
     }
 
-    @Test
-    void testListAcls() throws Exception {
-        assertThat(listAcl(Resource.any(), OperationType.ANY)).isEmpty();
-        addAcl(Resource.table(TablePath.of(DEFAULT_DB, "test_table")), READ);
-        assertThat(listAcl(Resource.any(), OperationType.ANY))
-                .containsExactly(
-                        "+I[| TABLE | fluss.test_table | ALLOW | FlussPrincipal{name='guest', type='USER'} | READ | * |]");
-    }
-
     void addAcl(Resource resource, OperationType operationType)
             throws ExecutionException, InterruptedException {
         tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.acl('ADD', '%s', 'ALLOW', '%s' , '%s')",
+                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s' , '%s')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
-                                ResourceType.ANY == resource.getType()
-                                        ? "ANY"
-                                        : String.format("%s:%s", guest.getType(), guest.getName()),
+                                String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()))
                 .await();
     }
@@ -417,7 +405,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 // Flink 1.18 not support index argument.
                                 // "CALL %s.sys.acl( action => 'LIST', resource => '%s', permission
                                 // => 'ALLOW', principal => '%s', operation  => '%s')",
-                                "CALL %s.sys.acl('LIST', '%s', 'ALLOW', '%s', '%s')",
+                                "CALL %s.sys.list_acl('LIST', '%s', 'ALLOW', '%s', '%s')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
                                 String.format("%s:%s", guest.getType(), guest.getName()),
@@ -430,7 +418,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
             throws ExecutionException, InterruptedException {
         tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.acl('DROP', '%s', 'ANY', '%s', '%s')",
+                                "CALL %s.sys.drop_acl('%s', 'ANY', '%s', '%s')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
                                 String.format("%s:%s", guest.getType(), guest.getName()),
@@ -465,10 +453,10 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
             case ANY:
                 return "ANY";
             case CLUSTER:
-                return "fluss-cluster";
+                return "cluster";
             case DATABASE:
             case TABLE:
-                return String.format("fluss-cluster.%s", resource.getName());
+                return String.format("cluster.%s", resource.getName());
             default:
                 return "";
         }

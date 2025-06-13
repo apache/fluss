@@ -24,7 +24,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.flink.lakehouse.LakeCatalog;
-import com.alibaba.fluss.flink.procedure.ProcedureUtil;
+import com.alibaba.fluss.flink.procedure.ProcedureManager;
 import com.alibaba.fluss.flink.utils.CatalogExceptionUtils;
 import com.alibaba.fluss.flink.utils.DataLakeUtils;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
@@ -642,13 +642,13 @@ public class FlinkCatalog implements Catalog {
         if (!databaseExists(dbName)) {
             throw new DatabaseNotExistException(getName(), dbName);
         }
-        return ProcedureUtil.listProcedures();
+        return ProcedureManager.listProcedures();
     }
 
     @Override
     public Procedure getProcedure(ObjectPath procedurePath)
             throws ProcedureNotExistException, CatalogException {
-        Optional<Procedure> procedure = ProcedureUtil.getProcedure(admin, procedurePath);
+        Optional<Procedure> procedure = ProcedureManager.getProcedure(admin, procedurePath);
         if (procedure.isPresent()) {
             return procedure.get();
         } else {
