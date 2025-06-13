@@ -29,7 +29,7 @@ public class Resource {
     public static final String WILDCARD_RESOURCE = "*";
     public static final String TABLE_SPLITTER = "\\.";
 
-    private static final String FLUSS_CLUSTER = "fluss-cluster";
+    public static final String FLUSS_CLUSTER = "fluss-cluster";
     private final ResourceType type;
     private final String name;
 

@@ -539,16 +539,6 @@ class FlinkCatalogTest {
         catalog.dropPartition(path2, firstPartSpec, false);
     }
 
-    private void createAndCheckAndDropTable(
-            final ResolvedSchema schema, ObjectPath tablePath, Map<String, String> options)
-            throws Exception {
-        CatalogTable table = newCatalogTable(schema, options);
-        catalog.createTable(tablePath, table, false);
-        CatalogBaseTable tableCreated = catalog.getTable(tablePath);
-        checkEqualsRespectSchema((CatalogTable) tableCreated, table);
-        catalog.dropTable(tablePath, false);
-    }
-
     @Test
     void testCreatePartitions() throws Exception {
         ObjectPath nonPartitionedPath = new ObjectPath(DEFAULT_DB, "non_partitioned_table1");
@@ -794,5 +784,15 @@ class FlinkCatalogTest {
         } finally {
             securedCatalog.close();
         }
+    }
+
+    private void createAndCheckAndDropTable(
+            final ResolvedSchema schema, ObjectPath tablePath, Map<String, String> options)
+            throws Exception {
+        CatalogTable table = newCatalogTable(schema, options);
+        catalog.createTable(tablePath, table, false);
+        CatalogBaseTable tableCreated = catalog.getTable(tablePath);
+        checkEqualsRespectSchema((CatalogTable) tableCreated, table);
+        catalog.dropTable(tablePath, false);
     }
 }

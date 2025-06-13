@@ -54,7 +54,7 @@ public class FlinkRowAssertionsUtils {
 
     private static List<String> collectRowsWithTimeout(
             CloseableIterator<Row> iterator, int expectedCount, boolean closeIterator) {
-        List<String> actual = new ArrayList<>(expectedCount);
+        List<String> actual = new ArrayList<>();
         long startTime = System.currentTimeMillis();
         int maxWaitTime = 60000; // 60 seconds
 
