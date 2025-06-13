@@ -30,7 +30,7 @@ import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.DATA_L
 import static com.alibaba.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 
-/** The entrypoint for Flink to tiering fluss data to Paimon. */
+/** The entrypoint for Flink to tier fluss data to lake format like paimon. */
 public class FlussLakeTieringEntrypoint {
 
     private static final String FLUSS_CONF_PREFIX = "fluss.";

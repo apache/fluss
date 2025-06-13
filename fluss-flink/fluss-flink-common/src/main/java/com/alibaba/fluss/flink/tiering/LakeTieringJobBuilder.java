@@ -28,6 +28,7 @@ import com.alibaba.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.configuration.PipelineOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -41,6 +42,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** The builder to build Flink lake tiering job. */
 public class LakeTieringJobBuilder {
+
+    private static final String DEFAULT_TIERING_SERVICE_JOB_NAME = "Fluss Lake Tiering Service";
 
     private final StreamExecutionEnvironment env;
     private final Configuration flussConfig;
@@ -106,7 +109,11 @@ public class LakeTieringJobBuilder {
                 .setParallelism(1)
                 .setMaxParallelism(1)
                 .sinkTo(new DiscardingSink());
+        String jobName =
+                env.getConfiguration()
+                        .getOptional(PipelineOptions.NAME)
+                        .orElse(DEFAULT_TIERING_SERVICE_JOB_NAME);
 
-        return env.executeAsync();
+        return env.executeAsync(jobName);
     }
 }
