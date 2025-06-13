@@ -390,6 +390,9 @@ public class LakeTableTieringManager implements AutoCloseable {
                 liveTieringTableIds.put(tableId, clock.milliseconds());
                 break;
             case Tiered:
+                tableLastTieredTime.put(tableId, clock.milliseconds());
+                liveTieringTableIds.remove(tableId);
+                break;
             case Failed:
                 liveTieringTableIds.remove(tableId);
                 // do nothing

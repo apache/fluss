@@ -155,8 +155,13 @@ class LakeTableTieringManagerTest {
         // not advance time, request table should return null
         assertThat(tableTieringManager.requestTable()).isNull();
 
-        // now, advance time to trigger the table tiering
-        manualClock.advanceTime(Duration.ofSeconds(10));
+        // now, advance 1 second to trigger the table tiering
+        manualClock.advanceTime(Duration.ofSeconds(4));
+        // not reach data freshness, shouldn't request table
+        assertThat(tableTieringManager.requestTable()).isNull();
+
+        // advance 6 seconds again, should get table now
+        manualClock.advanceTime(Duration.ofSeconds(6));
         // the tiered epoch should be 2 now
         assertRequestTable(tableId1, tablePath1, 2);
     }
