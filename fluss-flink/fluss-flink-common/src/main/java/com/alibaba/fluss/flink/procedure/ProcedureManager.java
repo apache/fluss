@@ -44,7 +44,7 @@ public class ProcedureManager {
     public static Optional<Procedure> getProcedure(Admin admin, ObjectPath procedurePath) {
         try {
             Class<? extends ProcedureBase> procedureClass =
-                    PROCEDURE_MAP.get(procedurePath.getFullName());
+                    PROCEDURE_MAP.get(procedurePath.getFullName().toLowerCase());
             if (procedureClass == null) {
                 return Optional.empty();
             }
@@ -68,7 +68,7 @@ public class ProcedureManager {
     private enum ProcedureEnum {
         ADD_ACL("sys.add_acl", AddAclProcedure.class),
         DROP_ACL("sys.drop_acl", DropAclProcedure.class),
-        List_ACL("sys.list_acl", DropAclProcedure.class);
+        List_ACL("sys.list_acl", ListAclProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;

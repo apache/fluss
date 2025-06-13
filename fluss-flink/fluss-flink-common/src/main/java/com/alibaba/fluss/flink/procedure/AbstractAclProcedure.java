@@ -21,7 +21,7 @@ import com.alibaba.fluss.security.acl.OperationType;
 import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 
-import org.apache.flink.table.procedure.ProcedureContext;
+import javax.annotation.Nullable;
 
 import java.util.concurrent.ExecutionException;
 
@@ -34,7 +34,6 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
      * <p>This method serves as the entry point for executing ACL operations (ADD, DROP, LIST)
      * through the Flink SQL procedure interface. It delegates execution to the internalCall method.
      *
-     * @param context The procedure context used for execution environment and resource access.
      * @param resource Resource on which the ACL operation applies. The format must be one of:
      *     <ul>
      *       <li>{@code cluster} - cluster level
@@ -63,25 +62,25 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
      * @throws InterruptedException if the current thread is interrupted while waiting for the
      *     operation to complete.
      */
-    public String[] call(
-            ProcedureContext context,
-            String resource,
-            String permission,
-            String principal,
-            String operation,
-            String host)
+    protected String[] internalCall(
+            @Nullable String resource,
+            @Nullable String permission,
+            @Nullable String principal,
+            @Nullable String operation,
+            @Nullable String host)
             throws Exception {
-        return internalCall(resource, permission, principal, operation, host);
-    }
-
-    private String[] internalCall(
-            String resource, String permissionType, String principal, String operation, String host)
-            throws Exception {
-        PermissionType permission = PermissionType.valueOf(permissionType);
+        PermissionType permissionType =
+                permission == null
+                        ? PermissionType.ANY
+                        : PermissionType.valueOf(permission.toUpperCase());
         FlussPrincipal flussPrincipal = parsePrincipal(principal);
-        OperationType operationType = OperationType.valueOf(operation);
+        OperationType operationType =
+                operation == null
+                        ? OperationType.ANY
+                        : OperationType.valueOf(operation.toUpperCase());
         Resource matchResource = parseResource(resource);
-        return aclOperation(matchResource, permission, flussPrincipal, operationType, host);
+        return aclOperation(
+                matchResource, permissionType, flussPrincipal, operationType, parseHost(host));
     }
 
     protected abstract String[] aclOperation(
@@ -93,7 +92,7 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
             throws Exception;
 
     private FlussPrincipal parsePrincipal(String principalStr) {
-        if (principalStr.equalsIgnoreCase("ANY")) {
+        if (principalStr == null || principalStr.equalsIgnoreCase("ANY")) {
             return FlussPrincipal.ANY;
         }
 
@@ -110,7 +109,7 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
     }
 
     private Resource parseResource(String resourceStr) {
-        if (resourceStr.equalsIgnoreCase("ANY")) {
+        if (resourceStr == null || resourceStr.equalsIgnoreCase("ANY")) {
             return Resource.any();
         }
 
@@ -129,5 +128,12 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
             resource = Resource.table(resourcePath[1], resourcePath[2]);
         }
         return resource;
+    }
+
+    private @Nullable String parseHost(@Nullable String hostStr) {
+        if (hostStr != null && hostStr.equalsIgnoreCase("ANY")) {
+            return null;
+        }
+        return hostStr;
     }
 }

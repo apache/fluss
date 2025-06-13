@@ -31,7 +31,6 @@ import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.table.api.TableResult;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
@@ -46,9 +45,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static com.alibaba.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
@@ -390,7 +387,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
             throws ExecutionException, InterruptedException {
         tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s' , '%s')",
+                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s' , '%s', '*')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
                                 String.format("%s:%s", guest.getType(), guest.getName()),
@@ -398,27 +395,11 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 .await();
     }
 
-    List<String> listAcl(Resource resource, OperationType operationType) {
-        TableResult tableResult =
-                tEnv.executeSql(
-                        String.format(
-                                // Flink 1.18 not support index argument.
-                                // "CALL %s.sys.acl( action => 'LIST', resource => '%s', permission
-                                // => 'ALLOW', principal => '%s', operation  => '%s')",
-                                "CALL %s.sys.list_acl('LIST', '%s', 'ALLOW', '%s', '%s')",
-                                ADMIN_CATALOG_NAME,
-                                getProcedureResourceString(resource),
-                                String.format("%s:%s", guest.getType(), guest.getName()),
-                                operationType.name()));
-        List<Row> rows = CollectionUtil.iteratorToList(tableResult.collect());
-        return rows.stream().map(Row::toString).collect(Collectors.toList());
-    }
-
     void dropAcl(Resource resource, OperationType operationType)
             throws ExecutionException, InterruptedException {
         tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.drop_acl('%s', 'ANY', '%s', '%s')",
+                                "CALL %s.sys.drop_acl('%s', 'ANY', '%s', '%s', 'ANY')",
                                 ADMIN_CATALOG_NAME,
                                 getProcedureResourceString(resource),
                                 String.format("%s:%s", guest.getType(), guest.getName()),

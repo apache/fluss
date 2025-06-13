@@ -26,21 +26,43 @@ import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceFilter;
 
+import org.apache.flink.table.annotation.ArgumentHint;
+import org.apache.flink.table.annotation.DataTypeHint;
+import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
+
+import javax.annotation.Nullable;
 
 import java.util.Collection;
 
 /** Procedure to list acl. */
 public class ListAclProcedure extends AbstractAclProcedure {
-
-    private String[] call(
+    @ProcedureHint(
+            argument = {
+                @ArgumentHint(name = "resource", type = @DataTypeHint("STRING")),
+                @ArgumentHint(
+                        name = "permission",
+                        type = @DataTypeHint("STRING"),
+                        isOptional = true),
+                @ArgumentHint(
+                        name = "principal",
+                        type = @DataTypeHint("STRING"),
+                        isOptional = true),
+                @ArgumentHint(
+                        name = "operation",
+                        type = @DataTypeHint("STRING"),
+                        isOptional = true),
+                @ArgumentHint(name = "host", type = @DataTypeHint("STRING"), isOptional = true)
+            })
+    public String[] call(
             ProcedureContext context,
-            String resource,
-            String permission,
-            String principal,
-            String operation)
+            @Nullable String resource,
+            @Nullable String permission,
+            @Nullable String principal,
+            @Nullable String operation,
+            @Nullable String host)
             throws Exception {
-        return call(context, resource, permission, principal, operation, null);
+        return internalCall(resource, permission, principal, operation, host == null ? "*" : host);
     }
 
     @Override

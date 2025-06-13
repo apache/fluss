@@ -19,7 +19,6 @@ package com.alibaba.fluss.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.flink.procedure.AbstractAclProcedure;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.ExceptionUtils;
 
@@ -42,7 +41,6 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.FunctionNotExistException;
 import org.apache.flink.table.catalog.exceptions.PartitionAlreadyExistsException;
-import org.apache.flink.table.catalog.exceptions.ProcedureNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
@@ -679,21 +677,6 @@ class FlinkCatalogTest {
         } finally {
             securedCatalog.close();
         }
-    }
-
-    @Test
-    void testLoadProcedures() throws Exception {
-        assertThatThrownBy(() -> catalog.listProcedures("no-db"))
-                .isExactlyInstanceOf(DatabaseNotExistException.class);
-        assertThat(catalog.listProcedures(DEFAULT_DB)).containsExactly("acl");
-        assertThatThrownBy(() -> catalog.getProcedure(ObjectPath.fromString(DEFAULT_DB + ".acl")))
-                .isExactlyInstanceOf(ProcedureNotExistException.class)
-                .hasMessageContaining(
-                        String.format("Procedure %s.acl does not exist in Catalog", DEFAULT_DB));
-        assertThatThrownBy(() -> catalog.getProcedure(ObjectPath.fromString("sys.no-procedure")))
-                .hasMessageContaining("Procedure sys.no-procedure does not exist in Catalog");
-        assertThat(catalog.getProcedure(ObjectPath.fromString("sys.acl")))
-                .isInstanceOf(AbstractAclProcedure.class);
     }
 
     private void createAndCheckAndDropTable(

@@ -24,20 +24,35 @@ import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceType;
 
+import org.apache.flink.table.annotation.ArgumentHint;
+import org.apache.flink.table.annotation.DataTypeHint;
+import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
+
+import javax.annotation.Nullable;
 
 import java.util.Collections;
 
 /** Procedure to add acl. */
 public class AddAclProcedure extends AbstractAclProcedure {
+
+    @ProcedureHint(
+            argument = {
+                @ArgumentHint(name = "resource", type = @DataTypeHint("STRING")),
+                @ArgumentHint(name = "permission", type = @DataTypeHint("STRING")),
+                @ArgumentHint(name = "principal", type = @DataTypeHint("STRING")),
+                @ArgumentHint(name = "operation", type = @DataTypeHint("STRING")),
+                @ArgumentHint(name = "host", type = @DataTypeHint("STRING"), isOptional = true)
+            })
     public String[] call(
             ProcedureContext context,
             String resource,
             String permission,
             String principal,
-            String operation)
+            String operation,
+            @Nullable String host)
             throws Exception {
-        return call(context, resource, permission, principal, operation, "*");
+        return internalCall(resource, permission, principal, operation, host == null ? "*" : host);
     }
 
     @Override
@@ -54,7 +69,7 @@ public class AddAclProcedure extends AbstractAclProcedure {
                 || OperationType.ANY.equals(operationType)
                 || host == null) {
             throw new IllegalArgumentException(
-                    "ANY can only used as filter,  can not use for adding acl");
+                    "Wildcard 'ANY' can only be used for filtering, not for adding ACL entries.");
         }
         admin.createAcls(
                         Collections.singletonList(
