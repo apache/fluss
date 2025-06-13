@@ -369,7 +369,7 @@ Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and exe
 ```shell
 docker compose exec jobmanager \
     /opt/flink/bin/flink run \
-    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION_SHORT$.jar \
+    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format paimon \
     --datalake.paimon.metastore filesystem \
