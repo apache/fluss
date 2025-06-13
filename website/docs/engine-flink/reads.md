@@ -53,19 +53,18 @@ SELECT * FROM my_table /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 
 ### Column Pruning
 
-Column pruning is an optimization that minimizes data transfer by only reading columns actually referenced in the query, 
-ignoring unused columns in storage layer. Fluss implement column pruning based on [Apache Arrow](https://arrow.apache.org/) for 
-streaming read Log Table or changLog of PrimaryKey Table. Benchmark results indicate that column pruning can reach 10x performance 
-improvement, and reduce 50% networking cost.
+Column pruning minimizes I/O by reading only the columns used in a query and ignoring unused ones at the storage layer.
+In Fluss, column pruning is implemented using [Apache Arrow](https://arrow.apache.org/) as the default log format to optimize streaming reads from Log Tables and change logs of PrimaryKey Tables.
+Benchmark results show that column pruning can reach 10x read performance improvement, and reduce unnecessary network traffic (reduce 80% I/O if 80% columns are not used).
 
 :::note
-1. Server-side column pruning only happen when the table is declared with Arrow log format ('table.log.format'='arrow'), which is enabled by default. Otherwise, column pruning will only happen at the client side.
-2. Currently, log data that has been uploaded to remote storage does not support server-side column pruning.
+1. Column pruning is only available when the table uses the Arrow log format (`'table.log.format' = 'arrow'`), which is enabled by default.
+2. Reading log data from remote storage currently does not support column pruning.
 :::
 
 #### Example
 
-1. Create a table
+**1. Create a table**
 ```sql title="Flink SQL"
 CREATE TABLE `testcatalog`.`testdb`.`log_table` (
     `c_custkey` INT NOT NULL,
@@ -79,38 +78,38 @@ CREATE TABLE `testcatalog`.`testdb`.`log_table` (
 );
 ```
 
-2. Query from table.
+**2. Query a single column:**
 ```sql title="Flink SQL"
 SELECT `c_name` FROM `testcatalog`.`testdb`.`log_table`;
 ```
 
-In this case, Fluss will only read the `c_name` column from the storage layer. You can check whether it takes effects 
-via `explain`:
-
+**3. Verify with `EXPLAIN`:**
 ```sql title="Flink SQL"
 EXPLAIN SELECT `c_name` FROM `testcatalog`.`testdb`.`log_table`;
 ```
 
-The result will be:
+**Output:**
 
 ```
 == Optimized Execution Plan ==
 TableSourceScan(table=[[testcatalog, testdb, log_table, project=[c_name]]], fields=[c_name])
 ```
 
+This confirms that only the `c_name` column is being read from storage.
+
 ### Partition Pruning
 
-Partition pruning is an optimization technique for Fluss partitioned tables. It reduces the number of partitions scanned 
-by specifying only the target partitions during steaming reads.
+Partition pruning is an optimization technique for Fluss partitioned tables. It reduces the number of partitions scanned during a query by filtering based on partition keys.
+This optimization is especially useful in streaming scenarios for [Multi-Field Partitioned Tables](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables) that has many partitions.
+The partition pruning also supports dynamically pruning new created partitions during streaming read.
 
 :::note
-1. Currently, Fluss Partition pruning only support equal conditions like `c_nationkey = '1'`. `>`, `<`, `or` and `in` are not supported.
-2. For Fluss [Multi-Field Partitioned Tables](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables), Users can specify one or more fields to prune (For example, if partition fields are `date,region`, we can specify the filter as `region='US'` in flink job). Fluss can automatically list all the matched partitions to read. If new partitions are created and match the partition pruning condition, it will be added into the streaming read partition list, and if the partition is deleted, it will be removed.
+1. Currently, **only equality conditions** (e.g., `c_nationkey = 'US'`) are supported for partition pruning. Operators like `<`, `>`, `OR`, and `IN` are not yet supported.
 :::
 
 #### Example
 
-1. Create a table
+**1. Create a partitioned table:**
 ```sql title="Flink SQL"
 CREATE TABLE `testcatalog`.`testdb`.`log_partitioned_table` (
     `c_custkey` INT NOT NULL,
@@ -125,27 +124,36 @@ CREATE TABLE `testcatalog`.`testdb`.`log_partitioned_table` (
 ) PARTITIONED BY (`c_nationkey`,`dt`);
 ```
 
-2. Query from table.
+**2. Query with partition filter:**
 ```sql title="Flink SQL"
-SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` where `c_nationkey` = 'US';
+SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` WHERE `c_nationkey` = 'US';
 ```
 
-In this case, Fluss will only read these partitions which matching condition `c_nationkey = 'US'`. For example, if there 
-are four existing partitions `US,2025-06-13`, `China,2025-06-13`, `US,2025-06-14`, `China,2025-06-14`, Fluss will only 
-read partitions `US,2025-06-13` and `US,2025-06-14` when streaming read job starts. If the date change to `2025-06-15` and 
-partitions `US,2025-06-15` and `China,2025-06-15` are created, Fluss will only add `US,2025-06-15` into the streaming read 
-partition list. 
+Fluss source will scan only the partitions where `c_nationkey = 'US'`.
+For example, if the following partitions exist:
+- `US,2025-06-13`
+- `China,2025-06-13`
+- `US,2025-06-14`
+- `China,2025-06-14`
 
-You can check whether partition pruning takes effects via `explain`:
+Only `US,2025-06-13` and `US,2025-06-14` will be read.
+
+As new partitions like `US,2025-06-15`, `China,2025-06-15` are created, partition `US,2025-06-15` will be automatically included in the stream, while `China,2025-06-15` will be dynamically filtered out based on the partition pruning condition.
+
+**3. Verify with `EXPLAIN`:**
+
 ```sql title="Flink SQL"
-EXPLAIN SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` where `c_nationkey` = 'US';
+EXPLAIN SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` WHERE `c_nationkey` = 'US';
 ```
 
-The result will be:
-```
+**Output:**
+
+```text
 == Optimized Execution Plan ==
-TableSourceScan(table=[[testcatalog, testdb, log_partitioned_table, filter=[=(c_nationkey, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET "UTF-16LE")]]], fields=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment, dt])
+TableSourceScan(table=[[testcatalog, testdb, log_partitioned_table, filter=[=(c_nationkey, _UTF-16LE'US':VARCHAR(2147483647) CHARACTER SET "UTF-16LE")]]], fields=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment, dt])
 ```
+
+This confirms that only partitions matching `c_nationkey = 'US'` will be scanned.
 
 ## Batch Read
 
