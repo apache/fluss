@@ -21,15 +21,11 @@ sidebar_position: 4
 
 # Deploying with Docker
 
-This guide will show you how to run a Fluss cluster using Docker. In this guide, we will introduce the prerequisites of
-the Docker environment and how to quickly create a Fluss cluster using the `docker run` commands
-or `docker compose` file.
+This guide will show you how to run a Fluss cluster using Docker. 
+We will introduce the [prerequisites of the Docker environment](#prerequisites), and how to quickly create a Fluss cluster using [`docker run` commands](#deploy-with-docker)
+or a [`docker compose` file](#deploy-with-docker-compose).
 
 ## Prerequisites
-
-**Overview**
-
-Prepare the build machine before creating the Docker image.
 
 **Hardware**
 
