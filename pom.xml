@@ -27,7 +27,7 @@
 
     <groupId>com.alibaba.fluss</groupId>
     <artifactId>fluss</artifactId>
-    <version>0.7-SNAPSHOT</version>
+    <version>0.8-SNAPSHOT</version>
 
     <name>Fluss :</name>
     <packaging>pom</packaging>

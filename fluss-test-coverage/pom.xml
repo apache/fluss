@@ -21,7 +21,7 @@
     <parent>
         <groupId>com.alibaba.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.7-SNAPSHOT</version>
+        <version>0.8-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-test-coverage</artifactId>
