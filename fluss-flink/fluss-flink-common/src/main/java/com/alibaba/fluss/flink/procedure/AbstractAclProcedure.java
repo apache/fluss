@@ -119,7 +119,7 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
                 || resourcePath.length > 3
                 || !"cluster".equalsIgnoreCase(resourcePath[0])) {
             throw new IllegalArgumentException(
-                    "resource must be in format fluss-cluster.${database}.${table}");
+                    "resource must be in format cluster.${database}.${table}");
         } else if (resourcePath.length == 1) {
             resource = Resource.cluster();
         } else if (resourcePath.length == 2) {

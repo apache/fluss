@@ -79,6 +79,6 @@ public class AddAclProcedure extends AbstractAclProcedure {
                                                 flussPrincipal, host, operationType, permission))))
                 .all()
                 .get();
-        return new String[] {"OK"};
+        return new String[] {"success"};
     }
 }
