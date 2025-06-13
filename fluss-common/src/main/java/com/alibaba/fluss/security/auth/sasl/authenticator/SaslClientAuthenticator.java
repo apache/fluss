@@ -49,13 +49,16 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     public SaslClientAuthenticator(Configuration configuration) {
         this.mechanism = configuration.get(CLIENT_MECHANISM).toUpperCase();
         String jaasConfigStr = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
-        if (jaasConfigStr == null && mechanism.equalsIgnoreCase(PlainSaslServer.PLAIN_MECHANISM)) {
+        if (jaasConfigStr == null && mechanism.equals(PlainSaslServer.PLAIN_MECHANISM)) {
             String username = configuration.get(CLIENT_SASL_JAAS_USERNAME);
             String password = configuration.get(CLIENT_SASL_JAAS_PASSWORD);
             if (username != null || password != null) {
                 if (username == null || password == null) {
                     throw new AuthenticationException(
-                            "username and password must be set together for SASL JAAS authentication");
+                            String.format(
+                                    "Configuration '%s' and '%s' must be set together for SASL JAAS authentication",
+                                    CLIENT_SASL_JAAS_USERNAME.key(),
+                                    CLIENT_SASL_JAAS_PASSWORD.key()));
                 }
                 jaasConfigStr = String.format(JAAS_CONF_FORMAT, username, password);
             }

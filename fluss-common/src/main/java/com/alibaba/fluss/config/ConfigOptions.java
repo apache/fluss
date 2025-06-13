@@ -40,7 +40,6 @@ import static com.alibaba.fluss.config.ConfigOptions.CompactionStyle.UNIVERSAL;
 import static com.alibaba.fluss.config.ConfigOptions.InfoLogLevel.INFO_LEVEL;
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
-import static com.alibaba.fluss.security.auth.sasl.jaas.JaasContext.SASL_JAAS_CONFIG;
 
 /**
  * Config options for Fluss.
@@ -1096,12 +1095,12 @@ public class ConfigOptions {
     public static final ConfigOption<String> CLIENT_MECHANISM =
             key("client.security.sasl.mechanism")
                     .stringType()
-                    .noDefaultValue()
+                    .defaultValue("PLAIN")
                     .withDescription(
                             "SASL mechanism to use for authentication.Currently, we only support plain.");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
-            key("client.security.sasl." + SASL_JAAS_CONFIG)
+            key("client.security.sasl.jaas.config")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
@@ -1113,14 +1112,18 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The password to use for client-side SASL JAAS authentication.");
+                            "The password to use for client-side SASL JAAS authentication. "
+                                    + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
+                                    + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_PASSWORD =
             key("client.security.sasl.password")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The username to use for client-side SASL JAAS authentication.");
+                            "The username to use for client-side SASL JAAS authentication. "
+                                    + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
+                                    + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table

@@ -165,12 +165,11 @@ public class SaslAuthenticationITCase {
     void testSimplifyUsernameAndPassword() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
         clientConfig.setString("client.security.sasl.username", "alice");
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessage(
-                        "username and password must be set together for SASL JAAS authentication");
+                        "Configuration 'client.security.sasl.username' and 'client.security.sasl.password' must be set together for SASL JAAS authentication");
         clientConfig.setString("client.security.sasl.password", "wrong-secret");
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .cause()
