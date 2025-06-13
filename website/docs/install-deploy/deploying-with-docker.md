@@ -21,15 +21,11 @@ sidebar_position: 4
 
 # Deploying with Docker
 
-This guide will show you how to run a Fluss cluster using Docker. In this guide, we will introduce the prerequisites of
-the Docker environment and how to quickly create a Fluss cluster using the `docker run` commands
-or `docker compose` file.
+This guide will show you how to run a Fluss cluster using Docker. 
+We will introduce the [prerequisites of the Docker environment](#prerequisites), and how to quickly create a Fluss cluster using [`docker run` commands](#deploy-with-docker)
+or a [`docker compose` file](#deploy-with-docker-compose).
 
 ## Prerequisites
-
-**Overview**
-
-Prepare the build machine before creating the Docker image.
 
 **Hardware**
 
@@ -81,8 +77,9 @@ docker run \
     --name coordinator-server \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://coordinator-server:9123
-advertised.listeners: FLUSS://localhost:9123
+bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+advertised.listeners: CLIENT://localhost:9123
+internal.listener.name: INTERNAL
 " \
     -p 9123:9123 \
     -d fluss/fluss:$FLUSS_VERSION$ coordinatorServer
@@ -102,12 +99,14 @@ docker run \
     --name tablet-server \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server:9124
-advertised.listeners: FLUSS://localhost:9124
+bind.listeners: INTERNAL://tablet-server:0, CLIENT://tablet-server:9123
+advertised.listeners: CLIENT://localhost:9124
+internal.listener.name: INTERNAL
 tablet-server.id: 0
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9124:9124 \
+    -p 9124:9123 \
     --volume shared-tmpfs:/tmp/fluss \
     -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
@@ -123,12 +122,14 @@ docker run \
     --name tablet-server-0 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server-0:9124
-advertised.listeners: FLUSS://localhost:9124
+bind.listeners: INTERNAL://tablet-server-0:0, CLIENT://tablet-server-0:9123
+advertised.listeners: CLIENT://localhost:9124
+internal.listener.name: INTERNAL
 tablet-server.id: 0
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data/tablet-server-0
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9124:9124 \
+    -p 9124:9123 \
     --volume shared-tmpfs:/tmp/fluss \
     -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
@@ -139,12 +140,14 @@ docker run \
     --name tablet-server-1 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server-1:9125
-advertised.listeners: FLUSS://localhost:9125
+bind.listeners: INTERNAL://tablet-server-1:0, CLIENT://tablet-server-1:9123
+advertised.listeners: CLIENT://localhost:9125
+internal.listener.name: INTERNAL
 tablet-server.id: 1
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data/tablet-server-1
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9125:9125 \
+    -p 9125:9123 \
     --volume shared-tmpfs:/tmp/fluss \
     -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
@@ -155,12 +158,14 @@ docker run \
     --name tablet-server-2 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server-2:9126
-advertised.listeners: FLUSS://localhost:9126
+bind.listeners: INTERNAL://tablet-server-2:0, CLIENT://tablet-server-2:9123
+advertised.listeners: CLIENT://localhost:9126
+internal.listener.name: INTERNAL
 tablet-server.id: 2
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data/tablet-server-2
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9126:9126 \
+    -p 9126:9123 \
     --volume shared-tmpfs:/tmp/fluss \
     -d fluss/fluss:$FLUSS_VERSION$ tabletServer
 ```
