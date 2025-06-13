@@ -21,6 +21,7 @@ import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
 import com.alibaba.fluss.security.auth.sasl.jaas.JaasContext;
 import com.alibaba.fluss.security.auth.sasl.jaas.LoginManager;
+import com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import javax.annotation.Nullable;
 import javax.security.auth.login.LoginException;
@@ -30,10 +31,14 @@ import java.util.Map;
 
 import static com.alibaba.fluss.config.ConfigOptions.CLIENT_MECHANISM;
 import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_PASSWORD;
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_USERNAME;
 import static com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory.createSaslClient;
 
 /** An authenticator that uses SASL to authenticate with a server. */
 public class SaslClientAuthenticator implements ClientAuthenticator {
+    private static final String JAAS_CONF_FORMAT =
+            "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"%s\" password=\"%s\";";
     private final String mechanism;
     private final Map<String, String> pros;
     private final String jaasConfig;
@@ -43,7 +48,22 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
 
     public SaslClientAuthenticator(Configuration configuration) {
         this.mechanism = configuration.get(CLIENT_MECHANISM).toUpperCase();
-        this.jaasConfig = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
+        String jaasConfigStr = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
+        if (jaasConfigStr == null && mechanism.equals(PlainSaslServer.PLAIN_MECHANISM)) {
+            String username = configuration.get(CLIENT_SASL_JAAS_USERNAME);
+            String password = configuration.get(CLIENT_SASL_JAAS_PASSWORD);
+            if (username != null || password != null) {
+                if (username == null || password == null) {
+                    throw new AuthenticationException(
+                            String.format(
+                                    "Configuration '%s' and '%s' must be set together for SASL JAAS authentication",
+                                    CLIENT_SASL_JAAS_USERNAME.key(),
+                                    CLIENT_SASL_JAAS_PASSWORD.key()));
+                }
+                jaasConfigStr = String.format(JAAS_CONF_FORMAT, username, password);
+            }
+        }
+        this.jaasConfig = jaasConfigStr;
         this.pros = configuration.toMap();
     }
 
