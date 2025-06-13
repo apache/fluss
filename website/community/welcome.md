@@ -31,7 +31,7 @@ If you are not sure on what to work on, look at issue tagged with [good first is
 The development discussions and user questions happen primarily on [GitHub Discussions](https://github.com/alibaba/fluss/discussions).
 
 ## Slack 
-We use Slack for real-time communication and collaboration. To join our workspace, follow this [invite link](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw).
+We use the [Fluss workspace](https://fluss-hq.slack.com/) on Slack for real-time communication and collaboration. You can join the community using [this invite link](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw).
 
 Please note that this link may occasionally break when Slack does an upgrade. If you encounter problems using it, please let us know by creating an issue on GitHub.
 
@@ -40,7 +40,7 @@ Join our monthly community gatherings to get involved:
 
 **Fluss Contributors Call**
 
-  Invitation link: [Community Events](https://calendar.app.google/1u58VvHpn71H9rz57)
+  Invitation link: [Community Events](https://calendar.google.com/calendar/u/0?cid=MjUzMjY2OTFkY2FmNmRiYjk5MzllZmUxNDliYjg1ZjI4ODhhNjU0YzY5Mzc2M2IyZDQ1NzIwNTAyZGU1MjZmOEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t)
 
 These community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
