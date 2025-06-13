@@ -116,6 +116,7 @@ git checkout release-0.5
 Fluss documentation uses placeholder variables that are automatically replaced during the build process. Note that these variables are only available for documentation under `website/docs/*`.
 - `$FLUSS_VERSION$`: Expands to the full version (e.g., "0.6.0")
 - `$FLUSS_VERSION_SHORT$`: Expands to the short version (e.g., "0.6")
+- `$FLUSS_DOCKER_VERSION$`: Expands to the docker version (e.g., "0.6.0-rc1"), it is suggested to use this variable when referring to the docker image version that we can link to a RC version during release testing.
 
 For example, to link to a specific version of Fluss binary:
 

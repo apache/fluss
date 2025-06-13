@@ -55,7 +55,7 @@ cd fluss-quickstart-flink
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -71,7 +71,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   tablet-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -94,7 +94,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -105,7 +105,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager

@@ -52,6 +52,7 @@ const plugin = (options) => {
         const replacements = {
             "$FLUSS_VERSION$": version.fullVersion,
             "$FLUSS_VERSION_SHORT$": version.shortVersion,
+            "$FLUSS_DOCKER_VERSION$": version.dockerVersion
         };
 
         // RegExp to find any replacement keys.

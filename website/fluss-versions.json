@@ -2,21 +2,25 @@
   {
     "versionName": "next",
     "fullVersion": "0.8-SNAPSHOT",
-    "shortVersion": "0.8-SNAPSHOT"
+    "shortVersion": "0.8-SNAPSHOT",
+    "dockerVersion": "0.8-SNAPSHOT"
   },
   {
     "versionName": "version-0.7",
     "fullVersion": "0.7.0",
-    "shortVersion": "0.7"
+    "shortVersion": "0.7",
+    "dockerVersion": "v0.7.0-rc2"
   },
   {
     "versionName": "version-0.6",
     "fullVersion": "0.6.0",
-    "shortVersion": "0.6"
+    "shortVersion": "0.6",
+    "dockerVersion": "0.6.0"
   },
   {
     "versionName": "version-0.5",
     "fullVersion": "0.5.0",
-    "shortVersion": "0.5"
+    "shortVersion": "0.5",
+    "dockerVersion": "0.5.0"
   }
 ]

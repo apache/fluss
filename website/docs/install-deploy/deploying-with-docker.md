@@ -82,7 +82,7 @@ advertised.listeners: CLIENT://localhost:9123
 internal.listener.name: INTERNAL
 " \
     -p 9123:9123 \
-    -d fluss/fluss:$FLUSS_VERSION$ coordinatorServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ coordinatorServer
 ```
 
 ### Start Fluss TabletServer
@@ -108,7 +108,7 @@ data.dir: /tmp/fluss/data
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 #### Start with Multiple TabletServer
@@ -131,7 +131,7 @@ data.dir: /tmp/fluss/data/tablet-server-0
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9124:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 2. Start tablet-server-1
@@ -149,7 +149,7 @@ data.dir: /tmp/fluss/data/tablet-server-1
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9125:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 3. Start tablet-server-2
@@ -167,7 +167,7 @@ data.dir: /tmp/fluss/data/tablet-server-2
 remote.data.dir: /tmp/fluss/remote-data" \
     -p 9126:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 Now all the Fluss related components are running.
@@ -191,7 +191,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -206,7 +206,7 @@ services:
     ports:
       - "9123:9123"
   tablet-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -244,7 +244,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -259,7 +259,7 @@ services:
     ports:
       - "9123:9123"
   tablet-server-0:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -279,7 +279,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-1:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -299,7 +299,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-2:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server

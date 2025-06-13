@@ -64,7 +64,7 @@ The container manifest below configures Fluss to use Logback and Loki4j. Save it
 ```dockerfile
 ARG FLUSS_VERSION
 
-FROM fluss/fluss:$FLUSS_VERSION$
+FROM fluss/fluss:$FLUSS_DOCKER_VERSION$
 
 # remove default logging backend from classpath and add logback to classpath
 RUN rm -rf ${FLUSS_HOME}/lib/log4j-slf4j-impl-*.jar && \
@@ -96,7 +96,7 @@ To do this, you can simply copy the manifest below into your `docker-compose.yml
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss-slf4j-logback:$FLUSS_VERSION$
+    image: fluss-slf4j-logback:$FLUSS_DOCKER_VERSION$
     build:
       args:
         FLUSS_VERSION: $FLUSS_VERSION$
@@ -118,7 +118,7 @@ services:
         logback.configurationFile: logback-loki-console.xml
       - APP_NAME=coordinator-server
   tablet-server:
-    image: fluss-slf4j-logback:$FLUSS_VERSION$
+    image: fluss-slf4j-logback:$FLUSS_DOCKER_VERSION$
     build:
       args:
         FLUSS_VERSION: $FLUSS_VERSION$
@@ -147,7 +147,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -160,7 +160,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
