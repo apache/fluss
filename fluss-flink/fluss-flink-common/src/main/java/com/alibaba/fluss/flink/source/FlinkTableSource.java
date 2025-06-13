@@ -76,6 +76,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
+import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
@@ -398,7 +399,7 @@ public class FlinkTableSource
                 && filters.size() == primaryKeyIndexes.length) {
             Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
             List<FieldEqual> fieldEquals =
-                    PushdownUtils.extractFieldEquals(
+                    extractFieldEquals(
                             filters,
                             primaryKeyTypes,
                             acceptedFilters,
@@ -419,11 +420,10 @@ public class FlinkTableSource
             return Result.of(acceptedFilters, remainingFilters);
         } else if (isPartitioned()) {
             // dynamic partition pushdown
-            Map<Integer, LogicalType> partitionKeyTypes = getPartitionKeyTypes();
             List<FieldEqual> fieldEquals =
-                    PushdownUtils.extractFieldEquals(
+                    extractFieldEquals(
                             filters,
-                            partitionKeyTypes,
+                            getPartitionKeyTypes(),
                             acceptedFilters,
                             remainingFilters,
                             FLINK_INTERNAL_VALUE);
