@@ -294,7 +294,7 @@ public class IdempotenceManager {
         }
 
         int retryCount = 0;
-        while (retryCount < RETRY_TIMES) {
+        while (true) {
             try {
                 tabletServerGateway
                         .initWriter(prepareInitWriterRequest(tablePaths))
@@ -303,21 +303,16 @@ public class IdempotenceManager {
                 return;
             } catch (Exception e) {
                 Throwable t = ExceptionUtils.stripExecutionException(e);
-                if (t instanceof AuthorizationException) {
+                if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {
                     throw t;
                 } else {
-                    LOG.warn(
-                            "Failed to init writer id. Retry to Get, retry count: " + retryCount,
-                            t);
+                    LOG.warn("Failed to init writer id.", t);
                     retryCount++;
                     long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
                     Thread.sleep(delayMs);
                 }
             }
         }
-
-        throw new RuntimeException(
-                "Failed to increment sequence id counter after " + RETRY_TIMES + " retries");
     }
 
     InitWriterRequest prepareInitWriterRequest(Set<PhysicalTablePath> physicalTables) {
