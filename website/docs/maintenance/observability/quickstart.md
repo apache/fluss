@@ -37,12 +37,21 @@ The quickstart configuration comes with 2 metric dashboards.
 
 Follow the instructions below to add observability capabilities to your setup.
 
-1. Download the <a href={ require("../../assets/fluss-quickstart-observability.zip").default } target="_blank">observability quickstart configuration</a> and extract the ZIP archive in your working directory.
-After extracting the archive, the contents of the working directory should be as follows.
+1. The observability quickstart configuration is included in the Fluss binary distribution. The easiest way to download the configuration to your current directory is to copy it from the Docker container image.
+
+```shell
+docker create --name fluss-quickstart-observability fluss/fluss:$FLUSS_VERSION$
+# Should print "Successfully copied ..."
+docker cp fluss-quickstart-observability:/opt/fluss/examples/quickstart-observability .
+# Can be removed since it is only used to copy the examples directory
+docker rm -f fluss-quickstart-observability
+```
+
+The contents of the working directory should now be as follows.
 
 ```
-├── docker-compose.yml              # docker compose manifest from quickstart guide
-└── fluss-quickstart-observability  # downloaded and extracted ZIP archive
+├── docker-compose.yml        # docker compose manifest from quickstart guide
+└── quickstart-observability  # copied from the container image
     ├── grafana
     │   ├── grafana.ini
     │   └── provisioning
@@ -62,8 +71,6 @@ After extracting the archive, the contents of the working directory should be as
 The container manifest below configures Fluss to use Logback and Loki4j. Save it to a file named `fluss-slf4j-logback.Dockerfile` in your working directory.
 
 ```dockerfile
-ARG FLUSS_VERSION
-
 FROM fluss/fluss:$FLUSS_VERSION$
 
 # remove default logging backend from classpath and add logback to classpath
@@ -75,7 +82,7 @@ RUN rm -rf ${FLUSS_HOME}/lib/log4j-slf4j-impl-*.jar && \
 RUN wget https://repo1.maven.org/maven2/com/github/loki4j/loki-logback-appender/1.4.2/loki-logback-appender-1.4.2.jar -P ${FLUSS_HOME}/lib/
 
 # logback configuration that exposes metrics to loki
-COPY fluss-quickstart-observability/slf4j/logback-loki-console.xml ${FLUSS_HOME}/conf/logback-console.xml
+COPY quickstart-observability/sfl4j/logback-loki-console.xml ${FLUSS_HOME}/conf/logback-console.xml
 ```
 
 :::note
@@ -98,8 +105,6 @@ services:
   coordinator-server:
     image: fluss-slf4j-logback:$FLUSS_VERSION$
     build:
-      args:
-        FLUSS_VERSION: $FLUSS_VERSION$
       dockerfile: fluss-slf4j-logback.Dockerfile
     command: coordinatorServer
     depends_on:
@@ -115,13 +120,10 @@ services:
         datalake.paimon.warehouse: /tmp/paimon
         metrics.reporters: prometheus
         metrics.reporter.prometheus.port: 9250
-        logback.configurationFile: logback-loki-console.xml
       - APP_NAME=coordinator-server
   tablet-server:
     image: fluss-slf4j-logback:$FLUSS_VERSION$
     build:
-      args:
-        FLUSS_VERSION: $FLUSS_VERSION$
       dockerfile: fluss-slf4j-logback.Dockerfile
     command: tabletServer
     depends_on:
@@ -139,7 +141,6 @@ services:
         datalake.paimon.warehouse: /tmp/paimon
         metrics.reporters: prometheus
         metrics.reporter.prometheus.port: 9250
-        logback.configurationFile: logback-loki-console.xml
       - APP_NAME=tablet-server
   zookeeper:
     restart: always
@@ -182,7 +183,7 @@ services:
     ports:
       - "9092:9090"
     volumes:
-      - ./fluss-quickstart-observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./quickstart-observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
   loki:
     image: grafana/loki:3.3.2
     ports:
@@ -196,7 +197,7 @@ services:
       - prometheus
       - loki
     volumes:
-      - ./fluss-quickstart-observability/grafana:/etc/grafana:ro
+      - ./quickstart-observability/grafana:/etc/grafana:ro
   #end
 
 volumes:
