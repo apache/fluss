@@ -42,9 +42,12 @@ public class FlussLakeTieringEntrypoint {
         // extract fluss config
         Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
         // we need to get bootstrap.servers
-        String bootstrapServers = paramsMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
+        String bootstrapServers = flussConfigMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
         if (bootstrapServers == null) {
-            throw new IllegalArgumentException("bootstrap.servers is not configured");
+            throw new IllegalArgumentException(
+                    String.format(
+                            "The bootstrap server to fluss is not configured, please configure %s",
+                            FLUSS_CONF_PREFIX + ConfigOptions.BOOTSTRAP_SERVERS.key()));
         }
         flussConfigMap.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
 
