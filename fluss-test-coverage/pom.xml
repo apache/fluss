@@ -271,6 +271,7 @@
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
                                         <exclude>com.alibaba.fluss.compression.*</exclude>
                                         <exclude>com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory</exclude>
+                                        <exclude>com.alibaba.fluss.security.auth.ServerAuthenticator</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.flink.utils.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.source.*
