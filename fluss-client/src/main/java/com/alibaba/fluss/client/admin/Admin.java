@@ -248,6 +248,24 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath);
 
     /**
+     * List all partitions in fluss cluster that are under the given table and the given partial
+     * PartitionSpec asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link InvalidPartitionException} if the input partition spec is invalid.
+     * </ul>
+     *
+     * @param tablePath The path of the table.
+     * @param partialPartitionSpec Part of table partition spec
+     */
+    CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, PartitionSpec partialPartitionSpec);
+
+    /**
      * Create a new partition for a partitioned table.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.

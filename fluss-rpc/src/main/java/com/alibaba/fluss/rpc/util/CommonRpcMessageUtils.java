@@ -17,6 +17,7 @@
 package com.alibaba.fluss.rpc.util;
 
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecords;
@@ -27,6 +28,8 @@ import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.messages.PbAclFilter;
 import com.alibaba.fluss.rpc.messages.PbAclInfo;
 import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbKeyValue;
+import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -215,5 +218,15 @@ public class CommonRpcMessageUtils {
             buf.getBytes(buf.readerIndex(), bytes);
             return ByteBuffer.wrap(bytes);
         }
+    }
+
+    public static ResolvedPartitionSpec toResolvedPartitionSpec(PbPartitionSpec pbPartitionSpec) {
+        List<String> partitionKeys = new ArrayList<>();
+        List<String> partitionValues = new ArrayList<>();
+        for (PbKeyValue pbKeyValue : pbPartitionSpec.getPartitionKeyValuesList()) {
+            partitionKeys.add(pbKeyValue.getKey());
+            partitionValues.add(pbKeyValue.getValue());
+        }
+        return new ResolvedPartitionSpec(partitionKeys, partitionValues);
     }
 }

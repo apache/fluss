@@ -17,6 +17,7 @@
 package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -84,6 +85,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+
+import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 
 /**
  * This class includes methods for write/read various metadata (leader address, tablet server
@@ -444,6 +447,28 @@ public class ZooKeeperClient implements AutoCloseable {
             optPartition.ifPresent(
                     partition -> partitions.put(partitionName, partition.getPartitionId()));
         }
+        return partitions;
+    }
+
+    /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
+    public Map<String, Long> getPartitionNameAndIds(
+            TablePath tablePath,
+            List<String> partitionKeys,
+            ResolvedPartitionSpec partialPartitionSpec)
+            throws Exception {
+        Map<String, Long> partitions = new HashMap<>();
+
+        for (String partitionName : getPartitions(tablePath)) {
+            ResolvedPartitionSpec resolvedPartitionSpec =
+                    fromPartitionName(partitionKeys, partitionName);
+            boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
+            if (contains) {
+                Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+                optPartition.ifPresent(
+                        partition -> partitions.put(partitionName, partition.getPartitionId()));
+            }
+        }
+
         return partitions;
     }
 

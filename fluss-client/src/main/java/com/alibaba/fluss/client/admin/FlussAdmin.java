@@ -60,6 +60,8 @@ import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesResponse;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
+import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -80,6 +82,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -269,10 +272,22 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath) {
+        return listPartitionInfos(tablePath, null);
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, PartitionSpec partitionSpec) {
         ListPartitionInfosRequest request = new ListPartitionInfosRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath(
+                new PbTablePath()
+                        .setDatabaseName(tablePath.getDatabaseName())
+                        .setTableName(tablePath.getTableName()));
+
+        if (partitionSpec != null) {
+            PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
+            request.setPartialPartitionSpec(pbPartitionSpec);
+        }
         return gateway.listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
     }

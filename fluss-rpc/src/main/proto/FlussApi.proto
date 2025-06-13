@@ -378,6 +378,7 @@ message InitWriterResponse {
 
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
+  optional PbPartitionSpec partial_partition_spec = 2;
 }
 
 message ListPartitionInfosResponse {

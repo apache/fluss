@@ -70,6 +70,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -385,9 +386,27 @@ public class FlinkCatalog implements Catalog {
         throw new UnsupportedOperationException();
     }
 
+    @SuppressWarnings("checkstyle:WhitespaceAround")
     @Override
     public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
+        List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
+        try {
+            catalogPartitionSpecs = listPartitions(objectPath, null);
+        } catch (TableNotExistException | TableNotPartitionedException | CatalogException e) {
+            throw e;
+        } catch (PartitionSpecInvalidException t) {
+            // do nothing
+        }
+        return catalogPartitionSpecs;
+    }
+
+    @Override
+    public List<CatalogPartitionSpec> listPartitions(
+            ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
+            throws TableNotExistException, TableNotPartitionedException,
+                    PartitionSpecInvalidException, CatalogException {
+
         // TODO lake table should support.
         if (objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
             return Collections.emptyList();
@@ -395,7 +414,14 @@ public class FlinkCatalog implements Catalog {
 
         try {
             TablePath tablePath = toTablePath(objectPath);
-            List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+            List<PartitionInfo> partitionInfos;
+            if (catalogPartitionSpec != null) {
+                Map<String, String> partitionSpec = catalogPartitionSpec.getPartitionSpec();
+                partitionInfos =
+                        admin.listPartitionInfos(tablePath, new PartitionSpec(partitionSpec)).get();
+            } else {
+                partitionInfos = admin.listPartitionInfos(tablePath).get();
+            }
             List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
                 catalogPartitionSpecs.add(
@@ -408,24 +434,17 @@ public class FlinkCatalog implements Catalog {
                 throw new TableNotExistException(getName(), objectPath);
             } else if (isTableNotPartitioned(t)) {
                 throw new TableNotPartitionedException(getName(), objectPath);
+            } else if (isPartitionInvalid(t) && catalogPartitionSpec != null) {
+                throw new PartitionSpecInvalidException(
+                        getName(), new ArrayList<>(), objectPath, catalogPartitionSpec);
             } else {
                 throw new CatalogException(
                         String.format(
-                                "Failed to list partitions of table %s in %s",
-                                objectPath, getName()),
+                                "Failed to list partitions of table %s in %s, by partitionSpec %s",
+                                objectPath, getName(), catalogPartitionSpec),
                         t);
             }
         }
-    }
-
-    @Override
-    public List<CatalogPartitionSpec> listPartitions(
-            ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
-            throws TableNotExistException, TableNotPartitionedException,
-                    PartitionSpecInvalidException, CatalogException {
-        // TODO, list partitions by catalogPartitionSpec. Trace by
-        // https://github.com/alibaba/fluss/issues/514
-        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -473,19 +492,18 @@ public class FlinkCatalog implements Catalog {
                     TableInfo tableInfo = admin.getTableInfo(tablePath).get();
                     partitionKeys = tableInfo.getPartitionKeys();
                 } catch (Exception ee) {
-                    // ignore.
+                    // ignore
                 }
-                if (partitionKeys != null) {
+                if (partitionKeys != null
+                        && !new HashSet<>(partitionKeys)
+                                .containsAll(catalogPartitionSpec.getPartitionSpec().keySet())) {
                     // throw specific partition exception if getting partition keys success.
                     throw new PartitionSpecInvalidException(
                             getName(), partitionKeys, objectPath, catalogPartitionSpec, e);
                 } else {
-                    // throw general exception if getting partition keys failed.
+                    // throw general exception
                     throw new CatalogException(
-                            String.format(
-                                    "PartitionSpec %s does not match partition keys of table %s in catalog %s.",
-                                    partitionSpec, objectPath.getFullName(), catalogName),
-                            e);
+                            "The partition value is invalid, " + e.getMessage(), e);
                 }
             } else if (isPartitionAlreadyExists(t)) {
                 throw new PartitionAlreadyExistsException(

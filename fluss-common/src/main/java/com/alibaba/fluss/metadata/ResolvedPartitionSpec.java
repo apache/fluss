@@ -17,6 +17,7 @@
 package com.alibaba.fluss.metadata;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.exception.InvalidPartitionException;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -150,5 +151,28 @@ public class ResolvedPartitionSpec {
         partitionKeys.forEach(
                 partitionKey -> reOrderedPartitionValues.add(partitionSpecMap.get(partitionKey)));
         return reOrderedPartitionValues;
+    }
+
+    public boolean contains(ResolvedPartitionSpec other) {
+        List<String> otherPartitionKeys = other.getPartitionKeys();
+        List<String> otherPartitionValues = other.getPartitionValues();
+
+        List<String> expectedPartitionValues = new ArrayList<>();
+        for (String otherPartitionKey : otherPartitionKeys) {
+            if (!partitionKeys.contains(otherPartitionKey)) {
+                throw new InvalidPartitionException(
+                        String.format(
+                                "table don't contains this partitionKey: %s", otherPartitionKey));
+            }
+            int keyIndex = partitionKeys.indexOf(otherPartitionKey);
+            expectedPartitionValues.add(partitionValues.get(keyIndex));
+        }
+
+        String expectedPartitionName =
+                String.join(PARTITION_SPEC_SEPARATOR, expectedPartitionValues);
+
+        String otherPartitionName = String.join(PARTITION_SPEC_SEPARATOR, otherPartitionValues);
+
+        return expectedPartitionName.equals(otherPartitionName);
     }
 }
