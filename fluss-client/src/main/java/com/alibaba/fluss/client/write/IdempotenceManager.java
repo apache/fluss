@@ -306,7 +306,10 @@ public class IdempotenceManager {
                 if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {
                     throw t;
                 } else {
-                    LOG.warn("Failed to init writer id.", t);
+                    LOG.warn(
+                            "Failed to init writer id, the retry count: {}, error message: {}",
+                            retryCount,
+                            t.getMessage());
                     retryCount++;
                     long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
                     Thread.sleep(delayMs);
