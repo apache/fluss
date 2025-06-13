@@ -51,6 +51,110 @@ You can also do streaming read without reading the snapshot data, you can use `l
 SELECT * FROM my_table /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 ```
 
+### Column Pruning
+
+Column pruning minimizes I/O by reading only the columns used in a query and ignoring unused ones at the storage layer.
+In Fluss, column pruning is implemented using [Apache Arrow](https://arrow.apache.org/) as the default log format to optimize streaming reads from Log Tables and change logs of PrimaryKey Tables.
+Benchmark results show that column pruning can reach 10x read performance improvement, and reduce unnecessary network traffic (reduce 80% I/O if 80% columns are not used).
+
+:::note
+1. Column pruning is only available when the table uses the Arrow log format (`'table.log.format' = 'arrow'`), which is enabled by default.
+2. Reading log data from remote storage currently does not support column pruning.
+:::
+
+#### Example
+
+**1. Create a table**
+```sql title="Flink SQL"
+CREATE TABLE `testcatalog`.`testdb`.`log_table` (
+    `c_custkey` INT NOT NULL,
+    `c_name` STRING NOT NULL,
+    `c_address` STRING NOT NULL,
+    `c_nationkey` INT NOT NULL,
+    `c_phone` STRING NOT NULL,
+    `c_acctbal` DECIMAL(15, 2) NOT NULL,
+    `c_mktsegment` STRING NOT NULL,
+    `c_comment` STRING NOT NULL
+);
+```
+
+**2. Query a single column:**
+```sql title="Flink SQL"
+SELECT `c_name` FROM `testcatalog`.`testdb`.`log_table`;
+```
+
+**3. Verify with `EXPLAIN`:**
+```sql title="Flink SQL"
+EXPLAIN SELECT `c_name` FROM `testcatalog`.`testdb`.`log_table`;
+```
+
+**Output:**
+
+```
+== Optimized Execution Plan ==
+TableSourceScan(table=[[testcatalog, testdb, log_table, project=[c_name]]], fields=[c_name])
+```
+
+This confirms that only the `c_name` column is being read from storage.
+
+### Partition Pruning
+
+Partition pruning is an optimization technique for Fluss partitioned tables. It reduces the number of partitions scanned during a query by filtering based on partition keys.
+This optimization is especially useful in streaming scenarios for [Multi-Field Partitioned Tables](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables) that has many partitions.
+The partition pruning also supports dynamically pruning new created partitions during streaming read.
+
+:::note
+1. Currently, **only equality conditions** (e.g., `c_nationkey = 'US'`) are supported for partition pruning. Operators like `<`, `>`, `OR`, and `IN` are not yet supported.
+:::
+
+#### Example
+
+**1. Create a partitioned table:**
+```sql title="Flink SQL"
+CREATE TABLE `testcatalog`.`testdb`.`log_partitioned_table` (
+    `c_custkey` INT NOT NULL,
+    `c_name` STRING NOT NULL,
+    `c_address` STRING NOT NULL,
+    `c_nationkey` INT NOT NULL,
+    `c_phone` STRING NOT NULL,
+    `c_acctbal` DECIMAL(15, 2) NOT NULL,
+    `c_mktsegment` STRING NOT NULL,
+    `c_comment` STRING NOT NULL,
+    `dt` STRING NOT NULL
+) PARTITIONED BY (`c_nationkey`,`dt`);
+```
+
+**2. Query with partition filter:**
+```sql title="Flink SQL"
+SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` WHERE `c_nationkey` = 'US';
+```
+
+Fluss source will scan only the partitions where `c_nationkey = 'US'`.
+For example, if the following partitions exist:
+- `US,2025-06-13`
+- `China,2025-06-13`
+- `US,2025-06-14`
+- `China,2025-06-14`
+
+Only `US,2025-06-13` and `US,2025-06-14` will be read.
+
+As new partitions like `US,2025-06-15`, `China,2025-06-15` are created, partition `US,2025-06-15` will be automatically included in the stream, while `China,2025-06-15` will be dynamically filtered out based on the partition pruning condition.
+
+**3. Verify with `EXPLAIN`:**
+
+```sql title="Flink SQL"
+EXPLAIN SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` WHERE `c_nationkey` = 'US';
+```
+
+**Output:**
+
+```text
+== Optimized Execution Plan ==
+TableSourceScan(table=[[testcatalog, testdb, log_partitioned_table, filter=[=(c_nationkey, _UTF-16LE'US':VARCHAR(2147483647) CHARACTER SET "UTF-16LE")]]], fields=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment, dt])
+```
+
+This confirms that only partitions matching `c_nationkey = 'US'` will be scanned.
+
 ## Batch Read
 
 ### Limit Read
