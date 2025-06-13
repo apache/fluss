@@ -37,7 +37,7 @@ In order to use the client, you need to add the following dependency to your `po
 <dependency>
     <groupId>com.alibaba.fluss</groupId>
     <artifactId>fluss-client</artifactId>
-    <version>0.6.0</version>
+    <version>$FLUSS_VERSION$</version>
 </dependency>
 ```
 
