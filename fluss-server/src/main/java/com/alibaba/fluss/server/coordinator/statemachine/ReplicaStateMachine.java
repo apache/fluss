@@ -414,6 +414,7 @@ public class ReplicaStateMachine {
     private Map<TableBucketReplica, LeaderAndIsr> doRemoveReplicaFromIsr(
             Collection<TableBucketReplica> tableBucketReplicas) {
         Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr = new HashMap<>();
+        Map<TableBucket, LeaderAndIsr> toUpdateLeaderAndIsrList = new HashMap<>();
         for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
             TableBucket tableBucket = tableBucketReplica.getTableBucket();
             int replicaId = tableBucketReplica.getReplica();
@@ -438,25 +439,21 @@ public class ReplicaStateMachine {
             List<Integer> newIsr =
                     leaderAndIsr.isr().size() == 1
                             // don't remove the replica id from isr when isr size is 1,
-                            // if isr is empty, we can't elect leader any more
+                            // if isr is empty, we can't elect leader anymore
                             ? leaderAndIsr.isr()
                             : leaderAndIsr.isr().stream()
                                     .filter(id -> id != replicaId)
                                     .collect(Collectors.toList());
             LeaderAndIsr adjustLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(newLeader, newIsr);
-            try {
-                zooKeeperClient.updateLeaderAndIsr(tableBucket, adjustLeaderAndIsr);
-            } catch (Exception e) {
-                LOG.error(
-                        "Fail to update bucket LeaderAndIsr for table bucket {} of table {}.",
-                        tableBucket,
-                        coordinatorContext.getTablePathById(tableBucket.getTableId()),
-                        e);
-                continue;
-            }
-            // update leader and isr
-            coordinatorContext.putBucketLeaderAndIsr(tableBucket, adjustLeaderAndIsr);
             adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
+            toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);
+        }
+        try {
+            zooKeeperClient.batchUpdateLeaderAndIsr(toUpdateLeaderAndIsrList);
+            toUpdateLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+            return adjustedLeaderAndIsr;
+        } catch (Exception e) {
+            LOG.error("Fail to batch update bucket LeaderAndIsr.");
         }
         return adjustedLeaderAndIsr;
     }

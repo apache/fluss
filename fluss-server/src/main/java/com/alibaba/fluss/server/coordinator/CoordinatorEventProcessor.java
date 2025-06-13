@@ -700,7 +700,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void processNewTabletServer(NewTabletServerEvent newTabletServerEvent) {
         // NOTE: we won't need to detect bounced tablet servers like Kafka as we won't
         // miss the event of tablet server un-register and register again since we can
-        // listener the children created and deleted in zk node.
+        // listen the children created and deleted in zk node.
 
         // Also, Kafka use broker epoch to make it can reject the LeaderAndIsrRequest,
         // UpdateMetadataRequest and StopReplicaRequest
