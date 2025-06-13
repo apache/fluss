@@ -35,9 +35,7 @@ final class ServerApiVersions {
     ServerApiVersions(Collection<PbApiVersion> serverApiVersions) {
         for (PbApiVersion serverVersion : serverApiVersions) {
             if (!ApiKeys.hasId(serverVersion.getApiKey())) {
-                throw new IllegalArgumentException(
-                        "Server returned an API version which is not supported by this client: "
-                                + serverVersion.getApiKey());
+                continue;
             }
             ApiKeys apiKey = ApiKeys.forId(serverVersion.getApiKey());
             Optional<Short> version =
