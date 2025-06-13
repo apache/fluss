@@ -75,9 +75,10 @@ public abstract class FlinkProcedureITCase {
                         "create catalog %s with ( \n"
                                 + "'type' = 'fluss', \n"
                                 + "'bootstrap.servers' = '%s', \n"
-                                + "'client.security.protocol' = 'username_password', \n"
-                                + "'client.security.username_password.username' = 'root', \n"
-                                + "'client.security.username_password.password' = 'password' \n"
+                                + "'client.security.protocol' = 'sasl', \n"
+                                + "'client.security.sasl.mechanism' = 'PLAIN', \n"
+                                + "'client.security.sasl.username' = 'root', \n"
+                                + "'client.security.sasl.password' = 'password' \n"
                                 + ")",
                         CATALOG_NAME, bootstrapServers);
         tEnv.executeSql(catalogDDL).await();
@@ -271,10 +272,14 @@ public abstract class FlinkProcedureITCase {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
 
         // set security information.
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        conf.setString("security.username_password.credentials", "root:password,guest:password2");
-        conf.set(ConfigOptions.SUPER_USERS, "USER:root");
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
+        conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }
