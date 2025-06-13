@@ -40,7 +40,12 @@ Join our monthly community gatherings to get involved:
 
 **Fluss Contributors Call**
 
-  Invitation link: [Community Events](https://calendar.google.com/calendar/u/0?cid=MjUzMjY2OTFkY2FmNmRiYjk5MzllZmUxNDliYjg1ZjI4ODhhNjU0YzY5Mzc2M2IyZDQ1NzIwNTAyZGU1MjZmOEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t)
+Invitation link: [Community Events](https://calendar.google.com/calendar/u/0?cid=MjUzMjY2OTFkY2FmNmRiYjk5MzllZmUxNDliYjg1ZjI4ODhhNjU0YzY5Mzc2M2IyZDQ1NzIwNTAyZGU1MjZmOEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t)
 
-These community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
+Community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
+:::info
+The **Google Calendar** below uses **Greenwich Mean Time (GMT+0)**!
+:::
+
+<iframe src="https://calendar.google.com/calendar/embed?src=25326691dcaf6dbb9939efe149bb85f2888a654c693763b2d45720502de526f8%40group.calendar.google.com&ctz=Greenwich" width="800" height="600" frameborder="0" scrolling="no"></iframe>
