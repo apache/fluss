@@ -52,12 +52,13 @@ single `Connection` instance per application and use it to create multiple `Admi
 `Table` and `Admin` instances, on the other hand, are not thread-safe and should be created for each thread that needs to access them.
  Caching or pooling of `Table` and `Admin` is not recommended.
 
-Create a new `Admin` instance:
+Create a new `Admin` instance :
 ```java
 // creating Connection object to connect with Fluss cluster
 Configuration conf = new Configuration(); 
 conf.setString("bootstrap.servers", "localhost:9123");
 Connection connection = ConnectionFactory.createConnection(conf);
+
 
 // obtain Admin instance from the Connection
 Admin admin = connection.getAdmin();
@@ -67,6 +68,29 @@ admin.listDatabases().get().forEach(System.out::println);
 Table table = connection.getTable(TablePath.of("my_db", "my_table");
 System.out.println(table.getTableInfo());
 ```
+
+if you are using SASL authentication, you need to set the following properties:
+```java
+// creating Connection object to connect with Fluss cluster
+Configuration conf = new Configuration(); 
+conf.setString("bootstrap.servers", "localhost:9123");
+conf.setString("client.security.protocol", "sasl");
+conf.setString("client.security.sasl.mechanism", "PLAIN");
+conf.setString("client.security.sasl.username", "alice");
+conf.setString("client.security.sasl.password", "alice-secret");
+Connection connection = ConnectionFactory.createConnection(conf);
+
+
+// obtain Admin instance from the Connection
+Admin admin = connection.getAdmin();
+admin.listDatabases().get().forEach(System.out::println);
+
+// obtain Table instance from the Connection
+Table table = connection.getTable(TablePath.of("my_db", "my_table");
+System.out.println(table.getTableInfo());
+```
+
+
 
 ## Working Operations
 All methods in `FlussAdmin` return `CompletableFuture` objects. You can handle these in two ways:
