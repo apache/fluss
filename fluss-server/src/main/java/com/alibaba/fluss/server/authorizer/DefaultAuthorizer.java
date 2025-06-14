@@ -16,6 +16,7 @@
 
 package com.alibaba.fluss.server.authorizer;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.ApiException;
@@ -116,7 +117,6 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
         OPS_MAPPING = Collections.unmodifiableMap(map);
     }
 
-    private final Configuration configuration;
     private final Set<FlussPrincipal> superUsers;
 
     private final ZooKeeperClient zooKeeperClient;
@@ -131,7 +131,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     private final HashMap<ResourceTypeKey, Set<String>> resourceCache = new HashMap<>();
 
     public DefaultAuthorizer(AuthorizationPlugin.Context context) {
-        this.configuration = context.getConfiguration();
+        Configuration configuration = context.getConfiguration();
         this.superUsers = parseSuperUsers(configuration);
         if (context.getZooKeeperClient().isPresent()) {
             this.zooKeeperClient = context.getZooKeeperClient().get();
@@ -203,21 +203,20 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                                     });
                             entries.values()
                                     .forEach(
-                                            idx -> {
-                                                results[idx] =
-                                                        AclCreateResult.success(
-                                                                aclBindings.get(idx));
-                                            });
+                                            idx ->
+                                                    results[idx] =
+                                                            AclCreateResult.success(
+                                                                    aclBindings.get(idx)));
 
                         } catch (Throwable e) {
                             ApiException exception = ApiError.fromThrowable(e).exception();
                             entries.values()
                                     .forEach(
-                                            idx -> {
-                                                results[idx] =
-                                                        new AclCreateResult(
-                                                                aclBindings.get(idx), exception);
-                                            });
+                                            idx ->
+                                                    results[idx] =
+                                                            new AclCreateResult(
+                                                                    aclBindings.get(idx),
+                                                                    exception));
                         }
                     });
         }
@@ -470,7 +469,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
         }
     }
 
-    boolean aclsAllowAccess(
+    @VisibleForTesting
+    public boolean aclsAllowAccess(
             Resource resource, FlussPrincipal principal, OperationType operation, String host) {
         Set<AccessControlEntry> accessControlEntries = matchingAcls(resource);
         return isEmptyAclAndAuthorized(resource, accessControlEntries)
@@ -684,7 +684,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
      * zknode version.
      */
     public static class VersionedAcls {
-        Set<AccessControlEntry> acls;
+        public Set<AccessControlEntry> acls;
         int zkVersion;
 
         public VersionedAcls(int zkVersion, Set<AccessControlEntry> acls) {
