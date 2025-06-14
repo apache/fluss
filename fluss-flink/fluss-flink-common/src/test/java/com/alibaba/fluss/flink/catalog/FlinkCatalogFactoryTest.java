@@ -69,9 +69,10 @@ public class FlinkCatalogFactoryTest {
 
         // test security configs
         Map<String, String> securityMap = new HashMap<>();
-        securityMap.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "username_password");
-        securityMap.put("client.security.username_password.username", "root");
-        securityMap.put("client.security.username_password.password", "password");
+        securityMap.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "sasl");
+        securityMap.put(ConfigOptions.CLIENT_SASL_MECHANISM.key(), "plain");
+        securityMap.put("client.security.sasl.username", "root");
+        securityMap.put("client.security.sasl.password", "password");
 
         options.putAll(securityMap);
         FlinkCatalog actualCatalog2 =

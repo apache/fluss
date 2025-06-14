@@ -29,10 +29,10 @@ import javax.security.sasl.SaslClient;
 
 import java.util.Map;
 
-import static com.alibaba.fluss.config.ConfigOptions.CLIENT_MECHANISM;
 import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
 import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_PASSWORD;
 import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_USERNAME;
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM;
 import static com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory.createSaslClient;
 
 /** An authenticator that uses SASL to authenticate with a server. */
@@ -47,7 +47,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     private LoginManager loginManager;
 
     public SaslClientAuthenticator(Configuration configuration) {
-        this.mechanism = configuration.get(CLIENT_MECHANISM).toUpperCase();
+        this.mechanism = configuration.get(CLIENT_SASL_MECHANISM).toUpperCase();
         String jaasConfigStr = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
         if (jaasConfigStr == null && mechanism.equals(PlainSaslServer.PLAIN_MECHANISM)) {
             String username = configuration.get(CLIENT_SASL_JAAS_USERNAME);

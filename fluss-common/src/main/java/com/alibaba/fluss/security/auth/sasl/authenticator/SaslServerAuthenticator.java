@@ -147,6 +147,6 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
 
     @Override
     public FlussPrincipal createPrincipal() {
-        return new FlussPrincipal("User", saslServer.getAuthorizationID());
+        return new FlussPrincipal(saslServer.getAuthorizationID(), "User");
     }
 }

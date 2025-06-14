@@ -1092,7 +1092,7 @@ public class ConfigOptions {
                             "Enable metrics for client. When metrics is enabled, the client "
                                     + "will collect metrics and report by the JMX metrics reporter.");
 
-    public static final ConfigOption<String> CLIENT_MECHANISM =
+    public static final ConfigOption<String> CLIENT_SASL_MECHANISM =
             key("client.security.sasl.mechanism")
                     .stringType()
                     .defaultValue("PLAIN")

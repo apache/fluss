@@ -72,7 +72,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
     static final String CATALOG_NAME = "testcatalog";
     static final String ADMIN_CATALOG_NAME = "test_admin_catalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
-    static FlussPrincipal guest = new FlussPrincipal("guest", "USER");
+    static FlussPrincipal guest = new FlussPrincipal("guest", "User");
     static Configuration clientConf;
 
     private TableEnvironment tEnv;
@@ -81,7 +81,6 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
     @BeforeAll
     static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT");
-        clientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
     }
 
     @BeforeEach
@@ -96,9 +95,10 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                         "create catalog %s with ( \n"
                                 + "'type' = 'fluss', \n"
                                 + "'bootstrap.servers' = '%s', \n"
-                                + "'client.security.protocol' = 'username_password', \n"
-                                + "'client.security.username_password.username' = 'guest', \n"
-                                + "'client.security.username_password.password' = 'password2' \n"
+                                + "'client.security.protocol' = 'sasl', \n"
+                                + "'client.security.sasl.mechanism' = 'PLAIN', \n"
+                                + "'client.security.sasl.username' = 'guest', \n"
+                                + "'client.security.sasl.password' = 'password2' \n"
                                 + ")",
                         CATALOG_NAME, bootstrapServers);
         tEnv.executeSql(createCatalogDDL);
@@ -110,9 +110,10 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                         "create catalog %s with ( \n"
                                 + "'type' = 'fluss', \n"
                                 + "'bootstrap.servers' = '%s', \n"
-                                + "'client.security.protocol' = 'username_password', \n"
-                                + "'client.security.username_password.username' = 'root', \n"
-                                + "'client.security.username_password.password' = 'password' \n"
+                                + "'client.security.protocol' = 'sasl', \n"
+                                + "'client.security.sasl.mechanism' = 'PLAIN', \n"
+                                + "'client.security.sasl.username' = 'root', \n"
+                                + "'client.security.sasl.password' = 'password' \n"
                                 + ")",
                         ADMIN_CATALOG_NAME, bootstrapServers);
         tEnv.executeSql(createAminCatalogDDL).await();
@@ -421,10 +422,14 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
 
         // set security information.
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        conf.setString("security.username_password.credentials", "root:password,guest:password2");
-        conf.set(ConfigOptions.SUPER_USERS, "USER:root");
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
+        conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }

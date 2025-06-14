@@ -86,14 +86,6 @@
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
-
-
-        <dependency>
-            <groupId>com.alibaba.fluss</groupId>
-            <artifactId>fluss-lakehouse-paimon</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
     </dependencies>
 
     <profiles>
@@ -124,7 +116,6 @@
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <exclude>fluss-flink/**</exclude>
-                                                <exclude>fluss-lakehouse/**</exclude>
                                                 <exclude>fluss-lake/**</exclude>
                                             </excludes>
                                         </resource>
@@ -160,7 +151,6 @@
                                             <directory>${project.basedir}/../</directory>
                                             <includes>
                                                 <include>fluss-flink/**/target/classes/**</include>
-                                                <include>fluss-lakehouse/**/target/classes/**</include>
                                                 <include>fluss-lake/**/target/classes/**</include>
                                             </includes>
                                             <excludes>
@@ -277,6 +267,7 @@
                                         <exclude>com.alibaba.fluss.Bucket</exclude>
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
                                         <exclude>com.alibaba.fluss.compression.*</exclude>
+                                        <exclude>com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.flink.utils.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.source.*
@@ -319,12 +310,32 @@
                                         <!-- start exclude for metric -->
                                         <exclude>com.alibaba.fluss.metrics.*</exclude>
                                         <!-- end exclude for metric -->
-                                        <!-- start exclude for lakehouse-paimon -->
-                                        <exclude>com.alibaba.fluss.lakehouse.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.lakehouse.*</exclude>
-                                        <!-- end exclude for lakehouse-paimon -->
                                         <exclude>com.alibaba.fluss.kafka.*</exclude>
-                                        <exclude>com.alibaba.fluss.spark.*</exclude>
+                                        <!-- exclude for fluss-ci-tools -->
+                                        <exclude>com.alibaba.fluss.tools.ci.*</exclude>
+                                        <!-- exclude for dummy class -->
+                                        <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
+                                        <exclude>com.alibaba.fluss.flink.DummyClass120</exclude>
+                                        <exclude>com.alibaba.fluss.flink.DummyClass119</exclude>
+                                        <exclude>com.alibaba.fluss.lake.batch.ArrowRecordBatch</exclude>
+                                        <exclude>com.alibaba.fluss.lake.committer.CommittedLakeSnapshot</exclude>
+                                        <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
+                                        <!-- start exclude for flink tiering service -->
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceOptions</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource.Builder</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringWriterInitContext</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceReader</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultEmitter</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo*</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.committer.TieringCommitOperatorFactory</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo*</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.committer.LakeTieringCommitOperatorFactory</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
+                                        <!-- end exclude for flink tiering service -->
                                     </excludes>
                                 </rule>
                             </rules>

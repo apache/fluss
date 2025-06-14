@@ -102,19 +102,20 @@ public class FlussAuthorizationITCase {
     @BeforeEach
     protected void setup() throws Exception {
         Configuration conf = FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT");
-        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        conf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
         Configuration rootConf = new Configuration(conf);
-        rootConf.setString("client.security.username_password.username", "root");
-        rootConf.setString("client.security.username_password.password", "password");
+        rootConf.setString("client.security.sasl.username", "root");
+        rootConf.setString("client.security.sasl.password", "password");
         rootConn = ConnectionFactory.createConnection(rootConf);
         rootAdmin = rootConn.getAdmin();
 
         guestConf = new Configuration(conf);
-        guestConf.setString("client.security.username_password.username", "guest");
-        guestConf.setString("client.security.username_password.password", "password2");
+        guestConf.setString("client.security.sasl.username", "guest");
+        guestConf.setString("client.security.sasl.password", "password2");
         guestConn = ConnectionFactory.createConnection(guestConf);
         guestAdmin = guestConn.getAdmin();
-        guestPrincipal = new FlussPrincipal("guest", "USER");
+        guestPrincipal = new FlussPrincipal("guest", "User");
 
         // prepare default database and table
         rootAdmin
@@ -164,9 +165,10 @@ public class FlussAuthorizationITCase {
         try {
             flussClusterExtension.start();
             Configuration conf = new Configuration(flussClusterExtension.getClientConfig("CLIENT"));
-            conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
-            conf.setString("client.security.username_password.username", "root");
-            conf.setString("client.security.username_password.password", "password");
+            conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+            conf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+            conf.setString("client.security.sasl.username", "root");
+            conf.setString("client.security.sasl.password", "password");
             try (Connection connection = ConnectionFactory.createConnection(conf);
                     Admin admin = connection.getAdmin()) {
                 assertThatThrownBy(
@@ -230,7 +232,7 @@ public class FlussAuthorizationITCase {
         assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).hasSize(1);
 
         // test whether the user have authorization to operate create and drop acls.
-        FlussPrincipal user1 = new FlussPrincipal("user1", "USER");
+        FlussPrincipal user1 = new FlussPrincipal("user1", "User");
         AclBinding user1AclBinding =
                 new AclBinding(
                         Resource.table("test_db", "test_table"),
@@ -684,10 +686,14 @@ public class FlussAuthorizationITCase {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
 
         // set security information.
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        conf.setString("security.username_password.credentials", "root:password,guest:password2");
-        conf.set(ConfigOptions.SUPER_USERS, "USER:root");
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
+        conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }

@@ -591,9 +591,13 @@ abstract class FlinkCatalogITCase {
     void testAuthentication() throws Exception {
         String clientListenerName = "CLIENT";
         Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
         serverConfig.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        serverConfig.setString("security.username_password.credentials", "root:password");
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
         serverConfig.setString(ConfigOptions.SUPER_USERS.key(), "USER:root");
         FlussClusterExtension flussClusterExtension =
                 FlussClusterExtension.builder()
@@ -629,9 +633,10 @@ abstract class FlinkCatalogITCase {
                             "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side.");
 
             Map<String, String> clientConfig = new HashMap<>();
-            clientConfig.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "username_password");
-            clientConfig.put("client.security.username_password.username", "root");
-            clientConfig.put("client.security.username_password.password", "password");
+            clientConfig.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "sasl");
+            clientConfig.put(ConfigOptions.CLIENT_SASL_MECHANISM.key(), "plain");
+            clientConfig.put("client.security.sasl.username", "root");
+            clientConfig.put("client.security.sasl.password", "password");
             authenticateCatalog =
                     new FlinkCatalog(
                             CATALOG_NAME,
