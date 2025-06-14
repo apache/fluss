@@ -422,6 +422,11 @@ public class TabletServer extends ServerBase {
         return replicaManager;
     }
 
+    @VisibleForTesting
+    public @Nullable Authorizer getAuthorizer() {
+        return authorizer;
+    }
+
     private static void validateConfigs(Configuration conf) {
         Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
         if (!serverId.isPresent()) {

@@ -171,32 +171,31 @@ public class FlussAuthorizationITCase {
             conf.setString("client.security.sasl.password", "password");
             try (Connection connection = ConnectionFactory.createConnection(conf);
                     Admin admin = connection.getAdmin()) {
-                assertThatThrownBy(
-                                () -> {
-                                    admin.listAcls(AclBindingFilter.ANY).get();
-                                })
+                assertThatThrownBy(() -> admin.listAcls(AclBindingFilter.ANY).get())
                         .hasMessageContaining("No Authorizer is configured.");
                 assertThatThrownBy(
-                                () -> {
-                                    admin.createAcls(
-                                                    Collections.singletonList(
-                                                            new AclBinding(
-                                                                    Resource.cluster(),
-                                                                    new AccessControlEntry(
-                                                                            WILD_CARD_PRINCIPAL,
-                                                                            WILD_CARD_HOST,
-                                                                            OperationType.CREATE,
-                                                                            PermissionType.ALLOW))))
-                                            .all()
-                                            .get();
-                                })
+                                () ->
+                                        admin.createAcls(
+                                                        Collections.singletonList(
+                                                                new AclBinding(
+                                                                        Resource.cluster(),
+                                                                        new AccessControlEntry(
+                                                                                WILD_CARD_PRINCIPAL,
+                                                                                WILD_CARD_HOST,
+                                                                                OperationType
+                                                                                        .CREATE,
+                                                                                PermissionType
+                                                                                        .ALLOW))))
+                                                .all()
+                                                .get())
                         .hasMessageContaining("No Authorizer is configured.");
                 assertThatThrownBy(
-                                () -> {
-                                    admin.dropAcls(Collections.singletonList(AclBindingFilter.ANY))
-                                            .all()
-                                            .get();
-                                })
+                                () ->
+                                        admin.dropAcls(
+                                                        Collections.singletonList(
+                                                                AclBindingFilter.ANY))
+                                                .all()
+                                                .get())
                         .hasMessageContaining("No Authorizer is configured.");
 
                 // test initWriter without authorizer and empty table paths
@@ -455,21 +454,15 @@ public class FlussAuthorizationITCase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(writeAclTable, descriptor, false).get();
         // create acl to allow guest write.
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.table(writeAclTable),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.WRITE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        AclBinding aclBinding =
+                new AclBinding(
+                        Resource.table(writeAclTable),
+                        new AccessControlEntry(
+                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
+        rootAdmin.createAcls(Collections.singletonList(aclBinding)).all().get();
 
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
-                rootAdmin.getTableInfo(writeAclTable).get().getTableId());
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId(), aclBinding);
 
         FlussConnection flussConnection = (FlussConnection) guestConn;
         TabletServerGateway tabletServerGateway =
@@ -520,35 +513,24 @@ public class FlussAuthorizationITCase {
         rootAdmin.createTable(noWriteAclTable, descriptor, false).get();
 
         // create acl to allow guest write for writeAclTable.
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.table(writeAclTable),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.WRITE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.table(noWriteAclTable),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.READ,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        AclBinding aclBindingOfWriteAclTable =
+                new AclBinding(
+                        Resource.table(writeAclTable),
+                        new AccessControlEntry(
+                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
+        AclBinding aclBindingOfNoWriteAclTable =
+                new AclBinding(
+                        Resource.table(noWriteAclTable),
+                        new AccessControlEntry(guestPrincipal, "*", READ, PermissionType.ALLOW));
+        rootAdmin.createAcls(Collections.singletonList(aclBindingOfWriteAclTable)).all().get();
+        rootAdmin.createAcls(Collections.singletonList(aclBindingOfNoWriteAclTable)).all().get();
 
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
-                rootAdmin.getTableInfo(writeAclTable).get().getTableId());
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
-                rootAdmin.getTableInfo(noWriteAclTable).get().getTableId());
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId(),
+                aclBindingOfWriteAclTable);
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(noWriteAclTable).get().getTableId(),
+                aclBindingOfNoWriteAclTable);
 
         // 1. Try to write data to noWriteAclTable. It should throw AuthorizationException because
         // of request writeId failed.
@@ -595,20 +577,14 @@ public class FlussAuthorizationITCase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(DATA1_TABLE_PATH, descriptor, false).get();
         // create acl to allow guest write.
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.table(DATA1_TABLE_PATH),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.WRITE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
-                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId());
+        AclBinding aclBinding =
+                new AclBinding(
+                        Resource.table(DATA1_TABLE_PATH),
+                        new AccessControlEntry(
+                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
+        rootAdmin.createAcls(Collections.singletonList(aclBinding)).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId(), aclBinding);
         try (Table table = guestConn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
