@@ -137,7 +137,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private final ApiManager apiManager;
     protected final ZooKeeperClient zkClient;
     protected final MetadataManager metadataManager;
-    protected final Authorizer authorizer;
+    protected final @Nullable Authorizer authorizer;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
