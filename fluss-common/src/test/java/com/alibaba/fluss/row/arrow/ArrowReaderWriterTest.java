@@ -160,7 +160,42 @@ class ArrowReaderWriterTest {
             for (int i = 0; i < rowCount; i++) {
                 row.setRowId(i);
                 assertThatRow(row).withSchema(rowType).isEqualTo(TEST_DATA.get(i));
+
+                InternalRow rowData = TEST_DATA.get(i);
+                assertThat(row.getBoolean(0)).isEqualTo(rowData.getBoolean(0));
+                assertThat(row.getByte(1)).isEqualTo(rowData.getByte(1));
+                assertThat(row.getShort(2)).isEqualTo(rowData.getShort(2));
+                if (!row.isNullAt(3)) {
+                    assertThat(row.getInt(3)).isEqualTo(rowData.getInt(3));
+                }
+                assertThat(row.getLong(4)).isEqualTo(rowData.getLong(4));
+                assertThat(row.getFloat(5)).isEqualTo(rowData.getFloat(5));
+                assertThat(row.getDouble(6)).isEqualTo(rowData.getDouble(6));
+                assertThat(row.getDecimal(7, 10, 3)).isEqualTo(rowData.getDecimal(7, 10, 3));
+                assertThat(row.getChar(8, 3)).isEqualTo(rowData.getChar(8, 3));
+                if (!row.isNullAt(9)) {
+                    assertThat(row.getString(9)).isEqualTo(rowData.getString(9));
+                }
+                assertThat(row.getBinary(10, 5)).isEqualTo(rowData.getBinary(10, 5));
+                assertThat(row.getBytes(11)).isEqualTo(rowData.getBytes(11));
+                assertThat(row.getInt(12)).isEqualTo(rowData.getInt(12));
+                assertThat(row.getInt(13)).isEqualTo(rowData.getInt(13));
+                if (!row.isNullAt(14)) {
+                    assertThat(row.getTimestampNtz(14, 0))
+                            .isEqualTo(rowData.getTimestampNtz(14, 0));
+                }
+                assertThat(row.getTimestampNtz(15, 3)).isEqualTo(rowData.getTimestampNtz(15, 3));
+                assertThat(row.getTimestampNtz(16, 6)).isEqualTo(rowData.getTimestampNtz(16, 6));
+                assertThat(row.getTimestampNtz(17, 9)).isEqualTo(rowData.getTimestampNtz(17, 9));
+                if (!row.isNullAt(18)) {
+                    assertThat(row.getTimestampLtz(18, 0))
+                            .isEqualTo(rowData.getTimestampLtz(18, 0));
+                }
+                assertThat(row.getTimestampLtz(19, 3)).isEqualTo(rowData.getTimestampLtz(19, 3));
+                assertThat(row.getTimestampLtz(20, 6)).isEqualTo(rowData.getTimestampLtz(20, 6));
+                assertThat(row.getTimestampLtz(21, 9)).isEqualTo(rowData.getTimestampLtz(21, 9));
             }
+            reader.close();
         }
     }
 
