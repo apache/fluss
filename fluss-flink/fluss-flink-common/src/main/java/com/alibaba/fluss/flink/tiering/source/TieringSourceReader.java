@@ -26,6 +26,8 @@ import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /** A {@link SourceReader} that read records from Fluss and write to lake. */
@@ -59,6 +61,12 @@ public final class TieringSourceReader<WriteResult>
     @Override
     protected void onSplitFinished(Map<String, TieringSplitState> finishedSplitIds) {
         context.sendSplitRequest();
+    }
+
+    @Override
+    public List<TieringSplit> snapshotState(long checkpointId) {
+        // we return empty list to make source reader be stateless
+        return Collections.emptyList();
     }
 
     @Override
