@@ -60,7 +60,12 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(6),
                         new org.apache.paimon.types.TimestampType(6),
                         new org.apache.paimon.types.BinaryType(),
-                        new org.apache.paimon.types.VarCharType());
+                        new org.apache.paimon.types.VarCharType(),
+                        // append three system columns: __bucket, __offset,__timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
         long logOffset = 0;
@@ -122,7 +127,13 @@ class FlussRecordAsPaimonRowTest {
     @Test
     void testPrimaryKeyTableRecord() {
         int tableBucket = 0;
-        RowType tableRowType = RowType.of(new org.apache.paimon.types.BooleanType());
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.BooleanType(),
+                        // append three system columns: __bucket, __offset,__timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
         long logOffset = 0;
