@@ -23,6 +23,7 @@ import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 import com.alibaba.fluss.types.DataTypeRoot;
@@ -151,6 +152,28 @@ class PartitionUtilsTest {
                             autoPartitionTimeUnit);
             assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo(expected[i]);
         }
+    }
+
+    @Test
+    void testString() {
+        Object value = BinaryString.fromString("Fluss");
+        DataTypeRoot type = DataTypeRoot.STRING;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("Fluss");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testCharConvert() {
+        Object value = BinaryString.fromString("F");
+        DataTypeRoot type = DataTypeRoot.CHAR;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("F");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
     }
 
     @Test
@@ -285,6 +308,17 @@ class PartitionUtilsTest {
 
         String toStringResult = convertValueOfType(timestampLTZ, type);
         assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428099988");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testBigInt() {
+        long value = 1748662955428L;
+        DataTypeRoot type = DataTypeRoot.BIGINT;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("1748662955428");
         String detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
     }
