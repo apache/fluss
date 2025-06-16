@@ -18,6 +18,7 @@ package com.alibaba.fluss.lake.paimon.tiering;
 
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Decimal;
@@ -25,26 +26,36 @@ import org.apache.paimon.data.InternalArray;
 import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
+import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
+import org.apache.paimon.types.RowType;
 
 import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow implements InternalRow {
 
+    // Lake table for paimon will append three system columns: __bucket, __offset,__timestamp
+    private static final int LAKE_PAIMON_SYSTEM_COLUMNS = 3;
+    private final RowType tableTowType;
     private final int bucket;
     private LogRecord logRecord;
     private int originRowFieldCount;
     private com.alibaba.fluss.row.InternalRow internalRow;
 
-    public FlussRecordAsPaimonRow(int bucket) {
+    public FlussRecordAsPaimonRow(int bucket, RowType tableTowType) {
         this.bucket = bucket;
+        this.tableTowType = tableTowType;
     }
 
     public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
         this.originRowFieldCount = internalRow.getFieldCount();
+        checkState(
+                originRowFieldCount == tableTowType.getFieldCount() - LAKE_PAIMON_SYSTEM_COLUMNS,
+                "The paimon table fields count must equals to LogRecord's fields count.");
     }
 
     @Override
@@ -52,7 +63,7 @@ public class FlussRecordAsPaimonRow implements InternalRow {
         return
         //  business (including partitions) + system (three system fields: bucket, offset,
         // timestamp)
-        originRowFieldCount + 3;
+        originRowFieldCount + LAKE_PAIMON_SYSTEM_COLUMNS;
     }
 
     @Override
@@ -142,13 +153,33 @@ public class FlussRecordAsPaimonRow implements InternalRow {
         if (pos == originRowFieldCount + 2) {
             return Timestamp.fromEpochMillis(logRecord.timestamp());
         }
-        if (TimestampLtz.isCompact(precision)) {
-            return Timestamp.fromEpochMillis(
-                    internalRow.getTimestampLtz(pos, precision).getEpochMillisecond());
-        } else {
-            TimestampLtz timestampLtz = internalRow.getTimestampLtz(pos, precision);
-            return Timestamp.fromEpochMillis(
-                    timestampLtz.getEpochMillisecond(), timestampLtz.getNanoOfMillisecond());
+
+        DataType paimonTimestampType = tableTowType.getTypeAt(pos);
+
+        switch (paimonTimestampType.getTypeRoot()) {
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                if (TimestampNtz.isCompact(precision)) {
+                    return Timestamp.fromEpochMillis(
+                            internalRow.getTimestampNtz(pos, precision).getMillisecond());
+                } else {
+                    TimestampNtz timestampNtz = internalRow.getTimestampNtz(pos, precision);
+                    return Timestamp.fromEpochMillis(
+                            timestampNtz.getMillisecond(), timestampNtz.getNanoOfMillisecond());
+                }
+
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                if (TimestampLtz.isCompact(precision)) {
+                    return Timestamp.fromEpochMillis(
+                            internalRow.getTimestampLtz(pos, precision).getEpochMillisecond());
+                } else {
+                    TimestampLtz timestampLtz = internalRow.getTimestampLtz(pos, precision);
+                    return Timestamp.fromEpochMillis(
+                            timestampLtz.getEpochMillisecond(),
+                            timestampLtz.getNanoOfMillisecond());
+                }
+            default:
+                throw new UnsupportedOperationException(
+                        "Unsupported data type to get timestamp: " + paimonTimestampType);
         }
     }
 

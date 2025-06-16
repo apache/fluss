@@ -43,6 +43,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 (TableWriteImpl<InternalRow>)
                         // todo: set ioManager to support write-buffer-spillable
                         fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER),
+                fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys); // Pass to parent

@@ -22,6 +22,7 @@ import com.alibaba.fluss.record.LogRecord;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.table.sink.CommitMessage;
 import org.apache.paimon.table.sink.TableWriteImpl;
+import org.apache.paimon.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -34,19 +35,23 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
 public abstract class RecordWriter<T> implements AutoCloseable {
 
     protected final TableWriteImpl<T> tableWrite;
+    protected final RowType tableRowType;
     protected final int bucket;
     @Nullable protected final BinaryRow partition;
     protected final FlussRecordAsPaimonRow flussRecordAsPaimonRow;
 
     public RecordWriter(
             TableWriteImpl<T> tableWrite,
+            RowType tableRowType,
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys) {
         this.tableWrite = tableWrite;
+        this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
         this.partition = toPaimonPartitionBinaryRow(partitionKeys, partition);
-        this.flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(tableBucket.getBucket());
+        this.flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType);
     }
 
     public abstract void write(LogRecord record) throws Exception;
