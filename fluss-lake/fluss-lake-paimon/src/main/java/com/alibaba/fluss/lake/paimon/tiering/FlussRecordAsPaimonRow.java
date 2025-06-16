@@ -36,6 +36,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow implements InternalRow {
 
+    // Lake table for paimon will append three system columns: __bucket, __offset,__timestamp
+    private static final int LAKE_PAIMON_SYSTEM_COLUMNS = 3;
     private final RowType tableTowType;
     private final int bucket;
     private LogRecord logRecord;
@@ -52,7 +54,7 @@ public class FlussRecordAsPaimonRow implements InternalRow {
         this.internalRow = logRecord.getRow();
         this.originRowFieldCount = internalRow.getFieldCount();
         checkState(
-                originRowFieldCount == tableTowType.getFieldCount(),
+                originRowFieldCount == tableTowType.getFieldCount() - LAKE_PAIMON_SYSTEM_COLUMNS,
                 "The paimon table fields count must equals to LogRecord's fields count.");
     }
 
@@ -61,7 +63,7 @@ public class FlussRecordAsPaimonRow implements InternalRow {
         return
         //  business (including partitions) + system (three system fields: bucket, offset,
         // timestamp)
-        originRowFieldCount + 3;
+        originRowFieldCount + LAKE_PAIMON_SYSTEM_COLUMNS;
     }
 
     @Override
