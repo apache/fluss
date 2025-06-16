@@ -23,6 +23,7 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
@@ -42,6 +43,7 @@ public class PartitionUtils {
 
     public static final List<DataTypeRoot> PARTITION_KEY_SUPPORTED_TYPES =
             Arrays.asList(
+                    DataTypeRoot.CHAR,
                     DataTypeRoot.STRING,
                     DataTypeRoot.BOOLEAN,
                     DataTypeRoot.BINARY,
@@ -154,6 +156,10 @@ public class PartitionUtils {
     public static String convertValueOfType(Object value, DataTypeRoot type) {
         String stringPartitionKey = "";
         switch (type) {
+            case CHAR:
+            case STRING:
+                stringPartitionKey = ((BinaryString) value).toString();
+                break;
             case BOOLEAN:
                 Boolean booleanValue = (Boolean) value;
                 stringPartitionKey = booleanValue.toString();

@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
@@ -152,6 +153,28 @@ class PartitionUtilsTest {
                             autoPartitionTimeUnit);
             assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo(expected[i]);
         }
+    }
+
+    @Test
+    void testString() {
+        Object value = BinaryString.fromString("Fluss");
+        DataTypeRoot type = DataTypeRoot.STRING;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("Fluss");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testCharConvert() {
+        Object value = BinaryString.fromString("F");
+        DataTypeRoot type = DataTypeRoot.CHAR;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("F");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
     }
 
     @Test
@@ -286,6 +309,17 @@ class PartitionUtilsTest {
 
         String toStringResult = convertValueOfType(timestampLTZ, type);
         assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428099988");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testBigInt() {
+        long value = 1748662955428L;
+        DataTypeRoot type = DataTypeRoot.BIGINT;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("1748662955428");
         String detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
     }

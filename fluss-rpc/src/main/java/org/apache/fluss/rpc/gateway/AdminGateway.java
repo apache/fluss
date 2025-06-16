@@ -73,7 +73,7 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     CompletableFuture<DropTableResponse> dropTable(DropTableRequest request);
 
     /**
-     * create a new partition for a partitioned table.
+     * Create a new partition for a partitioned table.
      *
      * @param request Create partition request
      */
