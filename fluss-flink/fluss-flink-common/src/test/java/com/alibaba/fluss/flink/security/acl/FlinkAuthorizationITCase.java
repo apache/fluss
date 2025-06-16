@@ -429,7 +429,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
                         + "    user_guest=\"password2\";");
-        conf.set(ConfigOptions.SUPER_USERS, "User:root");
+        conf.set(ConfigOptions.SUPER_USERS, "user:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }

@@ -410,6 +410,26 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testIgnoreCaseFlussPrincipal() throws Exception {
+        assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
+                .isEqualTo(Collections.emptyList());
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.database(DATA1_TABLE_PATH_PK.getDatabaseName()),
+                                        new AccessControlEntry(
+                                                new FlussPrincipal("guest", "USER"),
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
+                .isEqualTo(Collections.singletonList(DATA1_TABLE_PATH_PK.getTableName()));
+    }
+
+    @Test
     void testGetMetaInfo() throws Exception {
         MetadataRequest metadataRequest =
                 ClientRpcMessageUtils.makeMetadataRequest(

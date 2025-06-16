@@ -70,12 +70,13 @@ public class FlussPrincipal implements Principal {
             return false;
         }
         FlussPrincipal that = (FlussPrincipal) o;
-        return Objects.equals(name, that.name) && Objects.equals(type, that.type);
+        return Objects.equals(name, that.name)
+                && (type == null ? that.type == null : type.equalsIgnoreCase(that.type));
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(name, type);
+        return Objects.hash(name, type == null ? null : type.toLowerCase());
     }
 
     @Override
