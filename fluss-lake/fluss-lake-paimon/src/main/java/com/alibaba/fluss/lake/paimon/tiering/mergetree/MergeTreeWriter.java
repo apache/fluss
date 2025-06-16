@@ -44,7 +44,12 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys) {
-        super(createTableWrite(fileStoreTable), tableBucket, partition, partitionKeys);
+        super(
+                createTableWrite(fileStoreTable),
+                fileStoreTable.rowType(),
+                tableBucket,
+                partition,
+                partitionKeys);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
     }
 
