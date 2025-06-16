@@ -22,9 +22,11 @@ import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
+import org.apache.paimon.types.RowType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -42,8 +44,25 @@ class FlussRecordAsPaimonRowTest {
     @Test
     void testLogTableRecordAllTypes() {
         // Construct a FlussRecordAsPaimonRow instance
-        int bucket = 0;
-        FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.BooleanType(),
+                        new org.apache.paimon.types.TinyIntType(),
+                        new org.apache.paimon.types.SmallIntType(),
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.FloatType(),
+                        new org.apache.paimon.types.DoubleType(),
+                        new org.apache.paimon.types.VarCharType(),
+                        new org.apache.paimon.types.DecimalType(5, 2),
+                        new org.apache.paimon.types.DecimalType(20, 0),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3),
+                        new org.apache.paimon.types.TimestampType(3),
+                        new org.apache.paimon.types.BinaryType(),
+                        new org.apache.paimon.types.VarCharType());
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(14);
@@ -58,7 +77,7 @@ class FlussRecordAsPaimonRowTest {
         genericRow.setField(8, Decimal.fromUnscaledLong(9, 5, 2));
         genericRow.setField(9, Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
         genericRow.setField(10, TimestampLtz.fromEpochMillis(1698235273182L));
-        genericRow.setField(11, TimestampLtz.fromEpochMillis(1698235273182L, 45678));
+        genericRow.setField(11, TimestampNtz.fromMillis(1698235273182L, 45678));
         genericRow.setField(12, new byte[] {1, 2, 3, 4});
         genericRow.setField(13, null);
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
@@ -85,7 +104,7 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.isNullAt(13)).isTrue();
 
         // verify FlussRecordAsPaimonRow system columns (no partition fields, so indices stay same)
-        assertThat(flussRecordAsPaimonRow.getInt(14)).isEqualTo(bucket);
+        assertThat(flussRecordAsPaimonRow.getInt(14)).isEqualTo(tableBucket);
         assertThat(flussRecordAsPaimonRow.getLong(15)).isEqualTo(logOffset);
         assertThat(flussRecordAsPaimonRow.getLong(16)).isEqualTo(timeStamp);
         assertThat(flussRecordAsPaimonRow.getTimestamp(16, 4))
@@ -98,8 +117,10 @@ class FlussRecordAsPaimonRowTest {
 
     @Test
     void testPrimaryKeyTableRecord() {
-        int bucket = 0;
-        FlussRecordAsPaimonRow flussRecordAsPaimonRow = new FlussRecordAsPaimonRow(bucket);
+        int tableBucket = 0;
+        RowType tableRowType = RowType.of(new org.apache.paimon.types.BooleanType());
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
         GenericRow genericRow = new GenericRow(1);
