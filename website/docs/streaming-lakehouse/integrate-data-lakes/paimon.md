@@ -21,14 +21,14 @@ sidebar_position: 1
 
 # Paimon
 
-[Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture .  
+[Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
 To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 
 ## Introduction
 
-When a table with the option `'table.datalake.enabled' = 'true'` is created or altered in Fluss, Fluss will automatically create a corresponding Paimon table with the same table path .  
+When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path.
 The schema of the Paimon table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
-These system columns help Fluss clients consume data from Paimon in a streaming fashion—such as seeking by a specific bucket using an offset or timestamp.
+These system columns help Fluss clients consume data from Paimon in a streaming fashion, such as seeking by a specific bucket using an offset or timestamp.
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
@@ -43,12 +43,13 @@ CREATE TABLE fluss_order_with_lake (
     `ptime` AS PROCTIME(),
     PRIMARY KEY (`order_key`) NOT ENFORCED
  ) WITH (
-       'table.datalake.enabled' = 'true',
-       'table.datalake.freshness' = '30s');
+     'table.datalake.enabled' = 'true',
+     'table.datalake.freshness' = '30s'
+);
 ```
 
-Then, the datalake tiering service continuously tiers data from Fluss to Paimon. The parameter `table.datalake.freshness` controls how soon data written to Fluss should be tiered to Paimon—by default, this delay is 3 minutes.  
-For primary key tables, change logs are also generated in Paimon format, enabling stream-based consumption via Paimon APIs.
+Then, the datalake tiering service continuously tiers data from Fluss to Paimon. The parameter `table.datalake.freshness` controls the frequency that Fluss writes data to Paimon tables. By default, the data freshness is 3 minutes.  
+For primary key tables, changelogs are also generated in the Paimon format, enabling stream-based consumption via Paimon APIs.
 
 Since Fluss version 0.7, you can also specify Paimon table properties when creating a datalake-enabled Fluss table by using the `paimon.` prefix within the Fluss table properties clause.
 
@@ -63,17 +64,18 @@ CREATE TABLE fluss_order_with_lake (
     `ptime` AS PROCTIME(),
     PRIMARY KEY (`order_key`) NOT ENFORCED
  ) WITH (
-       'table.datalake.enabled' = 'true',
-       'table.datalake.freshness' = '30s',
-       'paimon.file.format' = 'orc',
-       'paimon.deletion-vectors.enabled' = 'true');
+     'table.datalake.enabled' = 'true',
+     'table.datalake.freshness' = '30s',
+     'paimon.file.format' = 'orc',
+     'paimon.deletion-vectors.enabled' = 'true'
+);
 ```
 
 For example, you can specify the Paimon property `file.format` to change the file format of the Paimon table, or set `deletion-vectors.enabled` to enable or disable deletion vectors for the Paimon table.
 
 ## Read Tables
 
-### Read by Flink
+### Reading with Apache Flink
 
 For a table with the option `'table.datalake.enabled' = 'true'`, its data exists in two layers: one remains in Fluss, and the other has already been tiered to Paimon.  
 You can choose between two views of the table:
@@ -102,7 +104,7 @@ For further information, refer to Paimon’s [SQL Query documentation](https://p
 
 #### Union Read of Data in Fluss and Paimon
 
-To read the full dataset, which includes both Fluss and Paimon data, simply query the table without any suffix. The following example illustrates this:
+To read the full dataset, which includes both Fluss (fresh) and Paimon (historical) data, simply query the table without any suffix. The following example illustrates this:
 
 ```sql title="Flink SQL"
 -- Query will union data from Fluss and Paimon
@@ -111,7 +113,7 @@ SELECT SUM(order_count) AS total_orders FROM ads_nation_purchase_power;
 
 This query may run slower than reading only from Paimon, but it returns the most up-to-date data. If you execute the query multiple times, you may observe different results due to continuous data ingestion.
 
-### Read by Other Engines
+### Reading with other Engines
 
 Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/master/engines/starrocks/):
 
@@ -119,11 +121,10 @@ First, create a Paimon catalog in StarRocks:
 
 ```sql title="StarRocks SQL"
 CREATE EXTERNAL CATALOG paimon_catalog
-PROPERTIES
-(
-  "type" = "paimon",
-  "paimon.catalog.type" = "filesystem",
-  "paimon.catalog.warehouse" = "/tmp/paimon_data_warehouse"
+PROPERTIES (
+       "type" = "paimon",
+       "paimon.catalog.type" = "filesystem",
+       "paimon.catalog.warehouse" = "/tmp/paimon_data_warehouse"
 );
 ```
 
