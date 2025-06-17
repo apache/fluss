@@ -272,6 +272,10 @@ public class LogFetcher implements Closeable {
     private void handleFetchLogException(
             int destination, TableOrPartitions tableOrPartitionsInFetchRequest, Throwable e) {
         try {
+            if (isClosed) {
+                return;
+            }
+
             LOG.error("Failed to fetch log from node {}", destination, e);
             // if is invalid metadata exception, we need to clear table bucket meta
             // to enable another round of log fetch to request new medata
