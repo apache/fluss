@@ -64,22 +64,22 @@ In Fluss, an OperationType defines the type of action a principal (user or role)
 
 | Operation Type | Description |
 |----------------| --- |
-| ANY            | Matches any operation type and is used exclusively in filters or queries to match ACL entries. It should not be used when granting actual permissions.|
-| ALL            | Grants permission for all operations on a resource. |
-| READ | Allows reading data from a resource (e.g., querying tables).|
-| WRITE | Allows writing data to a resource (e.g., inserting or updating data in tables).|
-| CREATE | Allows creating a new resource (e.g., creating a new database or table).|
-| DELETE | Allows deleting a resource (e.g., deleting a database or table).|
-| ALTER | Allows modifying the structure of a resource (e.g., altering the schema of a table).|
-| DESCRIBE | Allows describing a resource (e.g., retrieving metadata about a table).|
+| `ANY`            | Matches any operation type and is used exclusively in filters or queries to match ACL entries. It should not be used when granting actual permissions.|
+| `ALL`            | Grants permission for all operations on a resource. |
+| `READ` | Allows reading data from a resource (e.g., querying tables).|
+| `WRITE` | Allows writing data to a resource (e.g., inserting or updating data in tables).|
+| `CREATE` | Allows creating a new resource (e.g., creating a new database or table).|
+| `DELETE` | Allows deleting a resource (e.g., deleting a database or table).|
+| `ALTER` | Allows modifying the structure of a resource (e.g., altering the schema of a table).|
+| `DESCRIBE` | Allows describing a resource (e.g., retrieving metadata about a table).|
 
 
 Fluss implements a permission inheritance model, where certain operations imply others. This helps reduce redundancy in ACL rules by avoiding the need to explicitly grant every low-level permission.
-* ALL implies all other operations.
-* READ, WRITE, CREATE, DROP, ALTER each imply DESCRIBE.
+* `ALL` implies all other operations.
+* `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER` each imply `DESCRIBE`.
 
 ### Fluss Principal
-The FlussPrincipal is a core concept in the Fluss security architecture. It represents the identity of an authenticated entity (such as a user or service) and serves as the central bridge between authentication and authorization.Once a client successfully authenticates via a supported mechanism (e.g., SASL/PLAIN, Kerberos), a FlussPrincipal is created to represent that client's identity.
+The FlussPrincipal is a core concept in the Fluss security architecture. It represents the identity of an authenticated entity (such as a user or service) and serves as the central bridge between authentication and authorization. Once a client successfully authenticates via a supported mechanism (e.g., SASL/PLAIN, Kerberos), a FlussPrincipal is created to represent that client's identity.
 This principal is then used throughout the system for access control decisions, linking who the user is with what they are allowed to do.
 
 The principal type indicates the category of the principal (e. g., "User", "Group", "Role"), while the name identifies the specific entity within that category. By default, the simple authorizer uses "User" as the principal type, but custom authorizers can extend this to support role-based or group-based access control lists (ACLs).
@@ -104,9 +104,9 @@ Below is a summary of the currently public protocols and their relationship with
 | FETCH_LOG | READ | Table | |
 | PUT_KV | WRITE | Cluster | |
 | LOOKUP | READ | Cluster | |
-| INIT_WRITER | WRITE | TABLE | User has the INIT_WRITER permission if it has the WRITE permission for one of the requested tables. |
-| LIMIT_SCAN | READ | TABLE | |
-| PREFIX_LOOKUP | READ | TABLE | |
+| INIT_WRITER | WRITE | Table | User has the INIT_WRITER permission if it has the WRITE permission for one of the requested tables. |
+| LIMIT_SCAN | READ | Table | |
+| PREFIX_LOOKUP | READ | Table | |
 | GET_DATABASE_INFO | DESCRIBE | Database | |
 | CREATE_PARTITION | WRITE | Table | |
 | DROP_PARTITION | WRITE | Table | |
@@ -120,8 +120,14 @@ Fluss provides a FLINK SQL interface to manage Access Control Lists (ACLs) using
 ### Add ACL
 The general syntax is:
 ```sql title="Flink SQL"
--- Use named argument(only used for flink 1.19 and later version)
-CALL [catalog].sys.add_acl(  resource => '[resource]', permission => 'ALLOW', principal => '[principal_type:principal_name]', operation  => '[operation_type]', host => '[host]');
+-- Recommended, use named argument (only supported since Flink 1.19)
+CALL [catalog].sys.add_acl(
+    resource => '[resource]',
+    permission => 'ALLOW',
+    principal => '[principal_type:principal_name]',
+    operation  => '[operation_type]',
+    host => '[host]'
+);
      
 -- Use indexed argument
 CALL [catalog].sys.add_acl(
@@ -136,16 +142,22 @@ CALL [catalog].sys.add_acl(
 | Parameter  | Required | Description                                                                                                   |
 |------------|----------|---------------------------------------------------------------------------------------------------------------|
 | resource   | Yes      | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`)                             |
-| permission | Yes      | The permission to grant or deny to the principal on the resource (e.g., ALLOW, DENY)                          |
-| principal  | Yes      | The principal to apply the ACL to (e.g., user:alice, role:admin)                                              |
-| operation  | Yes      | The operation to allow or deny for the principal on the resource (e.g., READ, WRITE, CREATE, DELETE, ALTER, DESCRIBE, ANY, ALL) |
-| host       | No       | The host to apply the ACL to (e.g., 127.0.0.1). If not specified, the ACL applies to all hosts( same as "*")  |
+| permission | Yes      | The permission to grant to the principal on the resource, currently only `ALLOW` is supported.                    |
+| principal  | Yes      | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`)                                              |
+| operation  | Yes      | The operation to allow or deny for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`) |
+| host       | No       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts (same as `*`)  |
 
 ### Remove ACL
 The general syntax is:
 ```sql title="Flink SQL"
--- Use named argument(only used for flink 1.19 and later version)
-CALL [catalog].sys.drop_acl(  resource => '[resource]', permission => 'ALLOW', principal => '[principal_type:principal_name]', operation  => '[operation_type]', host => '[host]');
+-- Recommended, use named argument (only supported since Flink 1.19)
+CALL [catalog].sys.drop_acl(
+    resource => '[resource]',
+    permission => 'ALLOW',
+    principal => '[principal_type:principal_name]',
+    operation  => '[operation_type]',
+    host => '[host]'
+);
      
 -- Use indexed argument
 CALL [catalog].sys.drop_acl(
@@ -158,18 +170,24 @@ CALL [catalog].sys.drop_acl(
 ```
 | Parameter  | Required | Description                                                                                                                                                                                           |
 |------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| resource   | NO       | The resource to apply the ACL to (e.g., fluss-cluster, fluss-cluster.db1, fluss-cluster.db1.table1). If If not specified, it will filter all the resource(same as 'any')                              |
-| permission | NO       | The permission to grant or deny to the principal on the resource (e.g., ALLOW, DENY). If If not specified, it will filter all the permission(same as 'any')                                           |
-| principal  | NO       | The principal to apply the ACL to (e.g., user:alice, role:admin). If If not specified, it will filter all the principal(same as 'any')                                                                |
-| operation  | NO       | The operation to allow or deny for the principal on the resource (e.g., READ, WRITE, CREATE, DELETE, ALTER, DESCRIBE, ANY, ALL). If If not specified, it will filter all the operation(same as 'any') |
-| host       | NO       | The host to apply the ACL to (e.g., 127.0.0.1). If not specified, the ACL applies to all hosts( same as 'any')                                                                                        |
+| resource   | NO       | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). If not specified, it will filter all the resource (same as `ANY`)                              |
+| permission | NO       | The permission to grant or deny to the principal on the resource (e.g., `ALLOW`, `DENY`). If If not specified, it will filter all the permission(same as `ANY`)                                           |
+| principal  | NO       | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`). If If not specified, it will filter all the principal(same as `ANY`)                                                                |
+| operation  | NO       | The operation to allow or deny for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If If not specified, it will filter all the operation(same as `ANY`) |
+| host       | NO       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts( same as `ANY`)                                                                                        |
 
 ### List ACL
 List ACL will return a list of ACLs that match the specified criteria.
 The general syntax is:
 ```sql title="Flink SQL"
--- Use named argument(only used for flink 1.19 and later version)
-CALL [catalog].sys.drop_acl(  resource => '[resource]', permission => 'ALLOW', principal => '[principal_type:principal_name]', operation  => '[operation_type]', host => '[host]');
+-- Recommended, use named argument (only supported since Flink 1.19)
+CALL [catalog].sys.drop_acl(
+    resource => '[resource]',
+    permission => 'ALLOW',
+    principal => '[principal_type:principal_name]',
+    operation  => '[operation_type]',
+    host => '[host]'
+);
      
 -- Use indexed argument
 CALL [catalog].sys.drop_acl(
@@ -182,11 +200,11 @@ CALL [catalog].sys.drop_acl(
 ```
 | Parameter  | Required | Description                                                                                                                                                                                           |
 |------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| resource   | NO       | The resource to apply the ACL to (e.g., fluss-cluster, fluss-cluster.db1, fluss-cluster.db1.table1). If If not specified, it will filter all the resource(same as 'any')                              |
-| permission | NO       | The permission to grant or deny to the principal on the resource (e.g., ALLOW, DENY). If If not specified, it will filter all the permission(same as 'any')                                           |
-| principal  | NO       | The principal to apply the ACL to (e.g., user:alice, role:admin). If If not specified, it will filter all the principal(same as 'any')                                                                |
-| operation  | NO       | The operation to allow or deny for the principal on the resource (e.g., READ, WRITE, CREATE, DELETE, ALTER, DESCRIBE, ANY, ALL). If If not specified, it will filter all the operation(same as 'any') |
-| host       | NO       | The host to apply the ACL to (e.g., 127.0.0.1). If not specified, the ACL applies to all hosts( same as 'any')                                                                                        |
+| resource   | NO       | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). If If not specified, it will filter all the resource(same as `ANY`)                              |
+| permission | NO       | The permission to grant or deny to the principal on the resource (e.g., `ALLOW`, `DENY`). If If not specified, it will filter all the permission(same as `ANY`)                                           |
+| principal  | NO       | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`). If If not specified, it will filter all the principal(same as `ANY`)                                                                |
+| operation  | NO       | The operation to allow or deny for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If If not specified, it will filter all the operation(same as `ANY`) |
+| host       | NO       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts( same as `ANY`)                                                                                        |
 
 
 ## Extending Authorization Methods (For Developers)
@@ -194,7 +212,7 @@ CALL [catalog].sys.drop_acl(
 Fluss supports custom authorization logic through its plugin architecture.
 
 Steps to implement a custom authorization logic:
-1. **Implement AuthorizationPlugin Interfaces**.
+1. **Implement `AuthorizationPlugin` Interfaces**.
 2.  **Server-side Plugin Installation**:
     Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin directory: `<FLUSS_HOME>/plugins/<custom_auth_plugin>/`. The server will automatically load the plugin at startup.
 3. **Configure the desired protocol**: Set  `com.alibaba.fluss.server.authorizer.AuthorizationPlugin.identifier` as the value of `authorizer.type` in the Fluss server configuration file.

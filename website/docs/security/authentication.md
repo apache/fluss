@@ -73,23 +73,24 @@ Clients must specify the appropriate security protocol and authentication mechan
 
 | Option                           | Type   | Default Value | Description                                                                                                                                                                                                                                                                               |
 |----------------------------------|--------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Use sasl to enable SASL authentication.                                                                                                                                                                                           |
+| client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                                                                                                |
 | client.security.sasl.mechanism   | String | PLAIN         | The SASL mechanism used for authentication. Only support PLAIN now, but will support more mechanisms in the future.                                                                                                                                                                       |
 | client.security.sasl.username    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.password    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
-| client.security.sasl.jaas.config | String | (none)        | JAAS configuration for SASL. If not set, falls back to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
+| client.security.sasl.jaas.config | String | (none)        | JAAS configuration for SASL. If not set, fallback to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
 
 
 
-Here is an example client configuration(flink catalog):
+Here is an example client configuration in Flink SQL with Catalog:
+
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
   'bootstrap.servers' = 'fluss-server-1:9123',
   'client.security.protocol' = 'SASL',
   'client.security.sasl.mechanism' = 'PLAIN',
-  'client.security.sasl.username' = 'fluss',
-  'client.security.sasl.password' = 'fluss-pass'
+  'client.security.sasl.username' = '<my-username>',
+  'client.security.sasl.password' = '<my-password>',
 );
 ```
 
