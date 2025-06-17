@@ -177,6 +177,53 @@ public class ConfigOptions {
                             "The maximum number of buckets that can be created for a table."
                                     + "The default value is 128000");
 
+    /**
+     * The network address and port the server binds to for accepting connections.
+     *
+     * <p>This specifies the interface and port where the server will listen for incoming requests.
+     * The format is {@code listener_name://host:port}, supporting multiple addresses separated by
+     * commas.
+     *
+     * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
+     */
+    public static final ConfigOption<String> BIND_LISTENERS =
+            key("bind.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The network address and port to which the server binds for accepting connections. "
+                                    + "This defines the interface and port where the server will listen for incoming requests. "
+                                    + "The format is `listener_name://host:port`, and multiple addresses can be specified, separated by commas. "
+                                    + "Use `0.0.0.0` for the `host` to bind to all available interfaces which is dangerous on production and not suggested for production usage. "
+                                    + "The `listener_name` serves as an identifier for the address in the configuration. For example, "
+                                    + "`internal.listener.name` specifies the address used for internal server communication. "
+                                    + "If multiple addresses are configured, ensure that the `listener_name` values are unique.");
+
+    /**
+     * The externally advertised address and port for client connections.
+     *
+     * <p>This specifies the address other nodes/clients should use to connect to this server. It is
+     * required when the bind address ({@link #BIND_LISTENERS}) is not publicly reachable (e.g.,
+     * when using {@code localhost} in {@code bind.listeners}). <b>Must be configured in distributed
+     * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
+     * {@code bind.listeners} will be used as fallback.
+     */
+    public static final ConfigOption<String> ADVERTISED_LISTENERS =
+            key("advertised.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The externally advertised address and port for client connections. "
+                                    + "Required in distributed environments when the bind address is not publicly reachable. "
+                                    + "Format matches `bind.listeners` (listener_name://host:port). "
+                                    + "Defaults to the value of `bind.listeners` if not explicitly configured.");
+
+    public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
+            key("internal.listener.name")
+                    .stringType()
+                    .defaultValue(DEFAULT_LISTENER_NAME)
+                    .withDescription("The listener for server internal communication.");
+
     public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
             key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
@@ -236,53 +283,6 @@ public class ConfigOptions {
                                     + " resolution. The value accepts a list of ports"
                                     + " (“50100,50101”), ranges (“50100-50200”) or a combination of both."
                                     + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
-
-    /**
-     * The network address and port the server binds to for accepting connections.
-     *
-     * <p>This specifies the interface and port where the server will listen for incoming requests.
-     * The format is {@code listener_name://host:port}, supporting multiple addresses separated by
-     * commas.
-     *
-     * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
-     */
-    public static final ConfigOption<String> BIND_LISTENERS =
-            key("bind.listeners")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The network address and port to which the server binds for accepting connections. "
-                                    + "This defines the interface and port where the server will listen for incoming requests. "
-                                    + "The format is `listener_name://host:port`, and multiple addresses can be specified, separated by commas. "
-                                    + "Use `0.0.0.0` for the `host` to bind to all available interfaces which is dangerous on production and not suggested for production usage. "
-                                    + "The `listener_name` serves as an identifier for the address in the configuration. For example, "
-                                    + "`internal.listener.name` specifies the address used for internal server communication. "
-                                    + "If multiple addresses are configured, ensure that the `listener_name` values are unique.");
-
-    /**
-     * The externally advertised address and port for client connections.
-     *
-     * <p>This specifies the address other nodes/clients should use to connect to this server. It is
-     * required when the bind address ({@link #BIND_LISTENERS}) is not publicly reachable (e.g.,
-     * when using {@code localhost} in {@code bind.listeners}). <b>Must be configured in distributed
-     * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
-     * {@code bind.listeners} will be used as fallback.
-     */
-    public static final ConfigOption<String> ADVERTISED_LISTENERS =
-            key("advertised.listeners")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The externally advertised address and port for client connections. "
-                                    + "Required in distributed environments when the bind address is not publicly reachable. "
-                                    + "Format matches `bind.listeners` (listener_name://host:port). "
-                                    + "Defaults to the value of `bind.listeners` if not explicitly configured.");
-
-    public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
-            key("internal.listener.name")
-                    .stringType()
-                    .defaultValue(DEFAULT_LISTENER_NAME)
-                    .withDescription("The listener for server internal communication.");
 
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
