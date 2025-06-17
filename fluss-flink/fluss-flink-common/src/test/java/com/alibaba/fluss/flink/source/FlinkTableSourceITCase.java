@@ -16,16 +16,19 @@
 
 package com.alibaba.fluss.flink.source;
 
+import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.types.RowType;
+import com.alibaba.fluss.server.testutils.FlussClusterExtension;
+import com.alibaba.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -41,8 +44,10 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -72,11 +77,35 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for using flink sql to read fluss table. */
 abstract class FlinkTableSourceITCase extends FlinkTestBase {
+    protected static final ManualClock CLOCK = new ManualClock();
+
+    @RegisterExtension
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+            FlussClusterExtension.builder()
+                    .setClusterConf(
+                            new Configuration()
+                                    // set snapshot interval to 1s for testing purposes
+                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+                                    // not to clean snapshots for test purpose
+                                    .set(
+                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
+                                            Integer.MAX_VALUE))
+                    .setNumOfTabletServers(3)
+                    .setClock(CLOCK)
+                    .build();
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
+
+    @BeforeAll
+    protected static void beforeAll() {
+        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+    }
 
     @BeforeEach
     void before() {
@@ -384,6 +413,8 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                         rowWithPartition(new Object[] {5, "v5", 500L, 5000}, partitionName));
 
         writeRows(tablePath, rows1, true);
+        CLOCK.advanceTime(Duration.ofMillis(100L));
+        long timestamp = CLOCK.milliseconds();
 
         List<InternalRow> rows2 =
                 Arrays.asList(
@@ -418,10 +449,17 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         assertQueryResult(query, expected);
 
         // 3. read log table with scan.startup.mode='timestamp'
+        expected =
+                Arrays.asList(
+                        "+I[6, v6, 600, 6000]",
+                        "+I[7, v7, 700, 7000]",
+                        "+I[8, v8, 800, 8000]",
+                        "+I[9, v9, 900, 9000]",
+                        "+I[10, v10, 1000, 10000]");
         options =
                 String.format(
                         " /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' ='%d') */",
-                        1000);
+                        timestamp);
         query = "select a, b, c, d from " + tableName + options;
         assertQueryResult(query, expected);
     }
@@ -481,6 +519,7 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
     @MethodSource("readKvTableScanStartupModeArgs")
     void testReadKvTableWithEarliestAndTimestampScanStartupMode(String mode, boolean isPartitioned)
             throws Exception {
+        long timestamp = CLOCK.milliseconds();
         String tableName = mode + "_test_" + (isPartitioned ? "partitioned" : "non_partitioned");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         String partitionName = null;
@@ -504,8 +543,6 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
             partitionName = partitionNameById.values().iterator().next();
         }
 
-        RowType dataType = conn.getTable(tablePath).getTableInfo().getRowType();
-
         List<InternalRow> rows1 =
                 Arrays.asList(
                         rowWithPartition(new Object[] {1, "v1"}, partitionName),
@@ -520,6 +557,7 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         } else {
             waitUtilAllBucketFinishSnapshot(admin, tablePath, Collections.singleton(partitionName));
         }
+        CLOCK.advanceTime(Duration.ofMillis(100));
 
         List<InternalRow> rows2 =
                 Arrays.asList(
@@ -527,11 +565,12 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                         rowWithPartition(new Object[] {2, "v22"}, partitionName),
                         rowWithPartition(new Object[] {4, "v4"}, partitionName));
         writeRows(tablePath, rows2, false);
+        CLOCK.advanceTime(Duration.ofMillis(100));
 
         String options =
                 String.format(
-                        " /*+ OPTIONS('scan.startup.mode' = '%s', 'scan.startup.timestamp' = '1000') */",
-                        mode);
+                        " /*+ OPTIONS('scan.startup.mode' = '%s', 'scan.startup.timestamp' = '%s') */",
+                        mode, timestamp);
         String query = "select a, b from " + tableName + options;
         List<String> expected =
                 Arrays.asList(
@@ -619,9 +658,9 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
         List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         writeRows(tablePath, rows, true);
-        Thread.sleep(100);
+        CLOCK.advanceTime(Duration.ofMillis(100L));
         // startup time between write first and second batch records.
-        long currentTimeMillis = System.currentTimeMillis();
+        long currentTimeMillis = CLOCK.milliseconds();
 
         // startup timestamp is larger than current time.
         assertThatThrownBy(
@@ -643,7 +682,7 @@ abstract class FlinkTableSourceITCase extends FlinkTestBase {
                                         "select * from timestamp_table /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '%s') */ ",
                                         currentTimeMillis))
                         .collect()) {
-            Thread.sleep(100);
+            CLOCK.advanceTime(Duration.ofMillis(100L));
             // write second batch record.
             rows = Arrays.asList(row(4, "v4"), row(5, "v5"), row(6, "v6"));
             writeRows(tablePath, rows, true);
