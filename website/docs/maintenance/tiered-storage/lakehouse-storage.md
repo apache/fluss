@@ -48,7 +48,7 @@ datalake.paimon.metastore: filesystem
 datalake.paimon.warehouse: /tmp/paimon_data_warehouse
 ```
 
-Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog.
+Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog. Checkout the [Paimon documentation](https://paimon.apache.org/docs/1.1/maintenance/configurations/) for more details on the available configurations.
 
 For example, if you want to configure to use Hive catalog, you can configure like following:
 ```yaml
@@ -59,7 +59,7 @@ datalake.paimon.warehouse: hdfs:///path/to/warehouse
 ```
 #### Add other jars required by datalake
 While Fluss includes the core Paimon library, additional jars may still need to be manually added to `${FLUSS_HOME}/plugins/paimon/` according to your needs.
-For example, for OSS filesystem support, you need to put `paimon-oss`.jar into directory `${FLUSS_HOME}/plugins/paimon/`.
+For example, for OSS filesystem support, you need to put `paimon-oss-<paimon_version>.jar` into directory `${FLUSS_HOME}/plugins/paimon/`.
 
 ### Start The Datalake Tiering Service
 Then, you must start the datalake tiering service to tier Fluss's data to the lakehouse storage.
@@ -68,12 +68,12 @@ Then, you must start the datalake tiering service to tier Fluss's data to the la
 - Download [fluss-flink-tiering-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) 
 
 #### Prepare required jars
-- Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`, you should choose a connector version matching your Flink version. If you're using Flink 1.20, please use `fluss-flink-1.20-$FLUSS_VERSION$.jar`
-- If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
+- Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`, you should choose a connector version matching your Flink version. If you're using Flink 1.20, please use [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
+- If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
   you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also put it into `${FLINK_HOME}/lib`
 - Put [fluss-lake-paimon jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`, currently only paimon is supported, so you can only choose `fluss-lake-paimon`
 - [Download](https://flink.apache.org/downloads/) pre-bundled Hadoop jar `flink-shaded-hadoop-2-uber-*.jar` and put into `${FLINK_HOME}/lib`
-- Put Paimon's filesystem jar into `${FLINK_HOME}/lib`, if you use s3 to store paimon data, please put `paimon-s3` jar into `${FLINK_HOME}/lib`
+- Put Paimon's [filesystem jar](https://paimon.apache.org/docs/1.1/project/download/) into `${FLINK_HOME}/lib`, if you use s3 to store paimon data, please put `paimon-s3` jar into `${FLINK_HOME}/lib`
 - The other jars that Paimon may require, for example, if you use HiveCatalog, you will need to put hive related jars
 
 
@@ -88,8 +88,7 @@ After the Flink Cluster has been started, you can execute the `fluss-flink-tieri
 ```
 
 **Note:**
-- The `fluss.bootstrap.servers` should be the bootstrap server address of your Fluss cluster. You must configure all options with the `datalake.` prefix in the [server.yaml](#modify-serveryaml) file to run the tiering service.
-to run the tiering service.  In this case, these parameters are `--datalake.format`, `--datalake.paimon.metastore`, and `--datalake.paimon.warehouse`.
+- The `fluss.bootstrap.servers` should be the bootstrap server address of your Fluss cluster. You must configure all options with the `datalake.` prefix in the [server.yaml](#modify-serveryaml) file to run the tiering service. In this case, these parameters are `--datalake.format`, `--datalake.paimon.metastore`, and `--datalake.paimon.warehouse`.
 - The Flink tiering service is stateless, and you can run multiple tiering services simultaneously to tier tables in Fluss.
 These tiering services are coordinated by the Fluss cluster to ensure exactly-once semantics when tiering data to the lake storage. This means you can freely scale the service up or down according to your workload.
 - This follows the standard practice for [submitting jobs to Flink](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/deployment/cli/), where you can use the `-D` parameter to specify Flink-related configurations.
