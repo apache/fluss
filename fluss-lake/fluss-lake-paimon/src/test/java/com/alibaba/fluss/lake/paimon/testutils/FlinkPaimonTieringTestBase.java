@@ -284,6 +284,20 @@ public class FlinkPaimonTieringTestBase {
         return createTable(tablePath, tableBuilder.build());
     }
 
+    protected long createPrimaryKeyTable(
+            TablePath tablePath, int bucketNum, List<Schema.Column> columns) throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder().fromColumns(columns).primaryKey(columns.get(0).getName());
+
+        TableDescriptor.Builder tableBuilder =
+                TableDescriptor.builder()
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        tableBuilder.schema(schemaBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
+    }
+
     protected long createPkTable(TablePath tablePath) throws Exception {
         return createPkTable(tablePath, 1);
     }

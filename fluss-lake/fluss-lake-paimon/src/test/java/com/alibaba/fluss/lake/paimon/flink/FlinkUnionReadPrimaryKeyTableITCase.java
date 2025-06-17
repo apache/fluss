@@ -23,6 +23,8 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.row.TimestampNtz;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.types.DataTypes;
 
@@ -31,6 +33,7 @@ import org.apache.flink.table.api.TableResult;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -39,6 +42,7 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -200,6 +204,58 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .map(row -> Row.of(row.getField(0)))
                         .collect(Collectors.toList());
         assertThat(rows.toString()).isEqualTo(sortedRows(expectedRows).toString());
+    }
+
+    @Test
+    void testUnionReadWithTimeStamp() throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "pk_table_with_timestamp";
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        long tableId =
+                createPrimaryKeyTable(
+                        t1,
+                        1,
+                        Arrays.asList(
+                                new Schema.Column("c1", DataTypes.INT()),
+                                new Schema.Column("c2", DataTypes.TIMESTAMP_LTZ()),
+                                new Schema.Column("c3", DataTypes.TIMESTAMP())));
+        // write some rows;
+        List<InternalRow> rows =
+                Arrays.asList(
+                        row(
+                                1,
+                                TimestampLtz.fromEpochMillis(1698235273182L, 5000),
+                                TimestampNtz.fromMillis(1698235273183L, 6000)),
+                        row(
+                                2,
+                                TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                TimestampNtz.fromMillis(1698235273201L, 6000)));
+
+        writeRows(t1, rows, false);
+
+        // wait unit records has has been synced
+        waitUtilBucketSynced(t1, tableId, 1, false);
+
+        // stop lake tiering service
+        jobClient.cancel().get();
+
+        // write a row again
+        rows =
+                Collections.singletonList(
+                        row(
+                                2,
+                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                                TimestampNtz.fromMillis(1698235273501L, 8000)));
+        writeRows(t1, rows, false);
+
+        // now, query the result, it must union lake snapshot and log
+        List<String> result =
+                toSortedRows(batchTEnv.executeSql("select * from " + tableName), false);
+        assertThat(result.toString())
+                .isEqualTo(
+                        "[+I[1, 2023-10-25T12:01:13.182005Z, 2023-10-25T12:01:13.183006], +I[2, 2023-10-25T12:01:13.400007Z, 2023-10-25T12:01:13.501008]]");
     }
 
     private List<Row> paddingPartition(TablePath tablePath, List<Row> rows) {

@@ -33,6 +33,7 @@ import org.apache.paimon.reader.EmptyRecordReader;
 import org.apache.paimon.reader.RecordReader;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.TableRead;
+import org.apache.paimon.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -64,6 +65,7 @@ public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
 
     private final LogScanner logScanner;
     private final long stoppingOffset;
+    private final RowType paimonRowType;
 
     private boolean logScanFinished;
     private SortMergeReader currentSortMergeReader;
@@ -76,6 +78,7 @@ public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
             PaimonSnapshotAndFlussLogSplit snapshotAndFlussLogSplit,
             @Nullable int[] projectedFields) {
         this.pkIndexes = flussTable.getTableInfo().getSchema().getPrimaryKeyIndexes();
+        this.paimonRowType = fileStoreTable.rowType();
         int[] newProjectedFields = getNeedProjectFields(flussTable, projectedFields);
         this.tableRead =
                 fileStoreTable.newReadBuilder().withProjection(newProjectedFields).newRead();
@@ -190,7 +193,7 @@ public class PaimonSnapshotAndLogSplitScanner implements BatchScanner {
     private void pollLogRecords(Duration timeout) {
         ScanRecords scanRecords = logScanner.poll(timeout);
         for (ScanRecord scanRecord : scanRecords) {
-            InternalRow paimonRow = new ScanRecordWrapper(scanRecord);
+            InternalRow paimonRow = new ScanRecordWrapper(scanRecord, paimonRowType);
             boolean isDelete =
                     scanRecord.getChangeType() == ChangeType.DELETE
                             || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
