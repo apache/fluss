@@ -9,7 +9,7 @@
     "versionName": "version-0.7",
     "fullVersion": "0.7.0",
     "shortVersion": "0.7",
-    "dockerVersion": "v0.7.0-rc4"
+    "dockerVersion": "0.7.0"
   },
   {
     "versionName": "version-0.6",
