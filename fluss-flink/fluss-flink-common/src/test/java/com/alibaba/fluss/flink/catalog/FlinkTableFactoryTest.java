@@ -65,7 +65,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkTableFactory}. */
-class FlinkTableFactoryTest {
+abstract class FlinkTableFactoryTest {
 
     public static final ObjectIdentifier OBJECT_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1");
