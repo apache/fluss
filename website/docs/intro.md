@@ -34,6 +34,19 @@ With built-in replication for fault tolerance, horizontal scalability, and advan
 
 **Fluss (German: river, pronounced `/flus/`)** enables streaming data continuously converging, distributing and flowing into lakes, like a river 🌊
 
+## Use Cases
+The following is a list of (but not limited to) use-cases that Fluss shines ✨:
+* **📊 Optimized Real-time analytics**
+* **🔧 Feature Stores**
+* **📈 Real-time Dashboards**
+* **🧍 Real-time Customer 360**
+* **📡 Real-time IoT Pipelines**
+* **🚓 Real-time Fraud Detection**
+* **🚨 Real-time Alerting Systems**
+* **💫 Real-tim ETL/Data Warehouses**
+* **🌐 Real-time Geolocation Services**
+* **🚚 Real-time Shipment Update Tracking**
+
 ## Where to go Next?
 
 - [QuickStart](quickstart/flink.md): Get started with Fluss in minutes.
