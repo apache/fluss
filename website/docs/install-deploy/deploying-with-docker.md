@@ -171,7 +171,7 @@ docker run \
     --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
     -p 8083:8081 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ jobmanager
+    -d fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$ jobmanager
 ```
 
 2. start taskManager
@@ -182,7 +182,7 @@ docker run \
     --network=fluss-demo \
     --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ taskmanager
+    -d fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$ taskmanager
 ```
 
 #### Enter into SQL-Client
@@ -424,7 +424,7 @@ services:
     restart: always
     image: zookeeper:3.9.2
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -435,7 +435,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/fluss
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
