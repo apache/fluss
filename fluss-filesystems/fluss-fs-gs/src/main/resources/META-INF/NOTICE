@@ -1,5 +1,5 @@
 fluss-fs-gs
-Copyright (c) 2025 Alibaba Group Holding Ltd.
+Copyright 2025 The Apache Software Foundation
 This project bundles the following dependencies under the Apache Software License 2.0 (http://www.apache.org/licenses/LICENSE-2.0.txt)
 
 - com.fasterxml.jackson.core:jackson-annotations:2.15.3
