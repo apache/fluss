@@ -26,16 +26,16 @@ This guide demonstrates how to secure your Fluss cluster using two practical exa
 
 These scenarios will help you understand how to configure authentication and authorization, manage access control, and implement data isolation in real-world use cases.
 
-## Example 1: Secure Your Fluss Cluster Within a Department Using Role-Based Access Control
-In this example, we assume there are three roles within a department:
+## Example 1: Secure Fluss with Different Roles
+In this example, we assume there are three users within a department:
 * `admin`: A superuser who can manage the entire Fluss cluster.
-* `producer`: A role that is allowed to write data only.
-* `consumer`: A role that is allowed to read data only.
+* `developer`: A user that is allowed to read and write data.
+* `consumer`: A user that is allowed to read data only.
 ### Prepare Environment
 #### Create a `docker-compose.ym`l file
 The following `docker-compose.yml` file sets up a Fluss cluster consisting of one CoordinatorServer and one TabletServer.
 
-It uses SASL/PLAIN for user authentication and defines three users: admin, producer, and consumer. The admin user has full administrative privileges.
+It uses SASL/PLAIN for user authentication and defines three users: admin, developer, and consumer. The admin user has full administrative privileges.
 
 ```yaml
 services:
@@ -55,7 +55,7 @@ services:
         # security properties
         security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
         security.sasl.enabled.mechanisms: PLAIN
-        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_producer="producer-pass" user_consumer="consumer-pass";
+        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_developer="developer-pass" user_consumer="consumer-pass";
         authorizer.enabled: true
         super.users: User:admin
     ports:
@@ -79,7 +79,7 @@ services:
         # security properties
         security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
         security.sasl.enabled.mechanisms: PLAIN
-        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_producer="producer-pass" user_consumer="consumer-pass";
+        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_developer="developer-pass" user_consumer="consumer-pass";
         authorizer.enabled: true
         super.users: User:admin
     ports:
@@ -139,13 +139,13 @@ CREATE CATALOG admin_catalog WITH (
 ```
 
 ```sql title="Flink SQL"
-CREATE CATALOG producer_catalog WITH (
+CREATE CATALOG developer_catalog WITH (
 'type' = 'fluss',
 'bootstrap.servers' = 'localhost:9123',
 'client.security.protocol' = 'SASL',
 'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'producer',
-'client.security.sasl.password' = 'producer-pass'
+'client.security.sasl.username' = 'developer',
+'client.security.sasl.password' = 'developer-pass'
 );
 
 ```
@@ -165,13 +165,13 @@ CREATE CATALOG consumer_catalog WITH (
 ### Add ACLs for Producer and Consumer
 As the `admin` user, add ACLs to grant permissions:
 
-Allow `produce`r to write data:
+Allow `developer`rto write data:
 ```sql
 -- This can used for flink 1.18 and above.
 CALL admin_catalog.sys.add_acl(
     'cluster', 
     'ALLOW',
-    'User:producer', 
+    'User:developer', 
     'WRITE',
     '*'
 );
@@ -180,7 +180,7 @@ CALL admin_catalog.sys.add_acl(
 CALL admin_catalog.sys.add_acl(
     resource => 'cluster', 
     permission => 'ALLOW',
-    principal => 'User:producer', 
+    principal => 'User:developer', 
     operation => 'WRITE',
     host => '*'
 );
@@ -227,7 +227,7 @@ it will show like:
 |                                                                                               result |
 +------------------------------------------------------------------------------------------------------+
 |  resourceType="fluss-cluster";permission="ALLOW";principal="User:consumer";operation="READ";host="*" |
-| resourceType="fluss-cluster";permission="ALLOW";principal="User:producer";operation="WRITE";host="*" |
+| resourceType="fluss-cluster";permission="ALLOW";principal="User:developer";operation="WRITE";host="*" |
 +------------------------------------------------------------------------------------------------------+
 2 rows in set
 ```
@@ -235,7 +235,11 @@ it will show like:
 ### Create Tables Using Different Users
 Only the `admin` user can create tables:
 ```sql
-CREATE TABLE `admin_catalog`.`fluss`.`fluss_order` (
+-- switch to developer user context
+USE CATALOG admin_catalog;
+
+-- create table using developer credientials
+CREATE TABLE fluss_order (
      `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
@@ -245,9 +249,13 @@ CREATE TABLE `admin_catalog`.`fluss`.`fluss_order` (
 [INFO] Execute statement succeeded.
 ```
 
-The `producer` user cannot create tables:
+The `developer` user cannot create tables:
 ```sql
-CREATE TABLE `producer_catalog`.`fluss`.`fluss_order1`(
+-- switch to developer user context
+USE CATALOG developer_catalog;
+
+-- create table using developer credientials
+CREATE TABLE fluss_order1(
     `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
@@ -255,13 +263,18 @@ CREATE TABLE `producer_catalog`.`fluss`.`fluss_order1`(
 ```
 ```text title="result"
 [ERROR] Could not execute SQL statement. Reason:
-com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='producer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
+com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='developer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
 ```
 
 
 The `consumer` user also cannot create tables:
+
 ```sql
-CREATE TABLE `consumer_catalog`.`fluss`.`fluss_order2`(
+-- switch to developer user context
+USE CATALOG consumer_catalog;
+
+-- create table using developer credientials
+CREATE TABLE fluss_order2(
     `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
@@ -274,29 +287,41 @@ com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{nam
 
 
 
-### Write Data Using the Producer
-Write data using the `producer` user:
+### Write Data 
+Write data using the `developer` user:
 ```sql
-INSERT INTO `producer_catalog`.`fluss`.`fluss_order` VALUES (1, 1.0);
+-- switch to developer user context
+USE CATALOG developer_catalog;
+
+-- write data using developer credientials
+INSERT INTO fluss_order VALUES (1, 1.0);
 ```
 The job should succeed as shown in the Flink UI.
 
 
 Attempting to write data using the `consumer` user will fail in the Flink UI:
 ```sql
-INSERT INTO `consumer_catalog`.`fluss`.`fluss_order` VALUES (1, 1.0);
+-- switch to consumer user context
+USE CATALOG consumer_catalog;
+
+-- write data using consumer credientials
+INSERT INTO fluss_order VALUES (1, 1.0);
 ```
 ```text title="result"
 Caused by: java.util.concurrent.CompletionException: com.alibaba.fluss.exception.AuthorizationException: No WRITE permission among all the tables: [fluss.fluss_order]
 ```
 
-### Read Data Using the Consumer
+### Read Data 
 
 Read data using the `consumer` user:
 ```sql
 SET 'execution.runtime-mode' = 'batch';
 -- use tableau result mode
 SET 'sql-client.execution.result-mode' = 'tableau';
+    
+-- switch to consumer user context
+USE CATALOG consumer_catalog;
+-- read data using consumer credientials
 select * from `consumer_catalog`.`fluss`.`fluss_order` limit 10;
 ```
 ```text title="result"
@@ -309,12 +334,16 @@ select * from `consumer_catalog`.`fluss`.`fluss_order` limit 10;
 ```
 
 
-Attempting to read data using the `producer` user will fail:
+Attempting to read data using the `developer` user will fail:
 ```sql
 SET 'execution.runtime-mode' = 'batch';
 -- use tableau result mode
 SET 'sql-client.execution.result-mode' = 'tableau';
-select * from `producer_catalog`.`fluss`.`fluss_order` limit 10;
+-- switch to developer user context
+USE CATALOG developer_catalog;
+
+-- read data using developer credientials
+select * from `developer_catalog`.`fluss`.`fluss_order` limit 10;
 ```
 ```text title="result"
 [ERROR] Could not execute SQL statement. Reason:
