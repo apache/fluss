@@ -218,6 +218,17 @@ public class ServerRpcMessageUtils {
                 protoTableBucket.getBucketId());
     }
 
+    public static PbTableBucket fromTableBucket(TableBucket tableBucket) {
+        PbTableBucket pbTableBucket =
+                new PbTableBucket()
+                        .setTableId(tableBucket.getTableId())
+                        .setBucketId(tableBucket.getBucket());
+        if (tableBucket.getPartitionId() != null) {
+            pbTableBucket.setPartitionId(tableBucket.getPartitionId());
+        }
+        return pbTableBucket;
+    }
+
     public static ServerNode toServerNode(PbServerNode pbServerNode, ServerType serverType) {
         return new ServerNode(
                 pbServerNode.getNodeId(),

@@ -532,6 +532,14 @@ message LakeTieringHeartbeatResponse {
   repeated PbHeartbeatRespForTable failed_table_resp = 5;
 }
 
+message ControlledShutdownRequest {
+  required int32 tablet_server_id = 1;
+  required int32 tablet_server_epoch = 2;
+}
+
+message ControlledShutdownResponse {
+  repeated PbTableBucket remaining_leader_buckets = 1;
+}
 
 // --------------- Inner classes ----------------
 message PbApiVersion {

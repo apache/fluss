@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.server.ServerBase;
+import org.apache.fluss.server.ServerState;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -265,6 +266,7 @@ public class CoordinatorServer extends ServerBase {
     @Override
     protected CompletableFuture<Result> closeAsync(Result result) {
         if (isShutDown.compareAndSet(false, true)) {
+            serverState = ServerState.SHUTTING_DOWN;
             LOG.info("Shutting down Coordinator server ({}).", result);
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
 
@@ -277,6 +279,8 @@ public class CoordinatorServer extends ServerBase {
                         }
                     }));
         }
+
+        serverState = ServerState.NOT_RUNNING;
 
         return terminationFuture;
     }
