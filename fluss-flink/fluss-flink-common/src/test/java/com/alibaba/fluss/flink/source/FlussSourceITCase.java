@@ -160,7 +160,7 @@ public class FlussSourceITCase extends FlinkTestBase {
                 Arrays.asList(row(600L, 20L, 800, "addr1"), row(700L, 22L, 801, "addr2"));
 
         // send some row updates
-        writeRows(ordersPKTablePath, updatedRows, false);
+        writeRows(conn, ordersPKTablePath, updatedRows, false);
 
         List<RowData> expectedResult =
                 Arrays.asList(
@@ -210,7 +210,7 @@ public class FlussSourceITCase extends FlinkTestBase {
                 Arrays.asList(row(600L, 20L, 600, "addr1"), row(700L, 22L, 601, "addr2"));
 
         // send some row updates
-        writeRows(ordersLogTablePath, updatedRows, true);
+        writeRows(conn, ordersLogTablePath, updatedRows, true);
 
         List<RowData> expectedResult =
                 Arrays.asList(
