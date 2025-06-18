@@ -133,7 +133,7 @@ public abstract class FlinkProcedureITCase {
                             .collect(Collectors.toList());
             assertThat(acls)
                     .containsExactlyInAnyOrder(
-                            "+I[resourceType=\"fluss-cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"*\"]");
+                            "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"*\"]");
         }
     }
 
@@ -168,7 +168,7 @@ public abstract class FlinkProcedureITCase {
                             .collect(Collectors.toList());
             assertThat(acls)
                     .containsExactlyInAnyOrder(
-                            "+I[resourceType=\"fluss-cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"127.0.0.1\"]");
+                            "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"127.0.0.1\"]");
         }
         tEnv.executeSql(dropAcl).await();
         try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
