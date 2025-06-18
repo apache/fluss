@@ -35,6 +35,7 @@ import com.alibaba.fluss.rpc.RpcServer;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
+import com.alibaba.fluss.server.ServerState;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
 import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
@@ -265,6 +266,7 @@ public class CoordinatorServer extends ServerBase {
     @Override
     protected CompletableFuture<Result> closeAsync(Result result) {
         if (isShutDown.compareAndSet(false, true)) {
+            serverState = ServerState.SHUTTING_DOWN;
             LOG.info("Shutting down Coordinator server ({}).", result);
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
 
@@ -277,6 +279,8 @@ public class CoordinatorServer extends ServerBase {
                         }
                     }));
         }
+
+        serverState = ServerState.NOT_RUNNING;
 
         return terminationFuture;
     }

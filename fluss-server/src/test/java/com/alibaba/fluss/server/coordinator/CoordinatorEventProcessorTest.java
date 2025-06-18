@@ -310,8 +310,7 @@ class CoordinatorEventProcessorTest {
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled
-        retryVerifyContext(
-                ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
+        retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerIds()).contains(newlyServerId));
 
         initCoordinatorChannel();
         // verify the context has the exact tablet server
@@ -355,7 +354,7 @@ class CoordinatorEventProcessorTest {
 
         // retry until the server has been removed from coordinator context
         retryVerifyContext(
-                ctx -> assertThat(ctx.getLiveTabletServers()).doesNotContainKey(newlyServerId));
+                ctx -> assertThat(ctx.liveTabletServerIds()).doesNotContain(newlyServerId));
 
         // check replica state
         // all replicas should be online but the replica in the down server
@@ -392,8 +391,7 @@ class CoordinatorEventProcessorTest {
         // assume the server that comes again
         zookeeperClient.registerTabletServer(newlyServerId, tabletServerRegistration);
         // retry until the server has been added to coordinator context
-        retryVerifyContext(
-                ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
+        retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerIds()).contains(newlyServerId));
 
         // make sure the bucket that remains in offline should be online again
         // since the server become online
