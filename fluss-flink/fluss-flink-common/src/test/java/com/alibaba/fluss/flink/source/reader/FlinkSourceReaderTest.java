@@ -75,7 +75,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             partitionWrittenRows.put(
                     partitionIdAndName.getKey(),
                     writeRowsToPartition(
-                            tablePath, Collections.singleton(partitionIdAndName.getValue())));
+                            conn, tablePath, Collections.singleton(partitionIdAndName.getValue())));
         }
 
         // try to write some rows to the table

@@ -63,6 +63,8 @@ import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.utils.FileUtils;
+import com.alibaba.fluss.utils.clock.Clock;
+import com.alibaba.fluss.utils.clock.SystemClock;
 
 import org.apache.curator.test.TestingServer;
 import org.junit.jupiter.api.extension.AfterAllCallback;
@@ -124,6 +126,7 @@ public final class FlussClusterExtension
     private final Map<Integer, TabletServer> tabletServers;
     private final Map<Integer, ServerInfo> tabletServerInfos;
     private final Configuration clusterConf;
+    private final Clock clock;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -134,13 +137,15 @@ public final class FlussClusterExtension
             int numOfTabletServers,
             String coordinatorServerListeners,
             String tabletServerListeners,
-            Configuration clusterConf) {
+            Configuration clusterConf,
+            Clock clock) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
         this.tabletServerListeners = tabletServerListeners;
         this.tabletServerInfos = new HashMap<>();
         this.clusterConf = clusterConf;
+        this.clock = clock;
     }
 
     @Override
@@ -307,7 +312,7 @@ public final class FlussClusterExtension
 
         setRemoteDataDir(tabletServerConf);
 
-        TabletServer tabletServer = new TabletServer(tabletServerConf);
+        TabletServer tabletServer = new TabletServer(tabletServerConf, clock);
         tabletServer.start();
         ServerInfo serverInfo =
                 new ServerInfo(
@@ -823,6 +828,7 @@ public final class FlussClusterExtension
         private int numOfTabletServers = 1;
         private String tabletServerListeners = DEFAULT_LISTENERS;
         private String coordinatorServerListeners = DEFAULT_LISTENERS;
+        private Clock clock = SystemClock.getInstance();
 
         private final Configuration clusterConf = new Configuration();
 
@@ -856,12 +862,19 @@ public final class FlussClusterExtension
             return this;
         }
 
+        /** Sets the clock of fluss cluster. */
+        public Builder setClock(Clock clock) {
+            this.clock = clock;
+            return this;
+        }
+
         public FlussClusterExtension build() {
             return new FlussClusterExtension(
                     numOfTabletServers,
                     coordinatorServerListeners,
                     tabletServerListeners,
-                    clusterConf);
+                    clusterConf,
+                    clock);
         }
     }
 }

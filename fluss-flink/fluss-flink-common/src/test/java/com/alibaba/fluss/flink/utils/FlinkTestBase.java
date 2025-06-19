@@ -270,7 +270,8 @@ public class FlinkTestBase extends AbstractTestBase {
         }
     }
 
-    protected List<String> writeRowsToPartition(TablePath tablePath, Collection<String> partitions)
+    public static List<String> writeRowsToPartition(
+            Connection connection, TablePath tablePath, Collection<String> partitions)
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
@@ -281,13 +282,14 @@ public class FlinkTestBase extends AbstractTestBase {
             }
         }
         // write records
-        writeRows(tablePath, rows, false);
+        writeRows(connection, tablePath, rows, false);
         return expectedRowValues;
     }
 
-    protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)
+    public static void writeRows(
+            Connection connection, TablePath tablePath, List<InternalRow> rows, boolean append)
             throws Exception {
-        try (Table table = conn.getTable(tablePath)) {
+        try (Table table = connection.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
                 tableWriter = table.newAppend().createWriter();
