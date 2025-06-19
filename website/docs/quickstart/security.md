@@ -21,8 +21,8 @@ sidebar_position: 2
 
 #  Secure Your Fluss Cluster in Minutes
 This guide demonstrates how to secure your Fluss cluster using two practical examples:
-1. Securing a Fluss Cluster within a Department with Different Roles
-2. Enabling Multi-Tenant Isolation in a Fluss Cluster
+1. Securing a Fluss cluster within a department with different roles
+2. Enabling multi-tenant isolation in a Fluss cluster
 
 These scenarios will help you understand how to configure authentication and authorization, manage access control, and implement data isolation in real-world use cases.
 
@@ -46,12 +46,12 @@ We encourage you to use a recent version of Docker and [Compose v2](https://docs
 We will use docker compose to spin up the required components for this tutorial.
 
 1. Create a working directory for this guide.
-   ```shell
-    mkdir fluss-quickstart-security
-    cd fluss-quickstart-security
-    ```
+```shell
+mkdir fluss-quickstart-security
+cd fluss-quickstart-security
+```
 
-2. Create a docker-compose.yml file with the following content:
+2. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 services:
@@ -140,12 +140,11 @@ volumes:
 
 The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
-  It uses SASL/PLAIN for user authentication and defines three users: admin, developer, and consumer. The admin user has full administrative privileges.
+  It uses SASL/PLAIN for user authentication and defines three users: `admin`, `developer`, and `consumer`. The `admin` user is a `super.users` who has full administrative privileges on the Fluss cluster.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
 **Note:** The `fluss/quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
-includes the [fluss-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/1.0/flink/quick-start/) and
-[flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
+includes the [fluss-flink connector](engine-flink/getting-started.md) to simplify this guide.
 
 3. To start all containers, run:
 ```shell
@@ -171,43 +170,43 @@ docker compose exec jobmanager ./sql-client
 Create separate catalogs for each user:
 ```sql title="Flink SQL"
 CREATE CATALOG admin_catalog WITH (
-'type' = 'fluss',
-'bootstrap.servers' = 'coordinator-server:9123',
-'client.security.protocol' = 'SASL',
-'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'admin',
-'client.security.sasl.password' = 'admin-pass'
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'client.security.protocol' = 'SASL',
+    'client.security.sasl.mechanism' = 'PLAIN',
+    'client.security.sasl.username' = 'admin',
+    'client.security.sasl.password' = 'admin-pass'
 );
 ```
 
 ```sql title="Flink SQL"
 CREATE CATALOG developer_catalog WITH (
-'type' = 'fluss',
-'bootstrap.servers' = 'coordinator-server:9123',
-'client.security.protocol' = 'SASL',
-'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'developer',
-'client.security.sasl.password' = 'developer-pass'
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'client.security.protocol' = 'SASL',
+    'client.security.sasl.mechanism' = 'PLAIN',
+    'client.security.sasl.username' = 'developer',
+    'client.security.sasl.password' = 'developer-pass'
 );
 
 ```
 
 ```sql title="Flink SQL"
 CREATE CATALOG consumer_catalog WITH (
-'type' = 'fluss',
-'bootstrap.servers' = 'coordinator-server:9123',
-'client.security.protocol' = 'SASL',
-'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'consumer',
-'client.security.sasl.password' = 'consumer-pass'
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'client.security.protocol' = 'SASL',
+    'client.security.sasl.mechanism' = 'PLAIN',
+    'client.security.sasl.username' = 'consumer',
+    'client.security.sasl.password' = 'consumer-pass'
 );
 ```
 
 
-### Add ACLs for Producer and Consumer
+### Add ACLs for Users
 As the `admin` user, add ACLs to grant permissions:
 
-Allow `developer`user to read and write data:
+Allow `developer` user to read and write data:
 ```sql
 CALL admin_catalog.sys.add_acl(
     resource => 'cluster', 
@@ -232,7 +231,6 @@ CALL admin_catalog.sys.add_acl(
     principal => 'User:consumer', 
     operation => 'READ'
 );
-
 ```
 
 Lookup the ACLs:
@@ -241,8 +239,9 @@ CALL admin_catalog.sys.list_acl(
     resource => 'cluster'
 );
 ```
-it will show like:
-```text title="result"
+Output will show like:
+
+```text
 +-------------------------------------------------------------------------------------------------------+
 |                                                                                                result |
 +-------------------------------------------------------------------------------------------------------+
@@ -256,17 +255,19 @@ it will show like:
 ### Create Tables Using Different Users
 Only the `admin` user can create tables:
 ```sql
--- switch to developer user context
+-- switch to admin user context
 USE CATALOG admin_catalog;
 
--- create table using developer credientials
+-- create table using admin credentials
 CREATE TABLE fluss_order (
      `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
-```text title="result"
+**Output:**
+
+```text
 [INFO] Execute statement succeeded.
 ```
 
@@ -275,14 +276,16 @@ The `developer` user cannot create tables:
 -- switch to developer user context
 USE CATALOG developer_catalog;
 
--- create table using developer credientials
+-- create table using developer credentials
 CREATE TABLE fluss_order1(
     `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
-```text title="result"
+**Output:**
+
+```text
 [ERROR] Could not execute SQL statement. Reason:
 com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='developer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
 ```
@@ -294,14 +297,16 @@ The `consumer` user also cannot create tables:
 -- switch to consumer user context
 USE CATALOG consumer_catalog;
 
--- create table using consumer credientials
+-- create table using consumer credentials
 CREATE TABLE fluss_order2(
     `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
-```text title="result"
+**Output:**
+
+```text
 [ERROR] Could not execute SQL statement. Reason:
 com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='consumer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
 ```
@@ -328,7 +333,9 @@ USE CATALOG consumer_catalog;
 -- write data using consumer credientials
 INSERT INTO fluss_order VALUES (1, 1.0);
 ```
-```text title="result"
+**Output:**
+
+```text
 Caused by: java.util.concurrent.CompletionException: com.alibaba.fluss.exception.AuthorizationException: No WRITE permission among all the tables: [fluss.fluss_order]
 ```
 
@@ -343,9 +350,10 @@ SET 'sql-client.execution.result-mode' = 'tableau';
 -- switch to consumer user context
 USE CATALOG consumer_catalog;
 -- read data using consumer credientials
-select * from `consumer_catalog`.`fluss`.`fluss_order` limit 10;
+SELECT * FROM `consumer_catalog`.`fluss`.`fluss_order` LIMIT 10;
 ```
-```text title="result"
+**Output:**
+```text
 +-----------+-------------+
 | order_key | total_price |
 +-----------+-------------+
@@ -364,11 +372,11 @@ SET 'sql-client.execution.result-mode' = 'tableau';
 USE CATALOG developer_catalog;
 
 -- read data using developer credientials
-select * from `developer_catalog`.`fluss`.`fluss_order` limit 10;
+SELECT * FROM `developer_catalog`.`fluss`.`fluss_order` LIMIT 10;
 ```
 
 
-## Example 2: Implement Multi-Tenant Isolation in a Fluss Cluster
+## Example 2: Multi-Tenant Isolation in a Fluss Cluster
 This example shows how to enable multi-tenant isolation in a Fluss cluster.
 
 We'll demonstrate two departments — `marketing` and `finance` — each with its own dedicated database. The cluster includes the following users:
@@ -522,7 +530,6 @@ CALL admin_catalog.sys.add_acl(
     principal => 'User:finance', 
     operation => 'ALL'
 );
-
 ```
 
 Lookup the ACLs:
@@ -531,8 +538,8 @@ CALL admin_catalog.sys.list_acl(
     resource => 'ANY'
 );
 ```
-it will show like:
-```text title="result"
+Output will show like:
+```text
 +----------------------------------------------------------------------------------------------------+
 |                                                                                             result |
 +----------------------------------------------------------------------------------------------------+
@@ -552,7 +559,8 @@ use catalog marketing_catalog;
 -- show databases using marketing user credientials
 show databases;
 ```
-```text title="result"
+**Output:**
+```text
 +---------------+
 | database name |
 +---------------+
@@ -568,7 +576,10 @@ use catalog finance_catalog;
 -- show databases using finance user credientials
 show databases;
 ```
-```text title="result"
+
+**Output:**
+
+```text
 +---------------+
 | database name |
 +---------------+
@@ -588,7 +599,10 @@ CREATE TABLE `marketing_db`.`order` (
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
-```text title="result"
+
+**Output:**
+
+```text
 [INFO] Execute statement succeeded.
 ```
 
@@ -603,7 +617,9 @@ CREATE TABLE `marketing_db`.`order` (
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
 ```
-```text title="result"
+**Output:**
+
+```text
 [ERROR] Could not execute SQL statement. Reason:
 com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='finance', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='marketing_db'} 
 ```
