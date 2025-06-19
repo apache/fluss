@@ -36,6 +36,8 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 
+import static com.alibaba.fluss.security.acl.Resource.FLUSS_CLUSTER;
+
 /** Procedure to list acl. */
 public class ListAclProcedure extends AbstractAclProcedure {
     @ProcedureHint(
@@ -106,10 +108,14 @@ public class ListAclProcedure extends AbstractAclProcedure {
                 ace.getPrincipal() != null
                         ? (ace.getPrincipal().getType() + ":" + ace.getPrincipal().getName())
                         : null;
+        String resourceName =
+                FLUSS_CLUSTER.equals(resource.getName())
+                        ? "cluster"
+                        : "cluster." + resource.getName();
 
         return String.join(
                 ";",
-                formatEntry("resourceType", resource.getName()),
+                formatEntry("resource", resourceName),
                 formatEntry(
                         "permission",
                         ace.getPermissionType() != null ? ace.getPermissionType().name() : null),

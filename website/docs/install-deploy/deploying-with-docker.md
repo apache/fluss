@@ -361,7 +361,7 @@ bin/start-cluster.sh
 ### Enter into SQL-Client
 Use the following command to enter the Flink SQL CLI Container:
 ```shell
-./sql-client
+bin/sql-client.sh
 ```
 
 ### Create Fluss Catalog
