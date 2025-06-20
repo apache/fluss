@@ -35,9 +35,9 @@ import java.util.Optional;
 public interface Predicate extends Serializable {
 
     /**
-     * Now only support test based on the specific input row.
-     * Todo: boolean test(long rowCount, InternalRow minValues, InternalRow maxValues, InternalArray nullCounts);
-     * Test based on the specific input row.
+     * Now only support test based on the specific input row. Todo: boolean test(long rowCount,
+     * InternalRow minValues, InternalRow maxValues, InternalArray nullCounts); Test based on the
+     * specific input row.
      *
      * @return return true when hit, false when not hit.
      */
