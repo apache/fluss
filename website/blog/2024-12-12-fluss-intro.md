@@ -1,6 +1,7 @@
 ---
 slug: fluss-intro
 title: "Introducing Fluss: Streaming Storage for Real-Time Analytics"
+sidebar_label: "Introducing Fluss"
 authors: [jark]
 ---
 
