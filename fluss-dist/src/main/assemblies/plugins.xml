@@ -53,7 +53,9 @@
         </file>
 
         <file>
-            <source>../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar</source>
+            <source>
+                ../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar
+            </source>
             <outputDirectory>plugins/hdfs/</outputDirectory>
             <destName>fluss-fs-hadoop-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
@@ -75,7 +77,8 @@
 
         <!-- metrics -->
         <file>
-            <source>../fluss-metrics/fluss-metrics-prometheus/target/fluss-metrics-prometheus-${project.version}.jar</source>
+            <source>../fluss-metrics/fluss-metrics-prometheus/target/fluss-metrics-prometheus-${project.version}.jar
+            </source>
             <outputDirectory>plugins/prometheus/</outputDirectory>
             <destName>fluss-metrics-prometheus-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
@@ -85,6 +88,15 @@
             <source>../fluss-metrics/fluss-metrics-jmx/target/fluss-metrics-jmx-${project.version}.jar</source>
             <outputDirectory>plugins/jmx/</outputDirectory>
             <destName>fluss-metrics-jmx-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>
+                ../fluss-metrics/fluss-metrics-opentelemetry/target/fluss-metrics-opentelemetry-${project.version}.jar
+            </source>
+            <outputDirectory>plugins/opentelemetry/</outputDirectory>
+            <destName>fluss-metrics-opentelemetry-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
 
