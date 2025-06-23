@@ -994,6 +994,13 @@
                     <version>3.1.0</version>
                 </plugin>
 
+                <!-- Pin the version of the maven surefire plugin -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.0.0-M5</version>
+                </plugin>
+
                 <!-- Pin the version of the maven shade plugin -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
