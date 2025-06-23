@@ -34,6 +34,7 @@
     <modules>
         <module>fluss-metrics-prometheus</module>
         <module>fluss-metrics-jmx</module>
+        <module>fluss-metrics-opentelemetry</module>
     </modules>
 
     <!-- override these root dependencies as 'provided', so they don't end up
