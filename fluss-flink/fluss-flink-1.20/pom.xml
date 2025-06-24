@@ -162,26 +162,27 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.0.0-M5</version>
                 <executions>
-                    <!-- e2e test with flink/zookeeper cluster, we set forkCount=1 -->
+                    <!-- Test end with ITCase is e2e test in this module   -->
                     <execution>
-                        <id>e2e-tests</id>
-                        <phase>test</phase>
+                        <id>integration-tests</id>
+                        <phase>integration-test</phase>
+                        <inherited>false</inherited>
                         <goals>
                             <goal>test</goal>
                         </goals>
                         <configuration>
                             <includes>
-                                <!-- Test end with ITCase is e2e test in this module   -->
                                 <include>**/*ITCase.*</include>
                             </includes>
+                            <!-- e2e test with flink/zookeeper cluster, we set forkCount=1 -->
                             <forkCount>1</forkCount>
                         </configuration>
                     </execution>
-
-                    <!-- others tests, reuse parent's config -->
+                    <!-- others unit tests -->
                     <execution>
                         <id>default-test</id>
                         <phase>test</phase>
+                        <inherited>false</inherited>
                         <goals>
                             <goal>test</goal>
                         </goals>
