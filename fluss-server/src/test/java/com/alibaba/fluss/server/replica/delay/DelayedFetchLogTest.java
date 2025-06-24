@@ -21,7 +21,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
-import com.alibaba.fluss.server.entity.FetchData;
+import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.LogOffsetMetadata;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
@@ -63,7 +63,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                         100,
                         Duration.ofMinutes(3).toMillis(), // max wait ms large enough.
                         new FetchBucketStatus(
-                                new FetchData(150001L, 0L, Integer.MAX_VALUE),
+                                new FetchReqInfo(150001L, 0L, Integer.MAX_VALUE),
                                 new LogOffsetMetadata(0L, 0L, 0),
                                 preFetchResultForBucket),
                         delayedResponse::complete);
@@ -121,7 +121,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                         100,
                         1000, // wait time is small enough.
                         new FetchBucketStatus(
-                                new FetchData(150001L, 0L, Integer.MAX_VALUE),
+                                new FetchReqInfo(150001L, 0L, Integer.MAX_VALUE),
                                 new LogOffsetMetadata(0L, 0L, 0),
                                 preFetchResultForBucket),
                         delayedResponse::complete);

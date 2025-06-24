@@ -28,7 +28,7 @@ import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.server.entity.FetchData;
+import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.tablet.TabletServer;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
@@ -132,7 +132,7 @@ public class RemoteLogITCase {
                 .getReplicaManager()
                 .fetchLogRecords(
                         new FetchParams(-1, Integer.MAX_VALUE),
-                        Collections.singletonMap(tb, new FetchData(tableId, 0, 10240)),
+                        Collections.singletonMap(tb, new FetchReqInfo(tableId, 0, 10240)),
                         future::complete);
 
         Map<TableBucket, FetchLogResultForBucket> result = future.get();

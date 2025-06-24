@@ -63,7 +63,8 @@ public class TestingMetadataUpdater extends MetadataUpdater {
             List<ServerNode> tabletServers,
             Map<TablePath, TableInfo> tableInfos) {
         super(
-                RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance()),
+                RpcClient.create(
+                        new Configuration(), TestingClientMetricGroup.newInstance(), false),
                 Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();

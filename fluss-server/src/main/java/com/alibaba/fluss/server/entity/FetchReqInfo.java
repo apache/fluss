@@ -26,19 +26,19 @@ import java.util.Objects;
 
 /** The structure of fetch data. */
 @Internal
-// TODO rename to FetchReqInfo?
-public final class FetchData {
+public final class FetchReqInfo {
     private final long tableId;
     private final long fetchOffset;
     @Nullable private final int[] projectFields;
 
     private int maxBytes;
 
-    public FetchData(long tableId, long fetchOffset, int maxBytes) {
+    public FetchReqInfo(long tableId, long fetchOffset, int maxBytes) {
         this(tableId, fetchOffset, maxBytes, null);
     }
 
-    public FetchData(long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+    public FetchReqInfo(
+            long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;
@@ -88,16 +88,16 @@ public final class FetchData {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        FetchData fetchData = (FetchData) o;
-        if (tableId != fetchData.tableId) {
+        FetchReqInfo fetchReqInfo = (FetchReqInfo) o;
+        if (tableId != fetchReqInfo.tableId) {
             return false;
         }
 
-        if (!Arrays.equals(projectFields, fetchData.projectFields)) {
+        if (!Arrays.equals(projectFields, fetchReqInfo.projectFields)) {
             return false;
         }
 
-        return fetchOffset == fetchData.fetchOffset && maxBytes == fetchData.maxBytes;
+        return fetchOffset == fetchReqInfo.fetchOffset && maxBytes == fetchReqInfo.maxBytes;
     }
 
     @Override

@@ -135,7 +135,7 @@ import com.alibaba.fluss.server.authorizer.AclDeleteResult;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.entity.CommitLakeTableSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
-import com.alibaba.fluss.server.entity.FetchData;
+import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.entity.LakeBucketOffset;
 import com.alibaba.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import com.alibaba.fluss.server.entity.NotifyLakeTableOffsetData;
@@ -677,8 +677,8 @@ public class ServerRpcMessageUtils {
         return produceResponse;
     }
 
-    public static Map<TableBucket, FetchData> getFetchLogData(FetchLogRequest request) {
-        Map<TableBucket, FetchData> fetchDataMap = new HashMap<>();
+    public static Map<TableBucket, FetchReqInfo> getFetchLogData(FetchLogRequest request) {
+        Map<TableBucket, FetchReqInfo> fetchDataMap = new HashMap<>();
         for (PbFetchLogReqForTable fetchLogReqForTable : request.getTablesReqsList()) {
             long tableId = fetchLogReqForTable.getTableId();
             final int[] projectionFields;
@@ -698,7 +698,7 @@ public class ServerRpcMessageUtils {
                                         ? fetchLogReqForBucket.getPartitionId()
                                         : null,
                                 bucketId),
-                        new FetchData(
+                        new FetchReqInfo(
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),

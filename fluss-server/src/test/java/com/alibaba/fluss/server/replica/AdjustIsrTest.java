@@ -22,7 +22,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
-import com.alibaba.fluss.server.entity.FetchData;
+import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.log.FetchParams;
 
 import org.junit.jupiter.api.Test;
@@ -75,7 +75,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                 new FetchParams(
                         2, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
                 Collections.singletonMap(
-                        tb, new FetchData(tb.getTableId(), 10L, Integer.MAX_VALUE)),
+                        tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
                 result -> {});
         retry(
                 Duration.ofSeconds(20),
@@ -90,7 +90,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                 new FetchParams(
                         3, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
                 Collections.singletonMap(
-                        tb, new FetchData(tb.getTableId(), 10L, Integer.MAX_VALUE)),
+                        tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
                 result -> {});
         retry(
                 Duration.ofSeconds(20),
