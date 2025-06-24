@@ -123,7 +123,35 @@ CREATE TABLE T
 
 If the data written to the primary-key table is
 sequentially `+I(1, 2.0, 'apple')`, `+I(1, 4.0, 'banana')`, `-D(1, 4.0, 'banana')`, then the following change data will
-be generated.
+be generated.For example, the execution process of the following Flink SQL statement：
+
+```sql title="Flink SQL"
+-- 1. Switch to batch processing mode
+-- In this mode, we can perform POST and DELETE operations.
+-- Note: In this environment, full table SELECT is restricted in batch mode.
+SET execution.runtime-mode = batch;
+
+-- 2. Insert two pieces of data (executed in batch mode)
+-- Flink will submit these data as insertion events to the cluster.
+INSERT INTO T (k, v1) VALUES (1, 2.0,'apple');
+INSERT INTO T (k, v1) VALUES (1, 4.0,'banana');
+
+-- 3. Perform deletion operation
+-- This DELETE operation will mark records with primary key k=1 as deleted.
+-- Within Fluss, it generates a '- D' change log event.
+DELETE FROM T WHERE k = 1;
+
+
+-- 4. According to the experiment, Fluss has limitations on SELECT in batch processing mode.
+-- Only data lake tables or primary key point queries are supported.
+-- After switching to streaming mode, we can observe the change logs of the table.
+-- The SELECT here will act as a stream query, continuously displaying updates to the table.
+SET execution.runtime-mode = streaming;
+SELECT * FROM T;
+
+```
+
+Generate the following change data:
 
 ```text
 +I(1, 2.0, 'apple')
