@@ -1024,8 +1024,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .stream()
                         .filter(s -> s.contains("2025"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(
-                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2025$2"));
+        waitUtilAllBucketFinishSnapshot(
+                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
 
         String plan = tEnv.explainSql("select * from multi_partitioned_table where c ='2025'");
         assertThat(plan)

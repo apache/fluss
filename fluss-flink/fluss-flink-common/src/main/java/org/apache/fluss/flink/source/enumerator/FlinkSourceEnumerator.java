@@ -367,7 +367,13 @@ public class FlinkSourceEnumerator
     }
 
     private InternalRow convertPartitionInfoToInternalRow(PartitionInfo partitionInfo) {
-        return GenericRow.of(BinaryString.fromString(partitionInfo.getPartitionName()));
+        List<String> partitionValues =
+                partitionInfo.getResolvedPartitionSpec().getPartitionValues();
+        GenericRow genericRow = new GenericRow(partitionValues.size());
+        for (int i = 0; i < partitionValues.size(); i++) {
+            genericRow.setField(i, BinaryString.fromString(partitionValues.get(i)));
+        }
+        return genericRow;
     }
 
     /** Init the splits for Fluss. */
