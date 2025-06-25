@@ -54,6 +54,8 @@ SELECT * FROM T WHERE k = 1;
 
 -- Update
 INSERT INTO T(k, v1, v2) VALUES (2, 2.0, 't2');
+-- Switch to batch mode to perform update operation, otherwise an error will be reported: org.apache.flink.table.api.TableException: UPDATE statement is not supported for streaming mode now.
+SET execution.runtime-mode = batch;
 UPDATE T SET v1 = 4.0 WHERE k = 2;
 SELECT * FROM T WHERE k = 2;
  -- Output:
@@ -83,12 +85,12 @@ SELECT * FROM T WHERE k = 3;
 +----+-----+----+
  
 -- Delete
-DELETE FROM T WHERE k > 2;
-SELECT * FROM T;
+DELETE FROM T WHERE k = 2;
+SELECT * FROM T WHERE k = 2;
 -- Output:
-+----+-----+----+
-| k  | v1  | v2 |
-+----+-----+----+
-| 1  | 1.0 | t2 |
-+----+-----+----+
++----+-----+------+
+| k  | v1  | v2   |
++----+-----+------+
+|null| null| null |
++----+-----+------+
 ```
