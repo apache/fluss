@@ -18,7 +18,10 @@
 package com.alibaba.fluss.lake.paimon.flink;
 
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.row.TimestampNtz;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.types.Row;
@@ -29,6 +32,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -47,7 +53,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testReadLogTable(boolean isPartitioned) throws Exception {
+    void testReadLogTableFullType(boolean isPartitioned) throws Exception {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
@@ -56,7 +62,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         List<Row> writtenRows = new ArrayList<>();
         long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
-        // wait until records has has been synced
+        // wait until records has been synced
         waitUtilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
         // now, start to read the log table, which will read paimon
@@ -83,7 +89,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // test project push down
         actual =
                 CollectionUtil.iteratorToList(
-                        batchTEnv.executeSql("select b from " + tableName).collect());
+                        batchTEnv.executeSql("select f_byte from " + tableName).collect());
         List<Row> expected =
                 writtenRows.stream()
                         .map(row -> Row.of(row.getField(1)))
@@ -94,33 +100,109 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
     private long prepareLogTable(
             TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
             throws Exception {
-        long t1Id = createLogTable(tablePath, bucketNum, isPartitioned);
+        long t1Id = createFullTypeLogTable(tablePath, bucketNum, isPartitioned);
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
             for (String partition : partitionNameById.values()) {
                 for (int i = 0; i < 3; i++) {
-                    flinkRows.addAll(writeRows(tablePath, 10, partition));
+                    flinkRows.addAll(writeFullTypeRows(tablePath, 10, partition));
                 }
             }
         } else {
             for (int i = 0; i < 3; i++) {
-                flinkRows.addAll(writeRows(tablePath, 10, null));
+                flinkRows.addAll(writeFullTypeRows(tablePath, 10, null));
             }
         }
         return t1Id;
     }
 
-    private List<Row> writeRows(TablePath tablePath, int rowCount, @Nullable String partition)
-            throws Exception {
+    private List<Row> writeFullTypeRows(
+            TablePath tablePath, int rowCount, @Nullable String partition) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<Row> flinkRows = new ArrayList<>();
         for (int i = 0; i < rowCount; i++) {
             if (partition == null) {
-                rows.add(row(i, "v" + i));
-                flinkRows.add(Row.of(i, "v" + i));
+                rows.add(
+                        row(
+                                true,
+                                (byte) 100,
+                                (short) 200,
+                                30,
+                                400L,
+                                500.1f,
+                                600.0d,
+                                "another_string_" + i,
+                                Decimal.fromUnscaledLong(900, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273400L),
+                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                                TimestampNtz.fromMillis(1698235273501L),
+                                TimestampNtz.fromMillis(1698235273501L, 8000),
+                                new byte[] {5, 6, 7, 8}));
+
+                flinkRows.add(
+                        Row.of(
+                                true,
+                                (byte) 100,
+                                (short) 200,
+                                30,
+                                400L,
+                                500.1f,
+                                600.0d,
+                                "another_string_" + i,
+                                new java.math.BigDecimal("9.00"),
+                                new java.math.BigDecimal("1000"),
+                                Instant.ofEpochMilli(1698235273400L),
+                                Instant.ofEpochMilli(1698235273400L).plusNanos(7000),
+                                LocalDateTime.ofInstant(
+                                        Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC")),
+                                LocalDateTime.ofInstant(
+                                                Instant.ofEpochMilli(1698235273501L),
+                                                ZoneId.of("UTC"))
+                                        .plusNanos(8000),
+                                new byte[] {5, 6, 7, 8}));
             } else {
-                rows.add(row(i, "v" + i, partition));
-                flinkRows.add(Row.of(i, "v" + i, partition));
+                rows.add(
+                        row(
+                                true,
+                                (byte) 100,
+                                (short) 200,
+                                30,
+                                400L,
+                                500.1f,
+                                600.0d,
+                                "another_string_" + i,
+                                Decimal.fromUnscaledLong(900, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273400L),
+                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                                TimestampNtz.fromMillis(1698235273501L),
+                                TimestampNtz.fromMillis(1698235273501L, 8000),
+                                new byte[] {5, 6, 7, 8},
+                                partition));
+
+                flinkRows.add(
+                        Row.of(
+                                true,
+                                (byte) 100,
+                                (short) 200,
+                                30,
+                                400L,
+                                500.1f,
+                                600.0d,
+                                "another_string_" + i,
+                                new java.math.BigDecimal("9.00"),
+                                new java.math.BigDecimal("1000"),
+                                Instant.ofEpochMilli(1698235273400L),
+                                Instant.ofEpochMilli(1698235273400L).plusNanos(7000),
+                                LocalDateTime.ofInstant(
+                                        Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC")),
+                                LocalDateTime.ofInstant(
+                                                Instant.ofEpochMilli(1698235273501L),
+                                                ZoneId.of("UTC"))
+                                        .plusNanos(8000),
+                                new byte[] {5, 6, 7, 8},
+                                partition));
             }
         }
         writeRows(tablePath, rows, true);
@@ -132,11 +214,11 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         if (isPartitioned) {
             List<Row> rows = new ArrayList<>();
             for (String partition : waitUntilPartitions(tablePath).values()) {
-                rows.addAll(writeRows(tablePath, rowCount, partition));
+                rows.addAll(writeFullTypeRows(tablePath, rowCount, partition));
             }
             return rows;
         } else {
-            return writeRows(tablePath, rowCount, null);
+            return writeFullTypeRows(tablePath, rowCount, null);
         }
     }
 }

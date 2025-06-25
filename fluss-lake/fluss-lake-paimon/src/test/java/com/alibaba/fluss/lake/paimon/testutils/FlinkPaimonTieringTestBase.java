@@ -52,8 +52,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import javax.annotation.Nullable;
-
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -285,6 +283,43 @@ public class FlinkPaimonTieringTestBase {
         return createTable(tablePath, tableBuilder.build());
     }
 
+    protected long createFullTypeLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
+            throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("f_boolean", DataTypes.BOOLEAN())
+                        .column("f_byte", DataTypes.TINYINT())
+                        .column("f_short", DataTypes.SMALLINT())
+                        .column("f_int", DataTypes.INT())
+                        .column("f_long", DataTypes.BIGINT())
+                        .column("f_float", DataTypes.FLOAT())
+                        .column("f_double", DataTypes.DOUBLE())
+                        .column("f_string", DataTypes.STRING())
+                        .column("f_decimal1", DataTypes.DECIMAL(5, 2))
+                        .column("f_decimal2", DataTypes.DECIMAL(20, 0))
+                        .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_LTZ(3))
+                        .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_LTZ(6))
+                        .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
+                        .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
+                        .column("f_binary", DataTypes.BINARY(4));
+
+        TableDescriptor.Builder tableBuilder =
+                TableDescriptor.builder()
+                        .distributedBy(bucketNum, "f_int")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        if (isPartitioned) {
+            schemaBuilder.column("p", DataTypes.STRING());
+            tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+            tableBuilder.partitionedBy("p");
+            tableBuilder.property(
+                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
+        }
+        tableBuilder.schema(schemaBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
+    }
+
     protected long createPrimaryKeyTable(
             TablePath tablePath, int bucketNum, List<Schema.Column> columns) throws Exception {
         Schema.Builder schemaBuilder =
@@ -380,16 +415,5 @@ public class FlinkPaimonTieringTestBase {
                 },
                 Duration.ofMinutes(2),
                 "bucket " + tb + "not synced");
-    }
-
-    protected Object[] rowValues(Object[] values, @Nullable String partition) {
-        if (partition == null) {
-            return values;
-        } else {
-            Object[] newValues = new Object[values.length + 1];
-            System.arraycopy(values, 0, newValues, 0, values.length);
-            newValues[values.length] = partition;
-            return newValues;
-        }
     }
 }
