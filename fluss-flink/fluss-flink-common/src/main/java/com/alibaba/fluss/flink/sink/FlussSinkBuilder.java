@@ -228,14 +228,7 @@ public class FlussSinkBuilder<InputT> {
         }
     }
 
-    /**
-     * Resolve column names to their corresponding indexes in the table schema.
-     *
-     * @param columnNames list of column names to resolve
-     * @param tableRowType the table's row type containing field information
-     * @return array of column indexes corresponding to the provided names
-     * @throws IllegalArgumentException if any column name is not found in the schema
-     */
+    /** Resolve column names to their corresponding indexes in the table schema. */
     private int[] resolveColumnNamesToIndexes(List<String> columnNames, RowType tableRowType) {
         List<String> fieldNames = tableRowType.getFieldNames();
 
