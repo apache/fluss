@@ -187,8 +187,8 @@ public class FlinkSourceEnumerator
     public FlinkSourceEnumerator(
             TablePath tablePath,
             Configuration flussConf,
-            boolean isPartitioned,
             boolean hasPrimaryKey,
+            boolean isPartitioned,
             SplitEnumeratorContext<SourceSplitBase> context,
             Set<TableBucket> assignedTableBuckets,
             Map<Long, String> assignedPartitions,
