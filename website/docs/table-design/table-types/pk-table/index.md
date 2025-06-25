@@ -153,12 +153,14 @@ SELECT * FROM T;
 
 Generate the following change data:
 
-```text
-+I(1, 2.0, 'apple')
--U(1, 2.0, 'apple')
-+U(1, 4.0, 'banana')
--D(1, 4.0, 'banana')
-```
+
+
+| op   | k    | v1   | v2     |
+| ---- | ---- | ---- | ------ |
+| +I   | 1    | 2.0  | apple  |
+| -U   | 1    | 2.0  | apple  |
+| +U   | 1    | 4.0  | banana |
+| -D   | 1    | 4.0  | banana |
 
 ## Data Queries
 
