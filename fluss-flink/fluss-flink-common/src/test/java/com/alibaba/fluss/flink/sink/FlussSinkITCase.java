@@ -390,4 +390,68 @@ public class FlussSinkITCase extends FlinkTestBase {
             }
         }
     }
+
+    @Test
+    public void testPartialUpdateWithColumnNames() throws Exception {
+        createTable(TablePath.of(DEFAULT_DB, "partial_update_test"), pkTableDescriptor);
+
+        ArrayList<TestOrder> orders = new ArrayList<>();
+        // Initial inserts
+        orders.add(new TestOrder(1001, 2001, 100, "addr1", RowKind.INSERT));
+        orders.add(new TestOrder(1002, 2002, 200, "addr2", RowKind.INSERT));
+        orders.add(new TestOrder(1003, 2003, 300, "addr3", RowKind.INSERT));
+
+        // Partial updates - only amount and address should be updated
+        orders.add(new TestOrder(1001, 9999, 150, "new_addr1", RowKind.UPDATE_AFTER));
+        orders.add(new TestOrder(1003, 8888, 350, "new_addr3", RowKind.UPDATE_AFTER));
+
+        DataStream<TestOrder> stream = env.fromData(orders);
+
+        FlinkSink<TestOrder> flussSink =
+                FlussSink.<TestOrder>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable("partial_update_test")
+                        .setPartialUpdateColumns("amount", "address")
+                        .setSerializationSchema(new TestOrderSerializationSchema())
+                        .build();
+
+        stream.sinkTo(flussSink).name("Fluss Partial Update Sink");
+        env.executeAsync("Test Partial Update with Column Names");
+
+        Table table = conn.getTable(new TablePath(DEFAULT_DB, "partial_update_test"));
+        LogScanner logScanner = table.newScan().createLogScanner();
+
+        int numBuckets = table.getTableInfo().getNumBuckets();
+        for (int i = 0; i < numBuckets; i++) {
+            logScanner.subscribeFromBeginning(i);
+        }
+
+        // UPDATE_BEFORE records
+        orders.add(new TestOrder(1001, 2001, 100, "addr1", RowKind.UPDATE_BEFORE));
+        orders.add(new TestOrder(1003, 2003, 300, "addr3", RowKind.UPDATE_BEFORE));
+
+        List<TestOrder> rows = new ArrayList<>();
+        while (rows.size() < orders.size()) {
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (TableBucket bucket : scanRecords.buckets()) {
+                for (ScanRecord record : scanRecords.records(bucket)) {
+                    InternalRow row = record.getRow();
+                    TestOrder order =
+                            new TestOrder(
+                                    row.getLong(0),
+                                    row.getLong(1),
+                                    row.getInt(2),
+                                    row.getString(3).toString(),
+                                    toFlinkRowKind(record.getChangeType()));
+                    rows.add(order);
+                }
+            }
+        }
+
+        assertThat(rows.size()).isEqualTo(orders.size());
+        assertThat(rows.containsAll(orders)).isTrue();
+
+        logScanner.close();
+    }
 }

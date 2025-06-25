@@ -33,6 +33,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +58,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
  *          .setDatabase(databaseName)
  *          .setRowType(orderRowType)
  *          .setSerializationSchema(new OrderSerializationSchema())
+ *          .setPartialUpdateColumns("amount", "address");
  *          .build())
  * }</pre>
  *
@@ -73,6 +75,7 @@ public class FlussSinkBuilder<InputT> {
     private final Map<String, String> configOptions = new HashMap<>();
     private FlussSerializationSchema<InputT> serializationSchema;
     private boolean shuffleByBucketId = true;
+    private String[] partialUpdateColumnNames;
 
     /** Set the bootstrap server for the sink. */
     public FlussSinkBuilder<InputT> setBootstrapServers(String bootstrapServers) {
@@ -117,32 +120,35 @@ public class FlussSinkBuilder<InputT> {
         return this;
     }
 
+    /**
+     * Set partial update column names for upsert operations.
+     *
+     * <p>This method allows specifying which columns should be updated during upsert operations.
+     * Only the specified columns will be updated, while other columns will remain unchanged. This
+     * is particularly useful for scenarios where you only want to update specific fields like
+     * status, timestamps, or computed values without affecting the entire record.
+     *
+     * <p><strong>Note:</strong> Partial updates are only supported for tables with primary keys.
+     * For append-only tables, this setting will be ignored with a warning message.
+     */
+    public FlussSinkBuilder<InputT> setPartialUpdateColumns(String... columnNames) {
+        checkNotNull(columnNames, "Column names cannot be null");
+        checkArgument(columnNames.length > 0, "Column names cannot be empty");
+        this.partialUpdateColumnNames = Arrays.copyOf(columnNames, columnNames.length);
+        return this;
+    }
+
     /** Build the FlussSink. */
     public FlussSink<InputT> build() {
         validateConfiguration();
 
         Configuration flussConfig = Configuration.fromMap(configOptions);
 
-        FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter<InputT>, InputT> writerBuilder;
-
         TablePath tablePath = new TablePath(database, tableName);
         flussConfig.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
 
-        TableInfo tableInfo;
-        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
-                Admin admin = connection.getAdmin()) {
-            try {
-                tableInfo = admin.getTableInfo(tablePath).get();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while getting table info", e);
-            } catch (ExecutionException e) {
-                throw new RuntimeException("Failed to get table info", e);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
-        }
+        TableInfo tableInfo = getTableInfo(flussConfig, tablePath);
+
         int numBucket = tableInfo.getNumBuckets();
         List<String> bucketKeys = tableInfo.getBucketKeys();
         List<String> partitionKeys = tableInfo.getPartitionKeys();
@@ -150,6 +156,27 @@ public class FlussSinkBuilder<InputT> {
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         boolean isUpsert = tableInfo.hasPrimaryKey();
+
+        // Resolve column names to indexes if specified
+        int[] targetColumnIndexes = null;
+        if (partialUpdateColumnNames != null) {
+            if (isUpsert) {
+                targetColumnIndexes =
+                        resolveColumnNamesToIndexes(
+                                Arrays.asList(partialUpdateColumnNames), tableRowType);
+                LOG.info(
+                        "Partial update enabled for columns: {} -> indexes: {}",
+                        partialUpdateColumnNames,
+                        Arrays.toString(targetColumnIndexes));
+            } else {
+                LOG.warn(
+                        "Partial update columns specified for append-only table '{}', ignoring configuration. "
+                                + "Partial updates are only supported for tables with primary keys.",
+                        tablePath);
+            }
+        }
+
+        FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter<InputT>, InputT> writerBuilder;
 
         if (isUpsert) {
             LOG.info("Initializing Fluss upsert sink writer ...");
@@ -181,6 +208,60 @@ public class FlussSinkBuilder<InputT> {
         }
 
         return new FlussSink<>(writerBuilder);
+    }
+
+    /** Get table information from Fluss cluster. */
+    private TableInfo getTableInfo(Configuration flussConfig, TablePath tablePath) {
+        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
+                Admin admin = connection.getAdmin()) {
+            try {
+                return admin.getTableInfo(tablePath).get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while getting table info", e);
+            } catch (ExecutionException e) {
+                throw new RuntimeException("Failed to get table info for table: " + tablePath, e);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to initialize Fluss admin connection: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Resolve column names to their corresponding indexes in the table schema.
+     *
+     * @param columnNames list of column names to resolve
+     * @param tableRowType the table's row type containing field information
+     * @return array of column indexes corresponding to the provided names
+     * @throws IllegalArgumentException if any column name is not found in the schema
+     */
+    private int[] resolveColumnNamesToIndexes(List<String> columnNames, RowType tableRowType) {
+        List<String> fieldNames = tableRowType.getFieldNames();
+
+        // Create name to index mapping for efficient lookup
+        Map<String, Integer> nameToIndexMap = new HashMap<>();
+        for (int i = 0; i < fieldNames.size(); i++) {
+            nameToIndexMap.put(fieldNames.get(i), i);
+        }
+
+        // Resolve each column name to its index
+        int[] indexes = new int[columnNames.size()];
+        for (int i = 0; i < columnNames.size(); i++) {
+            String columnName = columnNames.get(i);
+            Integer index = nameToIndexMap.get(columnName);
+
+            if (index == null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Column '%s' not found in table schema. Available columns: %s",
+                                columnName, fieldNames));
+            }
+
+            indexes[i] = index;
+        }
+
+        return indexes;
     }
 
     private void validateConfiguration() {

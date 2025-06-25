@@ -169,6 +169,7 @@ class FlussSinkBuilderTest {
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(databaseName)
                         .setTable(tableName)
+                        .setPartialUpdateColumns("address")
                         .setOption("key1", "value1")
                         .setOptions(new HashMap<>())
                         .setShuffleByBucketId(false);
@@ -183,5 +184,42 @@ class FlussSinkBuilderTest {
         Field field = FlussSinkBuilder.class.getDeclaredField(fieldName);
         field.setAccessible(true);
         return (T) field.get(object);
+    }
+
+    @Test
+    void testSetPartialUpdateColumnsVarargs() throws Exception {
+        // Test basic varargs functionality
+        builder.setPartialUpdateColumns("amount", "address");
+
+        String[] actualColumnNames = getFieldValue(builder, "partialUpdateColumnNames");
+        assertThat(actualColumnNames).containsExactly("amount", "address");
+    }
+
+    @Test
+    void testPartialUpdateColumnsDefensiveCopy() throws Exception {
+        // Test that external modifications don't affect internal state
+        String[] originalArray = {"amount", "address"};
+        builder.setPartialUpdateColumns(originalArray);
+
+        // Modify original array
+        originalArray[0] = "MODIFIED";
+
+        // Internal array should be unchanged
+        String[] internalArray = getFieldValue(builder, "partialUpdateColumnNames");
+        assertThat(internalArray[0]).isEqualTo("amount");
+        assertThat(internalArray).isNotSameAs(originalArray);
+    }
+
+    @Test
+    void testPartialUpdateColumnsValidation() {
+        // Test null validation
+        assertThatThrownBy(() -> builder.setPartialUpdateColumns((String[]) null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Column names cannot be null");
+
+        // Test empty validation
+        assertThatThrownBy(() -> builder.setPartialUpdateColumns())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Column names cannot be empty");
     }
 }
