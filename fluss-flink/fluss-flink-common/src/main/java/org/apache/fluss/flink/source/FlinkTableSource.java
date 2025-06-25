@@ -480,7 +480,8 @@ public class FlinkTableSource
             }
             singleRowFilter = lookupRow;
             return Result.of(acceptedFilters, remainingFilters);
-        } else if (isPartitioned()) {
+        } else if (isPartitioned()
+                && !RowLevelModificationType.UPDATE.equals(modificationScanType)) {
             // apply partition filter pushdown
             List<Predicate> converted = new ArrayList<>();
 
