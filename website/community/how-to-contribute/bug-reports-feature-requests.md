@@ -25,9 +25,14 @@ Considerations before opening an issue:
 
 When filing an issue, make sure to answer these five questions:
 
+**Environment:**
 1. What version of Fluss are you using?
 2. What operating system and processor architecture are you using?
+
+**Steps to reproduce:**
 3. What did you do?
+
+**Expected vs Actual behavior:**
 4. What did you expect to see?
 5. What did you see instead?
 
