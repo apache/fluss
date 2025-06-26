@@ -45,39 +45,19 @@ a [Distributed Cluster](docs/install-deploy/deploying-distributed-cluster.md):
 
 ### Download And Configure Fluss
 
-First, download binary file for $FLUSS_VERSION$:
+1. First, download Fluss binary file for $FLUSS_VERSION$:
 
 ```shell
 tar -xzf fluss-$FLUSS_VERSION$-bin.tgz
 cd fluss-$FLUSS_VERSION$/
 ```
 
-Next, copy the configuration options from 0.6 (`fluss-0.6/conf/server.yaml`) to the new configuration
-file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Add any new options introduced in version $FLUSS_VERSION$ as
+2. If we want to enable [Lakehouse Storage](docs/maintenance/tiered-storage/lakehouse-storage.md), we need to prepare the required JAR files for the datalake first. For more details,
+   see [Add other jars requeired by datalake](docs/maintenance/tiered-storage/lakehouse-storage.md#add-other-jars-required-by-datalake).
+
+3. Next, copy the configuration options from 0.6 (`fluss-0.6/conf/server.yaml`) to the new configuration
+file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Adding any new options introduced in version $FLUSS_VERSION$ as
 needed to experience the new features.
-
-For example, we introduced `bind.listeners` in 0.7, which can replace the option `coordinator.host`
-and `tablet-server.host` options from version 0.6 to support different access protocols. The old options in 0.6 is as follows:
-```yaml title="server.yaml"
-zookeeper.address: 192.168.10.99:2181
-zookeeper.path.root: /fluss
-
-tablet-server.host: 192.168.10.1
-tablet-server.id: 1
-remote.data.dir: /tmp/fluss-remote-data
-```
-
-The new options in $FLUSS_VERSION$ is as follows:
-```yaml title="server.yaml"
-zookeeper.address: 192.168.10.199:2181
-zookeeper.path.root: /fluss
-
-# As we have ensured compatibility, you can also use `tablet-server.host` here, but it is recommended to use `bind.listeners`
-bind.listeners: FLUSS://192.168.10.1:9123
-tablet-server.id: 1
-
-remote.data.dir: /tmp/fluss-remote-data
-```
 
 ### Upgrade the TabletServers one-by-one
 
@@ -99,7 +79,7 @@ To upgrade the `TabletServers`, follow these steps one-by-one for each `TabletSe
 
 After all `TabletServers` have been upgraded, you can proceed to upgrade the `CoordinatorServer` by following these steps:
 
-**Stop the CoordinatorServer**S
+**Stop the CoordinatorServer**
 
 ```shell
 ./fluss-0.6/bin/coordinator-server.sh stop
