@@ -59,7 +59,7 @@ This mechanism is based on SASL (Simple Authentication and Security Layer) authe
 
 Here is an example where port 9093 requires SASL/PLAIN authentication for the users "admin" and "fluss":
 ```yaml title="conf/server.yaml"
-# port 9092 use SASL authentication for clients
+# port 9093 use SASL authentication for clients
 bind.listeners: INTERNAL://localhost:9092, CLIENT://localhost:9093
 advertised.listeners: CLIENT://host:9093,
 security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
