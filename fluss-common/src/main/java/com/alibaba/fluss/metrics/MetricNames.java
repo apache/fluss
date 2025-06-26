@@ -106,6 +106,7 @@ public class MetricNames {
     public static final String ISR_EXPANDS_RATE = "isrExpandsPerSecond";
     public static final String ISR_SHRINKS_RATE = "isrShrinksPerSecond";
     public static final String FAILED_ISR_UPDATES_RATE = "failedIsrUpdatesPerSecond";
+    public static final String LAKE_TIERING_LAG = "tieringLag";
 
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";

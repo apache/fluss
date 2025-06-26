@@ -251,6 +251,19 @@ public final class Replica {
         bucketMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, () -> isUnderMinIsr() ? 1 : 0);
         bucketMetricGroup.gauge(MetricNames.AT_MIN_ISR, () -> isAtMinIsr() ? 1 : 0);
 
+        if (isDataLakeEnabled()) {
+            // we need to register lake tiering lag metric
+            bucketMetricGroup.gauge(
+                    MetricNames.LAKE_TIERING_LAG,
+                    () ->
+                            isLeader()
+                                    ? getLogHighWatermark()
+                                            - (getLakeLogEndOffset() < 0
+                                                    ? 0
+                                                    : getLakeLogEndOffset())
+                                    : 0);
+        }
+
         isrExpands = new SimpleCounter();
         bucketMetricGroup.meter(MetricNames.ISR_EXPANDS_RATE, new MeterView(isrExpands));
         isrShrinks = new SimpleCounter();
