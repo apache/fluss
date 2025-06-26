@@ -34,8 +34,9 @@ For a quick introduction to running Flink, refer to the [Quick Start](quickstart
 
 
 ## Feature Support
-Fluss only supports Apache Flink's Table API.
+Fluss supports Apache Flink's Table API and Flnk's DataStream API.
 
+For Flink's Table API, Fluss supports the following features:
 
 | Feature support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
@@ -54,6 +55,8 @@ Fluss only supports Apache Flink's Table API.
 | [SQL delete from](writes.md#delete-from)          | ✔️    | Only in batch mode.                    |
 | [SQL update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
 | [SQL lookup join](lookups.md)                     | ✔️    |                                        |
+
+For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
 
 ## Preparation when using Flink SQL Client
 - **Download Flink**
