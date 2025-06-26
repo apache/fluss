@@ -17,7 +17,7 @@
 ################################################################################
 
 name: Feature Request 🚀
-description: Add new feature, improvement, and more
+description: User-facing functionality or improvement you’d like to see added
 type: "feature"
 body:
   - type: markdown
