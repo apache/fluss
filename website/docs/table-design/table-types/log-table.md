@@ -35,7 +35,7 @@ CREATE TABLE log_table (
   item_id BIGINT,
   amount INT,
   address STRING,
-  `timestamp` DATE
+  dt DATE
 )
 WITH ('bucket.num' = '3');
 ```
@@ -76,10 +76,10 @@ During query execution, query engines like Flink analyzes the query to identify 
 For example the following streaming query:
 
 ```sql
-SELECT order_id, item_id FROM log_table WHERE timestamp > '2023-01-01';
+SELECT order_id, item_id FROM log_table WHERE dt > '2023-01-01';
 ```
 
-In this query, only the `order_id`, `item_id`, and `timestamp` columns are accessed. Other columns (e.g., `address`, `amount`) are pruned and not read from storage.
+In this query, only the `order_id`, `item_id`, and `dt` columns are accessed. Other columns (e.g., `address`, `amount`) are pruned and not read from storage.
 
 
 ## Log Compression
