@@ -319,7 +319,7 @@ Write data using the `developer` user:
 -- switch to developer user context
 USE CATALOG developer_catalog;
 
--- write data using developer credientials
+-- write data using developer credentials
 INSERT INTO fluss_order VALUES (1, 1.0);
 ```
 The job should succeed as shown in the Flink UI.
@@ -330,7 +330,7 @@ Attempting to write data using the `consumer` user will fail in the Flink UI:
 -- switch to consumer user context
 USE CATALOG consumer_catalog;
 
--- write data using consumer credientials
+-- write data using consumer credentials
 INSERT INTO fluss_order VALUES (1, 1.0);
 ```
 **Output:**
@@ -349,7 +349,7 @@ SET 'sql-client.execution.result-mode' = 'tableau';
     
 -- switch to consumer user context
 USE CATALOG consumer_catalog;
--- read data using consumer credientials
+-- read data using consumer credentials
 SELECT * FROM `consumer_catalog`.`fluss`.`fluss_order` LIMIT 10;
 ```
 **Output:**
@@ -371,7 +371,7 @@ SET 'sql-client.execution.result-mode' = 'tableau';
 -- switch to developer user context
 USE CATALOG developer_catalog;
 
--- read data using developer credientials
+-- read data using developer credentials
 SELECT * FROM `developer_catalog`.`fluss`.`fluss_order` LIMIT 10;
 ```
 
@@ -556,7 +556,7 @@ The `marketing` user can only see the `marketing_db` database
 ```sql title="Flink SQL"
 -- switch to marketing user context
 use catalog marketing_catalog;
--- show databases using marketing user credientials
+-- show databases using marketing user credentials
 show databases;
 ```
 **Output:**
@@ -573,7 +573,7 @@ The `finance` user can only see the `finance_db` database:
 ```sql title="Flink SQL"
 -- switch to finance user context
 use catalog finance_catalog;
--- show databases using finance user credientials
+-- show databases using finance user credentials
 show databases;
 ```
 
@@ -592,7 +592,7 @@ The `marketing` user can operate on their own database:
 ```sql title="Flink SQL"
 -- switch to marketing user context
 use catalog marketing_catalog;
--- create table using marketing user credientials
+-- create table using marketing user credentials
 CREATE TABLE `marketing_db`.`order` (
      `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
@@ -610,7 +610,7 @@ The `finance` user cannot access the `marketing` database:
 ```sql title="Flink SQL"
 -- switch to finance user context
 use catalog finance_catalog;
--- create table using finance user credientials
+-- create table using finance user credentials
 CREATE TABLE `marketing_db`.`order` (
      `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
