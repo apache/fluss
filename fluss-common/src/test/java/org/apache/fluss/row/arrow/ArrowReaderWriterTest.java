@@ -23,6 +23,8 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -48,6 +50,7 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +58,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ArrowReader} and {@link ArrowWriter}. */
 class ArrowReaderWriterTest {
+
+    private static final DataType NESTED_DATA_TYPE =
+            DataTypes.ROW(
+                    DataTypes.FIELD("ri", DataTypes.INT()),
+                    DataTypes.FIELD("rs", DataTypes.STRING()),
+                    DataTypes.FIELD("rb", DataTypes.BIGINT()));
 
     private static final List<DataType> ALL_TYPES =
             Arrays.asList(
@@ -79,7 +88,13 @@ class ArrowReaderWriterTest {
                     DataTypes.TIMESTAMP_LTZ(0),
                     DataTypes.TIMESTAMP_LTZ(3),
                     DataTypes.TIMESTAMP_LTZ(6),
-                    DataTypes.TIMESTAMP_LTZ(9));
+                    DataTypes.TIMESTAMP_LTZ(9),
+                    DataTypes.ARRAY(DataTypes.INT()),
+                    DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                    DataTypes.ROW(
+                            DataTypes.FIELD("i", DataTypes.INT()),
+                            DataTypes.FIELD("r", NESTED_DATA_TYPE),
+                            DataTypes.FIELD("s", DataTypes.STRING())));
 
     private static final List<InternalRow> TEST_DATA =
             Arrays.asList(
@@ -105,7 +120,19 @@ class ArrowReaderWriterTest {
                             TimestampLtz.fromEpochMillis(3600000),
                             TimestampLtz.fromEpochMillis(3600123),
                             TimestampLtz.fromEpochMillis(3600123, 456000),
-                            TimestampLtz.fromEpochMillis(3600123, 456789)),
+                            TimestampLtz.fromEpochMillis(3600123, 456789),
+                            GenericArray.of(1, 2, 3),
+                            GenericMap.of(
+                                    6,
+                                    BinaryString.fromString("6"),
+                                    5,
+                                    BinaryString.fromString("5"),
+                                    666,
+                                    BinaryString.fromString("666")),
+                            GenericRow.of(
+                                    12,
+                                    GenericRow.of(34, fromString("56"), 78L),
+                                    fromString("910"))),
                     GenericRow.of(
                             false,
                             (byte) 1,
@@ -128,7 +155,19 @@ class ArrowReaderWriterTest {
                             null,
                             TimestampLtz.fromEpochMillis(3600120),
                             TimestampLtz.fromEpochMillis(3600120, 120000),
-                            TimestampLtz.fromEpochMillis(3600120, 123450)));
+                            TimestampLtz.fromEpochMillis(3600120, 123450),
+                            GenericArray.of(1, 2, 3),
+                            GenericMap.of(
+                                    6,
+                                    BinaryString.fromString("6"),
+                                    5,
+                                    BinaryString.fromString("5"),
+                                    666,
+                                    BinaryString.fromString("666")),
+                            GenericRow.of(
+                                    12,
+                                    GenericRow.of(34, fromString("56"), 78L),
+                                    fromString("910"))));
 
     @Test
     void testReaderWriter() throws IOException {
@@ -151,7 +190,8 @@ class ArrowReaderWriterTest {
             int size =
                     writer.serializeToOutputView(
                             pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
-            MemorySegment segment = MemorySegment.allocateHeapMemory(writer.estimatedSizeInBytes());
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
 
             assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
@@ -160,8 +200,8 @@ class ArrowReaderWriterTest {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
             int rowCount = reader.getRowCount();
-            ColumnarRow row = reader.read(0);
             for (int i = 0; i < rowCount; i++) {
+                ColumnarRow row = reader.read(i);
                 row.setRowId(i);
                 assertThatRow(row).withSchema(rowType).isEqualTo(TEST_DATA.get(i));
 

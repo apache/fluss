@@ -18,12 +18,12 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.Float4Vector;
 
 /** {@link ArrowFieldWriter} for Float. */
 @Internal
-public class ArrowFloatWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowFloatWriter extends ArrowFieldWriter<DataGetters> {
     public static ArrowFloatWriter forField(Float4Vector float4Vector) {
         return new ArrowFloatWriter(float4Vector);
     }
@@ -33,7 +33,7 @@ public class ArrowFloatWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         Float4Vector vector = (Float4Vector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -44,11 +44,11 @@ public class ArrowFloatWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private float readFloat(InternalRow row, int ordinal) {
+    private float readFloat(DataGetters row, int ordinal) {
         return row.getFloat(ordinal);
     }
 }

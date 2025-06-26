@@ -530,16 +530,16 @@ public class DataTestUtils {
             RowType rowType, LogRecords records, List<List<Object[]>> expected) {
         List<List<Tuple2<ChangeType, Object[]>>> appendOnlyExpectedValue = new ArrayList<>();
         for (List<Object[]> expectedRecord : expected) {
-            List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
+            List<Tuple2<ChangeType, Object[]>> expectedFieldAndChangeType =
                     expectedRecord.stream()
                             .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                             .collect(Collectors.toList());
-            appendOnlyExpectedValue.add(expectedFieldAndRowKind);
+            appendOnlyExpectedValue.add(expectedFieldAndChangeType);
         }
-        assertMemoryRecordsEqualsWithRowKind(rowType, records, appendOnlyExpectedValue);
+        assertMemoryRecordsEqualsWithChangeType(rowType, records, appendOnlyExpectedValue);
     }
 
-    public static void assertMemoryRecordsEqualsWithRowKind(
+    public static void assertMemoryRecordsEqualsWithChangeType(
             RowType rowType,
             LogRecords records,
             List<List<Tuple2<ChangeType, Object[]>>> expected) {
@@ -550,10 +550,10 @@ public class DataTestUtils {
             try (LogRecordReadContext readContext =
                             createArrowReadContext(rowType, DEFAULT_SCHEMA_ID);
                     CloseableIterator<LogRecord> logIterator = batch.records(readContext)) {
-                for (Tuple2<ChangeType, Object[]> expectedFieldAndRowKind : expectedRecord) {
+                for (Tuple2<ChangeType, Object[]> expectedFieldAndChangeType : expectedRecord) {
                     assertThat(logIterator.hasNext()).isTrue();
-                    assertLogRecordsEqualsWithRowKind(
-                            rowType, logIterator.next(), expectedFieldAndRowKind);
+                    assertLogRecordsEqualsWithChangeType(
+                            rowType, logIterator.next(), expectedFieldAndChangeType);
                 }
                 assertThat(logIterator.hasNext()).isFalse();
             }
@@ -561,16 +561,16 @@ public class DataTestUtils {
         assertThat(iterator.hasNext()).isFalse();
     }
 
-    public static void assertLogRecordBatchEqualsWithRowKind(
+    public static void assertLogRecordBatchEqualsWithChangeType(
             RowType rowType,
             LogRecordBatch logRecordBatch,
             List<Tuple2<ChangeType, Object[]>> expected) {
         try (LogRecordReadContext readContext = createArrowReadContext(rowType, DEFAULT_SCHEMA_ID);
                 CloseableIterator<LogRecord> logIterator = logRecordBatch.records(readContext)) {
-            for (Tuple2<ChangeType, Object[]> expectedFieldAndRowKind : expected) {
+            for (Tuple2<ChangeType, Object[]> expectedFieldAndChangeType : expected) {
                 assertThat(logIterator.hasNext()).isTrue();
-                assertLogRecordsEqualsWithRowKind(
-                        rowType, logIterator.next(), expectedFieldAndRowKind);
+                assertLogRecordsEqualsWithChangeType(
+                        rowType, logIterator.next(), expectedFieldAndChangeType);
             }
             assertThat(logIterator.hasNext()).isFalse();
         }
@@ -599,30 +599,30 @@ public class DataTestUtils {
         assertThatLogRecordBatch(actual).withSchema(rowType).isEqualTo(expected);
     }
 
-    private static void assertLogRecordsEqualsWithRowKind(
+    private static void assertLogRecordsEqualsWithChangeType(
             RowType rowType,
             LogRecord logRecord,
-            Tuple2<ChangeType, Object[]> expectedFieldAndRowKind) {
+            Tuple2<ChangeType, Object[]> expectedFieldAndChangeType) {
         DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
         InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
             fieldGetter[i] = InternalRow.createFieldGetter(dataTypes[i], i);
         }
-        assertThat(logRecord.getChangeType()).isEqualTo(expectedFieldAndRowKind.f0);
+        assertThat(logRecord.getChangeType()).isEqualTo(expectedFieldAndChangeType.f0);
         assertRowValueEquals(
-                fieldGetter, dataTypes, logRecord.getRow(), expectedFieldAndRowKind.f1);
+                fieldGetter, dataTypes, logRecord.getRow(), expectedFieldAndChangeType.f1);
     }
 
     public static void assertLogRecordsEquals(
             RowType rowType, LogRecords logRecords, List<Object[]> expectedValue) {
-        List<Tuple2<ChangeType, Object[]>> expectedValueWithRowKind =
+        List<Tuple2<ChangeType, Object[]>> expectedValueWithChangeType =
                 expectedValue.stream()
                         .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                         .collect(Collectors.toList());
-        assertLogRecordsEqualsWithRowKind(rowType, logRecords, expectedValueWithRowKind);
+        assertLogRecordsEqualsWithChangeType(rowType, logRecords, expectedValueWithChangeType);
     }
 
-    public static void assertLogRecordsEqualsWithRowKind(
+    public static void assertLogRecordsEqualsWithChangeType(
             RowType rowType,
             LogRecords logRecords,
             List<Tuple2<ChangeType, Object[]>> expectedValue) {

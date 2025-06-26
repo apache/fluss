@@ -45,11 +45,17 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
     /** The list of memory segments that have been fully written and are immutable now. */
     private List<MemorySegmentBytesView> finishedPages;
 
-    /** The current memory segment to write to. */
-    private MemorySegment currentSegment;
+    /** the current memory segment to write to. */
+    protected MemorySegment currentSegment;
 
     /** the offset in the current segment. */
-    private int positionInSegment;
+    protected int positionInSegment;
+
+    /** Flag indicating whether throw BufferExhaustedException or wait for available segment. */
+    protected boolean waitingSegment;
+
+    /** the reusable array for UTF encodings. */
+    protected byte[] utfBuffer;
 
     protected AbstractPagedOutputView(MemorySegment initialSegment, int pageSize) {
         if (initialSegment == null) {
@@ -299,6 +305,62 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         } else {
             writeLong(Double.doubleToLongBits(v));
         }
+    }
+
+    @Override
+    public void write(int b) throws IOException {
+        writeByte(b);
+    }
+
+    @Override
+    public void writeChar(int v) throws IOException {
+        if (positionInSegment < pageSize - 1) {
+            currentSegment.putChar(positionInSegment, (char) v);
+            positionInSegment += 2;
+        } else if (positionInSegment == pageSize) {
+            advance();
+            writeChar(v);
+        } else {
+            writeByte(v);
+            writeByte(v >> 8);
+        }
+    }
+
+    @Override
+    public void writeBytes(String s) throws IOException {
+        if (s == null) {
+            throw new NullPointerException();
+        }
+        for (int i = 0; i < s.length(); i++) {
+            writeByte(s.charAt(i));
+        }
+    }
+
+    @Override
+    public void writeChars(String s) throws IOException {
+        if (s == null) {
+            throw new NullPointerException();
+        }
+        for (int i = 0; i < s.length(); i++) {
+            writeChar(s.charAt(i));
+        }
+    }
+
+    @Override
+    public void writeUTF(String str) throws IOException {
+        if (str == null) {
+            throw new NullPointerException();
+        }
+
+        byte[] bytes = str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int length = bytes.length;
+
+        if (length > 65535) {
+            throw new IOException("String too long for UTF encoding: " + length);
+        }
+
+        writeShort(length);
+        write(bytes);
     }
 
     @Override

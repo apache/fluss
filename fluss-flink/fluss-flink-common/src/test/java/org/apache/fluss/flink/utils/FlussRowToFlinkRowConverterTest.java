@@ -25,6 +25,8 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.DateTimeUtils;
 
+import org.apache.flink.table.data.ArrayData;
+import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,8 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
@@ -90,7 +94,54 @@ class FlussRowToFlinkRowConverterTest {
 
             assertThat(flinkRow.getTimestamp(17, 1).toString())
                     .isEqualTo("2023-10-25T12:01:13.182");
-            assertThat(flinkRow.isNullAt(18)).isTrue();
+            assertThat(flinkRow.getTimestamp(18, 5).toString())
+                    .isEqualTo("2023-10-25T12:01:13.182");
+
+            assertThat(flinkRow.getArray(19).size()).isEqualTo(3);
+            assertThat(
+                            convertToJavaArray(
+                                    flinkRow.getArray(19),
+                                    new org.apache.flink.table.types.logical.IntType()))
+                    .isEqualTo(new Object[] {1, 2, 3});
+
+            Map<Object, Object> javaMap =
+                    convertToJavaMap(
+                            flinkRow.getMap(20),
+                            new org.apache.flink.table.types.logical.IntType(),
+                            new org.apache.flink.table.types.logical.VarCharType());
+            assertThat(javaMap.get(0)).isEqualTo(null);
+            assertThat(javaMap.get(1).toString()).isEqualTo("1");
+            assertThat(javaMap.get(2).toString()).isEqualTo("2");
+
+            assertThat(flinkRow.getRow(21, 3).getInt(0)).isEqualTo(123);
+            assertThat(flinkRow.getRow(21, 3).getRow(1, 1).getInt(0)).isEqualTo(20);
+            assertThat(flinkRow.getRow(21, 3).getString(2).toString()).isEqualTo("Test");
         }
+    }
+
+    private static Object[] convertToJavaArray(
+            ArrayData array, org.apache.flink.table.types.logical.LogicalType dataType) {
+        Object[] javaArray = new Object[array.size()];
+        for (int i = 0; i < array.size(); i++) {
+            ArrayData.ElementGetter keyGetter = ArrayData.createElementGetter(dataType);
+            Object value = keyGetter.getElementOrNull(array, i);
+            javaArray[i] = value;
+        }
+        return javaArray;
+    }
+
+    private static Map<Object, Object> convertToJavaMap(
+            MapData map,
+            org.apache.flink.table.types.logical.LogicalType keyType,
+            org.apache.flink.table.types.logical.LogicalType valueType) {
+        Map<Object, Object> javaMap = new HashMap<>();
+        for (int i = 0; i < map.size(); i++) {
+            ArrayData.ElementGetter keyGetter = ArrayData.createElementGetter(keyType);
+            ArrayData.ElementGetter valueGetter = ArrayData.createElementGetter(valueType);
+            Object key = keyGetter.getElementOrNull(map.keyArray(), i);
+            Object value = valueGetter.getElementOrNull(map.valueArray(), i);
+            javaMap.put(key, value);
+        }
+        return javaMap;
     }
 }

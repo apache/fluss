@@ -75,7 +75,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
-import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEqualsWithRowKind;
+import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEqualsWithChangeType;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test utils for rpc message. */
@@ -390,7 +390,7 @@ public class RpcMessageTestUtils {
             long bucketId,
             Long highWatermark,
             List<Object[]> expectedRecords) {
-        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
+        List<Tuple2<ChangeType, Object[]>> expectedFieldAndChangeType =
                 expectedRecords.stream()
                         .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                         .collect(Collectors.toList());
@@ -400,24 +400,24 @@ public class RpcMessageTestUtils {
                 tableId,
                 bucketId,
                 highWatermark,
-                expectedFieldAndRowKind,
+                expectedFieldAndChangeType,
                 null,
                 null);
     }
 
-    public static void assertFetchLogResponseWithRowKind(
+    public static void assertFetchLogResponseWithChangeType(
             FetchLogResponse response,
             long tableId,
             long bucketId,
             Long highWatermark,
-            List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind) {
+            List<Tuple2<ChangeType, Object[]>> expectedFieldAndChangeType) {
         assertFetchLogResponse(
                 response,
                 DATA1_ROW_TYPE,
                 tableId,
                 bucketId,
                 highWatermark,
-                expectedFieldAndRowKind,
+                expectedFieldAndChangeType,
                 null,
                 null);
     }
@@ -464,21 +464,21 @@ public class RpcMessageTestUtils {
             assertThat(protoFetchedBucket.getHighWatermark()).isEqualTo(highWatermark);
             MemoryLogRecords resultRecords =
                     MemoryLogRecords.pointToBytes(protoFetchedBucket.getRecords());
-            assertMemoryRecordsEqualsWithRowKind(
+            assertMemoryRecordsEqualsWithChangeType(
                     rowType, resultRecords, Collections.singletonList(expectedRecords));
         }
     }
 
     public static void assertLimitScanResponse(
             LimitScanResponse limitScanResponse, RowType rowType, List<Object[]> expectedRecords) {
-        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
+        List<Tuple2<ChangeType, Object[]>> expectedFieldAndChangeType =
                 expectedRecords.stream()
                         .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                         .collect(Collectors.toList());
         MemoryLogRecords resultRecords =
                 MemoryLogRecords.pointToBytes(limitScanResponse.getRecords());
-        assertMemoryRecordsEqualsWithRowKind(
-                rowType, resultRecords, Collections.singletonList(expectedFieldAndRowKind));
+        assertMemoryRecordsEqualsWithChangeType(
+                rowType, resultRecords, Collections.singletonList(expectedFieldAndChangeType));
     }
 
     public static void assertLimitScanResponse(

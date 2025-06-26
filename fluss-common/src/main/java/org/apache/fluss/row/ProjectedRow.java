@@ -134,6 +134,21 @@ public class ProjectedRow implements InternalRow {
     }
 
     @Override
+    public InternalArray getArray(int pos) {
+        return null;
+    }
+
+    @Override
+    public InternalMap getMap(int pos) {
+        return null;
+    }
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return null;
+    }
+
+    @Override
     public boolean equals(Object o) {
         throw new UnsupportedOperationException("Projected row data cannot be compared");
     }

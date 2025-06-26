@@ -43,7 +43,8 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
  * <p>Note: fluss-datalake-tiering also contains the same class, we need to keep them in sync if we
  * modify this class.
  */
-public class FlussRowToFlinkRowConverter {
+public class FlussRowToFlinkRowConverter implements Serializable {
+
     private final FlussDeserializationConverter[] toFlinkFieldConverters;
     private final InternalRow.FieldGetter[] flussFieldGetters;
 
@@ -93,24 +94,7 @@ public class FlussRowToFlinkRowConverter {
         };
     }
 
-    /**
-     * Runtime converter to convert field in Fluss's {@link InternalRow} to Flink's {@link RowData}
-     * type object.
-     */
-    @FunctionalInterface
-    public interface FlussDeserializationConverter extends Serializable {
-
-        /**
-         * Convert a Fluss field object of {@link InternalRow} to the Flink's internal data
-         * structure object.
-         *
-         * @param flussField A single field of a {@link InternalRow}
-         */
-        Object deserialize(Object flussField);
-    }
-
-    // TODO: use flink row type
-    private FlussDeserializationConverter createInternalConverter(DataType flussDataType) {
+    public static FlussDeserializationConverter createInternalConverter(DataType flussDataType) {
         switch (flussDataType.getTypeRoot()) {
             case BOOLEAN:
             case TINYINT:
@@ -147,6 +131,12 @@ public class FlussRowToFlinkRowConverter {
                             timestampLtz.getEpochMillisecond(),
                             timestampLtz.getNanoOfMillisecond());
                 };
+            case ARRAY:
+                return (flussField) -> FlinkArrayConverter.deserialize(flussDataType, flussField);
+            case MAP:
+                return (flussField) -> FlinkMapConverter.deserialize(flussDataType, flussField);
+            case ROW:
+                return (flussField) -> FlinkRowConverter.deserialize(flussDataType, flussField);
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);
         }

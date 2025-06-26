@@ -53,10 +53,10 @@ public interface OutputView {
     void writeByte(int v) throws IOException;
 
     /**
-     * Writes two bytes to the output stream to represent the value of the argument. The byte values
-     * to be written, in the little-endian order. The bytes written by this method may be read by
-     * the {@link InputView#readShort()}, which will then return a <code>short</code> equal to
-     * <code>(short)v</code>.
+     * Writes two bytes to the output stream to represent the value of the argument in little-endian
+     * byte order. The bytes written by this method may be read by the {@link
+     * InputView#readShort()}, which will then return a <code>short</code> equal to <code>(short)v
+     * </code>.
      *
      * @param v the <code>short</code> value to be written.
      * @throws IOException if an I/O error occurs.
@@ -64,11 +64,9 @@ public interface OutputView {
     void writeShort(int v) throws IOException;
 
     /**
-     * Writes an <code>int</code> value, which is consisted of four bytes, to the output stream. The
-     * byte values to be written, in the little-endian order. The bytes written by this method may
-     * be read by the {@link InputView#readInt()} , which will then return an <code>int
-     * </code> equal to <code>
-     * v</code>.
+     * Writes an <code>int</code> value, which is consisted of four bytes, to the output stream in
+     * little-endian byte order. The bytes written by this method may be read by the {@link
+     * InputView#readInt()}, which will then return an <code>int</code> equal to <code>v</code>.
      *
      * @param v the <code>int</code> value to be written.
      * @throws IOException if an I/O error occurs.
@@ -76,11 +74,9 @@ public interface OutputView {
     void writeInt(int v) throws IOException;
 
     /**
-     * Writes a <code>long</code> value, which is consisted of eight bytes, to the output stream.
-     * The byte values to be written, in the little-endian order. The bytes written by this method
-     * may be read by the {@link InputView#readLong()}, which will then return a <code>
-     * long</code> equal to <code>
-     * v</code>.
+     * Writes a <code>long</code> value, which is consisted of eight bytes, to the output stream in
+     * little-endian byte order. The bytes written by this method may be read by the {@link
+     * InputView#readLong()}, which will then return a <code>long</code> equal to <code>v</code>.
      *
      * @param v the <code>long</code> value to be written.
      * @throws IOException if an I/O error occurs.
@@ -93,7 +89,7 @@ public interface OutputView {
      * exactly the manner of the <code>Float.floatToIntBits</code> method and then writes the <code>
      * int</code> value in exactly the manner of the <code>writeInt</code> method. The bytes written
      * by this method may be read by the {@link InputView#readFloat()}, which will then return a
-     * <code>float</code> equal to <code>v</code> .
+     * <code>float</code> equal to <code>v</code>.
      *
      * @param v the <code>float</code> value to be written.
      * @throws IOException if an I/O error occurs.
@@ -106,8 +102,7 @@ public interface OutputView {
      * exactly the manner of the <code>Double.doubleToLongBits</code> method and then writes the
      * <code>long</code> value in exactly the manner of the <code>writeLong</code> method. The bytes
      * written by this method may be read by the {@link InputView#readDouble()}, which will then
-     * return a <code>double</code> equal to <code>v
-     * </code>.
+     * return a <code>double</code> equal to <code>v</code>.
      *
      * @param v the <code>double</code> value to be written.
      * @throws IOException if an I/O error occurs.
@@ -140,4 +135,55 @@ public interface OutputView {
      * @throws IOException if an I/O error occurs.
      */
     void write(byte[] b, int offset, int len) throws IOException;
+
+    /**
+     * Writes a single byte to the output stream. The byte to be written is the eight low-order bits
+     * of the argument <code>b</code>. The 24 high-order bits of <code>b</code> are ignored.
+     *
+     * @param b the byte to be written.
+     * @throws IOException if an I/O error occurs.
+     */
+    void write(int b) throws IOException;
+
+    /**
+     * Writes a <code>char</code> value, which is consisted of two bytes, to the output stream in
+     * little-endian byte order. The bytes written by this method may be read by the {@link
+     * InputView#readChar()}, which will then return a <code>char</code> equal to <code>v</code>.
+     *
+     * @param v the <code>char</code> value to be written.
+     * @throws IOException if an I/O error occurs.
+     */
+    void writeChar(int v) throws IOException;
+
+    /**
+     * Writes a string to the output stream. For every character in the string <code>s</code>, taken
+     * in order, one byte is written to the output stream. If <code>s</code> is <code>null</code>, a
+     * <code>NullPointerException</code> is thrown.
+     *
+     * @param s the string of bytes to be written.
+     * @throws IOException if an I/O error occurs.
+     */
+    void writeBytes(String s) throws IOException;
+
+    /**
+     * Writes every character in the string <code>s</code>, taken in order, to the output stream,
+     * two bytes per character. If <code>s</code> is <code>null</code>, a <code>NullPointerException
+     * </code> is thrown. If <code>s.length</code> is zero, then no characters are written.
+     * Otherwise, the character <code>s[0]</code> is written first, then <code>s[1]</code>, and so
+     * on; the last character written is <code>s[s.length-1]</code>.
+     *
+     * @param s the string value to be written.
+     * @throws IOException if an I/O error occurs.
+     */
+    void writeChars(String s) throws IOException;
+
+    /**
+     * Writes a string to the output stream using modified UTF-8 encoding in little endian byte
+     * order. This method is suitable for writing strings that will be read by the {@link
+     * InputView#readUTF()}.
+     *
+     * @param str a string to be written.
+     * @exception IOException if an I/O error occurs.
+     */
+    void writeUTF(String str) throws IOException;
 }

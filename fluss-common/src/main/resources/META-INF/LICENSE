@@ -1,0 +1,400 @@
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+
+------------------------------------------------------------------------------------
+This product bundles various third-party components under the same license.
+This section summarizes those components.
+
+
+Apache License 2.0
+--------------------------------------
+
+Apache Arrow-java
+./fluss-common/src/main/java/org/apache/fluss/compression/ArrowCompressionFactory.java
+./fluss-common/src/main/java/org/apache/fluss/compression/Lz4ArrowCompressionCodec.java
+./fluss-common/src/main/java/org/apache/fluss/compression/ZstdArrowCompressionCodec.java
+
+Apache Flink
+./fluss-client/src/main/java/org/apache/fluss/client/token/DefaultSecurityTokenManager.java
+./fluss-common/src/main/java/org/apache/fluss/classloading/ComponentClassLoader.java
+./fluss-common/src/main/java/org/apache/fluss/config/ConfigOption.java
+./fluss-common/src/main/java/org/apache/fluss/config/Configuration.java
+./fluss-common/src/main/java/org/apache/fluss/config/ConfigurationUtils.java
+./fluss-common/src/main/java/org/apache/fluss/config/GlobalConfiguration.java
+./fluss-common/src/main/java/org/apache/fluss/config/MemorySize.java
+./fluss-common/src/main/java/org/apache/fluss/fs/FSDataOutputStream.java
+./fluss-common/src/main/java/org/apache/fluss/fs/FileSystem.java
+./fluss-common/src/main/java/org/apache/fluss/fs/FileSystemSafetyNet.java
+./fluss-common/src/main/java/org/apache/fluss/fs/FsPath.java
+./fluss-common/src/main/java/org/apache/fluss/fs/SafetyNetCloseableRegistry.java
+./fluss-common/src/main/java/org/apache/fluss/fs/SafetyNetWrapperFileSystem.java
+./fluss-common/src/main/java/org/apache/fluss/fs/local/LocalFileSystem.java
+./fluss-common/src/main/java/org/apache/fluss/memory/AbstractPagedOutputView.java
+./fluss-common/src/main/java/org/apache/fluss/memory/MemorySegment.java
+./fluss-common/src/main/java/org/apache/fluss/memory/MemoryUtils.java
+./fluss-common/src/main/java/org/apache/fluss/metrics/MeterView.java
+./fluss-common/src/main/java/org/apache/fluss/metrics/groups/AbstractMetricGroup.java
+./fluss-common/src/main/java/org/apache/fluss/metrics/groups/MetricGroup.java
+./fluss-common/src/main/java/org/apache/fluss/metrics/registry/MetricRegistryImpl.java
+./fluss-common/src/main/java/org/apache/fluss/plugin/DefaultPluginManager.java
+./fluss-common/src/main/java/org/apache/fluss/plugin/DirectoryBasedPluginFinder.java
+./fluss-common/src/main/java/org/apache/fluss/plugin/PluginLoader.java
+./fluss-common/src/main/java/org/apache/fluss/row/BinarySegmentUtils.java
+./fluss-common/src/main/java/org/apache/fluss/row/BinaryString.java
+./fluss-common/src/main/java/org/apache/fluss/row/Decimal.java
+./fluss-common/src/main/java/org/apache/fluss/types/DataType.java
+./fluss-common/src/main/java/org/apache/fluss/utils/AbstractAutoCloseableRegistry.java
+./fluss-common/src/main/java/org/apache/fluss/utils/DateTimeUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/DecimalUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/ExceptionUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/ExecutorUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/FatalExitExceptionHandler.java
+./fluss-common/src/main/java/org/apache/fluss/utils/FileUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/IOUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/InstantiationUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/MurmurHashUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/NetUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/OperatingSystem.java
+./fluss-common/src/main/java/org/apache/fluss/utils/SerializedValue.java
+./fluss-common/src/main/java/org/apache/fluss/utils/TimeUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/UnsafeUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/concurrent/ExecutorThreadFactory.java
+./fluss-common/src/main/java/org/apache/fluss/utils/concurrent/FutureUtils.java
+./fluss-common/src/main/java/org/apache/fluss/utils/types/Either.java
+./fluss-common/src/main/java/org/apache/fluss/utils/types/Tuple.java
+./fluss-common/src/main/java/org/apache/fluss/utils/types/Tuple2.java
+./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopDataInputStream.java
+./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopDataOutputStream.java
+./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopFileSystem.java
+./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/HadoopFsPlugin.java
+./fluss-filesystems/fluss-fs-hadoop/src/main/java/org/apache/fluss/fs/hdfs/utils/HadoopUtils.java
+./fluss-filesystems/fluss-fs-oss/src/main/java/org/apache/fluss/fs/oss/OSSFileSystem.java
+./fluss-filesystems/fluss-fs-oss/src/main/java/org/apache/fluss/fs/oss/OSSFileSystemPlugin.java
+./fluss-filesystems/fluss-fs-s3/src/main/java/org/apache/fluss/fs/s3/token/S3DelegationTokenReceiver.java
+./fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/utils/CatalogPropertiesUtils.java
+./fluss-metrics/fluss-metrics-jmx/src/main/java/org/apache/fluss/metrics/jmx/JMXService.java
+./fluss-metrics/fluss-metrics-prometheus/src/main/java/org/apache/fluss/metrics/prometheus/PrometheusReporter.java
+./fluss-metrics/fluss-metrics-prometheus/src/main/java/org/apache/fluss/metrics/prometheus/PrometheusReporterPlugin.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rocksdb/RocksDBKvBuilder.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rocksdb/RocksDBResourceContainer.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/rocksdb/RocksDBWriteBatchWrapper.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/AsyncSnapshotCallable.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/CompletedSnapshot.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/CompletedSnapshotHandle.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/CompletedSnapshotStore.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/PeriodicSnapshotManager.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/RocksIncrementalSnapshot.java
+./fluss-server/src/main/java/org/apache/fluss/server/kv/snapshot/SharedKvFileRegistry.java
+./fluss-server/src/main/java/org/apache/fluss/server/metrics/ServerMetricUtils.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/ResourceGuard.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/ShutdownHookUtil.java
+./fluss-test-utils/src/main/java/org/apache/fluss/testutils/common/TestLoggerExtension.java
+
+Apache Kafka
+./fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/LogFetchBuffer.java
+./fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/LogFetchCollector.java
+./fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/LogFetcher.java
+./fluss-client/src/main/java/org/apache/fluss/client/write/IdempotenceManager.java
+./fluss-client/src/main/java/org/apache/fluss/client/write/RecordAccumulator.java
+./fluss-client/src/main/java/org/apache/fluss/client/write/Sender.java
+./fluss-common/src/main/java/org/apache/fluss/compression/FlussLZ4BlockInputStream.java
+./fluss-common/src/main/java/org/apache/fluss/compression/FlussLZ4BlockOutputStream.java
+./fluss-common/src/main/java/org/apache/fluss/record/DefaultLogRecordBatch.java
+./fluss-common/src/main/java/org/apache/fluss/record/FileLogInputStream.java
+./fluss-common/src/main/java/org/apache/fluss/record/FileLogRecords.java
+./fluss-common/src/main/java/org/apache/fluss/record/IndexedLogRecord.java
+./fluss-common/src/main/java/org/apache/fluss/record/MemoryLogRecords.java
+./fluss-common/src/main/java/org/apache/fluss/utils/concurrent/FlussScheduler.java
+./fluss-common/src/main/java/org/apache/fluss/utils/crc/Checksums.java
+./fluss-common/src/main/java/org/apache/fluss/utils/crc/Crc32C.java
+./fluss-common/src/main/java/org/apache/fluss/utils/crc/Java.java
+./fluss-common/src/main/java/org/apache/fluss/utils/crc/PureJavaCrc32C.java
+./fluss-common/src/main/java/org/apache/fluss/utils/log/ByteBufferUnmapper.java
+./fluss-common/src/main/java/org/apache/fluss/utils/log/FairBucketStatusMap.java
+./fluss-common/src/main/java/org/apache/fluss/utils/ExponentialBackoff.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/AuthenticateCallbackHandler.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/DefaultLogin.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/JaasConfig.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/JaasContext.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/Login.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/LoginManager.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/SaslClientCallbackHandler.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/jaas/SaslServerFactory.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/plain/PlainAuthenticateCallback.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/plain/PlainLoginModule.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/plain/PlainSaslServer.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/plain/PlainSaslServerProvider.java
+./fluss-common/src/main/java/org/apache/fluss/security/auth/sasl/plain/PlainServerCallbackHandler.java
+./fluss-server/src/main/java/org/apache/fluss/server/coordinator/statemachine/ReplicaStateMachine.java
+./fluss-server/src/main/java/org/apache/fluss/server/coordinator/statemachine/TableBucketStateMachine.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/AbstractIndex.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LazyIndex.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LocalLog.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogLoader.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogManager.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogOffsetMetadata.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogOffsetSnapshot.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogSegment.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogSegments.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/LogTablet.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/OffsetIndex.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/TimeIndex.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/WriterStateManager.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/checkpoint/CheckpointFile.java
+./fluss-server/src/main/java/org/apache/fluss/server/log/checkpoint/OffsetCheckpointFile.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/AdjustIsrManager.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/FollowerReplica.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/IsrState.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/delay/DelayedFetchLog.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/delay/DelayedOperation.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/delay/DelayedOperationManager.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/delay/DelayedWrite.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/fetcher/ReplicaFetcherManager.java
+./fluss-server/src/main/java/org/apache/fluss/server/replica/fetcher/ReplicaFetcherThread.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/DefaultTimer.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/Timer.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/TimerTask.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/TimerTaskEntry.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/TimerTaskList.java
+./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/TimingWheel.java
+
+Apache Paimon
+./fluss-common/src/main/java/org/apache/fluss/predicate/And.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/CompareUtils.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/CompoundPredicate.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/Contains.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/EndsWith.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/Equal.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/FieldRef.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/FunctionVisitor.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/GreaterOrEqual.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/GreaterThan.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/In.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/IsNotNull.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/IsNull.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/LeafFunction.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/LeafPredicate.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/LeafUnaryFunction.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/LessOrEqual.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/LessThan.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/NotEqual.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/NotIn.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/NullFalseLeafBinaryFunction.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/Or.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/PartitionPredicateVisitor.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/Predicate.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/PredicateBuilder.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/PredicateVisitor.java
+./fluss-common/src/main/java/org/apache/fluss/predicate/StartsWith.java
+./fluss-common/src/main/java/org/apache/fluss/row/encode/paimon/PaimonBinaryRowWriter.java
+./fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/PaimonSnapshotScanner.java
+
+Apache Spark
+./fluss-rpc/src/main/java/org/apache/fluss/rpc/netty/NettyLogger.java
+
+LightProto
+./fluss-common/src/main/java/org/apache/fluss/utils/ProtoCodecUtils.java
+./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtoGen.java
+./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufMessage.java
+./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufNumberField.java
+./fluss-protogen/fluss-protogen-maven-plugin/src/main/java/org/apache/fluss/protogen/maven/plugin/ProtoGenMojo.java

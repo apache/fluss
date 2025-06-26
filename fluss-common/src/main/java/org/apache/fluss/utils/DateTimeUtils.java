@@ -105,7 +105,7 @@ public class DateTimeUtils {
         return LocalTime.of(h, m, s, ms * 1000_000);
     }
 
-    public static TimestampNtz parseTimestampData(String dateStr, int precision)
+    public static TimestampNtz parseTimestampNtzData(String dateStr, int precision)
             throws DateTimeException {
         return TimestampNtz.fromLocalDateTime(
                 fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision));
@@ -117,6 +117,12 @@ public class DateTimeUtils {
                 fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision)
                         .atZone(timeZone.toZoneId())
                         .toInstant());
+    }
+
+    public static TimestampLtz parseTimestampLtzData(String dateStr, int precision)
+            throws DateTimeException {
+        return TimestampLtz.fromLocalDateTime(
+                fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision));
     }
 
     public static Integer parseDate(String s) {
@@ -375,5 +381,105 @@ public class DateTimeUtils {
             --b;
         }
         return x;
+    }
+
+    private static String pad(int length, long v) {
+        StringBuilder s = new StringBuilder(Long.toString(v));
+        while (s.length() < length) {
+            s.insert(0, "0");
+        }
+        return s.toString();
+    }
+
+    /** Appends year-month-day and hour:minute:second to a buffer; assumes they are valid. */
+    private static StringBuilder ymdhms(
+            StringBuilder b, int year, int month, int day, int h, int m, int s) {
+        ymd(b, year, month, day);
+        b.append(' ');
+        return hms(b, h, m, s);
+    }
+
+    /** Appends year-month-day to a buffer; assumes they are valid. */
+    private static StringBuilder ymd(StringBuilder b, int year, int month, int day) {
+        int4(b, year);
+        b.append('-');
+        int2(b, month);
+        b.append('-');
+        return int2(b, day);
+    }
+
+    /** Appends hour:minute:second to a buffer; assumes they are valid. */
+    private static StringBuilder hms(StringBuilder b, int h, int m, int s) {
+        int2(b, h);
+        b.append(':');
+        int2(b, m);
+        b.append(':');
+        return int2(b, s);
+    }
+
+    private static StringBuilder int4(StringBuilder buf, int i) {
+        buf.append((char) ('0' + (i / 1000) % 10));
+        buf.append((char) ('0' + (i / 100) % 10));
+        buf.append((char) ('0' + (i / 10) % 10));
+        return buf.append((char) ('0' + i % 10));
+    }
+
+    private static StringBuilder int2(StringBuilder buf, int i) {
+        buf.append((char) ('0' + (i / 10) % 10));
+        return buf.append((char) ('0' + i % 10));
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Format
+    // --------------------------------------------------------------------------------------------
+
+    public static String formatTimestampNtz(TimestampNtz ts, int precision) {
+        LocalDateTime ldt = ts.toLocalDateTime();
+
+        String fraction = pad(9, ldt.getNano());
+        while (fraction.length() > precision && fraction.endsWith("0")) {
+            fraction = fraction.substring(0, fraction.length() - 1);
+        }
+
+        StringBuilder ymdhms =
+                ymdhms(
+                        new StringBuilder(),
+                        ldt.getYear(),
+                        ldt.getMonthValue(),
+                        ldt.getDayOfMonth(),
+                        ldt.getHour(),
+                        ldt.getMinute(),
+                        ldt.getSecond());
+
+        if (!fraction.isEmpty()) {
+            ymdhms.append(".").append(fraction);
+        }
+
+        return ymdhms.toString();
+    }
+
+    public static String formatTimestampLtz(TimestampLtz ts, int precision) {
+        LocalDateTime ldt = ts.toLocalDateTime();
+
+        String fraction = pad(9, ldt.getNano());
+        while (fraction.length() > precision && fraction.endsWith("0")) {
+            fraction = fraction.substring(0, fraction.length() - 1);
+        }
+
+        StringBuilder ymdhms =
+                ymdhms(
+                        new StringBuilder(),
+                        ldt.getYear(),
+                        ldt.getMonthValue(),
+                        ldt.getDayOfMonth(),
+                        ldt.getHour(),
+                        ldt.getMinute(),
+                        ldt.getSecond());
+
+        if (!fraction.isEmpty()) {
+            ymdhms.append(".").append(fraction);
+        }
+
+        return ymdhms.toString();
     }
 }

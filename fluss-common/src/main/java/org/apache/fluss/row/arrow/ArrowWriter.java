@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.compression.ArrowCompressionRatioEstimator;
 import org.apache.fluss.memory.AbstractPagedOutputView;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.writers.ArrowFieldWriter;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -76,7 +77,7 @@ public class ArrowWriter implements AutoCloseable {
     /**
      * An array of writers which are responsible for the serialization of each column of the rows.
      */
-    private final ArrowFieldWriter<InternalRow>[] fieldWriters;
+    private final ArrowFieldWriter<DataGetters>[] fieldWriters;
 
     /** The provider which manages the {@link ArrowWriter} instances. */
     private final ArrowWriterProvider provider;
@@ -200,7 +201,7 @@ public class ArrowWriter implements AutoCloseable {
         // need to handle safe if exceed initial capacity
         boolean handleSafe = recordsCount >= INITIAL_CAPACITY;
         for (int i = 0; i < fieldWriters.length; i++) {
-            fieldWriters[i].write(row, i, handleSafe);
+            fieldWriters[i].write(recordsCount, row, i, handleSafe);
         }
         recordsCount++;
     }
