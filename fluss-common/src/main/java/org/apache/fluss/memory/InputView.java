@@ -3,8 +3,8 @@
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * (the "License"); you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -23,8 +23,13 @@ import java.io.EOFException;
 import java.io.IOException;
 
 /**
- * A very similar interface to {@link java.io.DataInput} but reading multi-bytes primitive types in
- * little endian.
+ * A specialized interface for reading multi-byte primitive types in little endian byte order. This
+ * interface is designed to be independent of Java's standard DataInput interface to avoid
+ * endianness confusion and API semantic violations.
+ *
+ * <p>Note: This interface uses little endian byte order, which is different from Java's standard
+ * DataInput interface that uses big endian. If you need big endian compatibility, use the {@link
+ * #asDataInput()} method to get a DataInput wrapper.
  *
  * @since 0.2
  */
@@ -54,8 +59,8 @@ public interface InputView {
     byte readByte() throws IOException;
 
     /**
-     * Reads two input bytes and returns a {@code short} value. This method is suitable for reading
-     * the bytes written by the {@link OutputView#writeShort(int)}.
+     * Reads two input bytes and returns a {@code short} value in little endian byte order. This
+     * method is suitable for reading the bytes written by the {@link OutputView#writeShort(int)}.
      *
      * @return the 16-bit value read.
      * @exception EOFException if this stream reaches the end before reading all the bytes.
@@ -64,8 +69,8 @@ public interface InputView {
     short readShort() throws IOException;
 
     /**
-     * Reads four input bytes and returns an {@code int} value. This method is suitable for reading
-     * bytes written by the {@link OutputView#writeInt(int)}.
+     * Reads four input bytes and returns an {@code int} value in little endian byte order. This
+     * method is suitable for reading bytes written by the {@link OutputView#writeInt(int)}.
      *
      * @return the {@code int} value read.
      * @exception EOFException if this stream reaches the end before reading all the bytes.
@@ -74,8 +79,28 @@ public interface InputView {
     int readInt() throws IOException;
 
     /**
-     * Reads eight input bytes and returns a {@code long} value. This method is suitable for reading
-     * bytes written by the {@link OutputView#writeLong(long)}.
+     * Reads two input bytes and returns a {@code char} value in little endian byte order. This
+     * method is suitable for reading bytes written by the {@link OutputView#writeChar(int)}.
+     *
+     * @return the {@code char} value read.
+     * @exception EOFException if this stream reaches the end before reading all the bytes.
+     * @exception IOException if an I/O error occurs.
+     */
+    char readChar() throws IOException;
+
+    /**
+     * Reads two input bytes and returns an unsigned 16-bit integer in little endian byte order.
+     * This method is suitable for reading bytes written by the {@link OutputView#writeShort(int)}.
+     *
+     * @return the unsigned 16-bit value read.
+     * @exception EOFException if this stream reaches the end before reading all the bytes.
+     * @exception IOException if an I/O error occurs.
+     */
+    int readUnsignedShort() throws IOException;
+
+    /**
+     * Reads eight input bytes and returns a {@code long} value in little endian byte order. This
+     * method is suitable for reading bytes written by the {@link OutputView#writeLong(long)}.
      *
      * @return the {@code long} value read.
      * @exception EOFException if this stream reaches the end before reading all the bytes.
@@ -161,4 +186,28 @@ public interface InputView {
      * @exception IOException if an I/O error occurs.
      */
     void readFully(byte[] b, int offset, int len) throws IOException;
+
+    /**
+     * Skips over and discards {@code n} bytes of data from the input stream. The skip method may,
+     * for a variety of reasons, end up skipping over some smaller number of bytes, possibly 0. This
+     * may result from any of a number of conditions; reaching end of file before {@code n} bytes
+     * have been skipped is only one possibility. The actual number of bytes skipped is returned. If
+     * {@code n} is negative, no bytes are skipped.
+     *
+     * @param n the number of bytes to be skipped.
+     * @return the actual number of bytes skipped.
+     * @exception IOException if an I/O error occurs.
+     */
+    int skipBytes(int n) throws IOException;
+
+    /**
+     * Reads a string that has been encoded using a modified UTF-8 format in little endian byte
+     * order. This method is suitable for reading strings written by the {@link
+     * OutputView#writeUTF(String)}.
+     *
+     * @return a Unicode string.
+     * @exception EOFException if this stream reaches the end before reading all the bytes.
+     * @exception IOException if an I/O error occurs.
+     */
+    String readUTF() throws IOException;
 }

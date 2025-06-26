@@ -116,7 +116,7 @@ public class FlinkTableSink
             return ChangelogMode.insertOnly();
         } else {
             if (primaryKeyIndexes.length > 0 || ignoreDelete) {
-                // primary-key table or ignore_delete mode can accept RowKind.DELETE
+                // primary-key table or ignore_delete mode can accept ChangeType.DELETE
                 ChangelogMode.Builder builder = ChangelogMode.newBuilder();
                 for (RowKind kind : requestedMode.getContainedKinds()) {
                     // optimize out the update_before messages
