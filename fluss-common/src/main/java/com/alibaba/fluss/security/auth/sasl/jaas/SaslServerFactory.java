@@ -17,10 +17,17 @@
 
 package com.alibaba.fluss.security.auth.sasl.jaas;
 
+import com.alibaba.fluss.security.auth.sasl.gssapi.GssapiServerCallbackHandler;
 import com.alibaba.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 
 import javax.security.auth.Subject;
 import javax.security.auth.login.AppConfigurationEntry;
@@ -28,12 +35,6 @@ import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslClient;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
-
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -56,8 +57,21 @@ public class SaslServerFactory {
             AuthenticateCallbackHandler callbackHandler;
             if (mechanism.equals("PLAIN")) {
                 callbackHandler = new PlainServerCallbackHandler();
+            } else if (mechanism.equals("GSSAPI")) {
+                callbackHandler = new GssapiServerCallbackHandler();
             } else {
                 throw new IllegalArgumentException("Unsupported mechanism: " + mechanism);
+            }
+
+            if (configurationEntries == null || configurationEntries.isEmpty()) {
+                LOG.warn(
+                        "JAAS configuration entries are empty or null for mechanism: {}",
+                        mechanism);
+            } else {
+                LOG.debug(
+                        "Using JAAS configuration entries for mechanism {}: {}",
+                        mechanism,
+                        configurationEntries);
             }
 
             callbackHandler.configure(mechanism, configurationEntries);
