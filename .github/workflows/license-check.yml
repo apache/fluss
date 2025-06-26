@@ -46,8 +46,17 @@ jobs:
             -DaltDeploymentRepository=validation_repository::default::file:${{ env.MVN_VALIDATION_DIR }} \
             | tee ${{ env.MVN_BUILD_OUTPUT_FILE }}
 
-      - name: Check License Headers with Apache RAT
+      - name: Check License
         run: |
-          ./mvnw ${{ env.MVN_COMMON_OPTIONS }} apache-rat:check
+          ./mvnw ${{ env.MVN_COMMON_OPTIONS }} exec:java@check-license -N \
+            -Dexec.args="${{ env.MVN_BUILD_OUTPUT_FILE }} $(pwd) ${{ env.MVN_VALIDATION_DIR }}" \
+            -Dlog4j.configurationFile=file://$(pwd)/tools/ci/fluss-ci-tools/src/main/resources/log4j2.properties
         env:
           MAVEN_OPTS: -Xmx4096m
+
+      - name: Check Markdown License Headers
+        run: |
+          ./mvnw org.apache.rat:apache-rat-plugin:0.16.1:check \
+            -Drat.includes="**/*.md" \
+            -Drat.excludes="**/README.md,**/CHANGELOG.md,**/CONTRIBUTING.md,**/LICENSE*,**/NOTICE*,**/.git/**,**/target/**,**/node_modules/**,**/.idea/**,**/build/**" \
+            -Drat.numUnapprovedLicenses=0
