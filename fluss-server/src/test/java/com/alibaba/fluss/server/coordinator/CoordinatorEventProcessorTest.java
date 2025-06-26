@@ -802,10 +802,10 @@ class CoordinatorEventProcessorTest {
         long partition2Id = zookeeperClient.getPartitionIdAndIncrement();
         String partition1Name = "2024";
         String partition2Name = "2025";
-        zookeeperClient.registerPartitionAssignment(partition1Id, partitionAssignment);
-        zookeeperClient.registerPartition(tablePath, tableId, partition1Name, partition1Id);
-        zookeeperClient.registerPartitionAssignment(partition2Id, partitionAssignment);
-        zookeeperClient.registerPartition(tablePath, tableId, partition2Name, partition2Id);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partition1Id, partition1Name, partitionAssignment, tablePath, tableId);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partition2Id, partition2Name, partitionAssignment, tablePath, tableId);
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),
