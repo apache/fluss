@@ -21,14 +21,14 @@ import com.alibaba.fluss.security.auth.sasl.jaas.AuthenticateCallbackHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.List;
-import java.util.Objects;
-
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.AuthorizeCallback;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Objects;
 
 /**
  * A server-side {@link javax.security.auth.callback.CallbackHandler} implementation for the
