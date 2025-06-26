@@ -37,7 +37,7 @@ Troubleshooting questions should be posted on:
 
 ## How to suggest a feature or enhancement
 
-Fluss aims to provide a unified streaming lakehouse for real-time analytics, offering seamless data ingestion, processing, and querying capabilities with strong consistency guarantees and efficient storage management.
+Fluss aims to provide a unified streaming storage for real-time analytics, offering seamless data ingestion, processing, and querying capabilities with strong consistency guarantees and efficient storage management.
 
 If you're looking for a feature that doesn't exist in Fluss, you're probably not alone. Others likely have similar needs. Please open a [GitHub Issue](https://github.com/alibaba/fluss/issues/new) describing the feature you'd like to see, why you need it, and how it should work.
 
