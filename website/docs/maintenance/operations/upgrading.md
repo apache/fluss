@@ -38,7 +38,7 @@ the rolling upgrade method. Specifically, upgrade the `TabletServers` one-by-one
 :::note
 1. During the server upgrade process, read and write operations in the cluster will not be affected.
 2. Currently, the Fluss `CoordinatorServer` does not yet support high availability (HA). During the `CoordinatorServer` upgrade stage, the `CoordinatorServer` will be in an unavailable state, which will affect admin operations such as table creation.
-   :::
+:::
 
 The following is an example of upgrading the Fluss server from 0.6 to $FLUSS_VERSION$ on
 a [Distributed Cluster](docs/install-deploy/deploying-distributed-cluster.md):
@@ -52,8 +52,8 @@ tar -xzf fluss-$FLUSS_VERSION$-bin.tgz
 cd fluss-$FLUSS_VERSION$/
 ```
 
-2. If we want to enable [Lakehouse Storage](docs/maintenance/tiered-storage/lakehouse-storage.md), we need to prepare the required JAR files for the datalake first. For more details,
-   see [Add other jars requeired by datalake](docs/maintenance/tiered-storage/lakehouse-storage.md#add-other-jars-required-by-datalake).
+2. If you want to enable [Lakehouse Storage](docs/maintenance/tiered-storage/lakehouse-storage.md), you need to prepare the required JAR files for the datalake first. For more details,
+   see [Add other jars required by datalake](docs/maintenance/tiered-storage/lakehouse-storage.md#add-other-jars-required-by-datalake).
 
 3. Next, copy the configuration options from 0.6 (`fluss-0.6/conf/server.yaml`) to the new configuration
 file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Adding any new options introduced in version $FLUSS_VERSION$ as
