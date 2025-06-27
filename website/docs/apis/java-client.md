@@ -67,7 +67,7 @@ Admin admin = connection.getAdmin();
 admin.listDatabases().get().forEach(System.out::println);
 
 // obtain Table instance from the Connection
-Table table = connection.getTable(TablePath.of("my_db", "my_table");
+Table table = connection.getTable(TablePath.of("my_db", "my_table"));
 System.out.println(table.getTableInfo());
 ```
 
