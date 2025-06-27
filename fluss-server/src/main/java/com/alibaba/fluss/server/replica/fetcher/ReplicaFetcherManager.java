@@ -182,33 +182,37 @@ public class ReplicaFetcherManager {
 
     ReplicaFetcherThread createFetcherThread(int fetcherId, int leaderId) {
         String threadName = "ReplicaFetcherThread-" + fetcherId + "-" + leaderId;
-        LeaderEndpoint leaderEndpoint =
-                new RemoteLeaderEndpoint(
-                        conf,
-                        serverId,
-                        leaderId,
-                        GatewayClientProxy.createGatewayProxy(
-                                () -> {
-                                    Optional<ServerNode> optionalServerNode =
-                                            serverNodeMetadataCache.apply(leaderId);
-                                    if (optionalServerNode.isPresent()) {
-                                        return optionalServerNode.get();
-                                    } else {
-                                        // no available serverNode to connect, throw exception,
-                                        // fetch thead expects to retry
-                                        throw new RuntimeException(
-                                                "ServerNode "
-                                                        + leaderId
-                                                        + " is not available in metadata cache.");
-                                    }
-                                },
-                                rpcClient,
-                                TabletServerGateway.class));
+        LeaderEndpoint leaderEndpoint = buildRemoteLogEndpoint(leaderId);
         return new ReplicaFetcherThread(
                 threadName,
                 replicaManager,
                 leaderEndpoint,
                 (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL).toMillis());
+    }
+
+    @VisibleForTesting
+    public RemoteLeaderEndpoint buildRemoteLogEndpoint(int leaderId) {
+        return new RemoteLeaderEndpoint(
+                conf,
+                serverId,
+                leaderId,
+                GatewayClientProxy.createGatewayProxy(
+                        () -> {
+                            Optional<ServerNode> optionalServerNode =
+                                    serverNodeMetadataCache.apply(leaderId);
+                            if (optionalServerNode.isPresent()) {
+                                return optionalServerNode.get();
+                            } else {
+                                // no available serverNode to connect, throw exception,
+                                // fetch thead expects to retry
+                                throw new RuntimeException(
+                                        "ServerNode "
+                                                + leaderId
+                                                + " is not available in metadata cache.");
+                            }
+                        },
+                        rpcClient,
+                        TabletServerGateway.class));
     }
 
     private void addBucketsToFetcherThread(

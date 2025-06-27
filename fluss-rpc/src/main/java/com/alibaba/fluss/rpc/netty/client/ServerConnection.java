@@ -102,13 +102,14 @@ final class ServerConnection {
             Bootstrap bootstrap,
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
-            ClientAuthenticator authenticator) {
+            ClientAuthenticator authenticator,
+            boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         bootstrap
                 .connect(node.host(), node.port())
-                .addListener((ChannelFutureListener) this::establishConnection);
+                .addListener(future -> establishConnection((ChannelFuture) future, isInnerClient));
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
@@ -260,13 +261,15 @@ final class ServerConnection {
 
     // ------------------------------------------------------------------------------------------
 
-    private void establishConnection(ChannelFuture future) {
+    private void establishConnection(ChannelFuture future, boolean isInnerClient) {
         synchronized (lock) {
             if (future.isSuccess()) {
                 LOG.debug("Established connection to server {}.", node);
                 channel = future.channel();
                 channel.pipeline()
-                        .addLast("handler", new NettyClientHandler(new ResponseCallback()));
+                        .addLast(
+                                "handler",
+                                new NettyClientHandler(new ResponseCallback(), isInnerClient));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server

@@ -205,7 +205,8 @@ public final class FlussClusterExtension
                 RpcClient.create(
                         conf,
                         new ClientMetricGroup(
-                                MetricRegistry.create(conf, null), "fluss-cluster-extension"));
+                                MetricRegistry.create(conf, null), "fluss-cluster-extension"),
+                        false);
         startCoordinatorServer();
         startTabletServers();
         // wait coordinator knows all tablet servers to make cluster

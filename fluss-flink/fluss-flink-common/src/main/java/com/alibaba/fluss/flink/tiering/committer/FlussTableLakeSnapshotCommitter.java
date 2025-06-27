@@ -55,7 +55,8 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         String clientId = flussConf.getString(ConfigOptions.CLIENT_ID);
         MetricRegistry metricRegistry = MetricRegistry.create(flussConf, null);
         // don't care about metrics, but pass a ClientMetricGroup to make compiler happy
-        rpcClient = RpcClient.create(flussConf, new ClientMetricGroup(metricRegistry, clientId));
+        rpcClient =
+                RpcClient.create(flussConf, new ClientMetricGroup(metricRegistry, clientId), false);
         MetadataUpdater metadataUpdater = new MetadataUpdater(flussConf, rpcClient);
         this.coordinatorGateway =
                 GatewayClientProxy.createGatewayProxy(

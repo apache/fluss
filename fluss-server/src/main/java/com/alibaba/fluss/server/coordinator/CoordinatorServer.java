@@ -210,7 +210,7 @@ public class CoordinatorServer extends ServerBase {
             registerZookeeperClientReconnectedListener();
 
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
