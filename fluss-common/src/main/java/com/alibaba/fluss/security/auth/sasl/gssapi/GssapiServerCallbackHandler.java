@@ -68,6 +68,13 @@ public class GssapiServerCallbackHandler implements AuthenticateCallbackHandler 
                 // which is the principal name the user wants to act as (e.g., "user-b@REALM")
                 String authzId = ac.getAuthorizationID();
 
+                if (authnId == null || authnId.isEmpty()) {
+                    throw new IOException("Authentication ID cannot be null or empty");
+                }
+                if (authzId == null || authzId.isEmpty()) {
+                    throw new IOException("Authorization ID cannot be null or empty");
+                }
+
                 LOG.info(
                         "Authorizing client: authenticationID='{}', authorizationID='{}'",
                         authnId,
