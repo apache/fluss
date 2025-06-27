@@ -15,23 +15,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ################################################################################
-name: CI
+name: Daily CI ON JDK 8
 on:
-  push:
-    branches:
-      - main
-      - release-**
-      - ci-**
-  pull_request:
-    paths-ignore:
-      - 'website/**'
-      - '**/*.md'
+  schedule:
+    # Run at 12:00 daily.
+    - cron: "0 12 * * *"
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  compile-on-jdk8:
+  build-on-jdk8:
     runs-on: self-hosted
     strategy:
       fail-fast: false
@@ -48,31 +42,13 @@ jobs:
       - name: Build
         run: |
           mvn -T 1C -B clean install -DskipTests -Pjava8-target
-
-  build-on-jdk11:
-    runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [ core, flink ]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Set up JDK 11
-        uses: actions/setup-java@v4
-        with:
-          java-version: '11'
-          distribution: 'temurin'
-      - name: Build
-        run: |
-          mvn -T 1C -B clean install -DskipTests
       - name: Test
         timeout-minutes: 60
         run: |
           TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }})
           echo "github ref: ${{ github.ref }}"
           echo "Start testing modules: $TEST_MODULES"
-          mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
+          mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties  -Pjava8-target
         env:
           MAVEN_OPTS: -Xmx4096m
           ARTIFACTS_OSS_ENDPOINT: ${{ secrets.ARTIFACTS_OSS_ENDPOINT }}

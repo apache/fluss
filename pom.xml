@@ -82,7 +82,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <target.java.version>1.8</target.java.version>
+        <target.java.version>11</target.java.version>
         <maven.compiler.source>${target.java.version}</maven.compiler.source>
         <maven.compiler.target>${target.java.version}</maven.compiler.target>
         <test.unit.pattern>**/*Test.*</test.unit.pattern>
@@ -426,28 +426,25 @@
 
     <profiles>
         <profile>
-            <id>java11-target</id>
+            <id>java8-target</id>
             <build>
                 <plugins>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-compiler-plugin</artifactId>
                         <configuration>
-                            <source>11</source>
-                            <target>11</target>
-                            <compilerArgs combine.children="append">
-                                <arg>--add-exports=java.base/sun.net.util=ALL-UNNAMED</arg>
-                                <arg>--add-exports=java.management/sun.management=ALL-UNNAMED</arg>
-                                <arg>--add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED</arg>
-                                <arg>--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED</arg>
-                                <arg>--add-exports=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                            <source>8</source>
+                            <target>8</target>
+                            <useIncrementalCompilation>false</useIncrementalCompilation>
+                            <compilerArgs >
+                                <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
+                                <arg>-Xpkginfo:always</arg>
                             </compilerArgs>
                         </configuration>
                     </plugin>
                 </plugins>
             </build>
         </profile>
-
         <profile>
             <id>test-coverage</id>
             <properties>
@@ -533,6 +530,22 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.0</version>
+                <configuration>
+                    <source>${target.java.version}</source>
+                    <target>${target.java.version}</target>
+                    <!-- The semantics of this option are reversed, see MCOMPILER-209. -->
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
+                    <compilerArgs >
+                        <arg>--add-exports=java.base/sun.net.util=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.management/sun.management=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                        <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
+                        <arg>-Xpkginfo:always</arg>
+                    </compilerArgs>
+                </configuration>
             </plugin>
 
             <plugin>
@@ -719,7 +732,7 @@
                                     <version>[3.1.1,)</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
-                                    <version>${target.java.version}</version>
+                                    <version>[1.8,)</version>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>
