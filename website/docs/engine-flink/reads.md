@@ -68,7 +68,7 @@ Benchmark results show that column pruning can reach 10x read performance improv
 
 **1. Create a table**
 ```sql title="Flink SQL"
-CREATE TABLE `testcatalog`.`testdb`.`log_table` (
+CREATE TABLE `log_table` (
     `c_custkey` INT NOT NULL,
     `c_name` STRING NOT NULL,
     `c_address` STRING NOT NULL,
@@ -82,12 +82,12 @@ CREATE TABLE `testcatalog`.`testdb`.`log_table` (
 
 **2. Query a single column:**
 ```sql title="Flink SQL"
-SELECT `c_name` FROM `testcatalog`.`testdb`.`log_table`;
+SELECT `c_name` FROM `log_table`;
 ```
 
 **3. Verify with `EXPLAIN`:**
 ```sql title="Flink SQL"
-EXPLAIN SELECT `c_name` FROM `testcatalog`.`testdb`.`log_table`;
+EXPLAIN SELECT `c_name` FROM `log_table`;
 ```
 
 **Output:**
@@ -113,7 +113,7 @@ The partition pruning also supports dynamically pruning new created partitions d
 
 **1. Create a partitioned table:**
 ```sql title="Flink SQL"
-CREATE TABLE `testcatalog`.`testdb`.`log_partitioned_table` (
+CREATE TABLE `log_partitioned_table` (
     `c_custkey` INT NOT NULL,
     `c_name` STRING NOT NULL,
     `c_address` STRING NOT NULL,
@@ -128,7 +128,7 @@ CREATE TABLE `testcatalog`.`testdb`.`log_partitioned_table` (
 
 **2. Query with partition filter:**
 ```sql title="Flink SQL"
-SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` WHERE `c_nationkey` = 'US';
+SELECT * FROM `log_partitioned_table` WHERE `c_nationkey` = 'US';
 ```
 
 Fluss source will scan only the partitions where `c_nationkey = 'US'`.
@@ -145,7 +145,7 @@ As new partitions like `US,2025-06-15`, `China,2025-06-15` are created, partitio
 **3. Verify with `EXPLAIN`:**
 
 ```sql title="Flink SQL"
-EXPLAIN SELECT * FROM `testcatalog`.`testdb`.`log_partitioned_table` WHERE `c_nationkey` = 'US';
+EXPLAIN SELECT * FROM `log_partitioned_table` WHERE `c_nationkey` = 'US';
 ```
 
 **Output:**
