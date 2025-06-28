@@ -40,31 +40,33 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for {@link SaslServerFactory} to ensure it can create a SASL server for GSSAPI.
+ * Unit tests for {@link SaslServerFactory} to verify it can create a SASL server for the mechanism
+ * "GSSAPI".
  *
- * <p>This test specifically verifies that the factory correctly handle the mechanism "GSSAPI" and
- * attempts to create a SASL server with a {@link GssapiServerCallbackHandler}
+ * <p>This test verifies that when "GSSAPI" is specified as the mechanism, the factory delegates to
+ * a {@link GssapiServerCallbackHandler} and correctly invokes {@link Sasl@createSaslServer} within
+ * a privileged context.
  */
 public class GssapiSaslServerTest {
 
     @Test
     public void testCreateSaslServerForGssapi() throws Exception {
 
-        // first, mock the LoginManager, SaslServer, and Subject
+        // Mock the dependencies: LoginManager, SaslServer, and Subject
         LoginManager mockLoginManager = mock(LoginManager.class);
         SaslServer mockSaslServer = mock(SaslServer.class);
 
         Subject subject = new Subject();
         when(mockLoginManager.subject()).thenReturn(subject);
 
-        // Then create empty jass configuration and props
+        // Create empty JAAS configuration and SASL properties
         List<AppConfigurationEntry> jaasConfig = Collections.emptyList();
         Map<String, ?> props = Collections.emptyMap();
 
         try (MockedStatic<Subject> subjectMock = mockStatic(Subject.class);
                 MockedStatic<Sasl> saslMock = mockStatic(Sasl.class)) {
 
-            // Mock the Subject.doAs method to return the action result
+            // Mock Subject.doAs to execute the provided PrivilegedExceptionAction directly
             subjectMock
                     .when(
                             () ->
@@ -76,7 +78,7 @@ public class GssapiSaslServerTest {
                                 return action.run();
                             });
 
-            // Mock the Sasl.createSaslServer method to return the mock SaslServer
+            // Mock the Sasl.createSaslServer to return the mock SaslServer for "GSSAPI" mechanism
             saslMock.when(
                             () ->
                                     Sasl.createSaslServer(
@@ -87,7 +89,7 @@ public class GssapiSaslServerTest {
                                             any()))
                     .thenReturn(mockSaslServer);
 
-            // call the SaslServerFactory to create a GSSAPI server
+            // Call SaslServerFactory to create a SASL server for "GSSAPI" and verify the result
             SaslServer saslServer =
                     SaslServerFactory.createSaslServer(
                             "GSSAPI", "localhost", props, mockLoginManager, jaasConfig);
