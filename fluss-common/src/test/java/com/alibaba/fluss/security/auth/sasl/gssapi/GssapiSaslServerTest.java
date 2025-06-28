@@ -44,8 +44,8 @@ import static org.mockito.Mockito.when;
  * "GSSAPI".
  *
  * <p>This test verifies that when "GSSAPI" is specified as the mechanism, the factory delegates to
- * a {@link GssapiServerCallbackHandler} and correctly invokes {@link Sasl@createSaslServer} within
- * a privileged context.
+ * a {@link GssapiServerCallbackHandler} and correctly invokes Sasl@createSaslServer a privileged
+ * context.
  */
 public class GssapiSaslServerTest {
     String mechanism = "GSSAPI";
