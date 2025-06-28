@@ -16,28 +16,28 @@
 
 package com.alibaba.fluss.security.auth.sasl.gssapi;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.when;
-
 import com.alibaba.fluss.security.auth.sasl.jaas.LoginManager;
 import com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
+import javax.security.auth.Subject;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslServer;
+
 import java.security.PrivilegedExceptionAction;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import javax.security.auth.Subject;
-import javax.security.auth.login.AppConfigurationEntry;
-import javax.security.sasl.Sasl;
-import javax.security.sasl.SaslServer;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link SaslServerFactory} to verify it can create a SASL server for the mechanism
