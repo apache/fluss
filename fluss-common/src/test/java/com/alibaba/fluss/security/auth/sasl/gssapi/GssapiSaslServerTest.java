@@ -16,28 +16,28 @@
 
 package com.alibaba.fluss.security.auth.sasl.gssapi;
 
-import com.alibaba.fluss.security.auth.sasl.jaas.LoginManager;
-import com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory;
-
-import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
-
-import javax.security.auth.Subject;
-import javax.security.auth.login.AppConfigurationEntry;
-import javax.security.sasl.Sasl;
-import javax.security.sasl.SaslServer;
-
-import java.security.PrivilegedExceptionAction;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
+
+import com.alibaba.fluss.security.auth.sasl.jaas.LoginManager;
+import com.alibaba.fluss.security.auth.sasl.jaas.SaslServerFactory;
+
+import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+
+import java.security.PrivilegedExceptionAction;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+import javax.security.auth.Subject;
+import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.sasl.Sasl;
+import javax.security.sasl.SaslServer;
 
 /**
  * Unit tests for {@link SaslServerFactory} to verify it can create a SASL server for the mechanism
@@ -48,11 +48,14 @@ import static org.mockito.Mockito.when;
  * a privileged context.
  */
 public class GssapiSaslServerTest {
+    String mechanism = "GSSAPI";
+    String service = "fluss";
+    String host = "localhost";
 
     @Test
     public void testCreateSaslServerForGssapi() throws Exception {
 
-        // Mock the dependencies: LoginManager, SaslServer, and Subject
+        // Mock the dependencies: LoginManager, SaslServer
         LoginManager mockLoginManager = mock(LoginManager.class);
         SaslServer mockSaslServer = mock(SaslServer.class);
 
@@ -82,17 +85,13 @@ public class GssapiSaslServerTest {
             saslMock.when(
                             () ->
                                     Sasl.createSaslServer(
-                                            eq("GSSAPI"),
-                                            eq("fluss"),
-                                            eq("localhost"),
-                                            eq(props),
-                                            any()))
+                                            eq(mechanism), eq(service), eq(host), eq(props), any()))
                     .thenReturn(mockSaslServer);
 
             // Call SaslServerFactory to create a SASL server for "GSSAPI" and verify the result
             SaslServer saslServer =
                     SaslServerFactory.createSaslServer(
-                            "GSSAPI", "localhost", props, mockLoginManager, jaasConfig);
+                            mechanism, host, props, mockLoginManager, jaasConfig);
 
             assertThat(saslServer).isNotNull();
             assertThat(saslServer).isEqualTo(mockSaslServer);
