@@ -40,6 +40,10 @@
 - [fluss-fs-oss-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.7.0/fluss-fs-oss-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.7.0/fluss-fs-oss-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.7.0/fluss-fs-oss-0.7.0.jar.sha1))
 - [fluss-fs-hadoop-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar.sha1))
 
+#### Flink Tier Service Jar
+
+- [fluss-flink-tiering-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar.sha1))
+
 ## Fluss 0.6.1
 
 #### Fluss
