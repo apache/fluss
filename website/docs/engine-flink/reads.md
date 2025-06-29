@@ -94,7 +94,7 @@ EXPLAIN SELECT `c_name` FROM `log_table`;
 
 ```
 == Optimized Execution Plan ==
-TableSourceScan(table=[[testcatalog, testdb, log_table, project=[c_name]]], fields=[c_name])
+TableSourceScan(table=[[fluss_catalog, fluss, log_table, project=[c_name]]], fields=[c_name])
 ```
 
 This confirms that only the `c_name` column is being read from storage.
@@ -152,7 +152,7 @@ EXPLAIN SELECT * FROM `log_partitioned_table` WHERE `c_nationkey` = 'US';
 
 ```text
 == Optimized Execution Plan ==
-TableSourceScan(table=[[testcatalog, testdb, log_partitioned_table, filter=[=(c_nationkey, _UTF-16LE'US':VARCHAR(2147483647) CHARACTER SET "UTF-16LE")]]], fields=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment, dt])
+TableSourceScan(table=[[fluss_catalog, fluss, log_partitioned_table, filter=[=(c_nationkey, _UTF-16LE'US':VARCHAR(2147483647) CHARACTER SET "UTF-16LE")]]], fields=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_mktsegment, c_comment, dt])
 ```
 
 This confirms that only partitions matching `c_nationkey = 'US'` will be scanned.
