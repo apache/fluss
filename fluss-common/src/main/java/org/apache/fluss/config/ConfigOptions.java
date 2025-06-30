@@ -1936,6 +1936,6 @@ public class ConfigOptions {
                                     + "If all your clients run on AWS, you normally want to disable token delegation and "
                                     + "use one of the predefined AWS credential providers that rely on automatic credential refreshing by AWS. "
                                     + "For further information, see the respective documentation. "
-                                    + "If you are using an S3-compatible object store (e.g., MinIO), you currently need to disable this option as well and use long-term credentials."
+                                    + "If you are using an S3-compatible object store (e.g., MinIO), you currently need to disable this option as well and use long-term credentials. "
                                     + "**Important:** We recommend to deactivate the token delegation process and use long-term credentials to support an S3-compatible object storage _only_ when all clients run in a trusted environment!");
 }
