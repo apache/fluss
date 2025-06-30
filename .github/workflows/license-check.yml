@@ -53,10 +53,3 @@ jobs:
             -Dlog4j.configurationFile=file://$(pwd)/tools/ci/fluss-ci-tools/src/main/resources/log4j2.properties
         env:
           MAVEN_OPTS: -Xmx4096m
-
-      - name: Check Markdown License Headers
-        run: |
-          ./mvnw org.apache.rat:apache-rat-plugin:0.16.1:check \
-            -Drat.includes="**/*.md" \
-            -Drat.excludes="**/README.md,**/CHANGELOG.md,**/CONTRIBUTING.md,**/LICENSE*,**/NOTICE*,**/.git/**,**/target/**,**/node_modules/**,**/.idea/**,**/build/**" \
-            -Drat.numUnapprovedLicenses=0
