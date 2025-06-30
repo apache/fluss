@@ -493,6 +493,9 @@ public class FlinkTableSource
 
             PredicateVisitor<Boolean> partitionPredicateVisitor =
                     new PartitionPredicateVisitor(partitionKeys);
+
+            // TODO after https://github.com/alibaba/fluss/pull/979
+            //  replace string type with the real type
             LogicalType[] partitionKeyTypes =
                     partitionKeys.stream()
                             .map(key -> VarCharType.STRING_TYPE)
