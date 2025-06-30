@@ -46,6 +46,8 @@ import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.logical.RowType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.time.ZoneId;
@@ -70,7 +72,10 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
-    protected final LakeFlinkCatalog lakeFlinkCatalog;
+  private static final Logger LOG = LoggerFactory.getLogger(FlinkTableFactory.class);
+  private static final String FLUSS_PREFIX = "fluss.";
+
+  protected final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
 
     public FlinkTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
@@ -248,6 +253,17 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             flussConfig.setString(
                     ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES.key(),
                     tableOptions.get(LookupOptions.MAX_RETRIES.key()));
+        }
+
+        // pass through all fluss options from flink config
+        try {
+            PropertiesUtils.extractAndRemovePrefix(flinkConfig.toMap(), FLUSS_PREFIX)
+                    .forEach(flussConfig::setString);
+        } catch (NoSuchMethodError e) {
+            // Flink 1.18 does not have the toMap() method yet, see
+            // https://nightlies.apache.org/flink/flink-docs-release-1.18/api/java//org/apache/flink/configuration/ReadableConfig.html
+            LOG.warn(
+                    "Passing config options with prefix 'fluss' via Flink config is only supported with Fluss Flink Connector 1.19 and higher. All config options with prefix 'fluss' will be ignored.");
         }
 
         // pass flink io tmp dir to fluss client.

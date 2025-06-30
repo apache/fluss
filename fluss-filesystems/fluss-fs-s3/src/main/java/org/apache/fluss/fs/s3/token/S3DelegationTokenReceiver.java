@@ -22,7 +22,6 @@ import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
 
-import org.apache.hadoop.fs.s3a.auth.NoAwsCredentialsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,15 +39,19 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
     private static final Logger LOG = LoggerFactory.getLogger(S3DelegationTokenReceiver.class);
 
     static volatile Credentials credentials;
-    static volatile Map<String, String> additionInfos;
+    static volatile Map<String, String> additionalInfos;
 
     public static void updateHadoopConfig(org.apache.hadoop.conf.Configuration hadoopConfig) {
         LOG.info("Updating Hadoop configuration");
 
+        // We always add the Fluss credential providers to the beginning of the provider chain.
+        // Independently whether token delegation is enabled or disabled, the library will go
+        // through the chain and
+        // find a valid credential provider automatically.
         String providers = hadoopConfig.get(PROVIDER_CONFIG_NAME, "");
         if (!providers.contains(DynamicTemporaryAWSCredentialsProvider.NAME)) {
             if (providers.isEmpty()) {
-                LOG.debug("Setting provider");
+                LOG.debug("Setting provider {}", DynamicTemporaryAWSCredentialsProvider.NAME);
                 providers = DynamicTemporaryAWSCredentialsProvider.NAME;
             } else {
                 providers = DynamicTemporaryAWSCredentialsProvider.NAME + "," + providers;
@@ -59,13 +62,8 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
             LOG.debug("Provider already exists");
         }
 
-        // then, set addition info
-        if (additionInfos == null) {
-            // if addition info is null, it also means we have not received any token,
-            // we throw InvalidCredentialsException
-            throw new NoAwsCredentialsException(DynamicTemporaryAWSCredentialsProvider.COMPONENT);
-        } else {
-            for (Map.Entry<String, String> entry : additionInfos.entrySet()) {
+        if (additionalInfos != null) {
+            for (Map.Entry<String, String> entry : additionalInfos.entrySet()) {
                 hadoopConfig.set(entry.getKey(), entry.getValue());
             }
         }
@@ -80,16 +78,21 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
     @Override
     public void onNewTokensObtained(ObtainedSecurityToken token) {
-        LOG.info("Updating session credentials");
+        LOG.info("Trying to update session credentials");
 
         byte[] tokenBytes = token.getToken();
+        if (tokenBytes.length != 0) {
+            credentials = CredentialsJsonSerde.fromJson(tokenBytes);
+            additionalInfos = token.getAdditionInfos();
 
-        credentials = CredentialsJsonSerde.fromJson(tokenBytes);
-        additionInfos = token.getAdditionInfos();
-
-        LOG.info(
-                "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKeyId());
+            LOG.info(
+                    "Session credentials updated successfully with access key: {}.",
+                    credentials.getAccessKeyId());
+        } else {
+            LOG.info(
+                    "Received empty token. This indicates that {} has been disabled.",
+                    ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION);
+        }
     }
 
     public static Credentials getCredentials() {
