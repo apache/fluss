@@ -1883,44 +1883,59 @@ public class ConfigOptions {
         ZSTD
     }
 
-    // ------------------------------------------------------------------------
-    //  ConfigOptions Registry and Utilities
-    // ------------------------------------------------------------------------
+  // ------------------------------------------------------------------------
+  //  ConfigOptions Registry and Utilities
+  // ------------------------------------------------------------------------
 
-    /**
-     * Holder class for lazy initialization of ConfigOptions registry. This ensures that the
-     * registry is initialized only when first accessed, and guarantees that all ConfigOption fields
-     * are already initialized (since static initialization happens in declaration order).
-     */
-    private static class ConfigOptionsHolder {
-        private static final Map<String, ConfigOption<?>> CONFIG_OPTIONS_BY_KEY;
+  /**
+   * Holder class for lazy initialization of ConfigOptions registry. This ensures that the
+   * registry is initialized only when first accessed, and guarantees that all ConfigOption fields
+   * are already initialized (since static initialization happens in declaration order).
+   */
+  private static class ConfigOptionsHolder {
+    private static final Map<String, ConfigOption<?>> CONFIG_OPTIONS_BY_KEY;
 
-        static {
-            Map<String, ConfigOption<?>> options = new HashMap<>();
-            Field[] fields = ConfigOptions.class.getFields();
-            for (Field field : fields) {
-                if (!ConfigOption.class.isAssignableFrom(field.getType())) {
-                    continue;
-                }
-                try {
-                    ConfigOption<?> configOption = (ConfigOption<?>) field.get(null);
-                    options.put(configOption.key(), configOption);
-                } catch (IllegalAccessException e) {
-                    // Ignore fields that cannot be accessed
-                }
-            }
-            CONFIG_OPTIONS_BY_KEY = Collections.unmodifiableMap(options);
+    static {
+      Map<String, ConfigOption<?>> options = new HashMap<>();
+      Field[] fields = ConfigOptions.class.getFields();
+      for (Field field : fields) {
+        if (!ConfigOption.class.isAssignableFrom(field.getType())) {
+          continue;
         }
+        try {
+          ConfigOption<?> configOption = (ConfigOption<?>) field.get(null);
+          options.put(configOption.key(), configOption);
+        } catch (IllegalAccessException e) {
+          // Ignore fields that cannot be accessed
+        }
+      }
+      CONFIG_OPTIONS_BY_KEY = Collections.unmodifiableMap(options);
     }
+  }
 
-    /**
-     * Gets the ConfigOption for a given key.
-     *
-     * @param key the configuration key
-     * @return the ConfigOption if found, null otherwise
-     */
-    @Internal
-    public static ConfigOption<?> getConfigOption(String key) {
-        return ConfigOptionsHolder.CONFIG_OPTIONS_BY_KEY.get(key);
-    }
+  /**
+   * Gets the ConfigOption for a given key.
+   *
+   * @param key the configuration key
+   * @return the ConfigOption if found, null otherwise
+   */
+  @Internal
+  public static ConfigOption<?> getConfigOption(String key) {
+    return ConfigOptionsHolder.CONFIG_OPTIONS_BY_KEY.get(key);
+  }
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for file systems (Fluss-internal, not recognized by Hadoop FS libraries)
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<Boolean> FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION =
+            key("fs.s3.enable-token-delegation")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Specifies if token delegation (Fluss-internal refreshing and distribution of temporary credentials from servers to clients) for S3 should be enabled or disabled. "
+                                    + "If all your clients run on AWS, you normally want to disable token delegation and "
+                                    + "use one of the predefined AWS credential providers that rely on automatic credential refreshing by AWS. "
+                                    + "For further information, see the respective documentation. "
+                                    + "If you are using an S3-compatible object store (e.g., MinIO), you currently need to disable this option as well and use long-term credentials."
+                                    + "**Important:** We recommend to deactivate the token delegation process and use long-term credentials to support an S3-compatible object storage _only_ when all clients run in a trusted environment!");
 }
