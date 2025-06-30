@@ -129,6 +129,7 @@ We have listed them in the table below the figure.
             <td>
                <li>[JMX](maintenance/observability/metric-reporters.md#jmx)</li>
                <li>[Prometheus](maintenance/observability/metric-reporters.md#prometheus)</li>
+               <li>[OpenTelemetry](maintenance/observability/metric-reporters.md#opentelemetry)</li>
             </td>
         </tr>
     </tbody>
@@ -137,9 +138,7 @@ We have listed them in the table below the figure.
 ## How to deploy Fluss
 
 Fluss can be deployed in three different ways:
-- [Local Cluster](install-deploy/deploying-local-cluster.md)
-- [Distributed Cluster](install-deploy/deploying-distributed-cluster.md)
-- [Docker run / Docker Compose](install-deploy/deploying-with-docker.md)
 
-**NOTE**:
-- Local Cluster is for testing purpose only.
+- [Local Cluster](install-deploy/deploying-local-cluster.md) (for testing purposes only)
+- [Distributed Cluster](install-deploy/deploying-distributed-cluster.md)
+- [Docker](install-deploy/deploying-with-docker.md)
