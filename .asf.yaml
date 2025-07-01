@@ -40,4 +40,4 @@ notifications:
   issues:       issues@fluss.apache.org
   pullrequests: issues@fluss.apache.org
   jobs:         builds@fluss.apache.org
-  discussions:  issues@foo.apache.org
+  discussions:  issues@fluss.apache.org
