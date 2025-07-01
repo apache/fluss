@@ -68,6 +68,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-fs-obs</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- metrics plugin -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
