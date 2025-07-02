@@ -72,7 +72,8 @@ export default function Home(): JSX.Element {
     const {siteConfig} = useDocusaurusContext();
     return (
         <Layout
-            title="Apache Fluss™ (incubating)"
+            // leave empty to just display "Apache Fluss (Incubating)" in tab on landing page
+            title=""
             description="Streaming Storage for Real-Time Analytics">
             <HomepageHeader/>
             <main>
