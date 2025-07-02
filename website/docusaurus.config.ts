@@ -158,6 +158,16 @@ const config: Config = {
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
         {
+            label: 'ASF', position: 'left', items: [
+                {to: 'https://www.apache.org/', label: 'Foundation'},
+                {to: 'https://www.apache.org/licenses/', label: 'License'},
+                {to: 'https://www.apache.org/foundation/sponsorship.html', label: 'Donate'},
+                {to: 'https://www.apache.org/foundation/thanks.html', label: 'Sponsors'},
+                {to: 'https://www.apache.org/security/', label: 'Security'},
+                {to: 'https://privacy.apache.org/policies/privacy-policy-public.html', label: 'Privacy'}
+            ]
+        },
+        {
           type: 'docsVersionDropdown',
           position: 'right',
           dropdownActiveClassDisabled: true,
