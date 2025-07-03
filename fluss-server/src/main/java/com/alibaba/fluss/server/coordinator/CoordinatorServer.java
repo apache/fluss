@@ -27,6 +27,7 @@ import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.lake.lakestorage.LakeStorage;
 import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
 import com.alibaba.fluss.lake.lakestorage.LakeStoragePluginSetUp;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -247,11 +248,12 @@ public class CoordinatorServer extends ServerBase {
 
     @Nullable
     private LakeCatalog createLakeCatalog() {
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromConfiguration(conf, pluginManager);
-        if (lakeStoragePlugin == null) {
+        DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
+        if (dataLakeFormat == null) {
             return null;
         }
+        LakeStoragePlugin lakeStoragePlugin =
+                LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat.toString(), pluginManager);
         Map<String, String> lakeProperties = extractLakeProperties(conf);
         LakeStorage lakeStorage =
                 lakeStoragePlugin.createLakeStorage(
