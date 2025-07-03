@@ -21,6 +21,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.client.write.RecordAccumulator.ReadyCheckResult;
+import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.InvalidMetadataException;
 import com.alibaba.fluss.exception.LeaderNotAvailableException;
@@ -205,8 +206,10 @@ public class Sender implements Runnable {
     }
 
     private void sendWriteData() throws Exception {
+        Cluster clusterSnapshot = metadataUpdater.getCluster();
+
         // get the list of buckets with data ready to send.
-        ReadyCheckResult readyCheckResult = accumulator.ready(metadataUpdater.getCluster());
+        ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
 
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
@@ -227,7 +230,7 @@ public class Sender implements Runnable {
                     readyCheckResult.unknownLeaderTables);
         }
 
-        Set<ServerNode> readyNodes = readyCheckResult.readyNodes;
+        Set<Integer> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
             // will cause the CPU to be occupied.
@@ -238,7 +241,7 @@ public class Sender implements Runnable {
 
         // get the list of batches prepare to send.
         Map<Integer, List<ReadyWriteBatch>> batches =
-                accumulator.drain(metadataUpdater.getCluster(), readyNodes, maxRequestSize);
+                accumulator.drain(clusterSnapshot, readyNodes, maxRequestSize);
 
         if (!batches.isEmpty()) {
             addToInflightBatches(batches);

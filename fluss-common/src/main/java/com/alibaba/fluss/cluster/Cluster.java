@@ -316,7 +316,7 @@ public final class Cluster {
     }
 
     /** Get the current leader for the given table-bucket. */
-    public @Nullable ServerNode leaderFor(TableBucket tableBucket) {
+    public @Nullable Integer leaderFor(TableBucket tableBucket) {
         BucketLocation location = availableLocationByBucket.get(tableBucket);
         if (location == null) {
             return null;

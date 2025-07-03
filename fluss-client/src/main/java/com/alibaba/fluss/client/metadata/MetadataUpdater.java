@@ -116,7 +116,7 @@ public class MetadataUpdater {
     }
 
     public int leaderFor(TableBucket tableBucket) {
-        ServerNode serverNode = cluster.leaderFor(tableBucket);
+        Integer serverNode = cluster.leaderFor(tableBucket);
         if (serverNode == null) {
             for (int i = 0; i < MAX_RETRY_TIMES; i++) {
                 TablePath tablePath = cluster.getTablePathOrElseThrow(tableBucket.getTableId());
@@ -144,7 +144,7 @@ public class MetadataUpdater {
             }
         }
 
-        return serverNode.id();
+        return serverNode;
     }
 
     public @Nullable ServerNode getTabletServer(int id) {
