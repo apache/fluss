@@ -18,13 +18,12 @@
 
 package com.alibaba.fluss.flink.source;
 
+import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.predicate.Predicate;
 import com.alibaba.fluss.predicate.PredicateBuilder;
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.utils.TypeUtils;
 
-import org.apache.flink.table.data.conversion.DataStructureConverters;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.expressions.ExpressionVisitor;
@@ -38,14 +37,12 @@ import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeFamily;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.paimon.flink.FlinkRowWrapper;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiFunction;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.apache.flink.table.types.logical.utils.LogicalTypeCasts.supportsImplicitCast;
@@ -72,7 +69,10 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
     }
 
     /** Accepts simple LIKE patterns like "abc%". */
-    private static final Pattern BEGIN_PATTERN = Pattern.compile("([^%]+)%");
+    private static final Pattern BEGIN_PATTERN = Pattern.compile("^[^%_]+%$");
+
+    private static final Pattern END_PATTERN = Pattern.compile("^%[^%_]+$");
+    private static final Pattern CONTAINS_PATTERN = Pattern.compile("^%[^%_]+%$");
 
     @Override
     public Predicate visit(CallExpression call) {
@@ -137,51 +137,20 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
                                                         fieldRefExpr.getOutputDataType(),
                                                         children.get(2)))
                                         .toString();
-                String escapedSqlPattern = sqlPattern;
-                boolean allowQuick = false;
-                if (escape == null && !sqlPattern.contains("_")) {
-                    allowQuick = true;
-                } else if (escape != null) {
-                    if (escape.length() != 1) {
-                        throw new UnsupportedExpression();
+
+                if (escape == null) {
+                    if (BEGIN_PATTERN.matcher(sqlPattern).matches()) {
+                        String prefix = sqlPattern.substring(0, sqlPattern.length() - 1);
+                        return builder.startsWith(builder.indexOf(fieldRefExpr.getName()), prefix);
                     }
-                    char escapeChar = escape.charAt(0);
-                    boolean matched = true;
-                    int i = 0;
-                    StringBuilder sb = new StringBuilder();
-                    while (i < sqlPattern.length() && matched) {
-                        char c = sqlPattern.charAt(i);
-                        if (c == escapeChar) {
-                            if (i == (sqlPattern.length() - 1)) {
-                                throw new UnsupportedExpression();
-                            }
-                            char nextChar = sqlPattern.charAt(i + 1);
-                            if (nextChar == '%') {
-                                matched = false;
-                            } else if ((nextChar == '_') || (nextChar == escapeChar)) {
-                                sb.append(nextChar);
-                                i += 1;
-                            } else {
-                                throw new UnsupportedExpression();
-                            }
-                        } else if (c == '_') {
-                            matched = false;
-                        } else {
-                            sb.append(c);
-                        }
-                        i = i + 1;
+                    if (END_PATTERN.matcher(sqlPattern).matches()) {
+                        String suffix = sqlPattern.substring(1);
+                        return builder.endsWith(builder.indexOf(fieldRefExpr.getName()), suffix);
                     }
-                    if (matched) {
-                        allowQuick = true;
-                        escapedSqlPattern = sb.toString();
-                    }
-                }
-                if (allowQuick) {
-                    Matcher beginMatcher = BEGIN_PATTERN.matcher(escapedSqlPattern);
-                    if (beginMatcher.matches()) {
-                        return builder.startsWith(
-                                builder.indexOf(fieldRefExpr.getName()),
-                                BinaryString.fromString(beginMatcher.group(1)));
+                    if (CONTAINS_PATTERN.matcher(sqlPattern).matches()
+                            && sqlPattern.indexOf('%', 1) == sqlPattern.length() - 1) {
+                        String mid = sqlPattern.substring(1, sqlPattern.length() - 1);
+                        return builder.contains(builder.indexOf(fieldRefExpr.getName()), mid);
                     }
                 }
             }
@@ -197,7 +166,7 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
             BiFunction<Integer, Object, Predicate> visit1,
             BiFunction<Integer, Object, Predicate> visit2) {
         Optional<FieldReferenceExpression> fieldRefExpr = extractFieldReference(children.get(0));
-        if (fieldRefExpr.isPresent()) {
+        if (fieldRefExpr.isPresent() && builder.indexOf(fieldRefExpr.get().getName()) != -1) {
             Object literal =
                     extractLiteral(fieldRefExpr.get().getOutputDataType(), children.get(1));
             return visit1.apply(builder.indexOf(fieldRefExpr.get().getName()), literal);
@@ -239,10 +208,7 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
                 Object value = valueOpt.get();
                 if (actualLogicalType.getTypeRoot().equals(expectedLogicalType.getTypeRoot())
                         && !isStringType(expectedLogicalType)) {
-                    return FlinkRowWrapper.fromFlinkObject(
-                            DataStructureConverters.getConverter(expectedType)
-                                    .toInternalOrNull(value),
-                            expectedLogicalType);
+                    return FlinkAsFlussRow.fromFlinkObject(value, expectedType);
                 } else if (isStringType(actualLogicalType) || isStringType(expectedLogicalType)) {
                     return value.toString();
                 } else if (supportsImplicitCast(actualLogicalType, expectedLogicalType)) {

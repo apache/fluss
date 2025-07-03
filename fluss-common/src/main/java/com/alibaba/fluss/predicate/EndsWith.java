@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.predicate;
 
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.DataType;
 
 import java.util.List;
@@ -39,8 +38,8 @@ public class EndsWith extends NullFalseLeafBinaryFunction {
 
     @Override
     public boolean test(DataType type, Object field, Object patternLiteral) {
-        BinaryString fieldString = (BinaryString) field;
-        return fieldString.endsWith((BinaryString) patternLiteral);
+        String fieldString = field.toString();
+        return fieldString.endsWith((String) patternLiteral);
     }
 
     @Override

@@ -64,7 +64,7 @@ public class FlinkSource<OUT>
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
 
-    private Predicate predicate;
+    private Predicate partitionFilters;
 
     public FlinkSource(
             Configuration flussConf,
@@ -77,7 +77,7 @@ public class FlinkSource<OUT>
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
-            Predicate predicate) {
+            Predicate partitionFilters) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -88,7 +88,7 @@ public class FlinkSource<OUT>
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
-        this.predicate = predicate;
+        this.partitionFilters = partitionFilters;
     }
 
     @Override
@@ -108,7 +108,7 @@ public class FlinkSource<OUT>
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                predicate);
+                partitionFilters);
     }
 
     @Override
@@ -126,7 +126,7 @@ public class FlinkSource<OUT>
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                predicate);
+                partitionFilters);
     }
 
     @Override
