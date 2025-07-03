@@ -104,7 +104,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
     @Override
     public TabletServerGateway newTabletServerClientForNode(int serverId) {
-        return tabletServerGatewayMap.get(serverId);
+        if (cluster.getTabletServer(serverId) == null) {
+            return null;
+        } else {
+            return tabletServerGatewayMap.get(serverId);
+        }
     }
 
     private void initializeCluster(

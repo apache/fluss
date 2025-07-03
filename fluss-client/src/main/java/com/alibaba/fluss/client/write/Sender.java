@@ -22,7 +22,6 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.InvalidMetadataException;
 import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
