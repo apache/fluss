@@ -485,7 +485,7 @@ public class LogFetcher implements Closeable {
         if (metadataUpdater.getBucketLocation(tableBucket).isPresent()) {
             BucketLocation bucketLocation = metadataUpdater.getBucketLocation(tableBucket).get();
             if (bucketLocation.getLeader() != null) {
-                return bucketLocation.getLeader().id();
+                return bucketLocation.getLeader();
             }
         }
 

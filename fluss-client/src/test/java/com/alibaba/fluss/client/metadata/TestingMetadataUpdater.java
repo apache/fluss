@@ -115,6 +115,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         Map<Integer, ServerNode> tabletServerMap = new HashMap<>();
         tabletServers.forEach(tabletServer -> tabletServerMap.put(tabletServer.id(), tabletServer));
 
+        int[] replicas = new int[tabletServers.size()];
+        for (int i = 0; i < replicas.length; i++) {
+            replicas[i] = tabletServers.get(i).id();
+        }
+
         Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
@@ -129,20 +134,20 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                                             physicalTablePath,
                                             tableId,
                                             0,
-                                            tabletServers.get(0),
-                                            tabletServers.toArray(new ServerNode[0])),
+                                            tabletServers.get(0).id(),
+                                            replicas),
                                     new BucketLocation(
                                             physicalTablePath,
                                             tableId,
                                             1,
-                                            tabletServers.get(1),
-                                            tabletServers.toArray(new ServerNode[0])),
+                                            tabletServers.get(1).id(),
+                                            replicas),
                                     new BucketLocation(
                                             physicalTablePath,
                                             tableId,
                                             2,
-                                            tabletServers.get(2),
-                                            tabletServers.toArray(new ServerNode[0]))));
+                                            tabletServers.get(2).id(),
+                                            replicas)));
                     tableIdByPath.put(tablePath, tableId);
                     tableInfoByPath.put(tablePath, tableInfo);
                 });
