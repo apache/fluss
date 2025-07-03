@@ -377,12 +377,11 @@ public class FlussAdmin implements Admin {
             Collection<Integer> buckets,
             OffsetSpec offsetSpec) {
         Long partitionId = null;
-        metadataUpdater.checkAndUpdateTableMetadata(
-                Collections.singleton(physicalTablePath.getTablePath()));
+        metadataUpdater.updateTableOrPartitionMetadata(physicalTablePath.getTablePath(), null);
         long tableId = metadataUpdater.getTableId(physicalTablePath.getTablePath());
         // if partition name is not null, we need to check and update partition metadata
         if (physicalTablePath.getPartitionName() != null) {
-            metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
+            metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
         Map<Integer, ListOffsetsRequest> requestMap =
