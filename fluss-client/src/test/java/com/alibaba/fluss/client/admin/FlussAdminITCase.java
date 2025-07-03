@@ -61,6 +61,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
 import com.alibaba.fluss.types.DataTypes;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
