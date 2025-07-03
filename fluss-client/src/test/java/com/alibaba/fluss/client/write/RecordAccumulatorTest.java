@@ -279,7 +279,7 @@ class RecordAccumulatorTest {
         Iterator<WriteBatch> bucketBatchesIterator = writeBatches.iterator();
         assertThat(bucketBatchesIterator.next().isClosed()).isTrue();
         // Bucket's leader should be ready.
-        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
+        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
 
         List<ReadyWriteBatch> batches =
                 accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
@@ -314,7 +314,7 @@ class RecordAccumulatorTest {
         // row size > 10;
         accum.append(createRecord(row1), writeCallback, cluster, 0, false);
         // bucket's leader should be ready for bucket0.
-        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
+        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
 
         Deque<WriteBatch> writeBatches =
                 accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
@@ -418,7 +418,7 @@ class RecordAccumulatorTest {
             }
         }
 
-        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
+        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
         List<ReadyWriteBatch> batches =
                 accum.drain(cluster, Collections.singleton(node1.id()), 1024).get(node1.id());
         // Due to size bound only one bucket should have been retrieved.

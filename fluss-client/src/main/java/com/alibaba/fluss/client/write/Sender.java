@@ -369,14 +369,13 @@ public class Sender implements Runnable {
                             .add(batch);
                 });
 
-        ServerNode destinationNode = metadataUpdater.getTabletServer(destination);
-        if (destinationNode == null) {
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
             handleWriteRequestException(
                     new LeaderNotAvailableException(
                             "Server " + destination + " is not found in metadata cache."),
                     recordsByBucket);
         } else {
-            TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
             writeBatchByTable.forEach(
                     (tableId, writeBatches) -> {
                         TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
