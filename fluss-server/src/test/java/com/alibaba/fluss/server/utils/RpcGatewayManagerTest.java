@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -35,10 +36,11 @@ class RpcGatewayManagerTest {
         RpcGatewayManager<TabletServerGateway> gatewayRpcGatewayManager =
                 new RpcGatewayManager<>(
                         new NettyClient(
-                                new Configuration(), TestingClientMetricGroup.newInstance()),
+                                new Configuration(), TestingClientMetricGroup.newInstance(), false),
                         TabletServerGateway.class);
 
-        ServerNode serverNode1 = new ServerNode(1, "localhost", 1234, ServerType.TABLET_SERVER);
+        ServerNode serverNode1 =
+                new ServerNode(1, "localhost", 1234, ServerType.TABLET_SERVER, "rack1");
         // should be empty at the beginning
         assertThat(gatewayRpcGatewayManager.getRpcGateway(serverNode1.id())).isEmpty();
         gatewayRpcGatewayManager.addServer(serverNode1);
@@ -50,7 +52,8 @@ class RpcGatewayManagerTest {
         assertThat(gatewayRpcGatewayManager.getRpcGateway(serverNode1.id())).isPresent();
 
         // add another server2
-        ServerNode serverNode2 = new ServerNode(2, "localhost", 1234, ServerType.TABLET_SERVER);
+        ServerNode serverNode2 =
+                new ServerNode(2, "localhost", 1234, ServerType.TABLET_SERVER, "rack2");
         gatewayRpcGatewayManager.addServer(serverNode2);
         assertThat(gatewayRpcGatewayManager.getRpcGateway(serverNode2.id())).isPresent();
 

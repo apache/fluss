@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,7 +32,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
@@ -54,7 +54,8 @@ class CoordinatorChannelManagerTest {
         Configuration configuration = new Configuration();
         CoordinatorChannelManager coordinatorChannelManager =
                 new CoordinatorChannelManager(
-                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()));
+                        RpcClient.create(
+                                configuration, TestingClientMetricGroup.newInstance(), false));
         List<ServerNode> tabletServersNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
 
         // test start up using server 0
@@ -91,7 +92,11 @@ class CoordinatorChannelManagerTest {
         AtomicInteger sendFlag = new AtomicInteger(0);
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
-                makeUpdateMetadataRequest(Optional.empty(), Collections.emptySet());
+                makeUpdateMetadataRequest(
+                        null,
+                        Collections.emptySet(),
+                        Collections.emptyList(),
+                        Collections.emptyList());
         coordinatorChannelManager.sendRequest(
                 targetServerId,
                 updateMetadataRequest,

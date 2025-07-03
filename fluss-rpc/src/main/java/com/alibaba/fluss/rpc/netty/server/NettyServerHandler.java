@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,6 +20,7 @@ package com.alibaba.fluss.rpc.netty.server;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.NetworkException;
+import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.record.send.Send;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
@@ -38,6 +40,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAda
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.IOUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,6 +72,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private final ServerAuthenticator authenticator;
 
     private volatile ConnectionState state;
+    private volatile boolean initialized = false;
 
     public NettyServerHandler(
             RequestChannel requestChannel,
@@ -205,6 +209,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     private void close() {
         switchState(ConnectionState.CLOSE);
+        IOUtils.closeQuietly(authenticator);
         ctx.close();
     }
 
@@ -306,24 +311,42 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
 
         AuthenticateRequest authenticateRequest = (AuthenticateRequest) requestMessage;
-        if (!authenticator.protocol().equals(authenticateRequest.getProtocol())) {
-            future.completeExceptionally(
-                    new AuthenticationException(
-                            String.format(
-                                    "Authenticate protocol not match: protocol of server is '%s' while protocol of client is '%s'",
-                                    authenticator.protocol(), authenticateRequest.getProtocol())));
+        try {
+            authenticator.matchProtocol(authenticateRequest.getProtocol());
+        } catch (AuthenticationException e) {
+            future.completeExceptionally(e);
             return;
         }
 
-        AuthenticateResponse authenticateResponse = new AuthenticateResponse();
-        if (!authenticator.isCompleted()) {
-            byte[] token = authenticateRequest.getToken();
-            byte[] challenge = authenticator.evaluateResponse(token);
-            if (!authenticator.isCompleted() && challenge != null) {
-                authenticateResponse.setChallenge(challenge);
-            }
+        if (!initialized) {
+            authenticator.initialize(
+                    new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
+            initialized = true;
         }
-        future.complete(authenticateResponse);
+
+        AuthenticateResponse authenticateResponse = new AuthenticateResponse();
+        try {
+            if (!authenticator.isCompleted()) {
+                byte[] token = authenticateRequest.getToken();
+                byte[] challenge = authenticator.evaluateResponse(token);
+                if (challenge != null) {
+                    authenticateResponse.setChallenge(challenge);
+                }
+            }
+            future.complete(authenticateResponse);
+        } catch (AuthenticationException e) {
+            if (e instanceof RetriableAuthenticationException) {
+                LOG.warn(
+                        "Authentication from {} failed due to a retriable exception: {}. Reinitializing authenticator for subsequent retries.",
+                        ctx.channel().remoteAddress(),
+                        e.getMessage(),
+                        e);
+                authenticator.initialize(
+                        new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
+            }
+
+            future.completeExceptionally(e);
+        }
 
         if (authenticator.isCompleted()) {
             switchState(ConnectionState.READY);
@@ -347,6 +370,31 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
         public boolean isAuthenticating() {
             return this == AUTHENTICATING;
+        }
+    }
+
+    private class DefaultAuthenticateContext implements ServerAuthenticator.AuthenticateContext {
+        private final String protocolName;
+
+        public DefaultAuthenticateContext(String protocolName) {
+            this.protocolName = protocolName;
+        }
+
+        @Override
+        public String ipAddress() {
+            return ((InetSocketAddress) ctx.channel().remoteAddress())
+                    .getAddress()
+                    .getHostAddress();
+        }
+
+        @Override
+        public String listenerName() {
+            return listenerName;
+        }
+
+        @Override
+        public String protocol() {
+            return protocolName;
         }
     }
 }

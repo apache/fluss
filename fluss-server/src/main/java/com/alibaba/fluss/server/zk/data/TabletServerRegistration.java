@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +19,8 @@ package com.alibaba.fluss.server.zk.data;
 
 import com.alibaba.fluss.cluster.Endpoint;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -27,10 +30,13 @@ import java.util.Objects;
  * @see TabletServerRegistrationJsonSerde for json serialization and deserialization.
  */
 public class TabletServerRegistration {
+    private final @Nullable String rack;
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
 
-    public TabletServerRegistration(List<Endpoint> endpoints, long registerTimestamp) {
+    public TabletServerRegistration(
+            @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
+        this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
     }
@@ -43,6 +49,10 @@ public class TabletServerRegistration {
         return registerTimestamp;
     }
 
+    public @Nullable String getRack() {
+        return rack;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -53,12 +63,13 @@ public class TabletServerRegistration {
         }
         TabletServerRegistration that = (TabletServerRegistration) o;
         return registerTimestamp == that.registerTimestamp
-                && Objects.equals(endpoints, that.endpoints);
+                && Objects.equals(endpoints, that.endpoints)
+                && Objects.equals(rack, that.rack);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp);
+        return Objects.hash(endpoints, registerTimestamp, rack);
     }
 
     @Override
@@ -68,6 +79,8 @@ public class TabletServerRegistration {
                 + endpoints
                 + ", registerTimestamp="
                 + registerTimestamp
+                + ", rack='"
+                + rack
                 + '}';
     }
 }

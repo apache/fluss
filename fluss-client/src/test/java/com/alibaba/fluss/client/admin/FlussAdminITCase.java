@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -29,6 +30,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
+import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
@@ -49,6 +51,7 @@ import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -504,6 +507,78 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testListPartitionInfosByPartitionSpec() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .column("secondary_partition", DataTypes.STRING())
+                                        .build())
+                        .comment("test table")
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt", "secondary_partition")
+                        .build();
+        TablePath partitionedTablePath = TablePath.of(dbName, "test_partitioned_table");
+        // create table
+        admin.createTable(partitionedTablePath, partitionedTable, true).get();
+        // add three partitions.
+        admin.createPartition(
+                        partitionedTablePath,
+                        newPartitionSpec(
+                                Arrays.asList("pt", "secondary_partition"),
+                                Arrays.asList("2025", "10")),
+                        false)
+                .get();
+        admin.createPartition(
+                        partitionedTablePath,
+                        newPartitionSpec(
+                                Arrays.asList("pt", "secondary_partition"),
+                                Arrays.asList("2025", "11")),
+                        false)
+                .get();
+        admin.createPartition(
+                        partitionedTablePath,
+                        newPartitionSpec(
+                                Arrays.asList("pt", "secondary_partition"),
+                                Arrays.asList("2026", "12")),
+                        false)
+                .get();
+
+        // run listPartitionInfos by partition spec with valid partition name.
+        PartitionSpec partitionSpec = newPartitionSpec("pt", "2025");
+
+        List<PartitionInfo> partitionInfos =
+                admin.listPartitionInfos(partitionedTablePath, partitionSpec).get();
+
+        List<String> actualPartitionNames =
+                partitionInfos.stream()
+                        .map(PartitionInfo::getPartitionName)
+                        .collect(Collectors.toList());
+        assertThat(actualPartitionNames).containsExactlyInAnyOrder("2025$10", "2025$11");
+
+        // run listPartitionInfos by partition spec with invalid partition name.
+        PartitionSpec invalidNamePartitionSpec = newPartitionSpec("pt", "2024");
+        List<PartitionInfo> invalidNamePartitionInfos =
+                admin.listPartitionInfos(partitionedTablePath, invalidNamePartitionSpec).get();
+        assertThat(invalidNamePartitionInfos).hasSize(0);
+
+        // run listPartitionInfos by invalid partition spec.
+        PartitionSpec invalidPartitionSpec = newPartitionSpec("pt1", "2025");
+        assertThatThrownBy(
+                        () ->
+                                admin.listPartitionInfos(partitionedTablePath, invalidPartitionSpec)
+                                        .get())
+                .cause()
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("table don't contains this partitionKey: pt1");
+    }
+
+    @Test
     void testGetKvSnapshot() throws Exception {
         TablePath tablePath1 =
                 TablePath.of(DEFAULT_TABLE_PATH.getDatabaseName(), "test-table-snapshot");
@@ -915,5 +990,36 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
                 .hasMessageContaining("exceeds the maximum limit");
+    }
+
+    /** Test that creating a table with system columns throws InvalidTableException. */
+    @Test
+    public void testSystemsColumns() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("f0", DataTypes.STRING())
+                                        .column("f1", DataTypes.BIGINT())
+                                        .column("f3", DataTypes.STRING())
+                                        .column("__offset", DataTypes.STRING())
+                                        .column("__timestamp", DataTypes.STRING())
+                                        .column("__bucket", DataTypes.STRING())
+                                        .build())
+                        .build();
+
+        TablePath tablePath = TablePath.of(dbName, "test_system_columns");
+
+        // Creating this table should throw InvalidTableException
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "__offset, __timestamp, __bucket cannot be used as column names, "
+                                + "because they are reserved system columns in Fluss. "
+                                + "Please use other names for these columns. "
+                                + "The reserved system columns are: __offset, __timestamp, __bucket");
     }
 }

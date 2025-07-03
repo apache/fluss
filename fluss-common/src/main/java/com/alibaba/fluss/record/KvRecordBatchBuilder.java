@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -53,8 +54,9 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private int batchSequence;
     private int currentRecordNumber;
     private int sizeInBytes;
-    private boolean isClosed;
+    private volatile boolean isClosed;
     private final KvFormat kvFormat;
+    private boolean aborted = false;
 
     private KvRecordBatchBuilder(
             int schemaId,
@@ -103,6 +105,11 @@ public class KvRecordBatchBuilder implements AutoCloseable {
      *     KvRecord is for delete the corresponding key.
      */
     public void append(byte[] key, @Nullable BinaryRow row) throws IOException {
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Tried to append a record, but KvRecordBatchBuilder has already been aborted");
+        }
+
         if (isClosed) {
             throw new IllegalStateException(
                     "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
@@ -130,6 +137,10 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     public BytesView build() throws IOException {
+        if (aborted) {
+            throw new IllegalStateException("Attempting to build an aborted record batch");
+        }
+
         if (builtBuffer != null) {
             return builtBuffer;
         }
@@ -154,8 +165,17 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         return isClosed;
     }
 
+    public void abort() {
+        aborted = true;
+    }
+
     @Override
     public void close() throws IOException {
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Cannot close KvRecordBatchBuilder as it has already been aborted");
+        }
+
         isClosed = true;
     }
 

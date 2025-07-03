@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -156,7 +157,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Specifies the type of authorizer to be used for access control. "
                                     + "This value corresponds to the identifier of the authorization plugin. "
-                                    + "The default value is 'default', which indicates the built-in authorizer implementation. "
+                                    + "The default value is `default`, which indicates the built-in authorizer implementation. "
                                     + "Custom authorizers can be implemented by providing a matching plugin identifier.");
 
     public static final ConfigOption<String> SUPER_USERS =
@@ -166,7 +167,7 @@ public class ConfigOptions {
                     .withDescription(
                             "A semicolon-separated list of superusers who have unrestricted access to all operations and resources. "
                                     + "Note that the delimiter is semicolon since SSL user names may contain comma, "
-                                    + "and each super user should be specified in the format 'principal_type:principal_name', e.g., 'User:admin;User:bob'. "
+                                    + "and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
@@ -176,6 +177,56 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of buckets that can be created for a table."
                                     + "The default value is 128000");
+
+    /**
+     * The network address and port the server binds to for accepting connections.
+     *
+     * <p>This specifies the interface and port where the server will listen for incoming requests.
+     * The format is {@code listener_name://host:port}, supporting multiple addresses separated by
+     * commas.
+     *
+     * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
+     */
+    public static final ConfigOption<String> BIND_LISTENERS =
+            key("bind.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The network address and port to which the server binds for accepting connections. "
+                                    + "This defines the interface and port where the server will listen for incoming requests. "
+                                    + "The format is `listener_name://host:port`, and multiple addresses can be specified, separated by commas. "
+                                    + "Use `0.0.0.0` for the `host` to bind to all available interfaces which is dangerous on production and not suggested for production usage. "
+                                    + "The `listener_name` serves as an identifier for the address in the configuration. For example, "
+                                    + "`internal.listener.name` specifies the address used for internal server communication. "
+                                    + "If multiple addresses are configured, ensure that the `listener_name` values are unique.");
+
+    /**
+     * The externally advertised address and port for client connections.
+     *
+     * <p>This specifies the address other nodes/clients should use to connect to this server. It is
+     * required when the bind address ({@link #BIND_LISTENERS}) is not publicly reachable (e.g.,
+     * when using {@code localhost} in {@code bind.listeners}). <b>Must be configured in distributed
+     * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
+     * {@code bind.listeners} will be used as fallback.
+     */
+    public static final ConfigOption<String> ADVERTISED_LISTENERS =
+            key("advertised.listeners")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The externally advertised address and port for client connections. "
+                                    + "Required in distributed environments when the bind address is not publicly reachable. "
+                                    + "Format matches `bind.listeners` (listener_name://host:port). "
+                                    + "Defaults to the value of `bind.listeners` if not explicitly configured.");
+
+    public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
+            key("internal.listener.name")
+                    .stringType()
+                    .defaultValue(DEFAULT_LISTENER_NAME)
+                    .withDescription("The listener for server internal communication.");
+
+    public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
+            key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
@@ -234,53 +285,6 @@ public class ConfigOptions {
                                     + " (“50100,50101”), ranges (“50100-50200”) or a combination of both."
                                     + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
 
-    /**
-     * The network address and port the server binds to for accepting connections.
-     *
-     * <p>This specifies the interface and port where the server will listen for incoming requests.
-     * The format is {@code listener_name://host:port}, supporting multiple addresses separated by
-     * commas.
-     *
-     * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
-     */
-    public static final ConfigOption<String> BIND_LISTENERS =
-            key("bind.listeners")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The network address and port to which the server binds for accepting connections. "
-                                    + "This defines the interface and port where the server will listen for incoming requests. "
-                                    + "The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas. "
-                                    + "Use '0.0.0.0' for the 'host' to bind to all available interfaces which is dangerous on production and not suggested for production usage. "
-                                    + "The 'listener_name' serves as an identifier for the address in the configuration. For example, "
-                                    + "'internal.listener.name' specifies the address used for internal server communication. "
-                                    + "If multiple addresses are configured, ensure that the 'listener_name' values are unique.");
-
-    /**
-     * The externally advertised address and port for client connections.
-     *
-     * <p>This specifies the address other nodes/clients should use to connect to this server. It is
-     * required when the bind address ({@link #BIND_LISTENERS}) is not publicly reachable (e.g.,
-     * when using {@code localhost} in {@code bind.listeners}). <b>Must be configured in distributed
-     * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
-     * {@code bind.listeners} will be used as fallback.
-     */
-    public static final ConfigOption<String> ADVERTISED_LISTENERS =
-            key("advertised.listeners")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The externally advertised address and port for client connections. "
-                                    + "Required in distributed environments when the bind address is not publicly reachable. "
-                                    + "Format matches 'bind.listeners' ({listener_name}://{host}:{port}). "
-                                    + "Defaults to the value of 'bind.listeners' if not explicitly configured.");
-
-    public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
-            key("internal.listener.name")
-                    .stringType()
-                    .defaultValue(DEFAULT_LISTENER_NAME)
-                    .withDescription("The listener for server internal communication.");
-
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()
@@ -333,7 +337,7 @@ public class ConfigOptions {
                     .defaultValue(Collections.emptyMap())
                     .withDescription(
                             "A map defining the authentication protocol for each listener. "
-                                    + "The format is 'listenerName1:protocol1,listenerName2:protocol2', e.g., 'INTERNAL:PLAINTEXT,CLIENT:GSSAPI'. "
+                                    + "The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. "
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
@@ -342,6 +346,14 @@ public class ConfigOptions {
                     .intType()
                     .noDefaultValue()
                     .withDescription("The id for the tablet server.");
+
+    public static final ConfigOption<String> TABLET_SERVER_RACK =
+            key("tablet-server.rack")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The rack for the tabletServer. This will be used in rack aware bucket assignment "
+                                    + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
@@ -387,9 +399,9 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("128kb"))
                     .withDescription(
-                            "Size of every page in memory buffers ('"
+                            "Size of every page in memory buffers (`"
                                     + SERVER_BUFFER_MEMORY_SIZE.key()
-                                    + "').");
+                                    + "`).");
 
     public static final ConfigOption<MemorySize> SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE =
             key("server.buffer.per-request-memory-size")
@@ -486,6 +498,15 @@ public class ConfigOptions {
                                     + "Under certain configurations EnsembleTracking can lead to setting of ZooKeeper connection string "
                                     + "with unresolvable hostnames.");
 
+    public static final ConfigOption<String> ZOOKEEPER_CONFIG_PATH =
+            key("zookeeper.client.config-path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The file path from which the ZooKeeper client reads its configuration. "
+                                    + "This allows each ZooKeeper client instance to load its own configuration file, "
+                                    + "instead of relying on shared JVM-level environment settings. "
+                                    + "This enables fine-grained control over ZooKeeper client behavior.");
     // ------------------------------------------------------------------------
     //  ConfigOptions for Log
     // ------------------------------------------------------------------------
@@ -616,7 +637,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum time to wait for enough bytes to be available for a fetch log request "
                                     + "from follower to response. This value should always be less than the "
-                                    + "'log.replica.max-lag-time' at all times to prevent frequent shrinking of ISR for "
+                                    + "`log.replica.max-lag-time` at all times to prevent frequent shrinking of ISR for "
                                     + "low throughput tables");
 
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MIN_BYTES =
@@ -634,14 +655,14 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(1)
                     .withDescription(
-                            "When a producer set acks to all (-1), this configuration specifies the "
+                            "When a writer set `client.writer.acks` to all (-1), this configuration specifies the "
                                     + "minimum number of replicas that must acknowledge a write for "
                                     + "the write to be considered successful. If this minimum cannot be met, "
-                                    + "then the producer will raise an exception(NotEnoughReplicas). "
-                                    + "when used together, this config and 'acks' allow you to "
+                                    + "then the writer will raise an exception (NotEnoughReplicas). "
+                                    + "when used together, this config and `client.writer.acks` allow you to "
                                     + "enforce greater durability guarantees. A typical scenario would be "
                                     + "to create a table with a replication factor of 3. set this conf to 2, and "
-                                    + "produce with acks = -1. This will ensure that the producer raises an "
+                                    + "write with acks = -1. This will ensure that the writer raises an "
                                     + "exception if a majority of replicas don't receive a write.");
 
     // ------------------------------------------------------------------------
@@ -765,9 +786,9 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("128kb"))
                     .withDescription(
-                            "Size of every page in memory buffers ('"
+                            "Size of every page in memory buffers (`"
                                     + CLIENT_WRITER_BUFFER_MEMORY_SIZE.key()
-                                    + "').");
+                                    + "`).");
 
     public static final ConfigOption<MemorySize> CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE =
             key("client.writer.buffer.per-request-memory-size")
@@ -795,6 +816,21 @@ public class ConfigOptions {
                     .withDescription(
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
+
+    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED =
+            key("client.writer.dynamic-batch-size.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Controls whether the client writer dynamically adjusts the batch size based on actual write throughput. Enabled by default. "
+                                    + "With dynamic batch sizing enabled, the writer adapts memory allocation per batch according to historical write sizes for the target table or partition. This ensures better memory utilization and performance under varying throughput conditions. The dynamic batch size is bounded: it will not exceed `"
+                                    + CLIENT_WRITER_BATCH_SIZE.key()
+                                    + "`, nor fall below `"
+                                    + CLIENT_WRITER_BUFFER_PAGE_SIZE.key()
+                                    + "`."
+                                    + "When disabled, the writer uses a fixed batch size (`"
+                                    + CLIENT_WRITER_BATCH_SIZE.key()
+                                    + "`) for all batches, this may lead to frequent memory waits and suboptimal write performance if the incoming data rate is inconsistent across partitions.");
 
     public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_TIMEOUT =
             key("client.writer.batch-timeout")
@@ -884,7 +920,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_RETRIES.key()
                                     + " to be greater than 0, and "
                                     + CLIENT_WRITER_ACKS.key()
-                                    + " must be 'all'.\n"
+                                    + " must be `all`.\n"
                                     + "Writer idempotence is enabled by default if no conflicting config are set. "
                                     + "If conflicting config are set and writer idempotence is not explicitly enabled, "
                                     + "idempotence is disabled. If idempotence is explicitly enabled and conflicting "
@@ -900,6 +936,15 @@ public class ConfigOptions {
                                     + " is set to true. When the number of inflight "
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
                                     + "requests to complete before sending out new requests.");
+
+    public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED =
+            key("client.writer.dynamic-create-partition.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether enable dynamic create partition for client writer. Enable by default."
+                                    + " Dynamic partition strategy refers to creating partitions based on the data "
+                                    + "being written for partitioned table if the wrote partition don't exists.");
 
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
@@ -1038,7 +1083,7 @@ public class ConfigOptions {
                     .doubleType()
                     .defaultValue(0.75)
                     .withDescription(
-                            "Ratio of the tokens's expiration time when new credentials for access filesystem should be re-obtained.");
+                            "Ratio of the token's expiration time when new credentials for access filesystem should be re-obtained.");
 
     public static final ConfigOption<Boolean> CLIENT_METRICS_ENABLED =
             key("client.metrics.enabled")
@@ -1047,6 +1092,39 @@ public class ConfigOptions {
                     .withDescription(
                             "Enable metrics for client. When metrics is enabled, the client "
                                     + "will collect metrics and report by the JMX metrics reporter.");
+
+    public static final ConfigOption<String> CLIENT_SASL_MECHANISM =
+            key("client.security.sasl.mechanism")
+                    .stringType()
+                    .defaultValue("PLAIN")
+                    .withDescription(
+                            "SASL mechanism to use for authentication.Currently, we only support plain.");
+
+    public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
+            key("client.security.sasl.jaas.config")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
+                                    + "Example: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
+
+    public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =
+            key("client.security.sasl.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password to use for client-side SASL JAAS authentication. "
+                                    + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
+                                    + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_SASL_JAAS_PASSWORD =
+            key("client.security.sasl.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username to use for client-side SASL JAAS authentication. "
+                                    + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
+                                    + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
@@ -1068,15 +1146,15 @@ public class ConfigOptions {
                     .enumType(LogFormat.class)
                     .defaultValue(LogFormat.ARROW)
                     .withDescription(
-                            "The format of the log records in log store. The default value is 'arrow'. "
-                                    + "The supported formats are 'arrow' and 'indexed'.");
+                            "The format of the log records in log store. The default value is `arrow`. "
+                                    + "The supported formats are `arrow` and `indexed`.");
 
     public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
             key("table.log.arrow.compression.type")
                     .enumType(ArrowCompressionType.class)
                     .defaultValue(ArrowCompressionType.ZSTD)
                     .withDescription(
-                            "The compression type of the log records if the log format is set to 'ARROW'. "
+                            "The compression type of the log records if the log format is set to `ARROW`. "
                                     + "The candidate compression type is "
                                     + Arrays.toString(ArrowCompressionType.values()));
 
@@ -1085,16 +1163,16 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(3)
                     .withDescription(
-                            "The compression level of ZSTD for the log records if the log format is set to 'ARROW' "
-                                    + "and the compression type is set to 'ZSTD'. The valid range is 1 to 22.");
+                            "The compression level of ZSTD for the log records if the log format is set to `ARROW` "
+                                    + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
 
     public static final ConfigOption<KvFormat> TABLE_KV_FORMAT =
             key("table.kv.format")
                     .enumType(KvFormat.class)
                     .defaultValue(KvFormat.COMPACTED)
                     .withDescription(
-                            "The format of the kv records in kv store. The default value is 'compacted'. "
-                                    + "The supported formats are 'compacted' and 'indexed'.");
+                            "The format of the kv records in kv store. The default value is `compacted`. "
+                                    + "The supported formats are `compacted` and `indexed`.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
@@ -1109,9 +1187,12 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The singe time partition key to execute auto partition on when the table has multiple partition keys."
-                                    + " If the table has only one partition key, this config is not necessary."
-                                    + " If the table has multiple partition keys, must specify one.");
+                            "This configuration defines the time-based partition key to be used for auto-partitioning when a table is partitioned with multiple keys. "
+                                    + "Auto-partitioning utilizes a time-based partition key to handle partitions automatically, including creating new ones and removing outdated ones, "
+                                    + "by comparing the time value of the partition with the current system time. "
+                                    + "In the case of a table using multiple partition keys (such as a composite partitioning strategy), "
+                                    + "this feature determines which key should serve as the primary time dimension for making auto-partitioning decisions."
+                                    + "And If the table has only one partition key, this config is not necessary. Otherwise, it must be specified.");
 
     public static final ConfigOption<AutoPartitionTimeUnit> TABLE_AUTO_PARTITION_TIME_UNIT =
             key("table.auto-partition.time-unit")
@@ -1119,17 +1200,17 @@ public class ConfigOptions {
                     .defaultValue(AutoPartitionTimeUnit.DAY)
                     .withDescription(
                             "The time granularity for auto created partitions. "
-                                    + "The default value is 'DAY'. "
-                                    + "Valid values are 'HOUR', 'DAY', 'MONTH', 'QUARTER', 'YEAR'. "
-                                    + "If the value is 'HOUR', the partition format for "
+                                    + "The default value is `DAY`. "
+                                    + "Valid values are `HOUR`, `DAY`, `MONTH`, `QUARTER`, `YEAR`. "
+                                    + "If the value is `HOUR`, the partition format for "
                                     + "auto created is yyyyMMddHH. "
-                                    + "If the value is 'DAY', the partition format for "
+                                    + "If the value is `DAY`, the partition format for "
                                     + "auto created is yyyyMMdd. "
-                                    + "If the value is 'MONTH', the partition format for "
+                                    + "If the value is `MONTH`, the partition format for "
                                     + "auto created is yyyyMM. "
-                                    + "If the value is 'QUARTER', the partition format for "
+                                    + "If the value is `QUARTER`, the partition format for "
                                     + "auto created is yyyyQ. "
-                                    + "If the value is 'YEAR', the partition format for "
+                                    + "If the value is `YEAR`, the partition format for "
                                     + "auto created is yyyy.");
 
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
@@ -1149,7 +1230,7 @@ public class ConfigOptions {
                                     + "configured as 3, then partitions 20241111, 20241112, 20241113 will be pre-created. "
                                     + "If any one partition exists, it'll skip creating the partition. "
                                     + "The default value is 2, which means 2 partitions will be pre-created. "
-                                    + "If the 'table.auto-partition.time-unit' is 'DAY'(default), one precreated partition is for today and another one is for tomorrow."
+                                    + "If the `table.auto-partition.time-unit` is `DAY`(default), one precreated partition is for today and another one is for tomorrow."
                                     + "For a partition table with multiple partition keys, pre-create is unsupported and will be set to 0 automatically when creating table if it is not explicitly specified.");
 
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_RETENTION =
@@ -1194,7 +1275,7 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only 'paimon' is supported. "
+                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only `paimon` is supported. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
@@ -1215,9 +1296,9 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "Defines the merge engine for the primary key table. By default, primary key table doesn't have merge engine. "
-                                    + "The supported merge engines are 'first_row' and 'versioned'. "
-                                    + "The 'first_row' merge engine will keep the first row of the same primary key. "
-                                    + "The 'versioned' merge engine will keep the row with the largest version of the same primary key.");
+                                    + "The supported merge engines are `first_row` and `versioned`. "
+                                    + "The `first_row` merge engine will keep the first row of the same primary key. "
+                                    + "The `versioned` merge engine will keep the row with the largest version of the same primary key.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
@@ -1225,8 +1306,8 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The column name of the version column for the 'versioned' merge engine. "
-                                    + "If the merge engine is set to 'versioned', the version column must be set.");
+                            "The column name of the version column for the `versioned` merge engine. "
+                                    + "If the merge engine is set to `versioned`, the version column must be set.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
@@ -1265,15 +1346,15 @@ public class ConfigOptions {
                     .defaultValue(2)
                     .withDescription(
                             "The maximum number of concurrent background flush and compaction jobs (per bucket of table). "
-                                    + "The default value is '2'.");
+                                    + "The default value is `2`.");
 
     public static final ConfigOption<Integer> KV_MAX_OPEN_FILES =
             key("kv.rocksdb.files.open")
                     .intType()
                     .defaultValue(-1)
                     .withDescription(
-                            "The maximum number of open files (per  bucket of table) that can be used by the DB, '-1' means no limit. "
-                                    + "The default value is '-1'.");
+                            "The maximum number of open files (per  bucket of table) that can be used by the DB, `-1` means no limit. "
+                                    + "The default value is `-1`.");
 
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")
@@ -1283,7 +1364,7 @@ public class ConfigOptions {
                             "The maximum size of RocksDB's file used for information logging. "
                                     + "If the log files becomes larger than this, a new file will be created. "
                                     + "If 0, all logs will be written to one log file. "
-                                    + "The default maximum file size is '25MB'. ");
+                                    + "The default maximum file size is `25MB`. ");
 
     public static final ConfigOption<Integer> KV_LOG_FILE_NUM =
             key("kv.rocksdb.log.file-num")
@@ -1300,7 +1381,7 @@ public class ConfigOptions {
                             "The directory for RocksDB's information logging files. "
                                     + "If empty (Fluss default setting), log files will be in the same directory as the Fluss log. "
                                     + "If non-empty, this directory will be used and the data directory's absolute path will be used as the prefix of the log file name. "
-                                    + "If setting this option as a non-existing location, e.g '/dev/null', RocksDB will then create the log under its own database folder as before.");
+                                    + "If setting this option as a non-existing location, e.g `/dev/null`, RocksDB will then create the log under its own database folder as before.");
 
     public static final ConfigOption<InfoLogLevel> KV_LOG_LEVEL =
             key("kv.rocksdb.log.level")
@@ -1340,7 +1421,7 @@ public class ConfigOptions {
                     .withDescription(
                             String.format(
                                     "The specified compaction style for DB. Candidate compaction style is %s, %s, %s or %s, "
-                                            + "and Fluss chooses '%s' as default style.",
+                                            + "and Fluss chooses `%s` as default style.",
                                     LEVEL.name(),
                                     FIFO.name(),
                                     UNIVERSAL.name(),
@@ -1355,7 +1436,7 @@ public class ConfigOptions {
                             "If true, RocksDB will pick target size of each level dynamically. From an empty DB, "
                                     + "RocksDB would make last level the base level, which means merging L0 data into the last level, "
                                     + "until it exceeds max_bytes_for_level_base. And then repeat this process for second last level and so on. "
-                                    + "The default value is 'false'. "
+                                    + "The default value is `false`. "
                                     + "For more information, please refer to %s https://github.com/facebook/rocksdb/wiki/Leveled-Compaction#level_compaction_dynamic_level_bytes-is-true"
                                     + "RocksDB's doc.");
 
@@ -1376,7 +1457,7 @@ public class ConfigOptions {
                                     + "compression policies. In many cases, lower levels use fast compression algorithms,"
                                     + " while higher levels with more data use slower but more effective compression algorithms. "
                                     + "The N th element in the List corresponds to the compression type of the level N-1"
-                                    + "When 'kv.rocksdb.compaction.level.use-dynamic-size' is true, compression_per_level[0] still determines L0, but other "
+                                    + "When `kv.rocksdb.compaction.level.use-dynamic-size` is true, compression_per_level[0] still determines L0, but other "
                                     + "elements are based on the base level and may not match the level seen in the info log. "
                                     + "Note: If the List size is smaller than the level number, the undefined lower level uses the last Compression Type in the List. "
                                     + "The optional values include NO, SNAPPY, LZ4, ZSTD. "
@@ -1387,7 +1468,7 @@ public class ConfigOptions {
                                     + "ZSTD is more space save than LZ4, but it is more CPU-intensive. "
                                     + "Different machines deploy compaction modes according to CPU and I/O resources. The default value is for the scenario that "
                                     + "CPU resources are adequate. If you find the IO pressure of the system is not big when writing a lot of data,"
-                                    + " but CPU resources are inadequate, you can exchange I/O resources for CPU resources and change the compaction mode to 'NO,NO,NO,LZ4,LZ4,ZSTD,ZSTD'. ");
+                                    + " but CPU resources are inadequate, you can exchange I/O resources for CPU resources and change the compaction mode to `NO,NO,NO,LZ4,LZ4,ZSTD,ZSTD`. ");
 
     public static final ConfigOption<MemorySize> KV_TARGET_FILE_SIZE_BASE =
             key("kv.rocksdb.compaction.level.target-file-size-base")
@@ -1395,7 +1476,7 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("64mb"))
                     .withDescription(
                             "The target file size for compaction, which determines a level-1 file size. "
-                                    + "The default value is '64MB'.");
+                                    + "The default value is `64MB`.");
 
     public static final ConfigOption<MemorySize> KV_MAX_SIZE_LEVEL_BASE =
             key("kv.rocksdb.compaction.level.max-size-level-base")
@@ -1403,7 +1484,7 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("256mb"))
                     .withDescription(
                             "The upper-bound of the total size of level base files in bytes. "
-                                    + "The default value is '256MB'.");
+                                    + "The default value is `256MB`.");
 
     public static final ConfigOption<MemorySize> KV_WRITE_BUFFER_SIZE =
             key("kv.rocksdb.writebuffer.size")
@@ -1411,7 +1492,7 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("64mb"))
                     .withDescription(
                             "The amount of data built up in memory (backed by an unsorted log on disk) "
-                                    + "before converting to a sorted on-disk files. The default writebuffer size is '64MB'.");
+                                    + "before converting to a sorted on-disk files. The default writebuffer size is `64MB`.");
 
     public static final ConfigOption<Integer> KV_MAX_WRITE_BUFFER_NUMBER =
             key("kv.rocksdb.writebuffer.count")
@@ -1419,7 +1500,7 @@ public class ConfigOptions {
                     .defaultValue(2)
                     .withDescription(
                             "The maximum number of write buffers that are built up in memory. "
-                                    + "The default value is '2'.");
+                                    + "The default value is `2`.");
 
     public static final ConfigOption<Integer> KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE =
             key("kv.rocksdb.writebuffer.number-to-merge")
@@ -1427,7 +1508,7 @@ public class ConfigOptions {
                     .defaultValue(1)
                     .withDescription(
                             "The minimum number of write buffers that will be merged together before writing to storage. "
-                                    + "The default value is '1'.");
+                                    + "The default value is `1`.");
 
     public static final ConfigOption<MemorySize> KV_BLOCK_SIZE =
             key("kv.rocksdb.block.blocksize")
@@ -1435,7 +1516,7 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("4kb"))
                     .withDescription(
                             "The approximate size (in bytes) of user data packed per block. "
-                                    + "The default blocksize is '4KB'.");
+                                    + "The default blocksize is `4KB`.");
 
     public static final ConfigOption<MemorySize> KV_METADATA_BLOCK_SIZE =
             key("kv.rocksdb.block.metadata-blocksize")
@@ -1444,7 +1525,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Approximate size of partitioned metadata packed per block. "
                                     + "Currently applied to indexes block when partitioned index/filters option is enabled. "
-                                    + "The default blocksize is '4KB'.");
+                                    + "The default blocksize is `4KB`.");
 
     public static final ConfigOption<MemorySize> KV_BLOCK_CACHE_SIZE =
             key("kv.rocksdb.block.cache-size")
@@ -1452,7 +1533,7 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
                             "The amount of the cache for data blocks in RocksDB. "
-                                    + "The default block-cache size is '8MB'.");
+                                    + "The default block-cache size is `8MB`.");
 
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")
@@ -1476,7 +1557,7 @@ public class ConfigOptions {
                     .defaultValue(false)
                     .withDescription(
                             "If true, RocksDB will use block-based filter instead of full filter, this only take effect when bloom filter is used. "
-                                    + "The default value is 'false'.");
+                                    + "The default value is `false`.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv recovering
@@ -1561,7 +1642,7 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("kafka")
                     .withDescription(
-                            "The database for fluss kafka. The default database is 'kafka'.");
+                            "The database for fluss kafka. The default database is `kafka`.");
 
     public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
             key("kafka.connection.max-idle-time")

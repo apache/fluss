@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +23,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
+import com.alibaba.fluss.exception.InvalidServerRackInfoException;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -37,8 +39,7 @@ import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.replica.ReplicaManager;
@@ -47,6 +48,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperUtils;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.FlussScheduler;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
@@ -82,6 +84,17 @@ public class TabletServer extends ServerBase {
 
     private final int serverId;
 
+    /**
+     * The rack info of the tabletServer. If not configured, the value will be null, and the
+     * tabletServer will not be able to perceive the underlying rack it resides in. In some
+     * rack-aware scenarios, this may lead to an inability to guarantee proper awareness
+     * capabilities.
+     *
+     * <p>Note: Either all tabletServers are configured with rack, or none of them are configured;
+     * otherwise, an {@link InvalidServerRackInfoException} will be thrown.
+     */
+    private final @Nullable String rack;
+
     /** The lock to guard startup / shutdown / manipulation methods. */
     private final Object lock = new Object();
 
@@ -89,6 +102,7 @@ public class TabletServer extends ServerBase {
 
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
     private final String interListenerName;
+    private final Clock clock;
 
     @GuardedBy("lock")
     private RpcServer rpcServer;
@@ -109,7 +123,7 @@ public class TabletServer extends ServerBase {
     private TabletServerMetricGroup tabletServerMetricGroup;
 
     @GuardedBy("lock")
-    private ServerMetadataCache metadataCache;
+    private TabletServerMetadataCache metadataCache;
 
     @GuardedBy("lock")
     private LogManager logManager;
@@ -134,11 +148,17 @@ public class TabletServer extends ServerBase {
     private Authorizer authorizer;
 
     public TabletServer(Configuration conf) {
+        this(conf, SystemClock.getInstance());
+    }
+
+    public TabletServer(Configuration conf, Clock clock) {
         super(conf);
         validateConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
+        this.rack = conf.getString(ConfigOptions.TABLET_SERVER_RACK);
         this.interListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
+        this.clock = clock;
     }
 
     public static void main(String[] args) {
@@ -165,13 +185,13 @@ public class TabletServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            this.metadataCache = new ServerMetadataCacheImpl();
+            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+            this.metadataCache = new TabletServerMetadataCache(metadataManager, zkClient);
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
 
-            SystemClock systemClock = SystemClock.getInstance();
-            this.logManager = LogManager.create(conf, zkClient, scheduler, systemClock);
+            this.logManager = LogManager.create(conf, zkClient, scheduler, clock);
             logManager.startup();
 
             this.kvManager = KvManager.create(conf, zkClient, logManager);
@@ -185,11 +205,11 @@ public class TabletServer extends ServerBase {
             // to fetch log.
             this.clientMetricGroup =
                     new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
             CoordinatorGateway coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(
-                            () -> metadataCache.getCoordinatorServer(interListenerName).get(),
+                            () -> metadataCache.getCoordinatorServer(interListenerName),
                             rpcClient,
                             CoordinatorGateway.class);
 
@@ -208,10 +228,9 @@ public class TabletServer extends ServerBase {
                                     rpcClient, metadataCache, interListenerName),
                             this,
                             tabletServerMetricGroup,
-                            systemClock);
+                            clock);
             replicaManager.startup();
 
-            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.tabletService =
                     new TabletService(
                             serverId,
@@ -234,6 +253,9 @@ public class TabletServer extends ServerBase {
             rpcServer.start();
 
             registerTabletServer();
+            // when init session, register tablet server again
+            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
+                    zkClient, this::registerTabletServer, this);
         }
     }
 
@@ -265,7 +287,7 @@ public class TabletServer extends ServerBase {
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
+                        rack, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
 
         while (true) {
             try {
@@ -398,8 +420,18 @@ public class TabletServer extends ServerBase {
     }
 
     @VisibleForTesting
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
+    }
+
+    @VisibleForTesting
     public ReplicaManager getReplicaManager() {
         return replicaManager;
+    }
+
+    @VisibleForTesting
+    public @Nullable Authorizer getAuthorizer() {
+        return authorizer;
     }
 
     private static void validateConfigs(Configuration conf) {

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +23,6 @@ import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.KvRecordBatchBuilder;
 import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.row.BinaryRow;
@@ -52,7 +52,7 @@ public class KvWriteBatch extends WriteBatch {
     private final @Nullable int[] targetColumns;
 
     public KvWriteBatch(
-            TableBucket tableBucket,
+            int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             KvFormat kvFormat,
@@ -60,7 +60,7 @@ public class KvWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
             long createdMs) {
-        super(tableBucket, physicalTablePath, createdMs);
+        super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
@@ -142,6 +142,11 @@ public class KvWriteBatch extends WriteBatch {
     @Override
     public int batchSequence() {
         return recordsBuilder.batchSequence();
+    }
+
+    @Override
+    public void abortRecordAppends() {
+        recordsBuilder.abort();
     }
 
     public void resetWriterState(long writerId, int batchSequence) {

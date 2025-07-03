@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,14 +24,20 @@ import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionStateListener;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.SessionConnectionStateErrorPolicy;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerConfig;
+import com.alibaba.fluss.utils.function.ThrowingRunnable;
 
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -96,6 +103,22 @@ public class ZooKeeperUtils {
             curatorFrameworkBuilder.connectionStateErrorPolicy(
                     new SessionConnectionStateErrorPolicy());
         }
+
+        Optional<String> configPath =
+                configuration.getOptional(ConfigOptions.ZOOKEEPER_CONFIG_PATH);
+        if (configPath.isPresent()) {
+            try {
+                ZKClientConfig zkClientConfig = new ZKClientConfig(configPath.get());
+                curatorFrameworkBuilder.zkClientConfig(zkClientConfig);
+            } catch (QuorumPeerConfig.ConfigException e) {
+                LOG.warn("Fail to load zookeeper client config from path {}", configPath.get(), e);
+                throw new RuntimeException(
+                        String.format(
+                                "Fail to load zookeeper client config from path %s",
+                                configPath.get()),
+                        e);
+            }
+        }
         return new ZooKeeperClient(
                 startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler));
     }
@@ -127,6 +150,53 @@ public class ZooKeeperUtils {
         cf.getUnhandledErrorListenable().addListener(unhandledErrorListener);
         cf.start();
         return new CuratorFrameworkWithUnhandledErrorListener(cf, unhandledErrorListener);
+    }
+
+    public static void registerZookeeperClientReInitSessionListener(
+            ZooKeeperClient zooKeeperClient,
+            ThrowingRunnable<Exception> reInitSessionCallback,
+            FatalErrorHandler fatalErrorHandler) {
+        zooKeeperClient
+                .getCuratorClient()
+                .getConnectionStateListenable()
+                .addListener(
+                        new ZookeeperClientSessionReInitListener(
+                                reInitSessionCallback, fatalErrorHandler));
+    }
+
+    private static class ZookeeperClientSessionReInitListener implements ConnectionStateListener {
+        private final ThrowingRunnable<Exception> reInitSessionCallback;
+        private final FatalErrorHandler fatalErrorHandler;
+        private volatile boolean sessionExpired = false;
+
+        public ZookeeperClientSessionReInitListener(
+                ThrowingRunnable<Exception> reInitSessionCallback,
+                FatalErrorHandler fatalErrorHandler) {
+            this.reInitSessionCallback = reInitSessionCallback;
+            this.fatalErrorHandler = fatalErrorHandler;
+        }
+
+        public void stateChanged(
+                CuratorFramework curatorFramework, ConnectionState connectionState) {
+            switch (connectionState) {
+                case LOST:
+                    sessionExpired = true;
+                    break;
+                case RECONNECTED:
+                    if (sessionExpired) {
+                        LOG.info("Zookeeper session re-initialized.");
+                        try {
+                            reInitSessionCallback.run();
+                        } catch (Exception e) {
+                            fatalErrorHandler.onFatalError(e);
+                        }
+                        sessionExpired = false;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 
     /** Creates a ZooKeeper path of the form "/a/b/.../z". */

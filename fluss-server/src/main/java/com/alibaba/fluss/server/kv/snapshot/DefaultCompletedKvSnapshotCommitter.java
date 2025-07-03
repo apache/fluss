@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,17 +17,16 @@
 
 package com.alibaba.fluss.server.kv.snapshot;
 
-import com.alibaba.fluss.cluster.MetadataCache;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Optional;
 import java.util.function.Supplier;
 
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeCommitKvSnapshotRequest;
@@ -47,7 +47,7 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
     }
 
     public static DefaultCompletedKvSnapshotCommitter create(
-            RpcClient rpcClient, MetadataCache metadataCache, String interListenerName) {
+            RpcClient rpcClient, ServerMetadataCache metadataCache, String interListenerName) {
         CoordinatorServerSupplier coordinatorServerSupplier =
                 new CoordinatorServerSupplier(metadataCache, interListenerName);
         return new DefaultCompletedKvSnapshotCommitter(
@@ -69,18 +69,19 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
 
         private static final int BACK_OFF_MILLS = 500;
 
-        private final MetadataCache metadataCache;
+        private final ServerMetadataCache metadataCache;
         private final String interListenerName;
 
-        public CoordinatorServerSupplier(MetadataCache metadataCache, String interListenerName) {
+        public CoordinatorServerSupplier(
+                ServerMetadataCache metadataCache, String interListenerName) {
             this.metadataCache = metadataCache;
             this.interListenerName = interListenerName;
         }
 
         @Override
         public ServerNode get() {
-            Optional<ServerNode> serverNode = metadataCache.getCoordinatorServer(interListenerName);
-            if (!serverNode.isPresent()) {
+            ServerNode serverNode = metadataCache.getCoordinatorServer(interListenerName);
+            if (serverNode == null) {
                 LOG.info("No coordinator provided, retrying after backoff.");
                 // backoff some times
                 try {
@@ -92,7 +93,7 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
                 }
                 return get();
             }
-            return serverNode.get();
+            return serverNode;
         }
     }
 }

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,6 +24,7 @@ import com.alibaba.fluss.flink.lakehouse.LakeTableFactory;
 import com.alibaba.fluss.flink.sink.FlinkTableSink;
 import com.alibaba.fluss.flink.source.FlinkTableSource;
 import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -46,15 +48,19 @@ import org.apache.flink.table.types.logical.RowType;
 
 import java.io.File;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
+import static com.alibaba.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static com.alibaba.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
+import static com.alibaba.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
 import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
 import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
@@ -76,13 +82,16 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
-        helper.validateExcept("table.", "client.");
+        final ReadableConfig tableOptions = helper.getOptions();
+        Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
+        List<String> prefixesToSkip = new ArrayList<>(Arrays.asList("table.", "client."));
+        datalakeFormat.ifPresent(dataLakeFormat -> prefixesToSkip.add(dataLakeFormat + "."));
+        helper.validateExcept(prefixesToSkip.toArray(new String[0]));
 
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
                         == RuntimeExecutionMode.STREAMING;
 
-        final ReadableConfig tableOptions = helper.getOptions();
         RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
 
@@ -140,7 +149,13 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     @Override
     public DynamicTableSink createDynamicTableSink(Context context) {
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
-        helper.validateExcept("table.", "client.");
+        final ReadableConfig tableOptions = helper.getOptions();
+        Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
+        if (datalakeFormat.isPresent()) {
+            helper.validateExcept("table.", "client.", datalakeFormat.get() + ".");
+        } else {
+            helper.validateExcept("table.", "client.");
+        }
 
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
@@ -150,7 +165,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
-        final ReadableConfig tableOptions = helper.getOptions();
 
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
@@ -161,7 +175,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionKeys,
                 isStreamingMode,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_FORMAT)),
+                tableOptions.get(toFlinkOption(TABLE_DATALAKE_FORMAT)),
                 tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),

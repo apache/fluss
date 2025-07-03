@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,14 +20,13 @@ package com.alibaba.fluss.flink.source;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.flink.source.testutils.FlinkTestBase;
 import com.alibaba.fluss.flink.source.testutils.MockDataUtils;
 import com.alibaba.fluss.flink.source.testutils.Order;
 import com.alibaba.fluss.flink.source.testutils.OrderPartial;
 import com.alibaba.fluss.flink.source.testutils.OrderPartialDeserializationSchema;
+import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.flink.utils.PojoToRowConverter;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -42,7 +42,7 @@ import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.types.RowKind;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -60,9 +60,6 @@ public class FlussSourceITCase extends FlinkTestBase {
     private static final Schema PK_SCHEMA = MockDataUtils.getOrdersSchemaPK();
     private static final Schema LOG_SCHEMA = MockDataUtils.getOrdersSchemaLog();
 
-    private static StreamExecutionEnvironment env;
-    private static String bootstrapServers;
-
     private final String pkTableName = "orders_test_pk";
     private final String logTableName = "orders_test_log";
 
@@ -74,17 +71,12 @@ public class FlussSourceITCase extends FlinkTestBase {
     private final TableDescriptor pkTableDescriptor =
             TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1, "orderId").build();
 
-    @BeforeAll
-    public static void beforeAll() {
-        FlinkTestBase.beforeAll();
+    protected StreamExecutionEnvironment env;
+
+    @BeforeEach
+    public void before() {
         env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(4);
-        bootstrapServers =
-                String.join(
-                        ",",
-                        FLUSS_CLUSTER_EXTENSION
-                                .getClientConfig()
-                                .get(ConfigOptions.BOOTSTRAP_SERVERS));
     }
 
     @Test
@@ -169,7 +161,7 @@ public class FlussSourceITCase extends FlinkTestBase {
                 Arrays.asList(row(600L, 20L, 800, "addr1"), row(700L, 22L, 801, "addr2"));
 
         // send some row updates
-        writeRows(ordersPKTablePath, updatedRows, false);
+        writeRows(conn, ordersPKTablePath, updatedRows, false);
 
         List<RowData> expectedResult =
                 Arrays.asList(
@@ -219,7 +211,7 @@ public class FlussSourceITCase extends FlinkTestBase {
                 Arrays.asList(row(600L, 20L, 600, "addr1"), row(700L, 22L, 601, "addr2"));
 
         // send some row updates
-        writeRows(ordersLogTablePath, updatedRows, true);
+        writeRows(conn, ordersLogTablePath, updatedRows, true);
 
         List<RowData> expectedResult =
                 Arrays.asList(

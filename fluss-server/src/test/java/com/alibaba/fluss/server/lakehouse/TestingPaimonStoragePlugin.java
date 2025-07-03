@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,10 +19,10 @@ package com.alibaba.fluss.server.lakehouse;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStorage;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lakehouse.writer.LakeTieringFactory;
+import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -48,7 +49,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
     public static class TestingPaimonLakeStorage implements LakeStorage {
 
         @Override
-        public LakeTieringFactory createLakeTieringFactory() {
+        public LakeTieringFactory<?, ?> createLakeTieringFactory() {
             throw new UnsupportedOperationException("createLakeTieringFactory is not supported.");
         }
 

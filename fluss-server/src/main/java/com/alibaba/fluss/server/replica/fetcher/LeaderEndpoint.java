@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +19,7 @@ package com.alibaba.fluss.server.replica.fetcher;
 
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
+import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 
 import java.util.Map;
 import java.util.Optional;
@@ -42,10 +44,9 @@ interface LeaderEndpoint {
      * fetching from the leader.
      *
      * @param fetchLogContext The fetch log context we want to carry out.
-     * @return A map of table bucket -> fetch data.
+     * @return fetchData.
      */
-    CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
-            FetchLogContext fetchLogContext);
+    CompletableFuture<FetchData> fetchLog(FetchLogContext fetchLogContext);
 
     /**
      * Builds a fetch request, given a bucket map.
@@ -57,4 +58,25 @@ interface LeaderEndpoint {
 
     /** Closes access to fetch from leader. */
     void close();
+
+    /** Fetch data returned by fetchLog method. */
+    final class FetchData {
+        private final FetchLogResponse fetchLogResponse;
+        private final Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap;
+
+        public FetchData(
+                FetchLogResponse fetchLogResponse,
+                Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap) {
+            this.fetchLogResponse = fetchLogResponse;
+            this.fetchLogResultMap = fetchLogResultMap;
+        }
+
+        public FetchLogResponse getFetchLogResponse() {
+            return fetchLogResponse;
+        }
+
+        public Map<TableBucket, FetchLogResultForBucket> getFetchLogResultMap() {
+            return fetchLogResultMap;
+        }
+    }
 }

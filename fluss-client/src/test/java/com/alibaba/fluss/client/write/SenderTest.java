@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -288,7 +289,7 @@ final class SenderTest {
         // IdempotenceManager.
         Set<ServerNode> readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
         assertThat(readyNodes.isEmpty()).isFalse();
-        Map<Integer, List<WriteBatch>> drained =
+        Map<Integer, List<ReadyWriteBatch>> drained =
                 accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
         assertThat(drained.isEmpty()).isTrue();
 
@@ -322,9 +323,9 @@ final class SenderTest {
             if (i == 0) {
                 // for first batch (retried first batch), we can send.
                 assertThat(drained.isEmpty()).isFalse();
-                List<WriteBatch> writeBatches = new ArrayList<>(drained.values()).get(0);
+                List<ReadyWriteBatch> writeBatches = new ArrayList<>(drained.values()).get(0);
                 assertThat(writeBatches.size()).isEqualTo(1);
-                assertThat(writeBatches.get(0).batchSequence()).isEqualTo(0);
+                assertThat(writeBatches.get(0).writeBatch().batchSequence()).isEqualTo(0);
             } else {
                 // for other batches, we will wait the result of the first batch and cannot be send.
                 assertThat(drained.isEmpty()).isTrue();
@@ -446,10 +447,14 @@ final class SenderTest {
                 Duration.ofMinutes(1),
                 () -> { // after response 1 is received, the writer will be reset
                     assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
-                    assertThat(accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1)).hasSize(1);
+                    assertThat(
+                                    accumulator.getReadyDeque(
+                                            DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket()))
+                            .hasSize(1);
                     assertThat(
                                     accumulator
-                                            .getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1)
+                                            .getReadyDeque(
+                                                    DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket())
                                             .peek()
                                             .batchSequence())
                             .isEqualTo(0);
@@ -494,7 +499,8 @@ final class SenderTest {
                 1, tb1, 1, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
 
         sender1.runOnce(); // receive response 1.
-        Deque<WriteBatch> queuedBatches = accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1);
+        Deque<WriteBatch> queuedBatches =
+                accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
 
         // Make sure that we are queueing the second batch first.
         assertThat(queuedBatches.size()).isEqualTo(1);
@@ -563,7 +569,8 @@ final class SenderTest {
         assertThat(future2.isDone()).isTrue();
         assertThat(future2.get()).isNull();
         assertThat(future1.isDone()).isFalse();
-        Deque<WriteBatch> queuedBatches = accumulator.getDeque(DATA1_PHYSICAL_TABLE_PATH, tb1);
+        Deque<WriteBatch> queuedBatches =
+                accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
 
         assertThat(queuedBatches.size()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));

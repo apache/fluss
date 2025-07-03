@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,15 +21,30 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 
+import java.io.Closeable;
+import java.io.IOException;
+
 /**
  * Authenticator for server side.
  *
  * @since 0.7
  */
 @PublicEvolving
-public interface ServerAuthenticator {
+public interface ServerAuthenticator extends Closeable {
 
     String protocol();
+
+    default void matchProtocol(String protocol) throws AuthenticationException {
+        if (!protocol().equalsIgnoreCase(protocol)) {
+            throw new AuthenticationException(
+                    String.format(
+                            "Authenticate protocol not match: protocol of server is '%s' while protocol of client is '%s'",
+                            protocol(), protocol));
+        }
+    }
+
+    /** Initialize the authenticator. */
+    default void initialize(AuthenticateContext context) {}
 
     /**
      * * Generates the challenge based on the client's token, then sends it back to the client. This
@@ -79,4 +95,16 @@ public interface ServerAuthenticator {
      * complete).
      */
     FlussPrincipal createPrincipal();
+
+    /** Close the authenticator. */
+    default void close() throws IOException {}
+
+    /** The context of the authentication process. */
+    interface AuthenticateContext {
+        String ipAddress();
+
+        String listenerName();
+
+        String protocol();
+    }
 }

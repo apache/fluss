@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -181,33 +182,37 @@ public class ReplicaFetcherManager {
 
     ReplicaFetcherThread createFetcherThread(int fetcherId, int leaderId) {
         String threadName = "ReplicaFetcherThread-" + fetcherId + "-" + leaderId;
-        LeaderEndpoint leaderEndpoint =
-                new RemoteLeaderEndpoint(
-                        conf,
-                        serverId,
-                        leaderId,
-                        GatewayClientProxy.createGatewayProxy(
-                                () -> {
-                                    Optional<ServerNode> optionalServerNode =
-                                            serverNodeMetadataCache.apply(leaderId);
-                                    if (optionalServerNode.isPresent()) {
-                                        return optionalServerNode.get();
-                                    } else {
-                                        // no available serverNode to connect, throw exception,
-                                        // fetch thead expects to retry
-                                        throw new RuntimeException(
-                                                "ServerNode "
-                                                        + leaderId
-                                                        + " is not available in metadata cache.");
-                                    }
-                                },
-                                rpcClient,
-                                TabletServerGateway.class));
+        LeaderEndpoint leaderEndpoint = buildRemoteLogEndpoint(leaderId);
         return new ReplicaFetcherThread(
                 threadName,
                 replicaManager,
                 leaderEndpoint,
                 (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL).toMillis());
+    }
+
+    @VisibleForTesting
+    public RemoteLeaderEndpoint buildRemoteLogEndpoint(int leaderId) {
+        return new RemoteLeaderEndpoint(
+                conf,
+                serverId,
+                leaderId,
+                GatewayClientProxy.createGatewayProxy(
+                        () -> {
+                            Optional<ServerNode> optionalServerNode =
+                                    serverNodeMetadataCache.apply(leaderId);
+                            if (optionalServerNode.isPresent()) {
+                                return optionalServerNode.get();
+                            } else {
+                                // no available serverNode to connect, throw exception,
+                                // fetch thead expects to retry
+                                throw new RuntimeException(
+                                        "ServerNode "
+                                                + leaderId
+                                                + " is not available in metadata cache.");
+                            }
+                        },
+                        rpcClient,
+                        TabletServerGateway.class));
     }
 
     private void addBucketsToFetcherThread(

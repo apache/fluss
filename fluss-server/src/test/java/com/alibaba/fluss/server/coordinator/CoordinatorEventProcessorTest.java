@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +18,7 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
@@ -43,16 +45,15 @@ import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerInfo;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.tablet.TestTabletServerGateway;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
@@ -98,6 +99,7 @@ import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.Onli
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,11 +131,11 @@ class CoordinatorEventProcessorTest {
 
     private CoordinatorEventProcessor eventProcessor;
     private final String defaultDatabase = "db";
-    private ServerMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
+    private CoordinatorMetadataCache serverMetadataCache;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -142,11 +144,18 @@ class CoordinatorEventProcessorTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+
+        // register coordinator server
+        zookeeperClient.registerCoordinatorLeader(
+                new CoordinatorAddress(
+                        "2", Endpoint.fromListenersString("CLIENT://localhost:10012")));
+
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
             zookeeperClient.registerTabletServer(
                     i,
                     new TabletServerRegistration(
+                            "rack" + i,
                             Collections.singletonList(
                                     new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
                             System.currentTimeMillis()));
@@ -155,7 +164,7 @@ class CoordinatorEventProcessorTest {
 
     @BeforeEach
     void beforeEach() throws IOException {
-        serverMetadataCache = new ServerMetadataCacheImpl();
+        serverMetadataCache = new CoordinatorMetadataCache();
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
@@ -189,8 +198,14 @@ class CoordinatorEventProcessorTest {
         int nBuckets = 3;
         int replicationFactor = 3;
         TableAssignment tableAssignment =
-                TableAssignmentUtils.generateAssignment(
-                        nBuckets, replicationFactor, new int[] {0, 1, 2});
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
         long t1Id = metadataManager.createTable(t1, tableDescriptor, tableAssignment, false);
 
         TablePath t2 = TablePath.of(defaultDatabase, "create_drop_t2");
@@ -250,7 +265,14 @@ class CoordinatorEventProcessorTest {
         initCoordinatorChannel(failedServer);
         // create a table,
         TablePath t1 = TablePath.of(defaultDatabase, "tdrop");
-        final long t1Id = createTable(t1, new int[] {0, 1, 2});
+        final long t1Id =
+                createTable(
+                        t1,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
 
         // retry until the create table t1 has been handled by coordinator
         // otherwise, when receive create table event, it can't find the schema of the table
@@ -282,6 +304,7 @@ class CoordinatorEventProcessorTest {
         int newlyServerId = 3;
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
+                        "rack3",
                         Endpoint.fromListenersString(DEFAULT_LISTENER_NAME + "://host3:1234"),
                         System.currentTimeMillis());
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
@@ -458,7 +481,14 @@ class CoordinatorEventProcessorTest {
         ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore =
                 new ZooKeeperCompletedSnapshotHandleStore(zookeeperClient);
         TablePath t1 = TablePath.of(defaultDatabase, "t_completed_snapshot");
-        final long t1Id = createTable(t1, new int[] {0, 1, 2});
+        final long t1Id =
+                createTable(
+                        t1,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
         CoordinatorEventManager coordinatorEventManager =
                 eventProcessor.getCoordinatorEventManager();
         int snapshotNum = 2;
@@ -540,8 +570,14 @@ class CoordinatorEventProcessorTest {
         int nBuckets = 3;
         int replicationFactor = 3;
         Map<Integer, BucketAssignment> assignments =
-                TableAssignmentUtils.generateAssignment(
-                                nBuckets, replicationFactor, new int[] {0, 1, 2})
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
                         .getBucketAssignments();
         PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
         Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
@@ -605,8 +641,14 @@ class CoordinatorEventProcessorTest {
         int nBuckets = 3;
         int replicationFactor = 3;
         Map<Integer, BucketAssignment> assignments =
-                TableAssignmentUtils.generateAssignment(
-                                nBuckets, replicationFactor, new int[] {0, 1, 2})
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
                         .getBucketAssignments();
         PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
         Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
@@ -651,7 +693,14 @@ class CoordinatorEventProcessorTest {
     void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
         initCoordinatorChannel();
         TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
-        final long t1Id = createTable(t1, new int[] {0, 1, 2});
+        final long t1Id =
+                createTable(
+                        t1,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
         TableBucket tableBucket = new TableBucket(t1Id, 0);
         LeaderAndIsr leaderAndIsr =
                 waitValue(
@@ -717,6 +766,7 @@ class CoordinatorEventProcessorTest {
                 zookeeperClient,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
+                new CoordinatorContext(),
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
@@ -752,10 +802,10 @@ class CoordinatorEventProcessorTest {
         long partition2Id = zookeeperClient.getPartitionIdAndIncrement();
         String partition1Name = "2024";
         String partition2Name = "2025";
-        zookeeperClient.registerPartitionAssignment(partition1Id, partitionAssignment);
-        zookeeperClient.registerPartition(tablePath, tableId, partition1Name, partition1Id);
-        zookeeperClient.registerPartitionAssignment(partition2Id, partitionAssignment);
-        zookeeperClient.registerPartition(tablePath, tableId, partition2Name, partition2Id);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partition1Id, partition1Name, partitionAssignment, tablePath, tableId);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partition2Id, partition2Name, partitionAssignment, tablePath, tableId);
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),
@@ -1004,9 +1054,9 @@ class CoordinatorEventProcessorTest {
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }
 
-    private long createTable(TablePath tablePath, int[] servers) {
+    private long createTable(TablePath tablePath, TabletServerInfo[] servers) {
         TableAssignment tableAssignment =
-                TableAssignmentUtils.generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
+                generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
         return metadataManager.createTable(
                 tablePath, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
     }

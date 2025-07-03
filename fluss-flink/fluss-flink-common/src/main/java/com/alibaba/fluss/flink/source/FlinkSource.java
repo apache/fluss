@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -29,6 +30,7 @@ import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitSerializer;
 import com.alibaba.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
 import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
+import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
@@ -46,6 +48,10 @@ import org.apache.flink.core.io.SimpleVersionedSerializer;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>
         implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
@@ -62,6 +68,8 @@ public class FlinkSource<OUT>
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
 
+    private final List<FieldEqual> partitionFilters;
+
     public FlinkSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -72,7 +80,8 @@ public class FlinkSource<OUT>
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming) {
+            boolean streaming,
+            List<FieldEqual> partitionFilters) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -83,6 +92,7 @@ public class FlinkSource<OUT>
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
+        this.partitionFilters = checkNotNull(partitionFilters);
     }
 
     @Override
@@ -101,7 +111,8 @@ public class FlinkSource<OUT>
                 splitEnumeratorContext,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
-                streaming);
+                streaming,
+                partitionFilters);
     }
 
     @Override
@@ -118,7 +129,8 @@ public class FlinkSource<OUT>
                 sourceEnumeratorState.getAssignedPartitions(),
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
-                streaming);
+                streaming,
+                partitionFilters);
     }
 
     @Override

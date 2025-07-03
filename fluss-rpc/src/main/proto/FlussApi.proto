@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -170,6 +171,8 @@ message UpdateMetadataRequest {
   optional PbServerNode coordinator_server = 1;
   repeated PbServerNode tablet_servers = 2;
   repeated PbTableMetadata table_metadata = 3;
+  repeated PbPartitionMetadata partition_metadata = 4;
+  optional int32 coordinator_epoch = 5;
 }
 
 message UpdateMetadataResponse {
@@ -367,6 +370,7 @@ message GetFileSystemSecurityTokenResponse {
 
 // init writer request and response
 message InitWriterRequest {
+  repeated PbTablePath table_path = 1;
 }
 
 message InitWriterResponse {
@@ -375,6 +379,7 @@ message InitWriterResponse {
 
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
+  optional PbPartitionSpec partial_partition_spec = 2;
 }
 
 message ListPartitionInfosResponse {
@@ -506,6 +511,25 @@ message DropAclsResponse{
   repeated PbDropAclsFilterResult filter_results = 1;
 }
 
+message LakeTieringHeartbeatRequest {
+  repeated PbHeartbeatReqForTable tiering_tables = 1;
+  repeated PbHeartbeatReqForTable finished_tables = 2;
+  repeated PbHeartbeatReqForTable failed_tables = 3;
+  // whether to request a table
+  optional bool request_table = 4;
+}
+
+message LakeTieringHeartbeatResponse {
+  // coordinator epoch
+  required int32 coordinator_epoch = 1;
+  // the returned table to tier, empty when no table is needed by the lake tiering service
+  optional PbLakeTieringTableInfo tiering_table = 2;
+  repeated PbHeartbeatRespForTable tiering_table_resp = 3;
+  repeated PbHeartbeatRespForTable finished_table_resp = 4;
+  repeated PbHeartbeatRespForTable failed_table_resp = 5;
+}
+
+
 // --------------- Inner classes ----------------
 message PbApiVersion {
   required int32 api_key = 1;
@@ -528,11 +552,13 @@ message PbPhysicalTablePath {
 // For UpdateMetadataRequest,
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
+// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
+  optional string rack = 5;
 }
 
 message PbTableMetadata {
@@ -543,6 +569,9 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+
+  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
+  // trace by: https://github.com/alibaba/fluss/issues/981
 }
 
 message PbPartitionMetadata {
@@ -559,6 +588,7 @@ message PbBucketMetadata {
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
   // TODO: Add isr here.
+  optional int32 leader_epoch = 4;
 }
 
 message PbProduceLogReqForBucket {
@@ -815,4 +845,23 @@ message PbDropAclsMatchingAcl {
   required PbAclInfo acl = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
+}
+
+message PbLakeTieringTableInfo {
+  required int64 table_id = 1;
+  required PbTablePath table_path = 2;
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatReqForTable {
+  required int64 table_id = 1;
+  // the coordinator epoch when the table is assigned to be tiering service
+  required int32 coordinator_epoch = 2;
+  // the tiering epoch when the table is assigned to be tiering service
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatRespForTable {
+  required int64 table_id = 1;
+  optional ErrorResponse error = 2;
 }

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,15 +34,31 @@ import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.AutoPartitionStrategy;
 import com.alibaba.fluss.utils.StringUtils;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
+import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static com.alibaba.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPES;
 
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
+
+    private static final Set<String> SYSTEM_COLUMNS =
+            Collections.unmodifiableSet(
+                    new LinkedHashSet<>(
+                            Arrays.asList(
+                                    OFFSET_COLUMN_NAME,
+                                    TIMESTAMP_COLUMN_NAME,
+                                    BUCKET_COLUMN_NAME)));
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
     public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
@@ -73,6 +90,23 @@ public class TableDescriptorValidation {
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
+        checkSystemColumns(schema);
+    }
+
+    private static void checkSystemColumns(RowType schema) {
+        List<String> fieldNames = schema.getFieldNames();
+        List<String> unsupportedColumns =
+                fieldNames.stream().filter(SYSTEM_COLUMNS::contains).collect(Collectors.toList());
+        if (!unsupportedColumns.isEmpty()) {
+            throw new InvalidTableException(
+                    String.format(
+                            "%s cannot be used as column names, "
+                                    + "because they are reserved system columns in Fluss. "
+                                    + "Please use other names for these columns. "
+                                    + "The reserved system columns are: %s",
+                            String.join(", ", unsupportedColumns),
+                            String.join(", ", SYSTEM_COLUMNS)));
+        }
     }
 
     private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {

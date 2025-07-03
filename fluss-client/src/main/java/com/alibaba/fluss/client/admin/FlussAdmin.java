@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -60,6 +61,8 @@ import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesResponse;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
+import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -80,6 +83,7 @@ import java.util.concurrent.CompletableFuture;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -269,10 +273,22 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath) {
+        return listPartitionInfos(tablePath, null);
+    }
+
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, PartitionSpec partitionSpec) {
         ListPartitionInfosRequest request = new ListPartitionInfosRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath(
+                new PbTablePath()
+                        .setDatabaseName(tablePath.getDatabaseName())
+                        .setTableName(tablePath.getTableName()));
+
+        if (partitionSpec != null) {
+            PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
+            request.setPartialPartitionSpec(pbPartitionSpec);
+        }
         return gateway.listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
     }
@@ -361,12 +377,11 @@ public class FlussAdmin implements Admin {
             Collection<Integer> buckets,
             OffsetSpec offsetSpec) {
         Long partitionId = null;
-        metadataUpdater.checkAndUpdateTableMetadata(
-                Collections.singleton(physicalTablePath.getTablePath()));
+        metadataUpdater.updateTableOrPartitionMetadata(physicalTablePath.getTablePath(), null);
         long tableId = metadataUpdater.getTableId(physicalTablePath.getTablePath());
         // if partition name is not null, we need to check and update partition metadata
         if (physicalTablePath.getPartitionName() != null) {
-            metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
+            metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
         Map<Integer, ListOffsetsRequest> requestMap =

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,6 +22,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.server.coordinator.CoordinatorChannelManager;
@@ -50,6 +52,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
@@ -192,6 +196,15 @@ class ReplicaStateMachineTest {
 
         // put the replica to online
         long tableId = 1;
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
         TableBucket tableBucket = new TableBucket(tableId, 0);
         for (int i = 0; i < 3; i++) {
             TableBucketReplica replica = new TableBucketReplica(tableBucket, i);
@@ -200,6 +213,7 @@ class ReplicaStateMachineTest {
         // put leader and isr
         LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), 0, 0);
         zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 
         // set replica 1 to offline
@@ -239,10 +253,12 @@ class ReplicaStateMachineTest {
                         new CoordinatorChannelManager(
                                 RpcClient.create(
                                         new Configuration(),
-                                        TestingClientMetricGroup.newInstance())),
+                                        TestingClientMetricGroup.newInstance(),
+                                        false)),
                         (event) -> {
                             // do nothing
-                        }),
+                        },
+                        coordinatorContext),
                 zookeeperClient);
     }
 
@@ -272,7 +288,8 @@ class ReplicaStateMachineTest {
                                             deleteReplicaResultForBucket.succeeded());
                                 }
                             }
-                        }),
+                        },
+                        coordinatorContext),
                 zookeeperClient);
     }
 
@@ -282,6 +299,7 @@ class ReplicaStateMachineTest {
             servers.add(
                     new ServerInfo(
                             serverId,
+                            "RACK" + serverId,
                             Endpoint.fromListenersString("CLIENT://host:23"),
                             ServerType.TABLET_SERVER));
         }

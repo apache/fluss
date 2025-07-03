@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,14 +27,14 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.kv.KvManager;
 import com.alibaba.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.log.LogManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.replica.Replica;
@@ -63,7 +64,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
@@ -111,9 +111,12 @@ public class ReplicaFetcherThreadTest {
         leaderRM = createReplicaManager(leaderServerId);
         followerRM = createReplicaManager(followerServerId);
         // with local test leader end point.
-        leader = new ServerNode(leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER);
+        leader =
+                new ServerNode(
+                        leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER, "rack1");
         ServerNode follower =
-                new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER);
+                new ServerNode(
+                        followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
         followerFetcher =
                 new ReplicaFetcherThread(
                         "test-fetcher-thread",
@@ -296,8 +299,7 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                result -> {},
-                (tableId, path) -> {});
+                result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
@@ -311,8 +313,7 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
-                result -> {},
-                (tableId, path) -> {});
+                result -> {});
     }
 
     private ReplicaManager createReplicaManager(int serverId) throws Exception {
@@ -332,8 +333,8 @@ public class ReplicaFetcherThreadTest {
                         null,
                         zkClient,
                         serverId,
-                        new ServerMetadataCacheImpl(),
-                        RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
+                        new TabletServerMetadataCache(new MetadataManager(null, conf), null),
+                        RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         SystemClock.getInstance());
         replicaManager.startup();
@@ -352,7 +353,7 @@ public class ReplicaFetcherThreadTest {
                 KvManager kvManager,
                 ZooKeeperClient zkClient,
                 int serverId,
-                ServerMetadataCache metadataCache,
+                TabletServerMetadataCache metadataCache,
                 RpcClient rpcClient,
                 TabletServerMetricGroup serverMetricGroup,
                 Clock clock)
@@ -377,8 +378,7 @@ public class ReplicaFetcherThreadTest {
         public void becomeLeaderOrFollower(
                 int requestCoordinatorEpoch,
                 List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
-                Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback,
-                BiConsumer<Long, PhysicalTablePath> leaderBucketCallback) {
+                Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
             for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
                 Optional<Replica> replicaOpt = maybeCreateReplica(data);
                 if (replicaOpt.isPresent() && data.getReplicas().contains(serverId)) {

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,6 +39,7 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -62,6 +64,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for auto partitioned table. */
 class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
+
+    @BeforeEach
+    void beforeEach() throws Exception {
+        super.setup();
+        // Auto partitioned table related tests will close dynamic partition creation default.
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, false);
+    }
 
     @Test
     void testPartitionedPrimaryKeyTable() throws Exception {
@@ -296,27 +305,28 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testOperateNotExistPartitionShouldThrowException() throws Exception {
-        Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, true);
+        createPartitionedTable(DATA1_TABLE_PATH_PK, true);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        String partitionName = "notExistPartition";
         Lookuper lookuper = table.newLookup().createLookuper();
 
         // test get for a not exist partition
-        assertThatThrownBy(() -> lookuper.lookup(row(1, "notExistPartition")).get())
+        assertThatThrownBy(() -> lookuper.lookup(row(1, partitionName)).get())
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining(
                         "Table partition '%s' does not exist.",
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, partitionName));
 
         // test write to not exist partition
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
-        GenericRow row = row(1, "a", "notExistPartition");
+        GenericRow row = row(1, "a", partitionName);
         assertThatThrownBy(() -> upsertWriter.upsert(row).get())
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining(
                         "Table partition '%s' does not exist.",
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, "notExistPartition"));
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, partitionName));
 
         // test scan a not exist partition's log
         LogScanner logScanner = table.newScan().createLogScanner();

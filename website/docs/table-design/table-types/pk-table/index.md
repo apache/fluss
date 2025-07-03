@@ -4,11 +4,13 @@ sidebar_position: 1
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -121,13 +123,33 @@ CREATE TABLE T
 
 If the data written to the primary-key table is
 sequentially `+I(1, 2.0, 'apple')`, `+I(1, 4.0, 'banana')`, `-D(1, 4.0, 'banana')`, then the following change data will
-be generated.
+be generated. For example, the following Flink SQL statements illustrate this behavior:
 
-```text
-+I(1, 2.0, 'apple')
--U(1, 2.0, 'apple')
-+U(1, 4.0, 'banana')
--D(1, 4.0, 'banana')
+```sql title="Flink SQL"
+-- set to batch mode to execute DELETE and INSERT statements
+SET execution.runtime-mode = batch;
+
+-- insert to records with the same primary key k=1
+INSERT INTO T (k, v1) VALUES (1, 2.0,'apple');
+INSERT INTO T (k, v1) VALUES (1, 4.0,'banana');
+
+-- delete the record with primary key k=1
+DELETE FROM T WHERE k = 1;
+
+-- set to streaming mode to observe the changelogs
+SET execution.runtime-mode = streaming;
+SELECT * FROM T;
+```
+
+Generate the following output in the Flink SQL CLI:
+
+```
+| op   | k    | v1   | v2     |
+| ---- | ---- | ---- | ------ |
+| +I   | 1    | 2.0  | apple  |
+| -U   | 1    | 2.0  | apple  |
+| +U   | 1    | 4.0  | banana |
+| -D   | 1    | 4.0  | banana |
 ```
 
 ## Data Queries

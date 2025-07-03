@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -41,6 +42,7 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.GetTableInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetTableSchemaRequest;
 import com.alibaba.fluss.rpc.messages.ListDatabasesRequest;
@@ -462,11 +464,16 @@ class TableManagerITCase {
 
         // now, assuming we send update metadata request to the server,
         // we should get the same response
-        gateway.updateMetadata(
-                        makeUpdateMetadataRequest(
-                                Optional.of(coordinatorServerInfo),
-                                new HashSet<>(tabletServerInfos)))
-                .get();
+        if (!isCoordinatorServer) {
+            ((TabletServerGateway) gateway)
+                    .updateMetadata(
+                            makeUpdateMetadataRequest(
+                                    coordinatorServerInfo,
+                                    new HashSet<>(tabletServerInfos),
+                                    Collections.emptyList(),
+                                    Collections.emptyList()))
+                    .get();
+        }
 
         // test lookup metadata from internal view
 
@@ -492,7 +499,8 @@ class TableManagerITCase {
                         configuration,
                         new ClientMetricGroup(
                                 MetricRegistry.create(configuration, null),
-                                "fluss-cluster-extension"))) {
+                                "fluss-cluster-extension"),
+                        false)) {
             ServerNode serverNode =
                     FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER);
             AdminGateway adminGatewayForClient =
@@ -595,11 +603,14 @@ class TableManagerITCase {
 
         // now, assuming we send update metadata request to the server,
         // we should get the same response
-        gateway.updateMetadata(
-                        makeLegacyUpdateMetadataRequest(
-                                Optional.of(coordinatorServerInfo),
-                                new HashSet<>(tabletServerInfos)))
-                .get();
+        if (!isCoordinatorServer) {
+            ((TabletServerGateway) gateway)
+                    .updateMetadata(
+                            makeLegacyUpdateMetadataRequest(
+                                    Optional.of(coordinatorServerInfo),
+                                    new HashSet<>(tabletServerInfos)))
+                    .get();
+        }
 
         // test lookup metadata
         AdminGateway adminGatewayForClient = getAdminGateway();
@@ -739,11 +750,15 @@ class TableManagerITCase {
         for (ServerInfo serverInfo : aliveTableServers) {
             // Legacy only support one endpoint
             Endpoint endpoint = serverInfo.endpoints().get(0);
-            aliveTableServerNodes.add(
+            PbServerNode pbServerNode =
                     new PbServerNode()
                             .setNodeId(serverInfo.id())
                             .setHost(endpoint.getHost())
-                            .setPort(endpoint.getPort()));
+                            .setPort(endpoint.getPort());
+            if (serverInfo.rack() != null) {
+                pbServerNode.setRack(serverInfo.rack());
+            }
+            aliveTableServerNodes.add(pbServerNode);
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         // Legacy only support one endpoint

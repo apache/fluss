@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -155,8 +156,13 @@ class LakeTableTieringManagerTest {
         // not advance time, request table should return null
         assertThat(tableTieringManager.requestTable()).isNull();
 
-        // now, advance time to trigger the table tiering
-        manualClock.advanceTime(Duration.ofSeconds(10));
+        // now, advance 1 second to trigger the table tiering
+        manualClock.advanceTime(Duration.ofSeconds(4));
+        // not reach data freshness, shouldn't request table
+        assertThat(tableTieringManager.requestTable()).isNull();
+
+        // advance 6 seconds again, should get table now
+        manualClock.advanceTime(Duration.ofSeconds(6));
         // the tiered epoch should be 2 now
         assertRequestTable(tableId1, tablePath1, 2);
     }

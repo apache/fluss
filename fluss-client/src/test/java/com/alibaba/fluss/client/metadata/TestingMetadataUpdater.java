@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -44,11 +45,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     private static final ServerNode COORDINATOR =
             new ServerNode(0, "localhost", 90, ServerType.COORDINATOR);
     private static final ServerNode NODE1 =
-            new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER);
+            new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
     private static final ServerNode NODE2 =
-            new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER);
+            new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
     private static final ServerNode NODE3 =
-            new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER);
+            new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
 
     private final TestCoordinatorGateway coordinatorGateway;
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;
@@ -62,7 +63,8 @@ public class TestingMetadataUpdater extends MetadataUpdater {
             List<ServerNode> tabletServers,
             Map<TablePath, TableInfo> tableInfos) {
         super(
-                RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance()),
+                RpcClient.create(
+                        new Configuration(), TestingClientMetricGroup.newInstance(), false),
                 Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();

@@ -4,11 +4,13 @@ sidebar_position: 1
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -32,7 +34,8 @@ CREATE TABLE log_table (
   order_id BIGINT,
   item_id BIGINT,
   amount INT,
-  address STRING
+  address STRING,
+  dt DATE
 )
 WITH ('bucket.num' = '3');
 ```
@@ -73,10 +76,10 @@ During query execution, query engines like Flink analyzes the query to identify 
 For example the following streaming query:
 
 ```sql
-SELECT id, name FROM log_table WHERE timestamp > '2023-01-01';
+SELECT order_id, item_id FROM log_table WHERE dt > '2023-01-01';
 ```
 
-In this query, only the `id`, `name`, and `timestamp` columns are accessed. Other columns (e.g., `address`, `status`) are pruned and not read from storage.
+In this query, only the `order_id`, `item_id`, and `dt` columns are accessed. Other columns (e.g., `address`, `amount`) are pruned and not read from storage.
 
 
 ## Log Compression

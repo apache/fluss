@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -464,5 +466,30 @@ public class BinaryStringTest {
         String s = "hahahe";
         byte[] bytes = Arrays.copyOf(s.getBytes(UTF_8), 10);
         assertThat(fromBytes(bytes, 0, 6)).isEqualTo(BinaryString.fromString(s));
+    }
+
+    @TestTemplate
+    public void testBinarySectionFunctions() throws Exception {
+        BinaryString testStr1 = BinaryString.fromString("");
+        BinaryString testStr2 = BinaryString.fromString("");
+
+        BinaryString str = BinaryString.fromString("Hello World");
+        // 1. pointTo
+        testStr1.pointTo(str.getSegments(), 0, 5);
+        assertThat(testStr1.toString()).isEqualTo("Hello");
+
+        testStr2.pointTo(str.getSegments()[0], 6, 5);
+        assertThat(testStr2.toString()).isEqualTo("World");
+        assertThat(testStr2.getOffset()).isEqualTo(6);
+
+        // 2. wrapByteBuffer
+        ByteBuffer byteBuffer = testStr2.wrapByteBuffer();
+        String str2FromByteBuffer = UTF_8.decode(byteBuffer).toString();
+        assertThat(str2FromByteBuffer).isEqualTo("World");
+
+        // 3. equals
+        assertThat(testStr2.equals(testStr2)).isTrue();
+        assertThat(testStr2.equals(null)).isFalse();
+        assertThat(testStr2.equals("World")).isFalse();
     }
 }

@@ -4,11 +4,13 @@ sidebar_position: 4
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -21,15 +23,11 @@ sidebar_position: 4
 
 # Deploying with Docker
 
-This guide will show you how to run a Fluss cluster using Docker. In this guide, we will introduce the prerequisites of
-the Docker environment and how to quickly create a Fluss cluster using the `docker run` commands
-or `docker compose` file.
+This guide will show you how to run a Fluss cluster using Docker. 
+We will introduce the [prerequisites of the Docker environment](#prerequisites), and how to quickly create a Fluss cluster using [`docker run` commands](#deploy-with-docker)
+or a [`docker compose` file](#deploy-with-docker-compose).
 
 ## Prerequisites
-
-**Overview**
-
-Prepare the build machine before creating the Docker image.
 
 **Hardware**
 
@@ -81,9 +79,12 @@ docker run \
     --name coordinator-server \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://coordinator-server:9123" \
+bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+advertised.listeners: CLIENT://localhost:9123
+internal.listener.name: INTERNAL
+" \
     -p 9123:9123 \
-    -d fluss/fluss:$FLUSS_VERSION$ coordinatorServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ coordinatorServer
 ```
 
 ### Start Fluss TabletServer
@@ -100,13 +101,16 @@ docker run \
     --name tablet-server \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server:9124
+bind.listeners: INTERNAL://tablet-server:0, CLIENT://tablet-server:9123
+advertised.listeners: CLIENT://localhost:9124
+internal.listener.name: INTERNAL
 tablet-server.id: 0
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9124:9124 \
+    -p 9124:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 #### Start with Multiple TabletServer
@@ -120,13 +124,16 @@ docker run \
     --name tablet-server-0 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server-0:9124
+bind.listeners: INTERNAL://tablet-server-0:0, CLIENT://tablet-server-0:9123
+advertised.listeners: CLIENT://localhost:9124
+internal.listener.name: INTERNAL
 tablet-server.id: 0
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data/tablet-server-0
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9124:9124 \
+    -p 9124:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 2. Start tablet-server-1
@@ -135,13 +142,16 @@ docker run \
     --name tablet-server-1 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server-1:9125
+bind.listeners: INTERNAL://tablet-server-1:0, CLIENT://tablet-server-1:9123
+advertised.listeners: CLIENT://localhost:9125
+internal.listener.name: INTERNAL
 tablet-server.id: 1
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data/tablet-server-1
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9125:9125 \
+    -p 9125:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 3. Start tablet-server-2
@@ -150,13 +160,16 @@ docker run \
     --name tablet-server-2 \
     --network=fluss-demo \
     --env FLUSS_PROPERTIES="zookeeper.address: zookeeper:2181
-bind.listeners: FLUSS://tablet-server-2:9126
+bind.listeners: INTERNAL://tablet-server-2:0, CLIENT://tablet-server-2:9123
+advertised.listeners: CLIENT://localhost:9126
+internal.listener.name: INTERNAL
 tablet-server.id: 2
+kv.snapshot.interval: 0s
 data.dir: /tmp/fluss/data/tablet-server-2
 remote.data.dir: /tmp/fluss/remote-data" \
-    -p 9126:9126 \
+    -p 9126:9123 \
     --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/fluss:$FLUSS_VERSION$ tabletServer
+    -d fluss/fluss:$FLUSS_DOCKER_VERSION$ tabletServer
 ```
 
 Now all the Fluss related components are running.
@@ -166,67 +179,6 @@ Run the below command to check the Fluss cluster status:
 ```bash
 docker container ls -a
 ```
-
-### Interacting with Fluss
-
-After the Fluss cluster is started, you can use **Fluss Client** (e.g., Flink SQL Client) to interact with Fluss.
-The following subsections will show you how to use 'Docker' to build a Flink cluster and use **Flink SQL Client**
-to interact with Fluss.
-
-#### Start Flink Cluster
-
-1. Start jobManager
-
-```bash
-docker run \
-    --name jobmanager \
-    --network=fluss-demo \
-    --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
-    -p 8083:8081 \
-    --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ jobmanager
-```
-
-2. Start taskManager
-
-```bash
-docker run \
-    --name taskmanager \
-    --network=fluss-demo \
-    --env FLINK_PROPERTIES=" jobmanager.rpc.address: jobmanager" \
-    --volume shared-tmpfs:/tmp/fluss \
-    -d fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$ taskmanager
-```
-
-#### Enter into SQL-Client
-First, use the following command to enter pod:
-```shell
-docker exec -it jobmanager /bin/bash
-```
-
-Then, use the following command to enter the Flink SQL CLI Container:
-```shell
-./sql-client
-```
-
-#### Create Fluss Catalog
-
-Use the following SQL to create a Fluss catalog:
-```sql title="Flink SQL"
-CREATE CATALOG fluss_catalog WITH (
-    'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123'
-);
-```
-
-```sql title="Flink SQL"
-USE CATALOG fluss_catalog;
-```
-
-#### Do more with Fluss
-
-After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](engine-flink/getting-started.md)
 
 ## Deploy with Docker Compose
 
@@ -241,7 +193,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -249,10 +201,14 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://coordinator-server:9123
+        bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+        advertised.listeners: CLIENT://localhost:9123
+        internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
+    ports:
+      - "9123:9123"
   tablet-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -260,11 +216,15 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server:9123
+        bind.listeners: INTERNAL://tablet-server:0, CLIENT://tablet-server:9123
+        advertised.listeners: CLIENT://localhost:9124
+        internal.listener.name: INTERNAL
         tablet-server.id: 0
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
+    ports:
+        - "9124:9123"
     volumes:
       - shared-tmpfs:/tmp/fluss
   zookeeper:
@@ -286,7 +246,7 @@ You can use the following `docker-compose.yml` file to start a Fluss cluster wit
 ```yaml
 services:
   coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -294,10 +254,14 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://coordinator-server:9123
+        bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+        advertised.listeners: CLIENT://localhost:9123
+        internal.listener.name: INTERNAL
         remote.data.dir: /tmp/fluss/remote-data
+    ports:
+      - "9123:9123"
   tablet-server-0:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -305,15 +269,19 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server-0:9123
+        bind.listeners: INTERNAL://tablet-server-0:0, CLIENT://tablet-server-0:9123
+        advertised.listeners: CLIENT://localhost:9124
+        internal.listener.name: INTERNAL
         tablet-server.id: 0
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-0
         remote.data.dir: /tmp/fluss/remote-data
+    ports:
+      - "9124:9123"
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-1:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -321,15 +289,19 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server-1:9123
+        bind.listeners: INTERNAL://tablet-server-1:0, CLIENT://tablet-server-1:9123
+        advertised.listeners: CLIENT://localhost:9125
+        internal.listener.name: INTERNAL
         tablet-server.id: 1
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-1
         remote.data.dir: /tmp/fluss/remote-data
+    ports:
+      - "9125:9123"
     volumes:
       - shared-tmpfs:/tmp/fluss
   tablet-server-2:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -337,11 +309,15 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server-2:9123
+        bind.listeners: INTERNAL://tablet-server-2:0, CLIENT://tablet-server-2:9123
+        advertised.listeners: CLIENT://localhost:9126
+        internal.listener.name: INTERNAL
         tablet-server.id: 2
         kv.snapshot.interval: 0s
         data.dir: /tmp/fluss/data/tablet-server-2
         remote.data.dir: /tmp/fluss/remote-data
+    ports:
+      - "9126:9123"
     volumes:
       - shared-tmpfs:/tmp/fluss
   zookeeper:
@@ -367,119 +343,34 @@ Run the below command to check the container status:
 docker container ls -a
 ```
 
-### Interacting with Fluss
+## Interacting with Fluss
 
-If you want to interact with this Fluss cluster, you can change the `docker-compose.yml` file to add a Flink cluster.
-The changed `docker-compose.yml` file is as follows:
+After the Fluss cluster is started, you can use **Fluss Client** (e.g., Flink SQL Client) to interact with Fluss.
+The following subsections will show you how to use 'Docker' to build a Flink cluster and use **Flink SQL Client**
+to interact with Fluss.
 
-```yaml
-services:
-  coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
-    command: coordinatorServer
-    depends_on:
-      - zookeeper
-    environment:
-      - |
-        FLUSS_PROPERTIES=
-        zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
-  tablet-server-0:
-    image: fluss/fluss:$FLUSS_VERSION$
-    command: tabletServer
-    depends_on:
-      - coordinator-server
-    environment:
-      - |
-        FLUSS_PROPERTIES=
-        zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server-0:9123
-        tablet-server.id: 0
-        kv.snapshot.interval: 0s
-        data.dir: /tmp/fluss/data/tablet-server-0
-        remote.data.dir: /tmp/fluss/remote-data
-    volumes:
-      - shared-tmpfs:/tmp/fluss
-  tablet-server-1:
-    image: fluss/fluss:$FLUSS_VERSION$
-    command: tabletServer
-    depends_on:
-      - coordinator-server
-    environment:
-      - |
-        FLUSS_PROPERTIES=
-        zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server-1:9123
-        tablet-server.id: 1
-        kv.snapshot.interval: 0s
-        data.dir: /tmp/fluss/data/tablet-server-1
-        remote.data.dir: /tmp/fluss/remote-data
-    volumes:
-      - shared-tmpfs:/tmp/fluss
-  tablet-server-2:
-    image: fluss/fluss:$FLUSS_VERSION$
-    command: tabletServer
-    depends_on:
-      - coordinator-server
-    environment:
-      - |
-        FLUSS_PROPERTIES=
-        zookeeper.address: zookeeper:2181
-        bind.listeners: FLUSS://tablet-server-2:9123
-        tablet-server.id: 2
-        kv.snapshot.interval: 0s
-        data.dir: /tmp/fluss/data/tablet-server-2
-        remote.data.dir: /tmp/fluss/remote-data
-    volumes:
-      - shared-tmpfs:/tmp/fluss
-  zookeeper:
-    restart: always
-    image: zookeeper:3.9.2
-  jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
-    ports:
-      - "8083:8081"
-    command: jobmanager
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: jobmanager
-    volumes:
-      - shared-tmpfs:/tmp/fluss
-  taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
-    depends_on:
-      - jobmanager
-    command: taskmanager
-    environment:
-      - |
-        FLINK_PROPERTIES=
-        jobmanager.rpc.address: jobmanager
-    volumes:
-      - shared-tmpfs:/tmp/fluss
+#### Start Flink Cluster
+You can start a Flink standalone cluster refer to [Flink Environment Preparation](engine-flink/getting-started.md#preparation-when-using-flink-sql-client)
 
-volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
-```
-Save the `docker-compose.yaml` script and execute the `docker-compose up -d` command in the same directory to create the cluster.
-
-#### Enter into SQL-Client
-First, use the following command to enter the Flink SQL CLI Container:
+**Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
 ```shell
-docker compose exec jobmanager ./sql-client
+bin/start-cluster.sh 
 ```
 
-#### Create Fluss Catalog
+
+### Enter into SQL-Client
+Use the following command to enter the Flink SQL CLI Container:
+```shell
+bin/sql-client.sh
+```
+
+### Create Fluss Catalog
+
 Use the following SQL to create a Fluss catalog:
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123'
+    'bootstrap.servers' = 'localhost:9123'
 );
 ```
 
@@ -487,7 +378,7 @@ CREATE CATALOG fluss_catalog WITH (
 USE CATALOG fluss_catalog;
 ```
 
-#### Do more with Fluss
+### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
 More details please refer to [Flink Getting started](engine-flink/getting-started.md)

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -98,6 +99,7 @@ public class ProtobufMessage {
         generateZeroCopySize(w);
         generateParseFrom(w);
         generateIsLazilyParsed(w);
+        generateGetParsedByteBuf(w);
         generateCheckRequiredFields(w);
         generateClear(w);
         generateCopyFrom(w);
@@ -171,6 +173,14 @@ public class ProtobufMessage {
         w.format(
                 "            return %s;\n",
                 RecordsFieldFinder.hasRecordsField(message) ? "true" : "false");
+        w.format("        }\n");
+    }
+
+    private void generateGetParsedByteBuf(PrintWriter w) {
+        w.println();
+        w.println("       @Override");
+        w.format("        public ByteBuf getParsedByteBuf() {\n");
+        w.format("            return _parsedBuffer;\n");
         w.format("        }\n");
     }
 

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -49,10 +50,11 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
-import static com.alibaba.fluss.lake.paimon.PaimonLakeCatalog.BUCKET_COLUMN_NAME;
-import static com.alibaba.fluss.lake.paimon.PaimonLakeCatalog.OFFSET_COLUMN_NAME;
-import static com.alibaba.fluss.lake.paimon.PaimonLakeCatalog.TIMESTAMP_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static com.alibaba.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -119,7 +121,7 @@ class LakeEnabledTableCreateITCase {
     void testCreateLakeEnabledTable() throws Exception {
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put("k1", "v1");
-        customProperties.put("k2", "v2");
+        customProperties.put("paimon.file.format", "parquet");
 
         // test bucket key log table
         TableDescriptor logTable =
@@ -160,7 +162,6 @@ class LakeEnabledTableCreateITCase {
                 "log_c1,log_c2",
                 BUCKET_NUM);
 
-        // test log no bucket key table
         TableDescriptor logNoBucketKeyTable =
                 TableDescriptor.builder()
                         .schema(
@@ -223,8 +224,18 @@ class LakeEnabledTableCreateITCase {
                         new DataType[] {
                             org.apache.paimon.types.DataTypes.INT().notNull(),
                             org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {"pk_c1", "pk_c2"}),
+                        new String[] {
+                            "pk_c1",
+                            "pk_c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
                 "pk_c1",
                 BUCKET_NUM);
 
@@ -256,8 +267,19 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.INT().notNull(),
                             org.apache.paimon.types.DataTypes.STRING(),
                             org.apache.paimon.types.DataTypes.STRING().notNull(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {"c1", "c2", "c3"}),
+                        new String[] {
+                            "c1",
+                            "c2",
+                            "c3",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
                 "c1",
                 BUCKET_NUM);
     }
@@ -393,8 +415,20 @@ class LakeEnabledTableCreateITCase {
 
         // check table properties
         Map<String, String> expectedProperties = new HashMap<>();
-        flussTable.getProperties().forEach((k, v) -> expectedProperties.put("fluss." + k, v));
-        flussTable.getCustomProperties().forEach((k, v) -> expectedProperties.put("fluss." + k, v));
+
+        Stream.concat(
+                        flussTable.getProperties().entrySet().stream(),
+                        flussTable.getCustomProperties().entrySet().stream())
+                .forEach(
+                        e -> {
+                            String k = e.getKey();
+                            String v = e.getValue();
+                            if (k.startsWith("paimon.")) {
+                                expectedProperties.put(k.substring("paimon.".length()), v);
+                            } else {
+                                expectedProperties.put("fluss." + k, v);
+                            }
+                        });
         assertThat(paimonTable.options()).containsAllEntriesOf(expectedProperties);
 
         // now, check schema

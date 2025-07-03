@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +21,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.exception.DisconnectException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.NetworkException;
+import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
@@ -38,6 +40,7 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
+import com.alibaba.fluss.utils.ExponentialBackoff;
 import com.alibaba.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
@@ -48,11 +51,15 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.IOException;
 import java.net.ConnectException;
+import java.net.InetSocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+
+import static com.alibaba.fluss.utils.IOUtils.closeQuietly;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
 @ThreadSafe
@@ -66,6 +73,7 @@ final class ServerConnection {
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
     private final ClientAuthenticator authenticator;
+    private final ExponentialBackoff backoff;
 
     private final Object lock = new Object();
 
@@ -87,18 +95,23 @@ final class ServerConnection {
     @GuardedBy("lock")
     private ServerApiVersions serverApiVersions;
 
+    @GuardedBy("lock")
+    private int retryAuthCount = 0;
+
     ServerConnection(
             Bootstrap bootstrap,
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
-            ClientAuthenticator authenticator) {
+            ClientAuthenticator authenticator,
+            boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         bootstrap
                 .connect(node.host(), node.port())
-                .addListener((ChannelFutureListener) this::establishConnection);
+                .addListener(future -> establishConnection((ChannelFuture) future, isInnerClient));
         this.authenticator = authenticator;
+        this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
 
     public ServerNode getServerNode() {
@@ -195,6 +208,7 @@ final class ServerConnection {
             connectionMetricGroup.close();
         }
 
+        closeQuietly(authenticator);
         return closeFuture;
     }
 
@@ -247,13 +261,15 @@ final class ServerConnection {
 
     // ------------------------------------------------------------------------------------------
 
-    private void establishConnection(ChannelFuture future) {
+    private void establishConnection(ChannelFuture future, boolean isInnerClient) {
         synchronized (lock) {
             if (future.isSuccess()) {
                 LOG.debug("Established connection to server {}.", node);
                 channel = future.channel();
                 channel.pipeline()
-                        .addLast("handler", new NettyClientHandler(new ResponseCallback()));
+                        .addLast(
+                                "handler",
+                                new NettyClientHandler(new ResponseCallback(), isInnerClient));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server
@@ -366,16 +382,31 @@ final class ServerConnection {
         synchronized (lock) {
             serverApiVersions =
                     new ServerApiVersions(((ApiVersionsResponse) response).getApiVersionsList());
-            LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
             // send initial token
-            sendAuthenticate(new byte[0]);
+            sendInitialToken();
         }
     }
 
-    private void sendAuthenticate(byte[] challenge) {
+    private void sendInitialToken() {
+        try {
+            authenticator.initialize(new DefaultAuthenticateContext());
+        } catch (Exception e) {
+            LOG.error("Failed to initialize authenticator", e);
+            close(e);
+            return;
+        }
+
+        LOG.debug("Begin to authenticate with protocol {}", authenticator.protocol());
+        sendAuthenticateRequest(new byte[0], true);
+    }
+
+    private void sendAuthenticateRequest(byte[] challenge, boolean initialToken) {
         try {
             if (!authenticator.isCompleted()) {
-                byte[] token = authenticator.authenticate(challenge);
+                byte[] token =
+                        initialToken && !authenticator.hasInitialTokenResponse()
+                                ? challenge
+                                : authenticator.authenticate(challenge);
                 if (token != null) {
                     switchState(ConnectionState.AUTHENTICATING);
                     AuthenticateRequest request =
@@ -392,10 +423,7 @@ final class ServerConnection {
             switchState(ConnectionState.READY);
 
         } catch (Exception e) {
-            LOG.error(
-                    "Authentication failed when authenticating challenge: {}",
-                    new String(challenge),
-                    e);
+            LOG.error("Authentication failed when authenticating challenge。", e);
             close(
                     new FlussRuntimeException(
                             "Authentication failed when authenticating challenge", e));
@@ -403,19 +431,28 @@ final class ServerConnection {
     }
 
     private void handleAuthenticateResponse(ApiMessage response, Throwable cause) {
-        if (cause != null) {
-            close(cause);
-            return;
-        }
-        if (!(response instanceof AuthenticateResponse)) {
-            close(new IllegalStateException("Unexpected response type " + response.getClass()));
-            return;
-        }
-
         synchronized (lock) {
+            if (cause != null) {
+                if (cause instanceof RetriableAuthenticationException) {
+                    LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
+                    channel.eventLoop()
+                            .schedule(
+                                    this::sendInitialToken,
+                                    backoff.backoff(retryAuthCount++),
+                                    TimeUnit.MILLISECONDS);
+                } else {
+                    close(cause);
+                }
+                return;
+            }
+            if (!(response instanceof AuthenticateResponse)) {
+                close(new IllegalStateException("Unexpected response type " + response.getClass()));
+                return;
+            }
+
             AuthenticateResponse authenticateResponse = (AuthenticateResponse) response;
             if (authenticateResponse.hasChallenge()) {
-                sendAuthenticate(((AuthenticateResponse) response).getChallenge());
+                sendAuthenticateRequest(((AuthenticateResponse) response).getChallenge(), false);
             } else if (authenticator.isCompleted()) {
                 switchState(ConnectionState.READY);
             } else {
@@ -519,6 +556,13 @@ final class ServerConnection {
 
         ByteBuf toByteBuf(ByteBufAllocator allocator) {
             return MessageCodec.encodeRequest(allocator, apiKey, apiVersion, requestId, request);
+        }
+    }
+
+    private class DefaultAuthenticateContext implements ClientAuthenticator.AuthenticateContext {
+        @Override
+        public String ipAddress() {
+            return ((InetSocketAddress) channel.remoteAddress()).getAddress().getHostAddress();
         }
     }
 }

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,6 +32,7 @@ import com.alibaba.fluss.client.write.WriterClient;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
@@ -40,9 +42,12 @@ import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 
 import static com.alibaba.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
+import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
+import static com.alibaba.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
@@ -63,12 +68,18 @@ public final class FlussConnection implements Connection {
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
         this.conf = conf;
+        // init Filesystem with configuration from FlussConnection,
+        // only pass options with 'client.fs.' prefix
+        FileSystem.initialize(
+                Configuration.fromMap(
+                        extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
+                null);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);
         this.metricRegistry = metricRegistry;
         this.clientMetricGroup = new ClientMetricGroup(metricRegistry, clientId);
-        this.rpcClient = RpcClient.create(conf, clientMetricGroup);
+        this.rpcClient = RpcClient.create(conf, clientMetricGroup, false);
 
         // TODO this maybe remove after we introduce client metadata.
         this.metadataUpdater = new MetadataUpdater(conf, rpcClient);
@@ -109,7 +120,9 @@ public final class FlussConnection implements Connection {
         if (writerClient == null) {
             synchronized (this) {
                 if (writerClient == null) {
-                    writerClient = new WriterClient(conf, metadataUpdater, clientMetricGroup);
+                    writerClient =
+                            new WriterClient(
+                                    conf, metadataUpdater, clientMetricGroup, this.getAdmin());
                 }
             }
         }

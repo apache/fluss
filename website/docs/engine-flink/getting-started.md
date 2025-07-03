@@ -5,11 +5,13 @@ sidebar_position: 1
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -32,8 +34,9 @@ For a quick introduction to running Flink, refer to the [Quick Start](quickstart
 
 
 ## Feature Support
-Fluss only supports Apache Flink's Table API.
+Fluss supports Apache Flink's Table API and Flink's DataStream API.
 
+For Flink's Table API, Fluss supports the following features:
 
 | Feature support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
@@ -44,14 +47,16 @@ Fluss only supports Apache Flink's Table API.
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
 | [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |
 | [SQL show partitions](ddl.md#show-partitions)     | ✔️    |                                        |
-| [SQL add partiiton](ddl.md#add-partition)         | ✔️    |                                        |
-| [SQL drop partiiton](ddl.md#drop-partition)       | ✔️    |                                        |
+| [SQL add partition](ddl.md#add-partition)         | ✔️    |                                        |
+| [SQL drop partition](ddl.md#drop-partition)       | ✔️    |                                        |
 | [SQL select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
 | [SQL limit](reads.md#limit-read)                  | ✔️    | Only for Log Table                     |
 | [SQL insert into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
 | [SQL delete from](writes.md#delete-from)          | ✔️    | Only in batch mode.                    |
 | [SQL update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
 | [SQL lookup join](lookups.md)                     | ✔️    |                                        |
+
+For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
 
 ## Preparation when using Flink SQL Client
 - **Download Flink**

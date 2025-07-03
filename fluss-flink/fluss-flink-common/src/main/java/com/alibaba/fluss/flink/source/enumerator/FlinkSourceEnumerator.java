@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -34,10 +35,12 @@ import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
 import com.alibaba.fluss.flink.source.split.LogSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
+import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -125,6 +128,8 @@ public class FlinkSourceEnumerator
 
     private volatile boolean closed = false;
 
+    private final List<FieldEqual> partitionFilters;
+
     public FlinkSourceEnumerator(
             TablePath tablePath,
             Configuration flussConf,
@@ -133,7 +138,8 @@ public class FlinkSourceEnumerator
             SplitEnumeratorContext<SourceSplitBase> context,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
-            boolean streaming) {
+            boolean streaming,
+            List<FieldEqual> partitionFilters) {
         this(
                 tablePath,
                 flussConf,
@@ -144,7 +150,8 @@ public class FlinkSourceEnumerator
                 Collections.emptyMap(),
                 startingOffsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
-                streaming);
+                streaming,
+                partitionFilters);
     }
 
     public FlinkSourceEnumerator(
@@ -157,7 +164,8 @@ public class FlinkSourceEnumerator
             Map<Long, String> assignedPartitions,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
-            boolean streaming) {
+            boolean streaming,
+            List<FieldEqual> partitionFilters) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -169,6 +177,7 @@ public class FlinkSourceEnumerator
         this.assignedPartitions = new HashMap<>(assignedPartitions);
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
+        this.partitionFilters = checkNotNull(partitionFilters);
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
     }
@@ -255,12 +264,41 @@ public class FlinkSourceEnumerator
     private Set<PartitionInfo> listPartitions() {
         try {
             List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
+            partitionInfos = applyPartitionFilter(partitionInfos);
             return new HashSet<>(partitionInfos);
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to list partitions for %s", tablePath),
                     ExceptionUtils.stripCompletionException(e));
         }
+    }
+
+    /** Apply partition filter. */
+    private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
+        if (!partitionFilters.isEmpty()) {
+            return partitionInfos.stream()
+                    .filter(
+                            partitionInfo -> {
+                                Map<String, String> specMap =
+                                        partitionInfo.getPartitionSpec().getSpecMap();
+                                // use getFields() instead of getFieldNames() to
+                                // avoid collection construction
+                                List<DataField> fields = tableInfo.getRowType().getFields();
+                                for (FieldEqual filter : partitionFilters) {
+                                    String fieldName = fields.get(filter.fieldIndex).getName();
+                                    String partitionValue = specMap.get(fieldName);
+                                    if (partitionValue == null
+                                            || !filter.equalValue
+                                                    .toString()
+                                                    .equals(partitionValue)) {
+                                        return false;
+                                    }
+                                }
+                                return true;
+                            })
+                    .collect(Collectors.toList());
+        }
+        return partitionInfos;
     }
 
     /** Init the splits for Fluss. */
@@ -487,8 +525,16 @@ public class FlinkSourceEnumerator
 
     private void handleSplitsAdd(List<SourceSplitBase> splits, Throwable t) {
         if (t != null) {
-            throw new FlinkRuntimeException(
-                    String.format("Failed to list splits for %s to read due to ", tablePath), t);
+            if (isPartitioned && streaming && scanPartitionDiscoveryIntervalMs > 0) {
+                // it means continuously read new partition splits, not throw exception, temporally
+                // warn it to avoid job fail. TODO: fix me in #288
+                LOG.warn("Failed to list splits for {}.", tablePath, t);
+                return;
+            } else {
+                throw new FlinkRuntimeException(
+                        String.format("Failed to list splits for %s to read due to ", tablePath),
+                        t);
+            }
         }
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {

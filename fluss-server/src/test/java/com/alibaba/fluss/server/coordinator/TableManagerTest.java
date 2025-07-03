@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +21,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableBucketReplica;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
 import com.alibaba.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.TestingEventManager;
@@ -54,6 +56,8 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
@@ -110,7 +114,8 @@ class TableManagerTest {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         CoordinatorRequestBatch coordinatorRequestBatch =
-                new CoordinatorRequestBatch(testCoordinatorChannelManager, testingEventManager);
+                new CoordinatorRequestBatch(
+                        testCoordinatorChannelManager, testingEventManager, coordinatorContext);
         ReplicaStateMachine replicaStateMachine =
                 new ReplicaStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);
@@ -143,6 +148,14 @@ class TableManagerTest {
                         .build();
 
         long tableId = DATA1_TABLE_ID;
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         // all replica should be online
@@ -158,6 +171,14 @@ class TableManagerTest {
         TableAssignment assignment = createAssignment();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
 
         // now, delete the created table
@@ -186,6 +207,14 @@ class TableManagerTest {
         TableAssignment assignment = createAssignment();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         // now, delete the created table/partition
@@ -225,17 +254,30 @@ class TableManagerTest {
         TableAssignment assignment = TableAssignment.builder().build();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, createAssignment().getBucketAssignments());
-        zookeeperClient.registerPartitionAssignment(
-                zookeeperClient.getPartitionIdAndIncrement(), partitionAssignment);
+        String partitionName = "2024";
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                zookeeperClient.getPartitionIdAndIncrement(),
+                partitionName,
+                partitionAssignment,
+                DATA1_TABLE_PATH,
+                tableId);
 
         // create partition
         long partitionId = 1L;
         tableManager.onCreateNewPartition(
-                DATA1_TABLE_PATH, tableId, partitionId, "2024", partitionAssignment);
+                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
 
         // all replicas should be online
         checkReplicaOnline(tableId, partitionId, partitionAssignment);

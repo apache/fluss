@@ -1,17 +1,18 @@
 /*
- *  Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package com.alibaba.fluss.rpc.netty.authenticate;
@@ -67,11 +68,12 @@ public class AuthenticationTest {
     @Test
     void testNormalAuthenticate() throws Exception {
         Configuration clientConfig = new Configuration();
-        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
-        clientConfig.setString("client.security.username_password.username", "root");
-        clientConfig.setString("client.security.username_password.password", "password");
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        clientConfig.setString("client.security.sasl.username", "root");
+        clientConfig.setString("client.security.sasl.password", "password");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, usernamePasswordServerNode);
         }
     }
@@ -83,14 +85,14 @@ public class AuthenticationTest {
 
         // test normal mutual auth
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
         }
 
         // test invalid challenge from server
         clientConfig.setString("client.security.mutual.error-type", "SERVER_ERROR_CHALLENGE");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .hasRootCauseExactlyInstanceOf(AuthenticationException.class)
                     .rootCause()
@@ -100,7 +102,7 @@ public class AuthenticationTest {
         // test invalid token from client
         clientConfig.setString("client.security.mutual.error-type", "CLIENT_ERROR_SECOND_TOKEN");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .rootCause()
                     .hasMessageContaining("Invalid token value");
@@ -113,7 +115,7 @@ public class AuthenticationTest {
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         clientConfig.setString("client.security.mutual.error-type", "SERVER_NO_CHALLENGE");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
 
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .hasRootCauseExactlyInstanceOf(IllegalStateException.class)
@@ -123,10 +125,21 @@ public class AuthenticationTest {
     }
 
     @Test
+    void testRetirableAuthenticateException() throws Exception {
+        Configuration clientConfig = new Configuration();
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
+        clientConfig.setString("client.security.mutual.error-type", "RETRIABLE_EXCEPTION");
+        try (NettyClient nettyClient =
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+            verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
+        }
+    }
+
+    @Test
     void testClientLackAuthenticateProtocol() throws Exception {
         Configuration clientConfig = new Configuration();
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(
                             () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
@@ -141,53 +154,55 @@ public class AuthenticationTest {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(
                             () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
                     .isExactlyInstanceOf(AuthenticationException.class)
                     .hasMessageContaining(
-                            "Authenticate protocol not match: protocol of server is 'username_password' while protocol of client is 'mutual'");
+                            "SASL server enables [PLAIN] while protocol of client is 'mutual'");
         }
     }
 
     @Test
     void testWrongPassword() throws Exception {
         Configuration clientConfig = new Configuration();
-        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
-        clientConfig.setString("client.security.username_password.username", "root");
-        clientConfig.setString("client.security.username_password.password", "password2");
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        clientConfig.setString("client.security.sasl.username", "root");
+        clientConfig.setString("client.security.sasl.password", "password2");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(
                             () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
                     .isExactlyInstanceOf(AuthenticationException.class)
-                    .hasMessageContaining("username or password is incorrect");
+                    .hasMessageContaining("Invalid username or password");
         }
     }
 
     @Test
     void testMultiClientsWithSameProtocol() throws Exception {
         Configuration clientConfig = new Configuration();
-        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
-        clientConfig.setString("client.security.username_password.username", "root");
-        clientConfig.setString("client.security.username_password.password", "password");
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        clientConfig.setString("client.security.sasl.username", "root");
+        clientConfig.setString("client.security.sasl.password", "password");
 
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, usernamePasswordServerNode);
             // client2 with wrong password after client1 successes to authenticate.
-            clientConfig.setString("client.security.username_password.password", "password2");
+            clientConfig.setString("client.security.sasl.password", "password2");
             try (NettyClient nettyClient2 =
-                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
                 assertThatThrownBy(
                                 () ->
                                         verifyGetTableNamesList(
                                                 nettyClient2, usernamePasswordServerNode))
                         .cause()
                         .isExactlyInstanceOf(AuthenticationException.class)
-                        .hasMessageContaining("username or password is incorrect");
+                        .hasMessageContaining("Invalid username or password");
             }
         }
     }
@@ -206,9 +221,15 @@ public class AuthenticationTest {
     private void buildNettyServer() throws Exception {
         Configuration configuration = new Configuration();
         configuration.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
-                "CLIENT1:mutual,CLIENT2:username_password");
-        configuration.setString("security.username_password.credentials", "root:password");
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT1:mutual,CLIENT2:sasl");
+        configuration.setString("security.sasl.enabled.mechanisms", "plain");
+        configuration.setString(
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
+        configuration.set(ConfigOptions.SUPER_USERS, "User:root");
+        configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         // 3 worker threads is enough for this test
         configuration.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();

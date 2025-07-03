@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,9 +32,11 @@ public class BucketLocationTest {
         TablePath tablePath = new TablePath("test_db", "test_table");
         int bucketId = 0;
         long tableId = 150001L;
-        ServerNode leader = new ServerNode(0, "localhost", 9092, ServerType.TABLET_SERVER);
-        ServerNode replica1 = new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER);
-        ServerNode replica2 = new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER);
+        ServerNode leader = new ServerNode(0, "localhost", 9092, ServerType.TABLET_SERVER, "rack0");
+        ServerNode replica1 =
+                new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER, "rack1");
+        ServerNode replica2 =
+                new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER, "rack2");
         ServerNode[] replicas = {leader, replica1, replica2};
         // TODO add isr and offline.
         BucketLocation bucketLocation =

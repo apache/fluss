@@ -4,11 +4,13 @@ title: Building Fluss
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -21,16 +23,33 @@ title: Building Fluss
 
 # Building Fluss from Source
 
-This page covers how to build Fluss 0.6.0-SNAPSHOT from sources.
+This page covers how to build Fluss from sources.
 
-In order to build Fluss you need to get the source code by [clone the git repository](https://github.com/alibaba/fluss).
+In order to build Fluss you need to get the source code by [cloning the git repository](https://github.com/alibaba/fluss).
 
 In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Fluss requires **Java 8 or Java 11** to build.
+
+:::tip
+- It is recommended to use JDK 1.8.3 if you're using Java 8 and encounter an error like `java.lang.NoSuchMethodError: 'java.nio.MappedByteBuffer java.nio.MappedByteBuffer.duplicate()'`.
+- Setting the environment variable via `export JAVA_TOOL_OPTIONS="-XX:+UnlockExperimentalVMOptions"` is useful if you encounter an error `VM option 'UseG1GC' is experimental and must be enabled via -XX:+UnlockExperimentalVMOptions`.
+:::
 
 To clone from git, enter:
 
 ```bash
 git clone git@github.com:alibaba/fluss.git
+```
+
+If you want to build a specific release or release candidate, have a look at the existing tags using 
+
+```bash
+git tag -n
+```
+
+and checkout the corresponding branch using
+
+```bash
+git checkout <tag>
 ```
 
 The simplest way of building Fluss is by running:

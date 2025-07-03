@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +18,8 @@
 package com.alibaba.fluss.cluster;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+
+import javax.annotation.Nullable;
 
 import java.util.Objects;
 
@@ -33,15 +36,23 @@ public class ServerNode {
     private final int port;
     private final ServerType serverType;
 
+    /** rack info for ServerNode. Currently, only tabletServer has rack info. */
+    private final @Nullable String rack;
+
     // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
     // RecordAccumulator.ready)
     private Integer hash;
 
     public ServerNode(int id, String host, int port, ServerType serverType) {
+        this(id, host, port, serverType, null);
+    }
+
+    public ServerNode(int id, String host, int port, ServerType serverType, @Nullable String rack) {
         this.id = id;
         this.host = host;
         this.port = port;
         this.serverType = serverType;
+        this.rack = rack;
         if (serverType == ServerType.COORDINATOR) {
             this.uid = "cs-" + id;
         } else {
@@ -80,6 +91,11 @@ public class ServerNode {
         return serverType;
     }
 
+    /** The rack for this node. */
+    public @Nullable String rack() {
+        return rack;
+    }
+
     /**
      * Check whether this node is empty, which may be the case if noNode() is used as a placeholder
      * in a response payload with an error.
@@ -98,6 +114,7 @@ public class ServerNode {
             result = 31 * result + id;
             result = 31 * result + port;
             result = 31 * result + serverType.hashCode();
+            result = 31 * result + ((rack == null) ? 0 : rack.hashCode());
             this.hash = result;
             return result;
         } else {
@@ -117,11 +134,12 @@ public class ServerNode {
         return id == other.id
                 && port == other.port
                 && Objects.equals(host, other.host)
-                && serverType == other.serverType;
+                && serverType == other.serverType
+                && Objects.equals(rack, other.rack);
     }
 
     @Override
     public String toString() {
-        return host + ":" + port + " (id: " + uid + ")";
+        return host + ":" + port + " (id: " + uid + ", rack: " + rack + ")";
     }
 }

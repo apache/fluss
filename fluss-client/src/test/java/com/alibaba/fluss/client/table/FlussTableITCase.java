@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,6 +32,8 @@ import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.fs.FsPath;
+import com.alibaba.fluss.fs.TestFileSystem;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.KvFormat;
 import com.alibaba.fluss.metadata.LogFormat;
@@ -61,6 +64,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -1158,6 +1162,21 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
                         .isEqualTo(expectedRecord.getRow());
             }
+        }
+    }
+
+    @Test
+    void testFileSystemRecognizeConnectionConf() throws Exception {
+        Configuration config = new Configuration(clientConf);
+        config.setString("client.fs.test.key", "fs_test_value");
+        config.setString("client.test.key", "client_test_value");
+        try (Connection ignore = ConnectionFactory.createConnection(config)) {
+            FsPath fsPath = new FsPath("test:///f1");
+            TestFileSystem testFileSystem = (TestFileSystem) fsPath.getFileSystem();
+            Configuration filesystemConf = testFileSystem.getConfiguration();
+            assertThat(filesystemConf.toMap())
+                    .containsExactlyEntriesOf(
+                            Collections.singletonMap("client.fs.test.key", "fs_test_value"));
         }
     }
 }

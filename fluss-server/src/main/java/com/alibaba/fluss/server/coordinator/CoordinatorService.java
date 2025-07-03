@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,20 +18,26 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
+import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionSpec;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
@@ -57,6 +64,14 @@ import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import com.alibaba.fluss.rpc.messages.MetadataRequest;
+import com.alibaba.fluss.rpc.messages.MetadataResponse;
+import com.alibaba.fluss.rpc.messages.PbHeartbeatReqForTable;
+import com.alibaba.fluss.rpc.messages.PbHeartbeatRespForTable;
+import com.alibaba.fluss.rpc.netty.server.Session;
+import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
 import com.alibaba.fluss.security.acl.OperationType;
@@ -65,18 +80,23 @@ import com.alibaba.fluss.server.RpcServiceBase;
 import com.alibaba.fluss.server.authorizer.AclCreateResult;
 import com.alibaba.fluss.server.authorizer.AclDeleteResult;
 import com.alibaba.fluss.server.authorizer.Authorizer;
+import com.alibaba.fluss.server.coordinator.event.AccessContextEvent;
 import com.alibaba.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import com.alibaba.fluss.server.coordinator.event.EventManager;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
+import com.alibaba.fluss.server.entity.LakeTieringTableInfo;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
+import com.alibaba.fluss.server.metadata.BucketMetadata;
+import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
+import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
+import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
@@ -86,14 +106,17 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
@@ -101,6 +124,7 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPartitionS
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
@@ -111,32 +135,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
+    private final Supplier<Integer> coordinatorEpochSupplier;
+    private final ServerMetadataCache metadataCache;
 
     // null if the cluster hasn't configured datalake format
     private final @Nullable DataLakeFormat dataLakeFormat;
     private final @Nullable LakeCatalog lakeCatalog;
+    private final LakeTableTieringManager lakeTableTieringManager;
 
     public CoordinatorService(
             Configuration conf,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
-            Supplier<EventManager> eventManagerSupplier,
+            Supplier<CoordinatorEventProcessor> coordinatorEventProcessorSupplier,
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            @Nullable LakeCatalog lakeCatalog) {
-        super(
-                remoteFileSystem,
-                ServerType.COORDINATOR,
-                zkClient,
-                metadataCache,
-                metadataManager,
-                authorizer);
+            @Nullable LakeCatalog lakeCatalog,
+            LakeTableTieringManager lakeTableTieringManager) {
+        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
-        this.eventManagerSupplier = eventManagerSupplier;
+        this.eventManagerSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
+        this.coordinatorEpochSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
         this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
         this.lakeCatalog = lakeCatalog;
+        this.lakeTableTieringManager = lakeTableTieringManager;
+        this.metadataCache = metadataCache;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
                 "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
@@ -164,7 +191,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         try {
             TablePath.validateDatabaseName(request.getDatabaseName());
         } catch (InvalidDatabaseException e) {
-            return FutureUtils.failedFuture(e);
+            return FutureUtils.completedExceptionally(e);
         }
 
         DatabaseDescriptor databaseDescriptor;
@@ -230,9 +257,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (!tableDescriptor.isPartitioned()) {
             // the replication factor must be set now
             int replicaFactor = tableDescriptor.getReplicationFactor();
-            int[] servers = metadataCache.getLiveServerIds();
-            tableAssignment =
-                    TableAssignmentUtils.generateAssignment(bucketCount, replicaFactor, servers);
+            TabletServerInfo[] servers = metadataCache.getLiveServers();
+            tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
         // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
@@ -348,9 +374,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // second, generate the PartitionAssignment.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
-        int[] servers = metadataCache.getLiveServerIds();
+        TabletServerInfo[] servers = metadataCache.getLiveServers();
         Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(table.bucketCount, replicaFactor, servers)
+                generateAssignment(table.bucketCount, replicaFactor, servers)
                         .getBucketAssignments();
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(table.tableId, bucketAssignments);
@@ -389,6 +415,28 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+        String listenerName = currentListenerName();
+        Session session = currentSession();
+
+        AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
+                new AccessContextEvent<>(
+                        ctx ->
+                                makeMetadataResponse(
+                                        request,
+                                        listenerName,
+                                        session,
+                                        authorizer,
+                                        metadataCache,
+                                        (tablePath) -> getTableMetadata(ctx, tablePath),
+                                        ctx::getPhysicalTablePath,
+                                        (physicalTablePath) ->
+                                                getPartitionMetadata(ctx, physicalTablePath)));
+        eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
+        return metadataResponseAccessContextEvent.getResultFuture();
     }
 
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
@@ -458,5 +506,148 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new CommitLakeTableSnapshotEvent(
                                 getCommitLakeTableSnapshotData(request), response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
+            LakeTieringHeartbeatRequest request) {
+        LakeTieringHeartbeatResponse heartbeatResponse = new LakeTieringHeartbeatResponse();
+        int currentCoordinatorEpoch = coordinatorEpochSupplier.get();
+        heartbeatResponse.setCoordinatorEpoch(currentCoordinatorEpoch);
+
+        // process failed tables
+        for (PbHeartbeatReqForTable failedTable : request.getFailedTablesList()) {
+            PbHeartbeatRespForTable pbHeartbeatRespForTable =
+                    heartbeatResponse.addFailedTableResp().setTableId(failedTable.getTableId());
+            try {
+                validateHeartbeatRequest(failedTable, currentCoordinatorEpoch);
+                lakeTableTieringManager.reportTieringFail(
+                        failedTable.getTableId(), failedTable.getTieringEpoch());
+            } catch (Throwable e) {
+                pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
+            }
+        }
+
+        // process tiering tables
+        for (PbHeartbeatReqForTable tieringTable : request.getTieringTablesList()) {
+            PbHeartbeatRespForTable pbHeartbeatRespForTable =
+                    heartbeatResponse.addTieringTableResp().setTableId(tieringTable.getTableId());
+            try {
+                validateHeartbeatRequest(tieringTable, currentCoordinatorEpoch);
+                lakeTableTieringManager.renewTieringHeartbeat(
+                        tieringTable.getTableId(), tieringTable.getTieringEpoch());
+            } catch (Throwable t) {
+                pbHeartbeatRespForTable.setError(ApiError.fromThrowable(t).toErrorResponse());
+            }
+        }
+
+        // process finished tables
+        for (PbHeartbeatReqForTable finishTable : request.getFinishedTablesList()) {
+            PbHeartbeatRespForTable pbHeartbeatRespForTable =
+                    heartbeatResponse.addFinishedTableResp().setTableId(finishTable.getTableId());
+            try {
+                validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
+                lakeTableTieringManager.finishTableTiering(
+                        finishTable.getTableId(), finishTable.getTieringEpoch());
+            } catch (Throwable e) {
+                pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
+            }
+        }
+
+        if (request.hasRequestTable() && request.isRequestTable()) {
+            LakeTieringTableInfo lakeTieringTableInfo = lakeTableTieringManager.requestTable();
+            if (lakeTieringTableInfo != null) {
+                heartbeatResponse
+                        .setTieringTable()
+                        .setTableId(lakeTieringTableInfo.tableId())
+                        .setTablePath(fromTablePath(lakeTieringTableInfo.tablePath()))
+                        .setTieringEpoch(lakeTieringTableInfo.tieringEpoch());
+            }
+        }
+        return CompletableFuture.completedFuture(heartbeatResponse);
+    }
+
+    private void validateHeartbeatRequest(
+            PbHeartbeatReqForTable heartbeatReqForTable, int currentEpoch) {
+        if (heartbeatReqForTable.getCoordinatorEpoch() != currentEpoch) {
+            throw new InvalidCoordinatorException(
+                    String.format(
+                            "The coordinator epoch %s in request is not match current coordinator epoch %d for table %d.",
+                            heartbeatReqForTable.getCoordinatorEpoch(),
+                            currentEpoch,
+                            heartbeatReqForTable.getTableId()));
+        }
+    }
+
+    private TableMetadata getTableMetadata(CoordinatorContext ctx, TablePath tablePath) {
+        // always get table info from zk.
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        long tableId = ctx.getTableIdByPath(tablePath);
+        List<BucketMetadata> bucketMetadataList;
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
+            // get table assignment from zk.
+            bucketMetadataList =
+                    getTableMetadataFromZk(
+                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
+        } else {
+            // get table assignment from coordinatorContext.
+            bucketMetadataList =
+                    getBucketMetadataFromContext(
+                            ctx, tableId, null, ctx.getTableAssignment(tableId));
+        }
+        return new TableMetadata(tableInfo, bucketMetadataList);
+    }
+
+    private PartitionMetadata getPartitionMetadata(
+            CoordinatorContext ctx, PhysicalTablePath partitionPath) {
+        TablePath tablePath =
+                new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
+        String partitionName = partitionPath.getPartitionName();
+        long tableId = ctx.getTableIdByPath(tablePath);
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
+            // https://github.com/alibaba/fluss/issues/483
+            return getPartitionMetadataFromZk(partitionPath, zkClient);
+        } else {
+            Optional<Long> partitionIdOpt = ctx.getPartitionId(partitionPath);
+            if (partitionIdOpt.isPresent()) {
+                long partitionId = partitionIdOpt.get();
+                List<BucketMetadata> bucketMetadataList =
+                        getBucketMetadataFromContext(
+                                ctx,
+                                tableId,
+                                partitionId,
+                                ctx.getPartitionAssignment(
+                                        new TablePartition(tableId, partitionId)));
+                return new PartitionMetadata(
+                        tableId, partitionName, partitionId, bucketMetadataList);
+            } else {
+                return getPartitionMetadataFromZk(partitionPath, zkClient);
+            }
+        }
+    }
+
+    private static List<BucketMetadata> getBucketMetadataFromContext(
+            CoordinatorContext ctx,
+            long tableId,
+            @Nullable Long partitionId,
+            Map<Integer, List<Integer>> tableAssigment) {
+        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
+        tableAssigment.forEach(
+                (bucketId, serverIds) -> {
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+                    Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
+                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+                    BucketMetadata bucketMetadata =
+                            new BucketMetadata(
+                                    bucketId,
+                                    leader,
+                                    ctx.getBucketLeaderEpoch(tableBucket),
+                                    serverIds);
+                    bucketMetadataList.add(bucketMetadata);
+                });
+        return bucketMetadataList;
     }
 }

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,13 +19,17 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
+import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.InitWriterRequest;
 import com.alibaba.fluss.rpc.protocol.Errors;
+import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +37,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 
@@ -47,6 +54,10 @@ import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 @ThreadSafe
 public class IdempotenceManager {
     private static final Logger LOG = LoggerFactory.getLogger(IdempotenceManager.class);
+
+    // retry config for requesting writerId, maybe make it as configurable
+    private static final int RETRY_TIMES = 3;
+    private static final int RETRY_INTERVAL_MS = 100;
 
     private final boolean idempotenceEnabled;
     private final IdempotenceBucketMap idempotenceBucketMap;
@@ -145,17 +156,17 @@ public class IdempotenceManager {
         return idempotenceBucketMap.lastAckedBatchSequence(tableBucket);
     }
 
-    synchronized void addInFlightBatch(WriteBatch batch) {
+    synchronized void addInFlightBatch(WriteBatch batch, TableBucket tableBucket) {
         if (!batch.hasBatchSequence()) {
             throw new IllegalStateException(
                     "Can't track batch for bucket "
-                            + batch.tableBucket()
+                            + tableBucket
                             + " when batch sequence is not set.");
         }
-        idempotenceBucketMap.get(batch.tableBucket()).addInflightBatch(batch);
+        idempotenceBucketMap.get(tableBucket).addInflightBatch(batch);
     }
 
-    synchronized void removeInFlightBatch(WriteBatch batch) {
+    synchronized void removeInFlightBatch(ReadyWriteBatch batch) {
         if (hasInflightBatches(batch.tableBucket())) {
             idempotenceBucketMap.removeInFlightBatch(batch);
         }
@@ -177,8 +188,9 @@ public class IdempotenceManager {
         return batch == null ? LogRecordBatch.NO_BATCH_SEQUENCE : batch.batchSequence();
     }
 
-    synchronized void handleCompletedBatch(WriteBatch batch) {
-        TableBucket tableBucket = batch.tableBucket();
+    synchronized void handleCompletedBatch(ReadyWriteBatch readyWriteBatch) {
+        TableBucket tableBucket = readyWriteBatch.tableBucket();
+        WriteBatch batch = readyWriteBatch.writeBatch();
         if (!hasWriterId(batch.writerId())) {
             LOG.debug(
                     "Ignoring completed batch {} with writer id {}, and batch sequence {} "
@@ -195,11 +207,12 @@ public class IdempotenceManager {
                 batch.writerId(),
                 tableBucket,
                 lastAckedSequence);
-        removeInFlightBatch(batch);
+        removeInFlightBatch(readyWriteBatch);
     }
 
     synchronized void handleFailedBatch(
-            WriteBatch batch, Exception exception, boolean adjustSequenceNumbers) {
+            ReadyWriteBatch readyWriteBatch, Exception exception, boolean adjustSequenceNumbers) {
+        WriteBatch batch = readyWriteBatch.writeBatch();
         if (!hasWriterId(batch.writerId())) {
             LOG.debug(
                     "Ignoring failed batch {} with writer id {}, and batch sequence {} "
@@ -216,7 +229,7 @@ public class IdempotenceManager {
             LOG.error(
                     "The server returned {} for table-bucket {} with writer id {} and batch sequence {}.",
                     exception,
-                    batch.tableBucket(),
+                    readyWriteBatch.tableBucket(),
                     batch.writerId(),
                     batch.batchSequence());
             // Reset the writer state since we have hit an irrecoverable exception and cannot make
@@ -224,9 +237,9 @@ public class IdempotenceManager {
             // the writer id and batch sequence for all existing buckets.
             resetWriterId();
         } else {
-            removeInFlightBatch(batch);
+            removeInFlightBatch(readyWriteBatch);
             if (adjustSequenceNumbers) {
-                idempotenceBucketMap.adjustSequencesDueToFailedBatch(batch);
+                idempotenceBucketMap.adjustSequencesDueToFailedBatch(readyWriteBatch);
             }
         }
     }
@@ -244,12 +257,11 @@ public class IdempotenceManager {
         return idempotenceBucketMap.getOrCreate(tableBucket).inflightBatchSize();
     }
 
-    synchronized boolean canRetry(WriteBatch batch, Errors error) {
+    synchronized boolean canRetry(WriteBatch batch, TableBucket tableBucket, Errors error) {
         if (!isWriterIdValid()) {
             return false;
         }
 
-        TableBucket tableBucket = batch.tableBucket();
         if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
                 && (batch.sequenceHasBeenReset()
                         || !isNextSequence(tableBucket, batch.batchSequence()))) {
@@ -277,24 +289,49 @@ public class IdempotenceManager {
         return false;
     }
 
-    void maybeWaitForWriterId() {
-        if (!isWriterIdValid()) {
+    void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
+        if (isWriterIdValid()) {
+            return;
+        }
+
+        int retryCount = 0;
+        while (true) {
             try {
                 tabletServerGateway
-                        .initWriter(new InitWriterRequest())
+                        .initWriter(prepareInitWriterRequest(tablePaths))
                         .thenAccept(response -> setWriterId(response.getWriterId()))
-                        .exceptionally(
-                                e -> {
-                                    LOG.error("Failed to get writer id from tablet server.", e);
-                                    return null;
-                                })
                         .get(); // TODO: can optimize into async response handling.
+                return;
             } catch (Exception e) {
-                LOG.error(
-                        "Received an exception while trying to get writer id from tablet server.",
-                        e);
+                Throwable t = ExceptionUtils.stripExecutionException(e);
+                if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {
+                    throw t;
+                } else {
+                    LOG.warn(
+                            "Failed to init writer id, the retry count: {}, error message: {}",
+                            retryCount,
+                            t.getMessage());
+                    retryCount++;
+                    long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
+                    Thread.sleep(delayMs);
+                }
             }
         }
+    }
+
+    InitWriterRequest prepareInitWriterRequest(Set<PhysicalTablePath> physicalTables) {
+        InitWriterRequest initWriterRequest = new InitWriterRequest();
+        Set<TablePath> tables =
+                physicalTables.stream()
+                        .map(PhysicalTablePath::getTablePath)
+                        .collect(Collectors.toSet());
+        for (TablePath tablePath : tables) {
+            initWriterRequest
+                    .addTablePath()
+                    .setDatabaseName(tablePath.getDatabaseName())
+                    .setTableName(tablePath.getTableName());
+        }
+        return initWriterRequest;
     }
 
     private int maybeUpdateLastAckedSequence(TableBucket tableBucket, int sequence) {

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,7 +27,7 @@ import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
-import com.alibaba.fluss.server.entity.FetchData;
+import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
@@ -155,7 +156,7 @@ public class ReplicaFetcherITCase {
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
                     new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
-                    Collections.singletonMap(tb, new FetchData(tableId, 0L, 1024 * 1024)),
+                    Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
                     future::complete);
             Map<TableBucket, FetchLogResultForBucket> result = future.get();
             assertThat(result.size()).isEqualTo(1);
@@ -231,7 +232,7 @@ public class ReplicaFetcherITCase {
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
                     new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
-                    Collections.singletonMap(tb, new FetchData(tableId, 0L, 1024 * 1024)),
+                    Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
                     future::complete);
             Map<TableBucket, FetchLogResultForBucket> result = future.get();
             assertThat(result.size()).isEqualTo(1);

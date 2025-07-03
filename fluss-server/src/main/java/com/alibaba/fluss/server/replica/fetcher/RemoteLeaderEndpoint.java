@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -37,7 +38,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.rpc.CommonRpcMessageUtils.getFetchLogResultForBucket;
+import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
@@ -90,8 +91,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     }
 
     @Override
-    public CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchLog(
-            FetchLogContext fetchLogContext) {
+    public CompletableFuture<FetchData> fetchLog(FetchLogContext fetchLogContext) {
         FetchLogRequest fetchLogRequest = fetchLogContext.getFetchLogRequest();
         return tabletServerGateway
                 .fetchLog(fetchLogRequest)
@@ -121,7 +121,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
                                 }
                             }
 
-                            return fetchLogResultMap;
+                            return new FetchData(fetchLogResponse, fetchLogResultMap);
                         });
     }
 

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -53,7 +54,7 @@ import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.coordinator.CoordinatorContext;
-import com.alibaba.fluss.server.entity.FetchData;
+import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.entity.LakeBucketOffset;
 import com.alibaba.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import com.alibaba.fluss.server.entity.NotifyLakeTableOffsetData;
@@ -77,7 +78,8 @@ import com.alibaba.fluss.server.log.LogReadInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
+import com.alibaba.fluss.server.metadata.ClusterMetadata;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -117,7 +119,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -144,7 +145,7 @@ public class ReplicaManager {
     @GuardedBy("replicaStateChangeLock")
     private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
-    private final ServerMetadataCache metadataCache;
+    private final TabletServerMetadataCache metadataCache;
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
     /**
@@ -189,7 +190,7 @@ public class ReplicaManager {
             KvManager kvManager,
             ZooKeeperClient zkClient,
             int serverId,
-            ServerMetadataCache metadataCache,
+            TabletServerMetadataCache metadataCache,
             RpcClient rpcClient,
             CoordinatorGateway coordinatorGateway,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -222,7 +223,7 @@ public class ReplicaManager {
             KvManager kvManager,
             ZooKeeperClient zkClient,
             int serverId,
-            ServerMetadataCache metadataCache,
+            TabletServerMetadataCache metadataCache,
             RpcClient rpcClient,
             CoordinatorGateway coordinatorGateway,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -328,8 +329,7 @@ public class ReplicaManager {
     public void becomeLeaderOrFollower(
             int requestCoordinatorEpoch,
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
-            Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback,
-            BiConsumer<Long, PhysicalTablePath> leaderBucketCallback) {
+            Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
         inLock(
                 replicaStateChangeLock,
@@ -345,8 +345,6 @@ public class ReplicaManager {
                             boolean becomeLeader = validateAndGetIsBecomeLeader(data);
                             if (becomeLeader) {
                                 replicasToBeLeader.add(data);
-                                leaderBucketCallback.accept(
-                                        tb.getTableId(), data.getPhysicalTablePath());
                             } else {
                                 replicasToBeFollower.add(data);
                             }
@@ -369,6 +367,16 @@ public class ReplicaManager {
                 });
 
         responseCallback.accept(new ArrayList<>(result.values()));
+    }
+
+    public void maybeUpdateMetadataCache(int coordinatorEpoch, ClusterMetadata clusterMetadata) {
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    // check or apply coordinator epoch.
+                    validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
+                    metadataCache.updateClusterMetadata(clusterMetadata);
+                });
     }
 
     /**
@@ -406,7 +414,7 @@ public class ReplicaManager {
      */
     public void fetchLogRecords(
             FetchParams params,
-            Map<TableBucket, FetchData> bucketFetchInfo,
+            Map<TableBucket, FetchReqInfo> bucketFetchInfo,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
         long startTime = System.currentTimeMillis();
         Map<TableBucket, LogReadResult> logReadResults = readFromLog(params, bucketFetchInfo);
@@ -974,17 +982,17 @@ public class ReplicaManager {
     }
 
     public Map<TableBucket, LogReadResult> readFromLog(
-            FetchParams fetchParams, Map<TableBucket, FetchData> bucketFetchInfo) {
+            FetchParams fetchParams, Map<TableBucket, FetchReqInfo> bucketFetchInfo) {
         Map<TableBucket, LogReadResult> logReadResult = new HashMap<>();
         boolean isFromFollower = fetchParams.isFromFollower();
         int limitBytes = fetchParams.maxFetchBytes();
-        for (Map.Entry<TableBucket, FetchData> entry : bucketFetchInfo.entrySet()) {
+        for (Map.Entry<TableBucket, FetchReqInfo> entry : bucketFetchInfo.entrySet()) {
             TableBucket tb = entry.getKey();
             PhysicalTableMetricGroup tableMetrics = null;
             Replica replica = null;
-            FetchData fetchData = entry.getValue();
-            long fetchOffset = fetchData.getFetchOffset();
-            int adjustedMaxBytes = Math.min(limitBytes, fetchData.getMaxBytes());
+            FetchReqInfo fetchReqInfo = entry.getValue();
+            long fetchOffset = fetchReqInfo.getFetchOffset();
+            int adjustedMaxBytes = Math.min(limitBytes, fetchReqInfo.getMaxBytes());
             try {
                 replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
@@ -992,15 +1000,15 @@ public class ReplicaManager {
                 LOG.trace(
                         "Fetching log record for replica {}, offset {}",
                         tb,
-                        fetchData.getFetchOffset());
-                replica.checkProjection(fetchData.getProjectFields());
+                        fetchReqInfo.getFetchOffset());
+                replica.checkProjection(fetchReqInfo.getProjectFields());
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
                         fetchOffset,
                         adjustedMaxBytes,
                         replica.getRowType(),
                         replica.getArrowCompressionInfo(),
-                        fetchData.getProjectFields());
+                        fetchReqInfo.getProjectFields());
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1211,7 +1219,7 @@ public class ReplicaManager {
 
     private void maybeAddDelayedFetchLog(
             FetchParams params,
-            Map<TableBucket, FetchData> bucketFetchInfo,
+            Map<TableBucket, FetchReqInfo> bucketFetchInfo,
             Map<TableBucket, LogReadResult> logReadResults,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
         long bytesReadable = 0;
@@ -1518,6 +1526,11 @@ public class ReplicaManager {
     @VisibleForTesting
     public AdjustIsrManager getAdjustIsrManager() {
         return adjustIsrManager;
+    }
+
+    @VisibleForTesting
+    public ReplicaFetcherManager getReplicaFetcherManager() {
+        return replicaFetcherManager;
     }
 
     public TabletServerMetricGroup getServerMetricGroup() {

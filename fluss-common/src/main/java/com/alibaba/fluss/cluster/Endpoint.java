@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -106,15 +107,12 @@ public class Endpoint {
         }
 
         Optional<String> maybeHost = getHost(conf, serverType);
-        Optional<String> maybePort = getPort(conf, serverType);
 
         // backward compatibility
-        if (maybeHost.isPresent() && maybePort.isPresent()) {
+        if (maybeHost.isPresent()) {
+            String port = getPort(conf, serverType);
             return Collections.singletonList(
-                    new Endpoint(
-                            maybeHost.get(),
-                            Integer.parseInt(maybePort.get()),
-                            DEFAULT_LISTENER_NAME));
+                    new Endpoint(maybeHost.get(), Integer.parseInt(port), DEFAULT_LISTENER_NAME));
         }
 
         throw new IllegalArgumentException(
@@ -195,10 +193,10 @@ public class Endpoint {
                 : conf.getOptional(ConfigOptions.TABLET_SERVER_HOST);
     }
 
-    private static Optional<String> getPort(Configuration conf, ServerType serverType) {
+    private static String getPort(Configuration conf, ServerType serverType) {
         return serverType == ServerType.COORDINATOR
-                ? conf.getOptional(ConfigOptions.COORDINATOR_PORT)
-                : conf.getOptional(ConfigOptions.TABLET_SERVER_PORT);
+                ? conf.get(ConfigOptions.COORDINATOR_PORT)
+                : conf.get(ConfigOptions.TABLET_SERVER_PORT);
     }
 
     /**

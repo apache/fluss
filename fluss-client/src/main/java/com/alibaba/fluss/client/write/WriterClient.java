@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +19,7 @@ package com.alibaba.fluss.client.write;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.bucketing.BucketingFunction;
+import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.client.write.RecordAccumulator.RecordAppendResult;
@@ -48,6 +50,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static com.alibaba.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
+import static com.alibaba.fluss.utils.ExceptionUtils.toException;
 
 /**
  * A client that write records to server.
@@ -82,11 +85,13 @@ public class WriterClient {
     private final Map<PhysicalTablePath, BucketAssigner> bucketAssignerMap = new CopyOnWriteMap<>();
     private final IdempotenceManager idempotenceManager;
     private final WriterMetricGroup writerMetricGroup;
+    private final DynamicPartitionCreator dynamicPartitionCreator;
 
     public WriterClient(
             Configuration conf,
             MetadataUpdater metadataUpdater,
-            ClientMetricGroup clientMetricGroup) {
+            ClientMetricGroup clientMetricGroup,
+            Admin admin) {
         try {
             this.conf = conf;
             this.metadataUpdater = metadataUpdater;
@@ -103,6 +108,13 @@ public class WriterClient {
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
+
+            this.dynamicPartitionCreator =
+                    new DynamicPartitionCreator(
+                            metadataUpdater,
+                            admin,
+                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
+                            this::maybeAbortBatches);
         } catch (Throwable t) {
             close(Duration.ofMillis(0));
             throw new FlussRuntimeException("Failed to construct writer", t);
@@ -147,8 +159,10 @@ public class WriterClient {
         try {
             throwIfWriterClosed();
 
-            // maybe create bucket assigner.
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
+            dynamicPartitionCreator.checkAndCreatePartitionAsync(physicalTablePath);
+
+            // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
             BucketAssigner bucketAssigner =
                     bucketAssignerMap.computeIfAbsent(
@@ -183,6 +197,13 @@ public class WriterClient {
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
+        }
+    }
+
+    private void maybeAbortBatches(Throwable t) {
+        if (accumulator.hasIncomplete()) {
+            LOG.error("Aborting all pending write batches due to fatal error", t);
+            accumulator.abortBatches(toException(t));
         }
     }
 

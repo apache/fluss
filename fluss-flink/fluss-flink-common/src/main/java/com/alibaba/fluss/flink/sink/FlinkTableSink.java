@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,6 +28,7 @@ import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.GenericRow;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.connector.ChangelogMode;
@@ -54,6 +56,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 
 /** A Flink {@link DynamicTableSink}. */
 public class FlinkTableSink
@@ -262,7 +266,7 @@ public class FlinkTableSink
         List<ResolvedExpression> remainingFilters = new ArrayList<>();
         Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
         List<FieldEqual> fieldEquals =
-                PushdownUtils.extractFieldEquals(
+                extractFieldEquals(
                         filters,
                         primaryKeyTypes,
                         acceptedFilters,
@@ -372,5 +376,10 @@ public class FlinkTableSink
             pkNames.add(tableRowType.getFieldNames().get(index));
         }
         return pkNames;
+    }
+
+    @VisibleForTesting
+    public List<String> getBucketKeys() {
+        return bucketKeys;
     }
 }

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,7 +22,6 @@ import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.MemoryLogRecordsArrowBuilder;
 import com.alibaba.fluss.record.bytesview.BytesView;
@@ -50,13 +50,13 @@ public class ArrowLogWriteBatch extends WriteBatch {
     private final AbstractPagedOutputView outputView;
 
     public ArrowLogWriteBatch(
-            TableBucket tableBucket,
+            int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
             long createdMs) {
-        super(tableBucket, physicalTablePath, createdMs);
+        super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);
@@ -71,7 +71,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
         checkArgument(writeRecord.getKey() == null, "key must be null for log record");
         checkNotNull(row != null, "row must not be null for log record");
         checkNotNull(callback, "write callback must be not null");
-        if (recordsBuilder.isFull() || recordsBuilder.isClosed()) {
+        if (recordsBuilder.isClosed() || recordsBuilder.isFull()) {
             return false;
         } else {
             recordsBuilder.append(ChangeType.APPEND_ONLY, row);
@@ -119,7 +119,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     @Override
     public void resetWriterState(long writerId, int batchSequence) {
         super.resetWriterState(writerId, batchSequence);
-        recordsBuilder.resetWriterState(writerId, batchSequence);
+        recordsBuilder.setWriterState(writerId, batchSequence);
     }
 
     @Override
@@ -130,5 +130,10 @@ public class ArrowLogWriteBatch extends WriteBatch {
     @Override
     public int batchSequence() {
         return recordsBuilder.batchSequence();
+    }
+
+    @Override
+    public void abortRecordAppends() {
+        recordsBuilder.abort();
     }
 }

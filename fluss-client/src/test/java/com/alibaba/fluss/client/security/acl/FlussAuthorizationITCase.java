@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +19,7 @@ package com.alibaba.fluss.client.security.acl;
 
 import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.FlussConnection;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
@@ -26,14 +28,19 @@ import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
+import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.InitWriterRequest;
+import com.alibaba.fluss.rpc.messages.InitWriterResponse;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
@@ -96,19 +103,20 @@ public class FlussAuthorizationITCase {
     @BeforeEach
     protected void setup() throws Exception {
         Configuration conf = FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT");
-        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        conf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
         Configuration rootConf = new Configuration(conf);
-        rootConf.setString("client.security.username_password.username", "root");
-        rootConf.setString("client.security.username_password.password", "password");
+        rootConf.setString("client.security.sasl.username", "root");
+        rootConf.setString("client.security.sasl.password", "password");
         rootConn = ConnectionFactory.createConnection(rootConf);
         rootAdmin = rootConn.getAdmin();
 
         guestConf = new Configuration(conf);
-        guestConf.setString("client.security.username_password.username", "guest");
-        guestConf.setString("client.security.username_password.password", "password2");
+        guestConf.setString("client.security.sasl.username", "guest");
+        guestConf.setString("client.security.sasl.password", "password2");
         guestConn = ConnectionFactory.createConnection(guestConf);
         guestAdmin = guestConn.getAdmin();
-        guestPrincipal = new FlussPrincipal("guest", "USER");
+        guestPrincipal = new FlussPrincipal("guest", "User");
 
         // prepare default database and table
         rootAdmin
@@ -158,38 +166,46 @@ public class FlussAuthorizationITCase {
         try {
             flussClusterExtension.start();
             Configuration conf = new Configuration(flussClusterExtension.getClientConfig("CLIENT"));
-            conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "username_password");
-            conf.setString("client.security.username_password.username", "root");
-            conf.setString("client.security.username_password.password", "password");
+            conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+            conf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+            conf.setString("client.security.sasl.username", "root");
+            conf.setString("client.security.sasl.password", "password");
             try (Connection connection = ConnectionFactory.createConnection(conf);
                     Admin admin = connection.getAdmin()) {
-                assertThatThrownBy(
-                                () -> {
-                                    admin.listAcls(AclBindingFilter.ANY).get();
-                                })
+                assertThatThrownBy(() -> admin.listAcls(AclBindingFilter.ANY).get())
                         .hasMessageContaining("No Authorizer is configured.");
                 assertThatThrownBy(
-                                () -> {
-                                    admin.createAcls(
-                                                    Collections.singletonList(
-                                                            new AclBinding(
-                                                                    Resource.cluster(),
-                                                                    new AccessControlEntry(
-                                                                            WILD_CARD_PRINCIPAL,
-                                                                            WILD_CARD_HOST,
-                                                                            OperationType.CREATE,
-                                                                            PermissionType.ALLOW))))
-                                            .all()
-                                            .get();
-                                })
+                                () ->
+                                        admin.createAcls(
+                                                        Collections.singletonList(
+                                                                new AclBinding(
+                                                                        Resource.cluster(),
+                                                                        new AccessControlEntry(
+                                                                                WILD_CARD_PRINCIPAL,
+                                                                                WILD_CARD_HOST,
+                                                                                OperationType
+                                                                                        .CREATE,
+                                                                                PermissionType
+                                                                                        .ALLOW))))
+                                                .all()
+                                                .get())
                         .hasMessageContaining("No Authorizer is configured.");
                 assertThatThrownBy(
-                                () -> {
-                                    admin.dropAcls(Collections.singletonList(AclBindingFilter.ANY))
-                                            .all()
-                                            .get();
-                                })
+                                () ->
+                                        admin.dropAcls(
+                                                        Collections.singletonList(
+                                                                AclBindingFilter.ANY))
+                                                .all()
+                                                .get())
                         .hasMessageContaining("No Authorizer is configured.");
+
+                // test initWriter without authorizer and empty table paths
+                FlussConnection flussConnection = (FlussConnection) connection;
+                TabletServerGateway tabletServerGateway =
+                        flussConnection.getMetadataUpdater().newTabletServerClientForNode(0);
+                InitWriterResponse response =
+                        tabletServerGateway.initWriter(new InitWriterRequest()).get();
+                assertThat(response.getWriterId()).isGreaterThanOrEqualTo(0);
             }
 
         } finally {
@@ -216,7 +232,7 @@ public class FlussAuthorizationITCase {
         assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).hasSize(1);
 
         // test whether the user have authorization to operate create and drop acls.
-        FlussPrincipal user1 = new FlussPrincipal("user1", "USER");
+        FlussPrincipal user1 = new FlussPrincipal("user1", "User");
         AclBinding user1AclBinding =
                 new AclBinding(
                         Resource.table("test_db", "test_table"),
@@ -401,7 +417,7 @@ public class FlussAuthorizationITCase {
                         Collections.singleton(DATA1_TABLE_PATH_PK), null, null);
 
         try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
             AdminGateway guestGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
@@ -431,25 +447,145 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testInitWriter() throws Exception {
+        TablePath writeAclTable = TablePath.of("test_db_1", "write_acl_table");
+        TablePath noWriteAclTable = TablePath.of("test_db_1", "no_write_acl_table");
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
+        rootAdmin.createTable(writeAclTable, descriptor, false).get();
+        // create acl to allow guest write.
+        AclBinding aclBinding =
+                new AclBinding(
+                        Resource.table(writeAclTable),
+                        new AccessControlEntry(
+                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
+        rootAdmin.createAcls(Collections.singletonList(aclBinding)).all().get();
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId(), aclBinding);
+
+        FlussConnection flussConnection = (FlussConnection) guestConn;
+        TabletServerGateway tabletServerGateway =
+                flussConnection.getMetadataUpdater().newTabletServerClientForNode(0);
+
+        // test 1: empty table paths
+        assertThatThrownBy(() -> tabletServerGateway.initWriter(new InitWriterRequest()).get())
+                .cause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "The request of InitWriter requires non empty table paths for authorization.");
+
+        // request contains a table path without permission
+        InitWriterRequest noAclRequest = new InitWriterRequest();
+        noAclRequest
+                .addTablePath()
+                .setDatabaseName(noWriteAclTable.getDatabaseName())
+                .setTableName(noWriteAclTable.getTableName());
+
+        // test 2: no table has write permission
+        assertThatThrownBy(() -> tabletServerGateway.initWriter(noAclRequest).get())
+                .cause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "No WRITE permission among all the tables: [test_db_1.no_write_acl_table]");
+
+        // request contains both a table path with/without permission
+        InitWriterRequest request = new InitWriterRequest();
+        request.addTablePath()
+                .setTableName(writeAclTable.getTableName())
+                .setDatabaseName(writeAclTable.getDatabaseName());
+        request.addTablePath()
+                .setTableName(noWriteAclTable.getTableName())
+                .setDatabaseName(noWriteAclTable.getDatabaseName());
+
+        // test 3: one table has write permission, the other doesn't have permission
+        InitWriterResponse response = tabletServerGateway.initWriter(request).get();
+        assertThat(response.getWriterId()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void testProduceWithNoWriteAuthorization() throws Exception {
+        TablePath writeAclTable = TablePath.of("test_db_1", "write_acl_table_1");
+        TablePath noWriteAclTable = TablePath.of("test_db_1", "no_write_acl_table_1");
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
+        rootAdmin.createTable(writeAclTable, descriptor, false).get();
+        rootAdmin.createTable(noWriteAclTable, descriptor, false).get();
+
+        // create acl to allow guest write for writeAclTable.
+        AclBinding aclBindingOfWriteAclTable =
+                new AclBinding(
+                        Resource.table(writeAclTable),
+                        new AccessControlEntry(
+                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
+        AclBinding aclBindingOfNoWriteAclTable =
+                new AclBinding(
+                        Resource.table(noWriteAclTable),
+                        new AccessControlEntry(guestPrincipal, "*", READ, PermissionType.ALLOW));
+        rootAdmin.createAcls(Collections.singletonList(aclBindingOfWriteAclTable)).all().get();
+        rootAdmin.createAcls(Collections.singletonList(aclBindingOfNoWriteAclTable)).all().get();
+
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId(),
+                aclBindingOfWriteAclTable);
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(noWriteAclTable).get().getTableId(),
+                aclBindingOfNoWriteAclTable);
+
+        // 1. Try to write data to noWriteAclTable. It should throw AuthorizationException because
+        // of request writeId failed.
+        try (Table table = guestConn.getTable(noWriteAclTable)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            assertThatThrownBy(() -> appendWriter.append(row(1, "a")).get())
+                    .hasRootCauseInstanceOf(AuthorizationException.class)
+                    .rootCause()
+                    .hasMessageContaining(
+                            String.format(
+                                    "No WRITE permission among all the tables: %s",
+                                    Collections.singletonList(noWriteAclTable)));
+        }
+
+        // 2. Try to write data to writeAclTable. It will success and writeId will be set.
+        try (Table table = guestConn.getTable(writeAclTable)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            appendWriter.append(row(1, "a")).get();
+        }
+
+        // 3. Try to write data to writeAclTable again. It will throw AuthorizationException because
+        // of no write permission.
+        // Note: If guestUser have permission for table lists: [writeAclTable, noWriteAclTable].
+        // When we give WRITE permission to writeAclTable for guestUser, guestUser will have
+        // INIT_WRITER permission for both writeAclTable and noWriteAclTable.
+        // In this case, when guestUser try to write noWriteAclTable, Fluss client can get writerId
+        // but can not to write to noWriteAclTable because of no WRITE permission.
+        try (Table table = guestConn.getTable(noWriteAclTable)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            assertThatThrownBy(() -> appendWriter.append(row(1, "a")).get())
+                    .hasRootCauseInstanceOf(AuthorizationException.class)
+                    .rootCause()
+                    .hasMessageContaining(
+                            String.format(
+                                    "No permission to WRITE table %s in database %s",
+                                    noWriteAclTable.getTableName(),
+                                    noWriteAclTable.getDatabaseName()));
+        }
+    }
+
+    @Test
     void testProduceAndConsumer() throws Exception {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(DATA1_TABLE_PATH, descriptor, false).get();
         // create acl to allow guest write.
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.table(DATA1_TABLE_PATH),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.WRITE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
-                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId());
+        AclBinding aclBinding =
+                new AclBinding(
+                        Resource.table(DATA1_TABLE_PATH),
+                        new AccessControlEntry(
+                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
+        rootAdmin.createAcls(Collections.singletonList(aclBinding)).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
+                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId(), aclBinding);
         try (Table table = guestConn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
@@ -527,10 +663,14 @@ public class FlussAuthorizationITCase {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
 
         // set security information.
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        conf.setString("security.username_password.credentials", "root:password,guest:password2");
-        conf.set(ConfigOptions.SUPER_USERS, "USER:root");
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
+        conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
     }

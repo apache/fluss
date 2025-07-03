@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,6 +22,7 @@ import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -36,6 +38,8 @@ import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
+import com.alibaba.fluss.exception.TooManyBucketsException;
+import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -245,6 +249,24 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath);
 
     /**
+     * List all partitions in fluss cluster that are under the given table and the given partial
+     * PartitionSpec asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link TableNotPartitionedException} if the table is not partitioned.
+     *   <li>{@link InvalidPartitionException} if the input partition spec is invalid.
+     * </ul>
+     *
+     * @param tablePath The path of the table.
+     * @param partialPartitionSpec Part of table partition spec
+     */
+    CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+            TablePath tablePath, PartitionSpec partialPartitionSpec);
+
+    /**
      * Create a new partition for a partitioned table.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
@@ -255,6 +277,10 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link PartitionAlreadyExistsException} if the partition already exists and {@code
      *       ignoreIfExists} is false.
      *   <li>{@link InvalidPartitionException} if the input partition spec is invalid.
+     *   <li>{@link TooManyPartitionsException} if the number of partitions is larger than the
+     *       maximum number of partitions of one table, see {@link ConfigOptions#MAX_PARTITION_NUM}.
+     *   <li>{@link TooManyBucketsException} if the number of buckets is larger than the maximum
+     *       number of buckets of one table, see {@link ConfigOptions#MAX_BUCKET_NUM}.
      * </ul>
      *
      * @param tablePath The table path of the table.

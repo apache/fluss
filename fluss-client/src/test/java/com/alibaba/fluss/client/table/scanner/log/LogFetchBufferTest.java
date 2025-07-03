@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +17,7 @@
 
 package com.alibaba.fluss.client.table.scanner.log;
 
+import com.alibaba.fluss.exception.WakeupException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordReadContext;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
@@ -35,6 +37,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -168,20 +171,22 @@ public class LogFetchBufferTest {
     @Test
     void testWakeup() throws Exception {
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            AtomicReference<Exception> exception = new AtomicReference<>();
             final Thread waitingThread =
                     new Thread(
                             () -> {
                                 try {
                                     logFetchBuffer.awaitNotEmpty(
                                             System.nanoTime() + Duration.ofMinutes(1).toNanos());
-                                } catch (InterruptedException e) {
-                                    throw new RuntimeException(e);
+                                } catch (Exception e) {
+                                    exception.set(e);
                                 }
                             });
             waitingThread.start();
             logFetchBuffer.wakeup();
             waitingThread.join(Duration.ofSeconds(30).toMillis());
             assertThat(waitingThread.isAlive()).isFalse();
+            assertThat(exception.get()).isInstanceOf(WakeupException.class);
         }
     }
 

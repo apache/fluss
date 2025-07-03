@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,7 +21,7 @@ import com.alibaba.fluss.server.SequenceIDCounter;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.atomic.AtomicValue;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.atomic.DistributedAtomicLong;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.RetryNTimes;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.BoundedExponentialBackoffRetry;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -30,7 +31,8 @@ public class ZkSequenceIDCounter implements SequenceIDCounter {
 
     // maybe make it as configurable
     private static final int RETRY_TIMES = 10;
-    private static final int RETRY_INTERVAL_MS = 100;
+    private static final int BASE_SLEEP_MS = 100;
+    private static final int MAX_SLEEP_MS = 1000;
 
     private final DistributedAtomicLong sequenceIdCounter;
 
@@ -39,7 +41,8 @@ public class ZkSequenceIDCounter implements SequenceIDCounter {
                 new DistributedAtomicLong(
                         curatorClient,
                         sequenceIDPath,
-                        new RetryNTimes(RETRY_TIMES, RETRY_INTERVAL_MS));
+                        new BoundedExponentialBackoffRetry(
+                                BASE_SLEEP_MS, MAX_SLEEP_MS, RETRY_TIMES));
     }
 
     /**

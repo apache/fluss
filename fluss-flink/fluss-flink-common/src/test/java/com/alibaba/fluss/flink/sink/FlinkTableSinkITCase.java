@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +23,6 @@ import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
@@ -44,7 +44,6 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -67,7 +66,7 @@ import java.util.stream.Stream;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
-import static com.alibaba.fluss.flink.source.testutils.FlinkTestBase.waitUntilPartitions;
+import static com.alibaba.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static com.alibaba.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -80,9 +79,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
-    static StreamExecutionEnvironment env;
-    static StreamTableEnvironment tEnv;
-    static TableEnvironment tBatchEnv;
+
+    protected StreamExecutionEnvironment env;
+    protected StreamTableEnvironment tEnv;
+    protected TableEnvironment tBatchEnv;
 
     static Stream<Arguments> writePartitionedTableParams() {
         return Stream.of(
@@ -92,11 +92,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 Arguments.of(true, true));
     }
 
-    @BeforeAll
-    static void beforeAll() {
+    @BeforeEach
+    void before() {
         // open a catalog so that we can get table from the catalog
-        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        String bootstrapServers = String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        String bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         // create table environment
         env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
@@ -108,7 +107,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
 
         // create batch table environment
         tBatchEnv =
@@ -120,11 +119,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tBatchEnv.executeSql("use catalog " + CATALOG_NAME);
         tBatchEnv
                 .getConfig()
-                .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
-    }
-
-    @BeforeEach
-    void before() {
+                .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);

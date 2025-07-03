@@ -4,11 +4,13 @@ sidebar_position: 1
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -37,7 +39,7 @@ In order to use the client, you need to add the following dependency to your `po
 <dependency>
     <groupId>com.alibaba.fluss</groupId>
     <artifactId>fluss-client</artifactId>
-    <version>0.6.0</version>
+    <version>$FLUSS_VERSION$</version>
 </dependency>
 ```
 
@@ -52,21 +54,45 @@ single `Connection` instance per application and use it to create multiple `Admi
 `Table` and `Admin` instances, on the other hand, are not thread-safe and should be created for each thread that needs to access them.
  Caching or pooling of `Table` and `Admin` is not recommended.
 
-Create a new `Admin` instance:
+Create a new `Admin` instance :
 ```java
 // creating Connection object to connect with Fluss cluster
 Configuration conf = new Configuration(); 
 conf.setString("bootstrap.servers", "localhost:9123");
 Connection connection = ConnectionFactory.createConnection(conf);
 
+
 // obtain Admin instance from the Connection
 Admin admin = connection.getAdmin();
 admin.listDatabases().get().forEach(System.out::println);
 
 // obtain Table instance from the Connection
-Table table = connection.getTable(TablePath.of("my_db", "my_table");
+Table table = connection.getTable(TablePath.of("my_db", "my_table"));
 System.out.println(table.getTableInfo());
 ```
+
+if you are using SASL authentication, you need to set the following properties:
+```java
+// creating Connection object to connect with Fluss cluster
+Configuration conf = new Configuration(); 
+conf.setString("bootstrap.servers", "localhost:9123");
+conf.setString("client.security.protocol", "sasl");
+conf.setString("client.security.sasl.mechanism", "PLAIN");
+conf.setString("client.security.sasl.username", "alice");
+conf.setString("client.security.sasl.password", "alice-secret");
+Connection connection = ConnectionFactory.createConnection(conf);
+
+
+// obtain Admin instance from the Connection
+Admin admin = connection.getAdmin();
+admin.listDatabases().get().forEach(System.out::println);
+
+// obtain Table instance from the Connection
+Table table = connection.getTable(TablePath.of("my_db", "my_table"));
+System.out.println(table.getTableInfo());
+```
+
+
 
 ## Working Operations
 All methods in `FlussAdmin` return `CompletableFuture` objects. You can handle these in two ways:

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -61,6 +62,7 @@ import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -82,7 +84,7 @@ public class PushdownUtils {
     /** Extract field equality information from expressions. */
     public static List<FieldEqual> extractFieldEquals(
             List<ResolvedExpression> expressions,
-            Map<Integer, LogicalType> primaryKeyColumn,
+            Map<Integer, LogicalType> fieldIndexToType,
             List<ResolvedExpression> acceptedFiltersResult,
             List<ResolvedExpression> remainingFiltersResult,
             ValueConversion valueConversion) {
@@ -106,7 +108,7 @@ public class PushdownUtils {
                                 extractFieldEqual(
                                         leftFieldRef,
                                         rightValue,
-                                        primaryKeyColumn,
+                                        fieldIndexToType,
                                         valueConversion);
                     } else if (left instanceof ValueLiteralExpression
                             && right instanceof FieldReferenceExpression) {
@@ -116,7 +118,7 @@ public class PushdownUtils {
                                 extractFieldEqual(
                                         rightFieldRef,
                                         leftValue,
-                                        primaryKeyColumn,
+                                        fieldIndexToType,
                                         valueConversion);
                     }
 
@@ -140,11 +142,11 @@ public class PushdownUtils {
     private static FieldEqual extractFieldEqual(
             FieldReferenceExpression fieldsRef,
             ValueLiteralExpression valueLiteral,
-            Map<Integer, LogicalType> primaryKeyColumn,
+            Map<Integer, LogicalType> fieldIndexToType,
             ValueConversion valueConversion) {
         int columnIndex = fieldsRef.getFieldIndex();
-        if (primaryKeyColumn.containsKey(columnIndex)) {
-            LogicalType expectedType = primaryKeyColumn.get(columnIndex);
+        if (fieldIndexToType.containsKey(columnIndex)) {
+            LogicalType expectedType = fieldIndexToType.get(columnIndex);
             if (expectedType.getTypeRoot()
                     != valueLiteral.getOutputDataType().getLogicalType().getTypeRoot()) {
                 return null;
@@ -437,7 +439,8 @@ public class PushdownUtils {
     // ------------------------------------------------------------------------------------------
 
     /** A structure represents a source field equal literal expression. */
-    public static class FieldEqual {
+    public static class FieldEqual implements Serializable {
+        private static final long serialVersionUID = 1L;
         public final int fieldIndex;
         public final Object equalValue;
 

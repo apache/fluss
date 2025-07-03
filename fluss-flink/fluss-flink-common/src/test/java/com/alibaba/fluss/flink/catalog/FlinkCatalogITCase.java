@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,6 +37,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,7 +82,8 @@ abstract class FlinkCatalogITCase {
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static Catalog catalog;
-    static TableEnvironment tEnv;
+
+    protected TableEnvironment tEnv;
 
     @BeforeAll
     static void beforeAll() {
@@ -95,19 +98,10 @@ abstract class FlinkCatalogITCase {
                         Thread.currentThread().getContextClassLoader(),
                         Collections.emptyMap());
         catalog.open();
-        // create table environment
-        tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
-        // crate catalog using sql
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
     }
 
     @AfterAll
     static void afterAll() {
-        tEnv.executeSql("use catalog " + TableConfigOptions.TABLE_CATALOG_NAME.defaultValue());
-        tEnv.executeSql("DROP CATALOG IF EXISTS " + CATALOG_NAME);
         if (catalog != null) {
             catalog.close();
         }
@@ -115,8 +109,23 @@ abstract class FlinkCatalogITCase {
 
     @BeforeEach
     void before() {
+        // create table environment
+        tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+        // crate catalog using sql
+        tEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                        CATALOG_NAME,
+                        BOOTSTRAP_SERVERS.key(),
+                        FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         // we don't need to "USE fluss" explicitly as it is the default database
+    }
+
+    @AfterEach
+    void after() {
+        tEnv.executeSql("use catalog " + TableConfigOptions.TABLE_CATALOG_NAME.defaultValue());
+        tEnv.executeSql("DROP CATALOG IF EXISTS " + CATALOG_NAME);
     }
 
     @Test
@@ -238,13 +247,23 @@ abstract class FlinkCatalogITCase {
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
         // 4. show partitions with spec.
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                "show partitions test_partitioned_table partition (b=2,dt=1)")
-                                        .collect())
-                .rootCause()
-                .isInstanceOf(UnsupportedOperationException.class);
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1)")
+                        .collect();
+        expectedShowPartitionsResult = Arrays.asList("+I[b=2/dt=1]", "+I[b=3/dt=1]");
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table partition (b = 3)")
+                        .collect();
+        expectedShowPartitionsResult = Arrays.asList("+I[b=3/dt=1]");
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1,b = 3)")
+                        .collect();
+        expectedShowPartitionsResult = Arrays.asList("+I[b=3/dt=1]");
+        assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
     }
 
     @Test
@@ -573,9 +592,13 @@ abstract class FlinkCatalogITCase {
     void testAuthentication() throws Exception {
         String clientListenerName = "CLIENT";
         Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
         serverConfig.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:username_password");
-        serverConfig.setString("security.username_password.credentials", "root:password");
+                "security.sasl.plain.jaas.config",
+                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                        + "    user_root=\"password\" "
+                        + "    user_guest=\"password2\";");
         serverConfig.setString(ConfigOptions.SUPER_USERS.key(), "USER:root");
         FlussClusterExtension flussClusterExtension =
                 FlussClusterExtension.builder()
@@ -611,9 +634,10 @@ abstract class FlinkCatalogITCase {
                             "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side.");
 
             Map<String, String> clientConfig = new HashMap<>();
-            clientConfig.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "username_password");
-            clientConfig.put("client.security.username_password.username", "root");
-            clientConfig.put("client.security.username_password.password", "password");
+            clientConfig.put(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(), "sasl");
+            clientConfig.put(ConfigOptions.CLIENT_SASL_MECHANISM.key(), "plain");
+            clientConfig.put("client.security.sasl.username", "root");
+            clientConfig.put("client.security.sasl.password", "password");
             authenticateCatalog =
                     new FlinkCatalog(
                             CATALOG_NAME,

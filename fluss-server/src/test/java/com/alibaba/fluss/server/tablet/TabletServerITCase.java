@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -42,7 +43,7 @@ public class TabletServerITCase extends ServerITCaseBase {
 
     @Override
     protected ServerNode getServerNode() {
-        return new ServerNode(1, HOSTNAME, getPort(), ServerType.TABLET_SERVER);
+        return new ServerNode(1, HOSTNAME, getPort(), ServerType.TABLET_SERVER, "rack1");
     }
 
     @Override
@@ -62,6 +63,7 @@ public class TabletServerITCase extends ServerITCaseBase {
                 ConfigOptions.BIND_LISTENERS,
                 String.format("%s://%s:%d", DEFAULT_LISTENER_NAME, HOSTNAME, getPort()));
         conf.set(ConfigOptions.TABLET_SERVER_ID, 1);
+        conf.set(ConfigOptions.TABLET_SERVER_RACK, "rack1");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         return conf;
     }

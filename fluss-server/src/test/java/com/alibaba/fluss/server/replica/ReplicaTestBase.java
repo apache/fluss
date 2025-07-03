@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,6 +32,7 @@ import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
+import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.KvManager;
@@ -45,10 +47,9 @@ import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.log.remote.TestingRemoteLogStorage;
-import com.alibaba.fluss.server.metadata.ClusterMetadataInfo;
+import com.alibaba.fluss.server.metadata.ClusterMetadata;
 import com.alibaba.fluss.server.metadata.ServerInfo;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
@@ -122,7 +123,8 @@ public class ReplicaTestBase {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     protected static final int TABLET_SERVER_ID = 1;
-    private static ZooKeeperClient zkClient;
+    private static final String TABLET_SERVER_RACK = "rack1";
+    protected static ZooKeeperClient zkClient;
 
     // to register all should be closed after each test
     private final CloseableRegistry closeableRegistry = new CloseableRegistry();
@@ -134,7 +136,7 @@ public class ReplicaTestBase {
     protected ReplicaManager replicaManager;
     protected RpcClient rpcClient;
     protected Configuration conf;
-    private ServerMetadataCache serverMetadataCache;
+    protected TabletServerMetadataCache serverMetadataCache;
     protected TestingCompletedKvSnapshotCommitter snapshotReporter;
     protected TestCoordinatorGateway testCoordinatorGateway;
     private FlussScheduler scheduler;
@@ -182,10 +184,11 @@ public class ReplicaTestBase {
         kvManager = KvManager.create(conf, zkClient, logManager);
         kvManager.startup();
 
-        serverMetadataCache = new ServerMetadataCacheImpl();
+        serverMetadataCache =
+                new TabletServerMetadataCache(new MetadataManager(zkClient, conf), zkClient);
         initMetadataCache(serverMetadataCache);
 
-        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance());
+        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false);
 
         snapshotReporter = new TestingCompletedKvSnapshotCommitter();
 
@@ -200,28 +203,31 @@ public class ReplicaTestBase {
         registerTableInZkClient();
     }
 
-    private void initMetadataCache(ServerMetadataCache metadataCache) {
+    private void initMetadataCache(TabletServerMetadataCache metadataCache) {
         metadataCache.updateClusterMetadata(
-                new ClusterMetadataInfo(
-                        Optional.of(
-                                new ServerInfo(
-                                        0,
-                                        Endpoint.fromListenersString("CLIENT://localhost:1234"),
-                                        ServerType.COORDINATOR)),
+                new ClusterMetadata(
+                        new ServerInfo(
+                                0,
+                                null,
+                                Endpoint.fromListenersString("CLIENT://localhost:1234"),
+                                ServerType.COORDINATOR),
                         new HashSet<>(
                                 Arrays.asList(
                                         new ServerInfo(
                                                 TABLET_SERVER_ID,
+                                                TABLET_SERVER_RACK,
                                                 Endpoint.fromListenersString(
                                                         "CLIENT://localhost:90"),
                                                 ServerType.TABLET_SERVER),
                                         new ServerInfo(
                                                 2,
+                                                "rack2",
                                                 Endpoint.fromListenersString(
                                                         "CLIENT://localhost:91"),
                                                 ServerType.TABLET_SERVER),
                                         new ServerInfo(
                                                 3,
+                                                "rack3",
                                                 Endpoint.fromListenersString(
                                                         "CLIENT://localhost:92"),
                                                 ServerType.TABLET_SERVER)))));
@@ -396,8 +402,7 @@ public class ReplicaTestBase {
     }
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
-        replicaManager.becomeLeaderOrFollower(
-                0, notifyLeaderAndIsrDataList, result -> {}, (tableId, path) -> {});
+        replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
     }
 
     protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)

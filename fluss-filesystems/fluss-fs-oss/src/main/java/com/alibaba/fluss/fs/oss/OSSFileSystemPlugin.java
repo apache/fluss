@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -68,11 +69,19 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
 
         // set credential provider
         if (hadoopConfig.get(ACCESS_KEY_ID) == null) {
-            LOG.info(
-                    "{} is not set, using credential provider {}.",
-                    ACCESS_KEY_ID,
-                    hadoopConfig.get(CREDENTIALS_PROVIDER_KEY));
-            setCredentialProvider(flussConfig, hadoopConfig);
+            String credentialsProvider = hadoopConfig.get(CREDENTIALS_PROVIDER_KEY);
+            if (credentialsProvider != null) {
+                LOG.info(
+                        "{} is not set, but {} is set, using credential provider {}.",
+                        ACCESS_KEY_ID,
+                        CREDENTIALS_PROVIDER_KEY,
+                        credentialsProvider);
+            } else {
+                // no ak, no credentialsProvider,
+                // set default credential provider which will get token from
+                // OSSSecurityTokenReceiver
+                setDefaultCredentialProvider(flussConfig, hadoopConfig);
+            }
         } else {
             LOG.info("{} is set, using provided access key id and secret.", ACCESS_KEY_ID);
         }
@@ -101,6 +110,12 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
         return fileSystem;
     }
 
+    protected void setDefaultCredentialProvider(
+            Configuration flussConfig, org.apache.hadoop.conf.Configuration hadoopConfig) {
+        // use OSSSecurityTokenReceiver to update hadoop config to set credentialsProvider
+        OSSSecurityTokenReceiver.updateHadoopConfig(hadoopConfig);
+    }
+
     @VisibleForTesting
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
@@ -125,11 +140,6 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
             }
         }
         return conf;
-    }
-
-    protected void setCredentialProvider(
-            Configuration flussConfig, org.apache.hadoop.conf.Configuration hadoopConfig) {
-        OSSSecurityTokenReceiver.updateHadoopConfig(hadoopConfig);
     }
 
     private void setSignatureVersion4(

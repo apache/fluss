@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +17,7 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
@@ -23,8 +25,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.testutils.TestingMetadataCache;
-import com.alibaba.fluss.server.utils.TableAssignmentUtils;
+import com.alibaba.fluss.server.testutils.TestingServerMetadataCache;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -54,6 +55,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link AutoPartitionManager}. */
@@ -187,7 +189,7 @@ class AutoPartitionManagerTest {
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         new MetadataManager(zookeeperClient, new Configuration()),
                         new Configuration(),
                         clock,
@@ -207,8 +209,14 @@ class AutoPartitionManagerTest {
         // manually create a partition.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(
-                                table.getNumBuckets(), replicaFactor, new int[] {0, 1, 2})
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
                         .getBucketAssignments();
         long tableId = table.getTableId();
         PartitionAssignment partitionAssignment =
@@ -263,7 +271,7 @@ class AutoPartitionManagerTest {
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         metadataManager,
                         new Configuration(),
                         clock,
@@ -286,8 +294,14 @@ class AutoPartitionManagerTest {
         // manually create 4 future partitions.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignmentUtils.generateAssignment(
-                                table.getNumBuckets(), replicaFactor, new int[] {0, 1, 2})
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
                         .getBucketAssignments();
         long tableId = table.getTableId();
         PartitionAssignment partitionAssignment =
@@ -333,7 +347,7 @@ class AutoPartitionManagerTest {
                 new ManuallyTriggeredScheduledExecutorService();
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         metadataManager,
                         new Configuration(),
                         clock,
@@ -393,7 +407,7 @@ class AutoPartitionManagerTest {
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
-                        new TestingMetadataCache(3),
+                        new TestingServerMetadataCache(3),
                         metadataManager,
                         config,
                         clock,

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,8 +34,11 @@ import com.alibaba.fluss.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -142,6 +146,57 @@ public class IndexedLogWriteBatchTest {
         assertThat(appendResult).isFalse();
     }
 
+    @Test
+    void testBatchAborted() throws Exception {
+        int bucketId = 0;
+        int writeLimit = 10240;
+        IndexedLogWriteBatch logProducerBatch =
+                createLogWriteBatch(
+                        new TableBucket(DATA1_TABLE_ID, bucketId),
+                        0L,
+                        writeLimit,
+                        MemorySegment.allocateHeapMemory(writeLimit));
+
+        int recordCount = 5;
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < recordCount; i++) {
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            logProducerBatch.tryAppend(
+                    createWriteRecord(),
+                    exception -> {
+                        if (exception != null) {
+                            future.completeExceptionally(exception);
+                        } else {
+                            future.complete(null);
+                        }
+                    });
+            futures.add(future);
+        }
+
+        logProducerBatch.abortRecordAppends();
+        logProducerBatch.abort(new RuntimeException("close with record batch abort"));
+
+        // first try to append.
+        assertThatThrownBy(
+                        () -> logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Tried to append a record, but MemoryLogRecordsIndexedBuilder has already been aborted");
+
+        // try to build.
+        assertThatThrownBy(logProducerBatch::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Attempting to build an aborted record batch");
+
+        // verify record append future is completed with exception.
+        for (CompletableFuture<Void> future : futures) {
+            assertThatThrownBy(future::join)
+                    .rootCause()
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("close with record batch abort");
+        }
+    }
+
     private WriteRecord createWriteRecord() {
         return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
@@ -155,7 +210,7 @@ public class IndexedLogWriteBatchTest {
     private IndexedLogWriteBatch createLogWriteBatch(
             TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment) {
         return new IndexedLogWriteBatch(
-                tb,
+                tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writeLimit,

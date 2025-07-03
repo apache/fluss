@@ -311,6 +311,20 @@ Apache Kafka
 ./fluss-common/src/main/java/com/alibaba/fluss/utils/crc/PureJavaCrc32C.java
 ./fluss-common/src/main/java/com/alibaba/fluss/utils/log/ByteBufferUnmapper.java
 ./fluss-common/src/main/java/com/alibaba/fluss/utils/log/FairBucketStatusMap.java
+./fluss-common/src/main/java/com/alibaba/fluss/utils/ExponentialBackoff.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/AuthenticateCallbackHandler.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/DefaultLogin.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/JaasConfig.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/JaasContext.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/Login.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/LoginManager.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/SaslClientCallbackHandler.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/jaas/SaslServerFactory.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/plain/PlainAuthenticateCallback.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/plain/PlainLoginModule.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/plain/PlainSaslServer.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/plain/PlainSaslServerProvider.java
+./fluss-common/src/main/java/com/alibaba/fluss/security/auth/sasl/plain/PlainServerCallbackHandler.java
 ./fluss-server/src/main/java/com/alibaba/fluss/server/coordinator/statemachine/ReplicaStateMachine.java
 ./fluss-server/src/main/java/com/alibaba/fluss/server/coordinator/statemachine/TableBucketStateMachine.java
 ./fluss-server/src/main/java/com/alibaba/fluss/server/log/AbstractIndex.java
@@ -347,10 +361,6 @@ Apache Kafka
 Apache Paimon
 ./fluss-common/src/main/java/com/alibaba/fluss/row/encode/paimon/PaimonBinaryRowWriter.java
 ./fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lakehouse/paimon/reader/PaimonSnapshotScanner.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/PaimonMultiTableSink.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/committable/PaimonMultiTableCommittableSerializer.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/committer/PaimonStoreMultiCommitter.java
-./fluss-lakehouse/fluss-lakehouse-paimon/src/main/java/com/alibaba/fluss/lakehouse/paimon/sink/operator/PaimonMultiWriterOperator.java
 
 Apache Spark
 ./fluss-rpc/src/main/java/com/alibaba/fluss/rpc/netty/NettyLogger.java

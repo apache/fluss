@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,23 +17,60 @@
 
 package com.alibaba.fluss.server.metadata;
 
-import com.alibaba.fluss.cluster.MetadataCache;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.TabletServerInfo;
 
-/** Metadata cache for server. it only caches the cluster metadata. */
-public interface ServerMetadataCache extends MetadataCache {
+import javax.annotation.Nullable;
+
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+/** Metadata cache for server. */
+public interface ServerMetadataCache {
 
     /**
-     * Update the cluster metadata by the remote update metadata request.
+     * Get the coordinator server node.
      *
-     * @param clusterMetadataInfo the metadata info.
+     * @return the coordinator server node
      */
-    void updateClusterMetadata(ClusterMetadataInfo clusterMetadataInfo);
+    @Nullable
+    ServerNode getCoordinatorServer(String listenerName);
 
     /**
-     * Update the table and database metadata by the remote update table leader and isr request.
-     * only leader server cache the table which it stored data. This metedata will used to get the
-     * table name and database name when consumer and produce.
+     * Check whether the tablet server id related tablet server node is alive.
+     *
+     * @param serverId the tablet server id
+     * @return true if the server is alive, false otherwise
      */
-    void upsertTableBucketMetadata(Long tableId, PhysicalTablePath physicalTablePath);
+    boolean isAliveTabletServer(int serverId);
+
+    /**
+     * Get the tablet server.
+     *
+     * @param serverId the tablet server id
+     * @return the tablet server node
+     */
+    Optional<ServerNode> getTabletServer(int serverId, String listenerName);
+
+    /**
+     * Get all alive tablet server nodes.
+     *
+     * @return all alive tablet server nodes
+     */
+    Map<Integer, ServerNode> getAllAliveTabletServers(String listenerName);
+
+    Set<TabletServerInfo> getAliveTabletServerInfos();
+
+    /** Get ids of all alive tablet server nodes. */
+    default TabletServerInfo[] getLiveServers() {
+        Set<TabletServerInfo> aliveTabletServerInfos = getAliveTabletServerInfos();
+        TabletServerInfo[] server = new TabletServerInfo[aliveTabletServerInfos.size()];
+        Iterator<TabletServerInfo> iterator = aliveTabletServerInfos.iterator();
+        for (int i = 0; i < aliveTabletServerInfos.size(); i++) {
+            server[i] = iterator.next();
+        }
+        return server;
+    }
 }

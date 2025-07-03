@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,19 +18,28 @@
 package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.cluster.Endpoint;
+import com.alibaba.fluss.cluster.TabletServerInfo;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
+import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.utils.types.Tuple2;
@@ -40,6 +50,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -48,7 +59,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ZooKeeperClient}. */
 class ZooKeeperClientTest {
@@ -100,10 +113,12 @@ class ZooKeeperClientTest {
         // register two table servers
         TabletServerRegistration registration1 =
                 new TabletServerRegistration(
+                        "rack1",
                         Endpoint.fromListenersString("CLIENT://host1:3456"),
                         System.currentTimeMillis());
         TabletServerRegistration registration2 =
                 new TabletServerRegistration(
+                        "rack2",
                         Endpoint.fromListenersString("CLIENT://host2:3454"),
                         System.currentTimeMillis());
         zookeeperClient.registerTabletServer(2, registration2);
@@ -159,6 +174,50 @@ class ZooKeeperClientTest {
         // test delete
         zookeeperClient.deleteLeaderAndIsr(tableBucket);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
+    }
+
+    @Test
+    void testBatchCreateLeaderAndIsr() throws Exception {
+        List<RegisterTableBucketLeadAndIsrInfo> noPartitionTableBucket = new ArrayList<>();
+        // non-partition table
+        List<LeaderAndIsr> noPartitionleaderAndIsrList = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            TableBucket tableBucket = new TableBucket(1, i);
+            LeaderAndIsr leaderAndIsr =
+                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+            noPartitionleaderAndIsrList.add(leaderAndIsr);
+            noPartitionTableBucket.add(
+                    new RegisterTableBucketLeadAndIsrInfo(tableBucket, leaderAndIsr, null, null));
+        }
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(noPartitionTableBucket);
+
+        for (int i = 0; i < 100; i++) {
+            Optional<LeaderAndIsr> optionalLeaderAndIsr =
+                    zookeeperClient.getLeaderAndIsr(noPartitionTableBucket.get(i).getTableBucket());
+            assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
+            assertThat(optionalLeaderAndIsr.get()).isIn(noPartitionleaderAndIsrList);
+        }
+
+        List<RegisterTableBucketLeadAndIsrInfo> partitionTableBucket = new ArrayList<>();
+        // partition table
+        List<LeaderAndIsr> partitionleaderAndIsrList = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            TableBucket tableBucket = new TableBucket(1, 2L, i);
+            LeaderAndIsr leaderAndIsr =
+                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+            partitionleaderAndIsrList.add(leaderAndIsr);
+            partitionTableBucket.add(
+                    new RegisterTableBucketLeadAndIsrInfo(
+                            tableBucket, leaderAndIsr, "partition" + i, null));
+        }
+
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(partitionTableBucket);
+        for (int i = 0; i < 100; i++) {
+            Optional<LeaderAndIsr> optionalLeaderAndIsr =
+                    zookeeperClient.getLeaderAndIsr(partitionTableBucket.get(i).getTableBucket());
+            assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
+            assertThat(optionalLeaderAndIsr.get()).isIn(partitionleaderAndIsrList);
+        }
     }
 
     @Test
@@ -355,8 +414,22 @@ class ZooKeeperClientTest {
         assertThat(partitions).isEmpty();
 
         // test create new partitions
-        zookeeperClient.registerPartition(tablePath, tableId, "p1", 1L);
-        zookeeperClient.registerPartition(tablePath, tableId, "p2", 2L);
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(
+                        tableId,
+                        generateAssignment(
+                                        3,
+                                        3,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
+                                .getBucketAssignments());
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                1L, "p1", partitionAssignment, tablePath, tableId);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                2L, "p2", partitionAssignment, tablePath, tableId);
 
         // check created partitions
         partitions = zookeeperClient.getPartitions(tablePath);
@@ -370,5 +443,35 @@ class ZooKeeperClientTest {
         zookeeperClient.deletePartition(tablePath, "p1");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
+    }
+
+    @Test
+    void testZookeeperConfigPath() throws Exception {
+        final Configuration config = new Configuration();
+        config.setString(
+                ConfigOptions.ZOOKEEPER_ADDRESS,
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
+        config.setString(ConfigOptions.ZOOKEEPER_CONFIG_PATH, "./no-file.properties");
+        assertThatThrownBy(
+                        () -> ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE))
+                .isExactlyInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Fail to load zookeeper client config from path");
+
+        config.setString(
+                ConfigOptions.ZOOKEEPER_CONFIG_PATH,
+                getClass().getClassLoader().getResource("zk.properties").getPath());
+        try (ZooKeeperClient zookeeperClient =
+                        ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE);
+                CuratorFramework curatorClient = zookeeperClient.getCuratorClient();
+                CuratorZookeeperClient curatorZookeeperClient = curatorClient.getZookeeperClient();
+                ZooKeeper zooKeeper = curatorZookeeperClient.getZooKeeper()) {
+            ZKClientConfig clientConfig = zooKeeper.getClientConfig();
+            assertThat(clientConfig.getProperty(ZKClientConfig.ENABLE_CLIENT_SASL_KEY))
+                    .isEqualTo("true");
+            assertThat(clientConfig.getProperty(ZKClientConfig.LOGIN_CONTEXT_NAME_KEY))
+                    .isEqualTo("ZookeeperClient");
+            assertThat(clientConfig.getProperty(ZKClientConfig.ZK_SASL_CLIENT_USERNAME))
+                    .isEqualTo("zookeeper2");
+        }
     }
 }

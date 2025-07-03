@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -86,12 +87,12 @@ public class MetadataUpdater {
         return cluster.getTableId(tablePath);
     }
 
-    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
-        return cluster.getPartitionIdOrElseThrow(physicalTablePath);
+    public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
+        return cluster.getPartitionId(physicalTablePath);
     }
 
-    public String getPartitionNameOrElseThrow(long partitionId) {
-        return cluster.getPartitionNameOrElseThrow(partitionId);
+    public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
+        return cluster.getPartitionIdOrElseThrow(physicalTablePath);
     }
 
     public TableInfo getTableInfoOrElseThrow(TablePath tablePath) {
@@ -186,10 +187,11 @@ public class MetadataUpdater {
      *
      * <p>and update partition metadata .
      */
-    public void checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
+    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
         if (!cluster.getPartitionId(physicalTablePath).isPresent()) {
             updateMetadata(null, Collections.singleton(physicalTablePath), null);
         }
+        return cluster.getPartitionId(physicalTablePath).isPresent();
     }
 
     /**

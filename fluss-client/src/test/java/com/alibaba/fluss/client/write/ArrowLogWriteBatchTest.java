@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,6 +41,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
@@ -49,6 +51,7 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ArrowLogWriteBatch}. */
 public class ArrowLogWriteBatchTest {
@@ -119,7 +122,7 @@ public class ArrowLogWriteBatchTest {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
         ArrowLogWriteBatch arrowLogWriteBatch =
                 new ArrowLogWriteBatch(
-                        tb,
+                        tb.getBucket(),
                         DATA1_PHYSICAL_TABLE_PATH,
                         DATA1_TABLE_INFO.getSchemaId(),
                         writerProvider.getOrCreateWriter(
@@ -195,7 +198,7 @@ public class ArrowLogWriteBatchTest {
 
             ArrowLogWriteBatch arrowLogWriteBatch =
                     new ArrowLogWriteBatch(
-                            tb,
+                            tb.getBucket(),
                             DATA1_PHYSICAL_TABLE_PATH,
                             DATA1_TABLE_INFO.getSchemaId(),
                             arrowWriter,
@@ -231,13 +234,66 @@ public class ArrowLogWriteBatchTest {
         assertThat(currentRatio).isLessThan(1.0f);
     }
 
+    @Test
+    void testBatchAborted() throws Exception {
+        int bucketId = 0;
+        int maxSizeInBytes = 10240;
+        ArrowLogWriteBatch arrowLogWriteBatch =
+                createArrowLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), maxSizeInBytes);
+        int recordCount = 5;
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < recordCount; i++) {
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            arrowLogWriteBatch.tryAppend(
+                    createWriteRecord(row(i, "a" + i)),
+                    exception -> {
+                        if (exception != null) {
+                            future.completeExceptionally(exception);
+                        } else {
+                            future.complete(null);
+                        }
+                    });
+            futures.add(future);
+        }
+
+        assertThat(writerProvider.freeWriters()).isEmpty();
+        arrowLogWriteBatch.abortRecordAppends();
+        arrowLogWriteBatch.abort(new RuntimeException("close with record batch abort"));
+
+        // first try to append.
+        assertThatThrownBy(
+                        () ->
+                                arrowLogWriteBatch.tryAppend(
+                                        createWriteRecord(row(1, "a")), newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Tried to append a record, but MemoryLogRecordsArrowBuilder has already been aborted");
+
+        // try to build.
+        assertThatThrownBy(arrowLogWriteBatch::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Attempting to build an aborted record batch");
+
+        // verify arrow writer have recycled.
+        assertThat(writerProvider.freeWriters()).hasSize(1);
+        assertThat(writerProvider.freeWriters().get("150001-1-ZSTD-3")).isNotNull();
+
+        // verify record append future is completed with exception.
+        for (CompletableFuture<Void> future : futures) {
+            assertThatThrownBy(future::join)
+                    .rootCause()
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("close with record batch abort");
+        }
+    }
+
     private WriteRecord createWriteRecord(GenericRow row) {
         return WriteRecord.forArrowAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private ArrowLogWriteBatch createArrowLogWriteBatch(TableBucket tb, int maxSizeInBytes) {
         return new ArrowLogWriteBatch(
-                tb,
+                tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writerProvider.getOrCreateWriter(

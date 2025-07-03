@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -93,7 +94,7 @@ abstract class FlinkMetricsITCase {
     protected static Admin admin;
     protected static com.alibaba.fluss.config.Configuration clientConf;
 
-    static TableEnvironment tEnv;
+    private TableEnvironment tEnv;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -106,6 +107,10 @@ abstract class FlinkMetricsITCase {
         } catch (Exception e) {
             throw new FlussRuntimeException("Fail to init Flink mini cluster", e);
         }
+    }
+
+    @BeforeEach
+    void beforeEach() throws Exception {
         tEnv = TableEnvironment.create(EnvironmentSettings.newInstance().build());
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // crate catalog using sql
@@ -114,10 +119,6 @@ abstract class FlinkMetricsITCase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-    }
-
-    @BeforeEach
-    void beforeEach() throws Exception {
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);

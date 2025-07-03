@@ -4,11 +4,13 @@ sidebar_position: 1
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -33,6 +35,19 @@ It offers flexible table types, including append-only **Log Tables** and updatab
 With built-in replication for fault tolerance, horizontal scalability, and advanced features like high-QPS lookup joins and bulk read/write operations, Fluss is ideal for powering **real-time analytics**, **AI/ML pipelines**, and **streaming data warehouses**. 
 
 **Fluss (German: river, pronounced `/flus/`)** enables streaming data continuously converging, distributing and flowing into lakes, like a river 🌊
+
+## Use Cases
+The following is a list of (but not limited to) use-cases that Fluss shines ✨:
+* **📊 Optimized Real-time analytics**
+* **🔧 Feature Stores**
+* **📈 Real-time Dashboards**
+* **🧍 Real-time Customer 360**
+* **📡 Real-time IoT Pipelines**
+* **🚓 Real-time Fraud Detection**
+* **🚨 Real-time Alerting Systems**
+* **💫 Real-tim ETL/Data Warehouses**
+* **🌐 Real-time Geolocation Services**
+* **🚚 Real-time Shipment Update Tracking**
 
 ## Where to go Next?
 

@@ -1,17 +1,18 @@
 /*
- *  Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package com.alibaba.fluss.flink.utils;
@@ -22,7 +23,6 @@ import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Sets;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.DecimalType;
@@ -42,7 +42,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -74,27 +76,27 @@ public class PojoToRowConverter<T> {
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
 
     static {
-        SUPPORTED_TYPES.put(DataTypeRoot.BOOLEAN, Sets.newHashSet(Boolean.class, boolean.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.TINYINT, Sets.newHashSet(Byte.class, byte.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.SMALLINT, Sets.newHashSet(Short.class, short.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.INTEGER, Sets.newHashSet(Integer.class, int.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BIGINT, Sets.newHashSet(Long.class, long.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.FLOAT, Sets.newHashSet(Float.class, float.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DOUBLE, Sets.newHashSet(Double.class, double.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BOOLEAN, orderedSet(Boolean.class, boolean.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.TINYINT, orderedSet(Byte.class, byte.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.SMALLINT, orderedSet(Short.class, short.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.INTEGER, orderedSet(Integer.class, int.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BIGINT, orderedSet(Long.class, long.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.FLOAT, orderedSet(Float.class, float.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.DOUBLE, orderedSet(Double.class, double.class));
         SUPPORTED_TYPES.put(
-                DataTypeRoot.CHAR, Sets.newHashSet(String.class, Character.class, char.class));
+                DataTypeRoot.CHAR, orderedSet(String.class, Character.class, char.class));
         SUPPORTED_TYPES.put(
-                DataTypeRoot.STRING, Sets.newHashSet(String.class, Character.class, char.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BINARY, Sets.newHashSet(byte[].class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BYTES, Sets.newHashSet(byte[].class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DECIMAL, Sets.newHashSet(BigDecimal.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DATE, Sets.newHashSet(LocalDate.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.TIME_WITHOUT_TIME_ZONE, Sets.newHashSet(LocalTime.class));
+                DataTypeRoot.STRING, orderedSet(String.class, Character.class, char.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BINARY, orderedSet(byte[].class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BYTES, orderedSet(byte[].class));
+        SUPPORTED_TYPES.put(DataTypeRoot.DECIMAL, orderedSet(BigDecimal.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.DATE, orderedSet(LocalDate.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.TIME_WITHOUT_TIME_ZONE, orderedSet(LocalTime.class));
         SUPPORTED_TYPES.put(
-                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE, Sets.newHashSet(LocalDateTime.class));
+                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE, orderedSet(LocalDateTime.class));
         SUPPORTED_TYPES.put(
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
-                Sets.newHashSet(Instant.class, OffsetDateTime.class));
+                orderedSet(Instant.class, OffsetDateTime.class));
         // Add more supported types as needed
 
     }
@@ -331,5 +333,20 @@ public class PojoToRowConverter<T> {
         }
 
         return row;
+    }
+
+    /**
+     * Utility method to create an ordered {@link LinkedHashSet} containing the specified Java type
+     * classes.
+     *
+     * <p>The returned set maintains the insertion order of the provided classes.
+     *
+     * @param javaTypes The Java type classes to include in the set. May be one or more classes.
+     * @return A new {@link LinkedHashSet} containing the given classes, preserving their order.
+     */
+    private static LinkedHashSet<Class<?>> orderedSet(Class<?>... javaTypes) {
+        LinkedHashSet<Class<?>> linkedHashSet = new LinkedHashSet<>();
+        linkedHashSet.addAll(Arrays.asList(javaTypes));
+        return linkedHashSet;
     }
 }

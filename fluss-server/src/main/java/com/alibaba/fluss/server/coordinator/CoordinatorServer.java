@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,10 +23,11 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeCatalog;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStorage;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lakehouse.lakestorage.LakeStoragePluginSetUp;
+import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePluginSetUp;
+import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.RpcClient;
@@ -35,14 +37,14 @@ import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
-import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
+import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCacheImpl;
 import com.alibaba.fluss.server.metrics.ServerMetricUtils;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperUtils;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.ExecutorUtils;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -54,6 +56,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -113,7 +116,7 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorService coordinatorService;
 
     @GuardedBy("lock")
-    private ServerMetadataCache metadataCache;
+    private CoordinatorMetadataCache metadataCache;
 
     @GuardedBy("lock")
     private CoordinatorChannelManager coordinatorChannelManager;
@@ -136,6 +139,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     @Nullable
     private Authorizer authorizer;
+
+    @GuardedBy("lock")
+    private CoordinatorContext coordinatorContext;
 
     public CoordinatorServer(Configuration conf) {
         super(conf);
@@ -168,7 +174,8 @@ public class CoordinatorServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            this.metadataCache = new ServerMetadataCacheImpl();
+            this.coordinatorContext = new CoordinatorContext();
+            this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -183,11 +190,12 @@ public class CoordinatorServer extends ServerBase {
                             conf,
                             remoteFileSystem,
                             zkClient,
-                            this::getCoordinatorEventManager,
+                            this::getCoordinatorEventProcessor,
                             metadataCache,
                             metadataManager,
                             authorizer,
-                            createLakeCatalog());
+                            createLakeCatalog(),
+                            lakeTableTieringManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -200,9 +208,10 @@ public class CoordinatorServer extends ServerBase {
             rpcServer.start();
 
             registerCoordinatorLeader();
+            registerZookeeperClientReconnectedListener();
 
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
@@ -225,6 +234,7 @@ public class CoordinatorServer extends ServerBase {
                             zkClient,
                             metadataCache,
                             coordinatorChannelManager,
+                            coordinatorContext,
                             autoPartitionManager,
                             lakeTableTieringManager,
                             serverMetricGroup,
@@ -238,11 +248,12 @@ public class CoordinatorServer extends ServerBase {
 
     @Nullable
     private LakeCatalog createLakeCatalog() {
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromConfiguration(conf, pluginManager);
-        if (lakeStoragePlugin == null) {
+        DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
+        if (dataLakeFormat == null) {
             return null;
         }
+        LakeStoragePlugin lakeStoragePlugin =
+                LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat.toString(), pluginManager);
         Map<String, String> lakeProperties = extractLakeProperties(conf);
         LakeStorage lakeStorage =
                 lakeStoragePlugin.createLakeStorage(
@@ -277,6 +288,47 @@ public class CoordinatorServer extends ServerBase {
         zkClient.registerCoordinatorLeader(coordinatorAddress);
     }
 
+    private void registerZookeeperClientReconnectedListener() {
+        ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
+                zkClient,
+                () -> {
+                    // we need to retry to register since although
+                    // zkClient reconnect, the ephemeral node may still exist
+                    // for a while time, retry to wait the ephemeral node removed
+                    // see ZOOKEEPER-2985
+                    long startTime = System.currentTimeMillis();
+                    long retryWaitIntervalMs = Duration.ofSeconds(3).toMillis();
+                    long retryTotalWaitTimeMs = Duration.ofMinutes(1).toMillis();
+                    while (true) {
+                        try {
+                            this.registerCoordinatorLeader();
+                            break;
+                        } catch (KeeperException.NodeExistsException nodeExistsException) {
+                            long elapsedTime = System.currentTimeMillis() - startTime;
+                            if (elapsedTime >= retryTotalWaitTimeMs) {
+                                LOG.error(
+                                        "Coordinator Server register to Zookeeper exceeded total retry time of {} ms. "
+                                                + "Aborting registration attempts.",
+                                        retryTotalWaitTimeMs);
+                                throw nodeExistsException;
+                            }
+
+                            LOG.warn(
+                                    "Coordinator server already registered in Zookeeper. "
+                                            + "retrying register after {} ms....",
+                                    retryWaitIntervalMs);
+                            try {
+                                Thread.sleep(retryWaitIntervalMs);
+                            } catch (InterruptedException interruptedException) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                    }
+                },
+                this);
+    }
+
     private void createDefaultDatabase() {
         MetadataManager metadataManager = new MetadataManager(zkClient, conf);
         List<String> databases = metadataManager.listDatabases();
@@ -294,9 +346,9 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
-    private CoordinatorEventManager getCoordinatorEventManager() {
+    private CoordinatorEventProcessor getCoordinatorEventProcessor() {
         if (coordinatorEventProcessor != null) {
-            return coordinatorEventProcessor.getCoordinatorEventManager();
+            return coordinatorEventProcessor;
         } else {
             throw new IllegalStateException("CoordinatorEventProcessor is not initialized yet.");
         }
@@ -373,6 +425,15 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
+                if (coordinatorContext != null) {
+                    // then reset coordinatorContext
+                    coordinatorContext.resetContext();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (lakeTableTieringManager != null) {
                     lakeTableTieringManager.close();
                 }
@@ -433,6 +494,11 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public RpcServer getRpcServer() {
         return rpcServer;
+    }
+
+    @VisibleForTesting
+    public ServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     private static void validateConfigs(Configuration conf) {
