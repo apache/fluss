@@ -147,7 +147,7 @@ public class MetadataUpdater {
         return serverNode;
     }
 
-    public @Nullable ServerNode getTabletServer(int id) {
+    private @Nullable ServerNode getTabletServer(int id) {
         return cluster.getTabletServer(id);
     }
 
@@ -165,10 +165,14 @@ public class MetadataUpdater {
                 this::getRandomTabletServer, rpcClient, TabletServerGateway.class);
     }
 
-    public TabletServerGateway newTabletServerClientForNode(int serverId) {
-        final ServerNode serverNode = getTabletServer(serverId);
-        return GatewayClientProxy.createGatewayProxy(
-                () -> serverNode, rpcClient, TabletServerGateway.class);
+    public @Nullable TabletServerGateway newTabletServerClientForNode(int serverId) {
+        @Nullable final ServerNode serverNode = getTabletServer(serverId);
+        if (serverNode == null) {
+            return null;
+        } else {
+            return GatewayClientProxy.createGatewayProxy(
+                    () -> serverNode, rpcClient, TabletServerGateway.class);
+        }
     }
 
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {

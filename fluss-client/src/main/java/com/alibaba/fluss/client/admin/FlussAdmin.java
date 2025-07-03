@@ -24,6 +24,7 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -100,14 +101,12 @@ public class FlussAdmin implements Admin {
 
     private final AdminGateway gateway;
     private final MetadataUpdater metadataUpdater;
-    private final RpcClient client;
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
-        this.client = client;
     }
 
     @Override
@@ -393,7 +392,7 @@ public class FlussAdmin implements Admin {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
         }
 
-        sendListOffsetsRequest(metadataUpdater, client, requestMap, bucketToOffsetMap);
+        sendListOffsetsRequest(metadataUpdater, requestMap, bucketToOffsetMap);
         return new ListOffsetsResult(bucketToOffsetMap);
     }
 
@@ -479,34 +478,35 @@ public class FlussAdmin implements Admin {
 
     private static void sendListOffsetsRequest(
             MetadataUpdater metadataUpdater,
-            RpcClient client,
             Map<Integer, ListOffsetsRequest> leaderToRequestMap,
             Map<Integer, CompletableFuture<Long>> bucketToOffsetMap) {
         leaderToRequestMap.forEach(
                 (leader, request) -> {
                     TabletServerGateway gateway =
-                            GatewayClientProxy.createGatewayProxy(
-                                    () -> metadataUpdater.getTabletServer(leader),
-                                    client,
-                                    TabletServerGateway.class);
-                    gateway.listOffsets(request)
-                            .thenAccept(
-                                    r -> {
-                                        for (PbListOffsetsRespForBucket resp :
-                                                r.getBucketsRespsList()) {
-                                            if (resp.hasErrorCode()) {
-                                                bucketToOffsetMap
-                                                        .get(resp.getBucketId())
-                                                        .completeExceptionally(
-                                                                ApiError.fromErrorMessage(resp)
-                                                                        .exception());
-                                            } else {
-                                                bucketToOffsetMap
-                                                        .get(resp.getBucketId())
-                                                        .complete(resp.getOffset());
+                            metadataUpdater.newTabletServerClientForNode(leader);
+                    if (gateway == null) {
+                        throw new LeaderNotAvailableException(
+                                "Server " + leader + " is not found in metadata cache.");
+                    } else {
+                        gateway.listOffsets(request)
+                                .thenAccept(
+                                        r -> {
+                                            for (PbListOffsetsRespForBucket resp :
+                                                    r.getBucketsRespsList()) {
+                                                if (resp.hasErrorCode()) {
+                                                    bucketToOffsetMap
+                                                            .get(resp.getBucketId())
+                                                            .completeExceptionally(
+                                                                    ApiError.fromErrorMessage(resp)
+                                                                            .exception());
+                                                } else {
+                                                    bucketToOffsetMap
+                                                            .get(resp.getBucketId())
+                                                            .complete(resp.getOffset());
+                                                }
                                             }
-                                        }
-                                    });
+                                        });
+                    }
                 });
     }
 }
