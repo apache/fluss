@@ -122,8 +122,7 @@ public final class Cluster {
 
     public Cluster invalidPhysicalTableBucketMeta(Set<PhysicalTablePath> physicalTablesToInvalid) {
         // should remove invalid tables from current availableLocationsByPath
-        Map<PhysicalTablePath, List<BucketLocation>> newBucketLocationsByPath =
-                new HashMap<>(availableLocationsByPath.size() - physicalTablesToInvalid.size());
+        Map<PhysicalTablePath, List<BucketLocation>> newBucketLocationsByPath = new HashMap<>();
         // copy the metadata from current availableLocationsByPath to newBucketLocationsByPath
         // except for the tables in physicalTablesToInvalid
         for (Map.Entry<PhysicalTablePath, List<BucketLocation>> tablePathAndBucketLocations :
