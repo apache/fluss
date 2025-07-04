@@ -255,4 +255,14 @@ public final class RowType extends DataType {
             return new RowType(isNullable, fields);
         }
     }
+
+    public DataField getField(String fieldName) {
+        for (DataField field : fields) {
+            if (field.getName().equals(fieldName)) {
+                return field;
+            }
+        }
+
+        throw new RuntimeException("Cannot find field: " + fieldName);
+    }
 }
