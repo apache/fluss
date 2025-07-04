@@ -34,7 +34,6 @@ import com.huaweicloud.sdk.iam.v3.model.TokenAuthIdentity;
 import com.huaweicloud.sdk.iam.v3.region.IamRegion;
 import org.apache.hadoop.conf.Configuration;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -54,7 +53,7 @@ public class OBSSecurityTokenProvider {
     private final String region;
     private final IamClient iamClient;
 
-    public OBSSecurityTokenProvider(Configuration conf) throws IOException {
+    public OBSSecurityTokenProvider(Configuration conf) {
         endpoint = conf.get(ENDPOINT_KEY);
         String accessKeyId = conf.get(ACCESS_KEY_ID);
         String accessKeySecret = conf.get(ACCESS_KEY_SECRET);
@@ -70,7 +69,7 @@ public class OBSSecurityTokenProvider {
                         .build();
     }
 
-    public ObtainedSecurityToken obtainSecurityToken(String scheme) throws Exception {
+    public ObtainedSecurityToken obtainSecurityToken(String scheme) {
         final CreateTemporaryAccessKeyByTokenRequest request =
                 new CreateTemporaryAccessKeyByTokenRequest();
         CreateTemporaryAccessKeyByTokenRequestBody body =

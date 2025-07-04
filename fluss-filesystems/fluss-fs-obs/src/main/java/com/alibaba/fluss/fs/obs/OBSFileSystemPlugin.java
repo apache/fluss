@@ -30,10 +30,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.URI;
 
-/* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
- * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership. */
-
 /** Simple factory for the HuaweiCloud OBS file system. */
 public class OBSFileSystemPlugin implements FileSystemPlugin {
 
@@ -48,7 +44,7 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
     private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.obs."};
 
     private static final String ACCESS_KEY_ID = "fs.obs.access.key";
-    public static final String CREDENTIALS_PROVIDER = "fs.obs.credentials.provider";
+    public static final String CREDENTIALS_PROVIDER = "fs.obs.security.provider";
 
     public static final String REGION_KEY = "fs.obs.region";
 
@@ -74,7 +70,7 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
                 // no ak, no credentialsProvider,
                 // set default credential provider which will get token from
                 // OBSSecurityTokenReceiver
-                setDefaultCredentialProvider(flussConfig, hadoopConfig);
+                setDefaultCredentialProvider(hadoopConfig);
             }
         } else {
             LOG.info("{} is set, using provided access key id and secret.", ACCESS_KEY_ID);
@@ -104,8 +100,7 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
         return fileSystem;
     }
 
-    protected void setDefaultCredentialProvider(
-            Configuration flussConfig, org.apache.hadoop.conf.Configuration hadoopConfig) {
+    protected void setDefaultCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
         // use OBSSecurityTokenReceiver to update hadoop config to set credentialsProvider
         OBSSecurityTokenReceiver.updateHadoopConfig(hadoopConfig);
     }

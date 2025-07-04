@@ -19,44 +19,41 @@ package com.alibaba.fluss.fs.obs.token;
 
 import com.alibaba.fluss.annotation.Internal;
 
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.obs.BasicSessionCredential;
+import com.obs.services.IObsCredentialsProvider;
+import com.obs.services.internal.security.BasicSecurityKey;
+import com.obs.services.model.ISecurityKey;
 import org.apache.hadoop.fs.obs.OBSFileSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.URI;
-
 /**
  * Support dynamic session credentials for authenticating with HuaweiCloud OBS. It'll get
  * credentials from {@link OBSSecurityTokenReceiver}. It implements obs native {@link
- * BasicSessionCredential} to work with {@link OBSFileSystem}.
+ * IObsCredentialsProvider} to work with {@link OBSFileSystem}.
  */
 @Internal
-public class DynamicTemporaryOBSCredentialsProvider implements BasicSessionCredential {
+public class DynamicTemporaryOBSCredentialsProvider implements IObsCredentialsProvider {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(DynamicTemporaryOBSCredentialsProvider.class);
 
     public static final String NAME = DynamicTemporaryOBSCredentialsProvider.class.getName();
 
-    public DynamicTemporaryOBSCredentialsProvider(URI name, Configuration conf) {
+    @Override
+    public void setSecurityKey(ISecurityKey iSecurityKey) {
         // do nothing
-        // OBSFileSystem need this Constructor
     }
 
     @Override
-    public String getOBSAccessKeyId() {
-        return OBSSecurityTokenReceiver.getCredentials().getAccess();
-    }
-
-    @Override
-    public String getOBSSecretKey() {
-        return OBSSecurityTokenReceiver.getCredentials().getSecret();
-    }
-
-    @Override
-    public String getSessionToken() {
-        return OBSSecurityTokenReceiver.getCredentials().getSecuritytoken();
+    public ISecurityKey getSecurityKey() {
+        ISecurityKey credentials = OBSSecurityTokenReceiver.getCredentials();
+        if (credentials == null) {
+            throw new RuntimeException("Credentials is not ready.");
+        }
+        LOG.debug("Providing session credentials");
+        return new BasicSecurityKey(
+                credentials.getAccessKey(),
+                credentials.getSecretKey(),
+                credentials.getSecurityToken());
     }
 }
