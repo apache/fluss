@@ -26,6 +26,7 @@ import com.alibaba.fluss.exception.InvalidRequiredAcksException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.StorageException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.fs.FsPath;
@@ -79,6 +80,7 @@ import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.metadata.ClusterMetadata;
+import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
@@ -1081,6 +1083,28 @@ public class ReplicaManager {
                 return new FetchLogResultForBucket(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             } else {
+                // TODO: This scenario can also occur when a partition is removed and the remote log
+                // segment is deleted. While we have implemented latch mechanisms (e.g., Java locks)
+                // to protect atomicity in several short critical sections, we lack a true database
+                // lock system to ensure ACID properties (specifically atomicity, consistency,
+                // isolation) for DDL transactions. This limitation warrants further discussion in
+                // the future.
+                if (tb.getPartitionId() != null) {
+                    PartitionMetadata partitionMetadata =
+                            metadataCache.getPartitionMetadata(replica.getPhysicalTablePath());
+                    if (partitionMetadata == null
+                            || partitionMetadata.getPartitionId()
+                                    == PartitionMetadata.DELETED_PARTITION_ID) {
+                        return new FetchLogResultForBucket(
+                                tb,
+                                ApiError.fromThrowable(
+                                        new PartitionNotExistException(
+                                                String.format(
+                                                        "Partition %s already removed.",
+                                                        tb.getPartitionId()))));
+                    }
+                }
+
                 return new FetchLogResultForBucket(
                         tb,
                         ApiError.fromThrowable(
