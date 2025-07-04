@@ -32,12 +32,31 @@ To enabled HuaweiCloud OBS as remote storage, there are some required configurat
 ```yaml
 # The dir that used to be as the remote storage of Fluss
 remote.data.dir: obs://<your-bucket>/path/to/remote/storage
-# access key
-fs.obs.access.key: <your-access-key>
-# secret key
-fs.obs.secret.key: <your-secret-key>
 # obs endpoint, such as: https://obs.cn-north-4.myhuaweicloud.com
 fs.obs.endpoint: <obs-endpoint-hostname>
 # OBS region, such as: cn-north-4
 fs.obs.region: <your-obs-region>
+
+# Authentication (choose one option below)
+
+# Option 1: Direct credentials
+# HuaweiCloud access key
+fs.obs.access.key: <your-access-key>
+# HuaweiCloud secret key
+fs.obs.secret.key: <your-secret-key>
+
+# Option 2: Secure credential provider
+fs.obs.security.provider: <your-credentials-provider>
 ```
+To avoid exposing sensitive access key information directly in the `server.yaml`, you can choose option2 to use a credential provider by setting the `fs.obs.security.provider` property.
+
+For example, to use environment variables for credential management:
+```yaml
+fs.obs.security.provider: com.obs.services.EnvironmentVariableObsCredentialsProvider
+```
+Then, set the following environment variables before starting the Fluss service:
+```bash
+export OBS_ACCESS_KEY_ID=<your-access-key>
+export OBS_SECRET_ACCESS_KEY=<your-secret-key>
+```
+This approach enhances security by keeping sensitive credentials out of configuration files.

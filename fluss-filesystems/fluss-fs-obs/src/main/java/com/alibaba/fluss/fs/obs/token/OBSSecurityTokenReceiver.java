@@ -22,7 +22,8 @@ import com.alibaba.fluss.fs.token.CredentialsJsonSerde;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 import com.alibaba.fluss.fs.token.SecurityTokenReceiver;
 
-import com.huaweicloud.sdk.iam.v3.model.Credential;
+import com.obs.services.internal.security.BasicSecurityKey;
+import com.obs.services.model.ISecurityKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +36,7 @@ public class OBSSecurityTokenReceiver implements SecurityTokenReceiver {
 
     private static final Logger LOG = LoggerFactory.getLogger(OBSSecurityTokenReceiver.class);
 
-    static volatile Credential credentials;
+    static volatile ISecurityKey credentials;
     static volatile Map<String, String> additionInfos;
 
     public static void updateHadoopConfig(org.apache.hadoop.conf.Configuration hadoopConfig) {
@@ -89,18 +90,19 @@ public class OBSSecurityTokenReceiver implements SecurityTokenReceiver {
                 CredentialsJsonSerde.fromJson(tokenBytes);
 
         // Create Credential from fluss credentials
-        credentials = new Credential();
-        credentials.setAccess(flussCredentials.getAccessKeyId());
-        credentials.setSecret(flussCredentials.getSecretAccessKey());
-        credentials.setSecuritytoken(flussCredentials.getSecurityToken());
+        credentials =
+                new BasicSecurityKey(
+                        flussCredentials.getAccessKeyId(),
+                        flussCredentials.getSecretAccessKey(),
+                        flussCredentials.getSecurityToken());
         additionInfos = token.getAdditionInfos();
 
         LOG.info(
                 "Session credentials updated successfully with access key: {}.",
-                credentials.getAccess());
+                credentials.getAccessKey());
     }
 
-    public static Credential getCredentials() {
+    public static ISecurityKey getCredentials() {
         return credentials;
     }
 }

@@ -26,10 +26,6 @@ import org.apache.hadoop.fs.FileSystem;
 
 import java.io.IOException;
 
-/* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
- * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership. */
-
 /**
  * A {@link FileSystem} for HuaweiCloud OBS that wraps an {@link HadoopFileSystem}, but overwrite
  * method to generate access security token.
