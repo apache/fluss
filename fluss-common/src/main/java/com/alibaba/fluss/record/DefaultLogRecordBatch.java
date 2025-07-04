@@ -87,7 +87,7 @@ import java.util.NoSuchElementException;
 // TODO rename to MemoryLogRecordBatch
 @PublicEvolving
 public class DefaultLogRecordBatch implements LogRecordBatch {
-    protected static final int BASE_OFFSET_LENGTH = 8;
+    public static final int BASE_OFFSET_LENGTH = 8;
     public static final int LENGTH_LENGTH = 4;
     static final int MAGIC_LENGTH = 1;
     static final int COMMIT_TIMESTAMP_LENGTH = 8;
@@ -104,7 +104,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     static final int MAGIC_OFFSET = LENGTH_OFFSET + LENGTH_LENGTH;
     static final int COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
     public static final int CRC_OFFSET = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
-    protected static final int SCHEMA_ID_OFFSET = CRC_OFFSET + CRC_LENGTH;
+    public static final int SCHEMA_ID_OFFSET = CRC_OFFSET + CRC_LENGTH;
     public static final int ATTRIBUTES_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
     static final int LAST_OFFSET_DELTA_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
     static final int WRITE_CLIENT_ID_OFFSET = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
@@ -186,7 +186,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         return Crc32C.compute(buffer, SCHEMA_ID_OFFSET, sizeInBytes() - SCHEMA_ID_OFFSET);
     }
 
-    private byte attributes() {
+    public byte attributes() {
         // note we're not using the byte of attributes now.
         return segment.get(ATTRIBUTES_OFFSET + position);
     }
@@ -216,7 +216,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         return baseLogOffset() + lastOffsetDelta();
     }
 
-    private int lastOffsetDelta() {
+    public int lastOffsetDelta() {
         return segment.getInt(LAST_OFFSET_DELTA_OFFSET + position);
     }
 
@@ -268,6 +268,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         int sizeInBytes = sizeInBytes();
         return sizeInBytes == that.sizeInBytes()
                 && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+    }
+
+    public MemorySegment getSegment() {
+        return segment;
     }
 
     @Override
