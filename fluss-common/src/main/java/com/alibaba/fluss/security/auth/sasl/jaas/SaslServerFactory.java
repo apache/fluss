@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.security.auth.sasl.jaas;
 
+import com.alibaba.fluss.security.auth.sasl.gssapi.GssapiServerCallbackHandler;
 import com.alibaba.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 
 import org.slf4j.Logger;
@@ -56,8 +57,21 @@ public class SaslServerFactory {
             AuthenticateCallbackHandler callbackHandler;
             if (mechanism.equals("PLAIN")) {
                 callbackHandler = new PlainServerCallbackHandler();
+            } else if (mechanism.equals("GSSAPI")) {
+                callbackHandler = new GssapiServerCallbackHandler();
             } else {
                 throw new IllegalArgumentException("Unsupported mechanism: " + mechanism);
+            }
+
+            if (configurationEntries == null || configurationEntries.isEmpty()) {
+                LOG.warn(
+                        "JAAS configuration entries are empty or null for mechanism: {}",
+                        mechanism);
+            } else {
+                LOG.debug(
+                        "Using JAAS configuration entries for mechanism {}: {}",
+                        mechanism,
+                        configurationEntries);
             }
 
             callbackHandler.configure(mechanism, configurationEntries);
