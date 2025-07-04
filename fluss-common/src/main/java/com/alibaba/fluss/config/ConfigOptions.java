@@ -112,7 +112,21 @@ public class ConfigOptions {
                     .withDescription(
                             "A (semicolon-separated) list of patterns that specifies which classes should always be"
                                     + " resolved through the plugin parent ClassLoader first. A pattern is a simple prefix that is checked "
-                                    + " against the fully qualified class name. This setting should generally not be modified.");
+                                    + " against the fully qualified class name. This setting should generally not be modified. To add another "
+                                    + " pattern we recommend to use \"plugin.classloader.parent-first-patterns.additional\" instead.");
+
+    public static final ConfigOption<List<String>>
+            PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS_ADDITIONAL =
+                    key("plugin.classloader.parent-first-patterns.additional")
+                            .stringType()
+                            .asList()
+                            .defaultValues()
+                            .withDescription(
+                                    "A (semicolon-separated) list of patterns that specifies which classes should always be"
+                                            + " resolved through the plugin parent ClassLoader first. A pattern is a simple prefix that is checked "
+                                            + " against the fully qualified class name. These patterns are appended to \""
+                                            + PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS.key()
+                                            + "\".");
 
     public static final ConfigOption<Duration> AUTO_PARTITION_CHECK_INTERVAL =
             key("auto-partition.check.interval")
