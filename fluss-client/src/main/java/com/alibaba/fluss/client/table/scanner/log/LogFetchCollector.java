@@ -263,8 +263,9 @@ public class LogFetchCollector {
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION) {
             throw new FetchException(
-                    String.format("The fetching offset %s is out of range", fetchOffset),
-                    error.exception());
+                    String.format(
+                            "The fetching offset %s is out of range: %s",
+                            fetchOffset, errorMessage));
         } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
             throw new AuthorizationException(errorMessage);
         } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
