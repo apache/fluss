@@ -17,6 +17,8 @@
 
 package com.alibaba.fluss.security.auth.sasl.jaas;
 
+import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,18 +47,21 @@ public class DefaultLogin implements Login {
 
     @Override
     public LoginContext login() throws LoginException {
-        loginContext =
-                new LoginContext(
-                        contextName,
-                        null,
-                        callbacks -> {
-                            // Nothing here until we support some mechanisms such as sasl/GSSAPI
-                            // later.
-                            throw new UnsupportedCallbackException(
-                                    callbacks[0], "Unrecognized SASL mechanism.");
-                        },
-                        jaasConfig);
-        loginContext.login();
+        try (TemporaryClassLoaderContext ignored =
+                TemporaryClassLoaderContext.of(DefaultLogin.class.getClassLoader())) {
+            loginContext =
+                    new LoginContext(
+                            contextName,
+                            null,
+                            callbacks -> {
+                                // Nothing here until we support some mechanisms such as sasl/GSSAPI
+                                // later.
+                                throw new UnsupportedCallbackException(
+                                        callbacks[0], "Unrecognized SASL mechanism.");
+                            },
+                            jaasConfig);
+            loginContext.login();
+        }
         LOG.info("Successfully logged in.");
         return loginContext;
     }

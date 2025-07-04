@@ -54,7 +54,9 @@ public class LakeStoragePluginSetUp {
     private static Iterator<LakeStoragePlugin> getAllLakeStoragePlugins(
             @Nullable PluginManager pluginManager) {
         final Iterator<LakeStoragePlugin> pluginIteratorSPI =
-                ServiceLoader.load(LakeStoragePlugin.class).iterator();
+                ServiceLoader.load(
+                                LakeStoragePlugin.class, LakeStoragePlugin.class.getClassLoader())
+                        .iterator();
         if (pluginManager == null) {
             return pluginIteratorSPI;
         } else {

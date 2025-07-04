@@ -256,7 +256,10 @@ public final class NettyServer implements RpcServer {
                             protocol.name());
                     protocols.put(protocol.name(), protocol);
                 };
-        ServiceLoader.load(NetworkProtocolPlugin.class).iterator().forEachRemaining(loadProtocol);
+        ServiceLoader.load(
+                        NetworkProtocolPlugin.class, NetworkProtocolPlugin.class.getClassLoader())
+                .iterator()
+                .forEachRemaining(loadProtocol);
 
         if (protocols.containsKey(protocolName)) {
             LOG.info("Protocol plugin {} loaded successfully", protocolName);

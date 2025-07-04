@@ -49,7 +49,12 @@ public class AuthorizerLoader {
         }
         String authorizerType = configuration.get(AUTHORIZER_TYPE);
         Collection<Supplier<Iterator<AuthorizationPlugin>>> pluginSuppliers = new ArrayList<>(2);
-        pluginSuppliers.add(() -> ServiceLoader.load(AuthorizationPlugin.class).iterator());
+        pluginSuppliers.add(
+                () ->
+                        ServiceLoader.load(
+                                        AuthorizationPlugin.class,
+                                        AuthorizationPlugin.class.getClassLoader())
+                                .iterator());
 
         if (pluginManager != null) {
             pluginSuppliers.add(() -> pluginManager.load(AuthorizationPlugin.class));
