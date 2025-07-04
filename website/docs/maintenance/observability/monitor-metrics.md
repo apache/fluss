@@ -312,8 +312,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="6"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
+      <th rowspan="10"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
@@ -342,6 +342,21 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>replicasToDeleteCount</td>
       <td>The total number of replicas in the progress to be deleted in this cluster.</td>
       <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>eventQueueSize</td>
+      <td>The number of events waiting to be processed in the queue.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>eventQueueTimeMs</td>
+      <td>The time that an event spent waiting in the queue to be processed.</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>eventProcessingTimeMs</td>
+      <td>The time that an event took to be processed.</td>
+      <td>Histogram</td>
     </tr>
   </tbody>
 </table>
