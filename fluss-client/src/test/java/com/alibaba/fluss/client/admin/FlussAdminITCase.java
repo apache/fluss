@@ -134,6 +134,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 DatabaseDescriptor.builder()
                         .comment("test comment")
                         .customProperty("key1", "value1")
+                        .customProperty("key2", "value2")
                         .build(),
                 false);
         DatabaseInfo databaseInfo = admin.getDatabaseInfo("test_db_2").get();
@@ -144,9 +145,30 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isEqualTo("test comment");
         assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties())
                 .containsEntry("key1", "value1");
-        assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties()).hasSize(1);
+        assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties()).hasSize(2);
         assertThat(databaseInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+
+        long timesBeforeAlter = System.currentTimeMillis();
+        admin.alterDatabase(
+                "test_db_2",
+                DatabaseDescriptor.builder()
+                        .comment("alter comment")
+                        .customProperty("key1", "new_value1")
+                        .customProperty("key3", "val3")
+                        .build(),
+                false);
+        databaseInfo = admin.getDatabaseInfo("test_db_2").get();
+        long timestampAfterAlter = System.currentTimeMillis();
+        assertThat(databaseInfo.getCreatedTime()).isLessThan(databaseInfo.getModifiedTime());
+        assertThat(databaseInfo.getDatabaseName()).isEqualTo("test_db_2");
+        assertThat(databaseInfo.getDatabaseDescriptor().getComment().get())
+                .isEqualTo("alter comment");
+        assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties())
+                .containsEntry("key1", "new_value1")
+                .containsEntry("key3", "val3");
+        assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties()).hasSize(2);
+        assertThat(databaseInfo.getModifiedTime()).isBetween(timesBeforeAlter, timestampAfterAlter);
     }
 
     @Test

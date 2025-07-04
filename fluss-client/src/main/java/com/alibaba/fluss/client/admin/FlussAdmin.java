@@ -39,6 +39,7 @@ import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.AlterDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
@@ -212,6 +213,16 @@ public class FlussAdmin implements Admin {
         ListDatabasesRequest request = new ListDatabasesRequest();
         return gateway.listDatabases(request)
                 .thenApply(ListDatabasesResponse::getDatabaseNamesList);
+    }
+
+    @Override
+    public CompletableFuture<Void> alterDatabase(
+            String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfNotExists) {
+        AlterDatabaseRequest request = new AlterDatabaseRequest();
+        request.setDatabaseJson(databaseDescriptor.toJsonBytes())
+                .setDatabaseName(databaseName)
+                .setIgnoreIdNotExists(ignoreIfNotExists);
+        return gateway.alterDatabase(request).thenApply(r -> null);
     }
 
     @Override

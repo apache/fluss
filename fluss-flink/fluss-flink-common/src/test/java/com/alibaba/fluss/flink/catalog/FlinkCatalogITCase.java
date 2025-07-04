@@ -511,6 +511,7 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testCreateDatabase() {
+        // create database without anything
         tEnv.executeSql("create database test_db");
         List<Row> databases =
                 CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
@@ -521,6 +522,16 @@ abstract class FlinkCatalogITCase {
         tEnv.executeSql("drop database test_db");
         databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
         assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
+
+        // create database with comment and custom properties
+        tEnv.executeSql("create database test_db comment 'test_db' with('key1' = 'val1')");
+        databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
+
+        assertThat(databases.stream().map(Row::toString).collect(Collectors.toList()))
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.asList(String.format("+I[%s]", DEFAULT_DB), "+I[test_db]"));
+        // alter database
+        tEnv.executeSql("alter database test_db set('key1' = 'new_val1', 'key2' = 'val2')");
     }
 
     @Test

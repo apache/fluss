@@ -332,6 +332,12 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.delete().deletingChildrenIfNeeded().forPath(path);
     }
 
+    public void alterDatabase(String database, DatabaseRegistration databaseRegistration)
+            throws Exception {
+        String path = DatabaseZNode.path(database);
+        zkClient.setData().forPath(path, DatabaseZNode.encode(databaseRegistration));
+    }
+
     public boolean databaseExists(String database) throws Exception {
         String path = DatabaseZNode.path(database);
         return zkClient.checkExists().forPath(path) != null;

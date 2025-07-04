@@ -162,6 +162,24 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<String>> listDatabases();
 
     /**
+     * Alter a database asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} if the database not exists and {@code
+     *       ignoreIfNotExists} is false.
+     * </ul>
+     *
+     * @param databaseName The name of the database to alter.
+     * @param databaseDescriptor The descriptor of the database to alter.
+     * @param ignoreIfNotExists Flag to specify behavior when a database with the given name not
+     *     exists: if set to false, throw a DatabaseNotExistException, if set to true, do nothing.
+     */
+    CompletableFuture<Void> alterDatabase(
+            String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfNotExists);
+
+    /**
      * Create a new table asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.

@@ -230,9 +230,21 @@ public class FlinkCatalog implements Catalog {
     }
 
     @Override
-    public void alterDatabase(String databaseName, CatalogDatabase catalogDatabase, boolean b)
+    public void alterDatabase(
+            String databaseName, CatalogDatabase catalogDatabase, boolean ignoreIfNotExists)
             throws DatabaseNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        try {
+            admin.alterDatabase(databaseName, toFlussDatabase(catalogDatabase), ignoreIfNotExists);
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtils.isDatabaseNotExist(t)) {
+                throw new DatabaseNotExistException(getName(), databaseName);
+            } else {
+                throw new CatalogException(
+                        String.format("Failed to alter database %s in %s", databaseName, getName()),
+                        t);
+            }
+        }
     }
 
     @Override

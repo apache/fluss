@@ -63,6 +63,15 @@ public class DatabaseRegistration {
                 currentMillis);
     }
 
+    public static DatabaseRegistration of(DatabaseDescriptor databaseDescriptor, long createdTime) {
+        final long currentMillis = System.currentTimeMillis();
+        return new DatabaseRegistration(
+                databaseDescriptor.getComment().orElse(null),
+                databaseDescriptor.getCustomProperties(),
+                createdTime,
+                currentMillis);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {

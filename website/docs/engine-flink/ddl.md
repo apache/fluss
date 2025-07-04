@@ -75,6 +75,15 @@ USE fluss;
 DROP DATABASE my_db;
 ```
 
+## Alter Database
+
+The following SQL sets one or more properties in the specified database. If a particular property is already set in the database, override the old value with the new one.
+
+```sql title="Flink SQL"
+-- alter the database
+ALTER DATABASE my_db SET ('key1' = 'val1', 'key2' = 'val2');
+```
+
 ## Create Table
 
 ### PrimaryKey Table
