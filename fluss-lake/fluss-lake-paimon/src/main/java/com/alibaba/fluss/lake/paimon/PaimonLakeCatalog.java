@@ -73,18 +73,19 @@ public class PaimonLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+    public void createTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
             throws TableAlreadyExistException {
         // then, create the table
         Identifier paimonPath = toPaimonIdentifier(tablePath);
         Schema paimonSchema = toPaimonSchema(tableDescriptor);
         try {
-            createTable(paimonPath, paimonSchema);
+            createTable(paimonPath, paimonSchema, ignoreIfExists);
         } catch (Catalog.DatabaseNotExistException e) {
             // create database
             createDatabase(tablePath.getDatabaseName());
             try {
-                createTable(paimonPath, paimonSchema);
+                createTable(paimonPath, paimonSchema, false);
             } catch (Catalog.DatabaseNotExistException t) {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
@@ -97,11 +98,11 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
-    private void createTable(Identifier tablePath, Schema schema)
+    private void createTable(Identifier tablePath, Schema schema, boolean ifNotExists)
             throws Catalog.DatabaseNotExistException {
         try {
             // not ignore if table exists
-            paimonCatalog.createTable(tablePath, schema, false);
+            paimonCatalog.createTable(tablePath, schema, ifNotExists);
         } catch (Catalog.TableAlreadyExistException e) {
             throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
         }

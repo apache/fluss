@@ -65,7 +65,8 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         private final Map<TablePath, TableDescriptor> tableByPath = new HashMap<>();
 
         @Override
-        public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+        public void createTable(
+                TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
                 throws TableAlreadyExistException {
             if (tableByPath.containsKey(tablePath)) {
                 throw new TableAlreadyExistException("Table " + tablePath + " already exists");
