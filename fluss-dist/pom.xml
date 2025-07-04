@@ -85,6 +85,13 @@
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-metrics-opentelemetry</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-lake-paimon</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
