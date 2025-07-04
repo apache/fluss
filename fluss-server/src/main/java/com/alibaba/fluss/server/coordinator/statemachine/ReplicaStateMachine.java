@@ -107,7 +107,7 @@ public class ReplicaStateMachine {
             for (Integer replica : replicas) {
                 TableBucketReplica tableBucketReplica =
                         new TableBucketReplica(tableBucket, replica);
-                if (coordinatorContext.isReplicaAndServerOnline(replica, tableBucket)) {
+                if (coordinatorContext.isReplicaOnline(replica, tableBucket)) {
                     coordinatorContext.putReplicaState(
                             tableBucketReplica, ReplicaState.OnlineReplica);
                     onlineReplicas.add(tableBucketReplica);
