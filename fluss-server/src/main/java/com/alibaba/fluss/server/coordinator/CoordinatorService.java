@@ -103,6 +103,9 @@ import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.utils.IOUtils;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
@@ -131,6 +134,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
+
+    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
@@ -313,6 +318,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (dataLakeFormat != null
                 && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
             newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+        }
+
+        if (dataLakeFormat != null && dataLakeFormat.equals(DataLakeFormat.LANCE)) {
+            if (newDescriptor.hasPrimaryKey()) {
+                Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+                newProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false");
+                newDescriptor = newDescriptor.withProperties(newProperties);
+                LOG.warn("Fluss currently does not support tiering primary key table to Lance.");
+            }
         }
 
         // lake table can only be enabled when the cluster configures datalake format
