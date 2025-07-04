@@ -124,6 +124,7 @@ We have listed them in the table below the figure.
             <li>[HDFS](maintenance/filesystems/hdfs.md)</li>
             <li>[Aliyun OSS](maintenance/filesystems/oss.md)</li>
             <li>[Amazon S3](maintenance/filesystems/s3.md)</li>
+            <li>[Google Cloud Storage](maintenance/filesystems/gcs.md)</li>
             </td>
         </tr>
         <tr>

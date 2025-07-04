@@ -54,4 +54,6 @@ The Fluss project supports the following file system:
 
 - **[AWS S3](s3.md)** is supported by `fluss-fs-s3` and registered under the `s3://` URI scheme.
 
+- **[Google Cloud Storage](gcs.md)** is supported by `fluss-fs-gcs` and registered under the `gs://` URI scheme.
+
 The implementation is based on [Hadoop Project](https://hadoop.apache.org/) but is self-contained with no dependency footprint.
