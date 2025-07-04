@@ -50,11 +50,13 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableSet;
+import java.util.NavigableMap;
 import java.util.Set;
-import java.util.TreeSet;
+import java.util.TreeMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
@@ -96,8 +98,10 @@ public class AutoPartitionManager implements AutoCloseable {
     // now, only consider day partition, todo: need to consider all partition unit
     private final Map<Long, Integer> autoCreateDayPartitionDelayMinutes = new HashMap<>();
 
+    // table id -> (value of auto partition time key -> partition name set)
+    // for single partition key, the partition name set will be null to reduce memory usage
     @GuardedBy("lock")
-    private final Map<Long, TreeSet<String>> partitionsByTable = new HashMap<>();
+    private final Map<Long, TreeMap<String, Set<String>>> partitionsByTable = new HashMap<>();
 
     private final Lock lock = new ReentrantLock();
 
@@ -140,11 +144,14 @@ public class AutoPartitionManager implements AutoCloseable {
                 lock,
                 () -> {
                     autoPartitionTables.put(tableId, tableInfo);
-                    Set<String> partitionSet =
+                    TreeMap<String, Set<String>> partitionMap =
                             partitionsByTable.computeIfAbsent(
-                                    tableInfo.getTableId(), k -> new TreeSet<>());
-                    checkNotNull(partitionSet, "Partition set is null.");
-                    partitionSet.addAll(partitions);
+                                    tableInfo.getTableId(), k -> new TreeMap<>());
+                    checkNotNull(partitionMap, "Partition map is null.");
+                    partitions.forEach(
+                            partitionName ->
+                                    addPartitionToPartitionsByTable(
+                                            tableInfo, partitionMap, partitionName));
                     if (tableInfo.getTableConfig().getAutoPartitionStrategy().timeUnit()
                             == AutoPartitionTimeUnit.DAY) {
                         // get the delay minutes to create partition
@@ -191,7 +198,10 @@ public class AutoPartitionManager implements AutoCloseable {
                 lock,
                 () -> {
                     if (autoPartitionTables.containsKey(tableId)) {
-                        partitionsByTable.get(tableId).add(partitionName);
+                        addPartitionToPartitionsByTable(
+                                autoPartitionTables.get(tableId),
+                                partitionsByTable.get(tableId),
+                                partitionName);
                     }
                 });
     }
@@ -224,6 +234,33 @@ public class AutoPartitionManager implements AutoCloseable {
         }
     }
 
+    private String extractAutoPartitionValue(TableInfo tableInfo, String partitionName) {
+        // for single partition key table, the full partition name is the auto partition value
+        if (tableInfo.getPartitionKeys().size() == 1) {
+            return partitionName;
+        }
+
+        String autoPartitionKey = tableInfo.getTableConfig().getAutoPartitionStrategy().key();
+        int autoPartitionKeyIndex = tableInfo.getPartitionKeys().indexOf(autoPartitionKey);
+        return partitionName.split("\\$")[autoPartitionKeyIndex];
+    }
+
+    private void addPartitionToPartitionsByTable(
+            TableInfo tableInfo,
+            NavigableMap<String, Set<String>> partitionMap,
+            String partitionName) {
+        if (tableInfo.getPartitionKeys().size() > 1) {
+            Set<String> partitionSet =
+                    partitionMap.computeIfAbsent(
+                            extractAutoPartitionValue(tableInfo, partitionName),
+                            k -> new HashSet<>());
+            checkNotNull(partitionSet, "Partition set is null.");
+            partitionSet.add(partitionName);
+        } else {
+            partitionMap.put(partitionName, null);
+        }
+    }
+
     private void doAutoPartition() {
         Instant now = clock.instant();
         inLock(lock, () -> doAutoPartition(now, autoPartitionTables.keySet(), false));
@@ -248,10 +285,15 @@ public class AutoPartitionManager implements AutoCloseable {
                     createPartitionInstant = now.minus(Duration.ofMinutes(delayMinutes));
                 }
             }
-            TreeSet<String> currentPartitions =
-                    partitionsByTable.computeIfAbsent(tableId, k -> new TreeSet<>());
+
             TableInfo tableInfo = autoPartitionTables.get(tableId);
             TablePath tablePath = tableInfo.getTablePath();
+            TreeMap<String, Set<String>> currentPartitions =
+                    partitionsByTable.computeIfAbsent(
+                            tableId,
+                            tableInfo.getPartitionKeys().size() > 1
+                                    ? k -> new TreeMap<>()
+                                    : k -> null);
             TableRegistration table;
             try {
                 table = metadataManager.getTableRegistration(tablePath);
@@ -281,7 +323,9 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     private void createPartitions(
-            TableInfo tableInfo, Instant currentInstant, TreeSet<String> currentPartitions) {
+            TableInfo tableInfo,
+            Instant currentInstant,
+            TreeMap<String, Set<String>> currentPartitions) {
         // get the partitions needed to create
         List<ResolvedPartitionSpec> partitionsToPreCreate =
                 partitionNamesToPreCreate(
@@ -307,7 +351,8 @@ public class AutoPartitionManager implements AutoCloseable {
 
                 metadataManager.createPartition(
                         tablePath, tableId, partitionAssignment, partition, false);
-                currentPartitions.add(partition.getPartitionName());
+                // only single partition key table supports automatic creation of partitions
+                currentPartitions.put(partition.getPartitionName(), null);
                 LOG.info(
                         "Auto partitioning created partition {} for table [{}].",
                         partition,
@@ -343,7 +388,7 @@ public class AutoPartitionManager implements AutoCloseable {
             List<String> partitionKeys,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
-            TreeSet<String> currentPartitions) {
+            TreeMap<String, Set<String>> currentPartitions) {
         AutoPartitionTimeUnit autoPartitionTimeUnit = autoPartitionStrategy.timeUnit();
         ZonedDateTime currentZonedDateTime =
                 ZonedDateTime.ofInstant(
@@ -356,7 +401,7 @@ public class AutoPartitionManager implements AutoCloseable {
                     generateAutoPartition(
                             partitionKeys, currentZonedDateTime, idx, autoPartitionTimeUnit);
             // if the partition already exists, we don't need to create it, otherwise, create it
-            if (!currentPartitions.contains(partition.getPartitionName())) {
+            if (!currentPartitions.containsKey(partition.getPartitionName())) {
                 partitionsToCreate.add(partition);
             }
         }
@@ -368,14 +413,12 @@ public class AutoPartitionManager implements AutoCloseable {
             List<String> partitionKeys,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
-            NavigableSet<String> currentPartitions) {
+            NavigableMap<String, Set<String>> currentPartitions) {
         int numToRetain = autoPartitionStrategy.numToRetain();
         // negative value means not to drop partitions
         if (numToRetain < 0) {
             return;
         }
-        String autoPartitionKey =
-                partitionKeys.size() == 1 ? partitionKeys.get(0) : autoPartitionStrategy.key();
 
         ZonedDateTime currentZonedDateTime =
                 ZonedDateTime.ofInstant(
@@ -398,12 +441,20 @@ public class AutoPartitionManager implements AutoCloseable {
         // (a=2,dt=20250505,b=1) (a=2,dt=20250506,b=1) (a=2,dt=20250507,b=1)
         // then partition of pattern:
         // (a=?,dt=20250506,b=?) (a=?,dt=20250507,b=?) will be retained.
-        int timePartitionKeyIndex = partitionKeys.indexOf(autoPartitionKey);
-        // Todo: refactoring currentPartitions to sort by the partition time key, then it is
-        // efficient to handle large partition set.
-        for (String partitionName : new ArrayList<>(currentPartitions)) {
-            String currentTime = partitionName.split("\\$")[timePartitionKeyIndex];
-            if (currentTime.compareTo(lastRetainPartitionTime) < 0) {
+        Iterator<Map.Entry<String, Set<String>>> iterator =
+                currentPartitions.headMap(lastRetainPartitionTime).entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, Set<String>> entry = iterator.next();
+
+            Iterator<String> dropIterator;
+            if (entry.getValue() == null) {
+                dropIterator = new HashSet<>(Collections.singleton(entry.getKey())).iterator();
+            } else {
+                dropIterator = entry.getValue().iterator();
+            }
+
+            while (dropIterator.hasNext()) {
+                String partitionName = dropIterator.next();
                 // drop the partition
                 try {
                     metadataManager.dropPartition(
@@ -418,12 +469,13 @@ public class AutoPartitionManager implements AutoCloseable {
                 }
 
                 // only remove when zk success, this reflects to the partitionsByTable
-                currentPartitions.remove(partitionName);
+                dropIterator.remove();
                 LOG.info(
                         "Auto partitioning deleted partition {} for table [{}].",
                         partitionName,
                         tablePath);
             }
+            iterator.remove();
         }
     }
 

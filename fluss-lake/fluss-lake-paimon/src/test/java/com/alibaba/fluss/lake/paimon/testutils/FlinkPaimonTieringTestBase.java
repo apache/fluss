@@ -46,7 +46,11 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.reader.RecordReader;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +61,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -354,6 +359,20 @@ public class FlinkPaimonTieringTestBase {
         return createTable(tablePath, table1Descriptor);
     }
 
+    protected void dropTable(TablePath tablePath) throws Exception {
+        admin.dropTable(tablePath, false).get();
+        Identifier tableIdentifier = toPaimonIdentifier(tablePath);
+        try {
+            paimonCatalog.dropTable(tableIdentifier, false);
+        } catch (Catalog.TableNotExistException e) {
+            // do nothing, table not exists
+        }
+    }
+
+    private Identifier toPaimonIdentifier(TablePath tablePath) {
+        return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
     protected void assertReplicaStatus(
             TablePath tablePath,
             long tableId,
@@ -415,5 +434,30 @@ public class FlinkPaimonTieringTestBase {
                 },
                 Duration.ofMinutes(2),
                 "bucket " + tb + "not synced");
+    }
+
+    protected void checkDataInPaimonPrimayKeyTable(
+            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                getPaimonRowCloseableIterator(tablePath);
+        for (InternalRow expectedRow : expectedRows) {
+            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+            assertThat(row.getInt(0)).isEqualTo(expectedRow.getInt(0));
+            assertThat(row.getString(1).toString()).isEqualTo(expectedRow.getString(1).toString());
+        }
+    }
+
+    protected CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
+            TablePath tablePath) throws Exception {
+        Identifier tableIdentifier =
+                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+
+        paimonCatalog = getPaimonCatalog();
+
+        FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
+
+        RecordReader<org.apache.paimon.data.InternalRow> reader =
+                table.newRead().createReader(table.newReadBuilder().newScan().plan());
+        return reader.toCloseableIterator();
     }
 }

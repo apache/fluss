@@ -189,17 +189,6 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         assertThat(flussRowIterator.hasNext()).isFalse();
     }
 
-    private void checkDataInPaimonPrimayKeyTable(
-            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
-        for (InternalRow expectedRow : expectedRows) {
-            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
-            assertThat(row.getInt(0)).isEqualTo(expectedRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(expectedRow.getString(1).toString());
-        }
-    }
-
     private void checkDataInPaimonAppendOnlyPartitionedTable(
             TablePath tablePath,
             Map<String, String> partitionSpec,
@@ -219,18 +208,6 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             assertThat(row.getLong(4)).isEqualTo(startingOffset++);
         }
         assertThat(flussRowIterator.hasNext()).isFalse();
-    }
-
-    private CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
-            TablePath tablePath) throws Exception {
-        Identifier tableIdentifier =
-                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
-
-        FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
-
-        RecordReader<org.apache.paimon.data.InternalRow> reader =
-                table.newRead().createReader(table.newReadBuilder().newScan().plan());
-        return reader.toCloseableIterator();
     }
 
     private CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(

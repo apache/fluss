@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.flink.tiering;
 
-import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo;
 import com.alibaba.fluss.flink.tiering.committer.TieringCommitOperatorFactory;
@@ -34,8 +33,6 @@ import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
-
-import java.util.Collections;
 
 import static com.alibaba.fluss.flink.tiering.source.TieringSource.TIERING_SOURCE_TRANSFORMATION_UID;
 import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
@@ -74,11 +71,7 @@ public class LakeTieringJobBuilder {
     public JobClient build() throws Exception {
         // get the lake storage plugin
         LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromConfiguration(
-                        Configuration.fromMap(
-                                Collections.singletonMap(
-                                        ConfigOptions.DATALAKE_FORMAT.key(), dataLakeFormat)),
-                        null);
+                LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat, null);
         // create lake storage from configurations
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(dataLakeConfig);
 

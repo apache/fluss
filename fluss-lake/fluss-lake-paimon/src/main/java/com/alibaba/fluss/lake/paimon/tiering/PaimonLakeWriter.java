@@ -66,7 +66,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
         try {
             recordWriter.write(record);
         } catch (Exception e) {
-            throw new IOException("Fail to write Fluss record to Paimon.", e);
+            throw new IOException("Failed to write Fluss record to Paimon.", e);
         }
     }
 
@@ -76,7 +76,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
         try {
             commitMessage = recordWriter.complete();
         } catch (Exception e) {
-            throw new IOException("Fail to complete Paimon write.", e);
+            throw new IOException("Failed to complete Paimon write.", e);
         }
         return new PaimonWriteResult(commitMessage);
     }
@@ -91,7 +91,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
                 paimonCatalog.close();
             }
         } catch (Exception e) {
-            throw new IOException("Fail to close PaimonLakeWriter.", e);
+            throw new IOException("Failed to close PaimonLakeWriter.", e);
         }
     }
 
@@ -99,7 +99,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
         try {
             return (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
         } catch (Exception e) {
-            throw new IOException("Fail to get table " + tablePath + " in Paimon.");
+            throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
         }
     }
 }

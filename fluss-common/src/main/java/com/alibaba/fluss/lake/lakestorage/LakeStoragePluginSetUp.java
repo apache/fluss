@@ -17,9 +17,6 @@
 
 package com.alibaba.fluss.lake.lakestorage;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.plugin.PluginManager;
 import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
@@ -35,29 +32,23 @@ import java.util.ServiceLoader;
  */
 public class LakeStoragePluginSetUp {
 
-    @Nullable
-    public static LakeStoragePlugin fromConfiguration(
-            final Configuration configuration, @Nullable final PluginManager pluginManager) {
-        DataLakeFormat dataLakeFormat = configuration.get(ConfigOptions.DATALAKE_FORMAT);
-        if (dataLakeFormat == null) {
-            return null;
-        }
-        String dataLakeIdentifier = dataLakeFormat.toString();
+    public static LakeStoragePlugin fromDataLakeFormat(
+            final String dataLakeFormat, @Nullable final PluginManager pluginManager) {
         // now, load lake storage plugin
         Iterator<LakeStoragePlugin> lakeStoragePluginIterator =
                 getAllLakeStoragePlugins(pluginManager);
 
         while (lakeStoragePluginIterator.hasNext()) {
             LakeStoragePlugin lakeStoragePlugin = lakeStoragePluginIterator.next();
-            if (Objects.equals(lakeStoragePlugin.identifier(), dataLakeIdentifier)) {
-                return lakeStoragePlugin;
+            if (Objects.equals(lakeStoragePlugin.identifier(), dataLakeFormat)) {
+                return PluginLakeStorageWrapper.of(lakeStoragePlugin);
             }
         }
 
         // if come here, means we haven't found LakeStoragePlugin match the configured
         // datalake, throw exception
         throw new UnsupportedOperationException(
-                "No LakeStoragePlugin can be found for datalake format: " + dataLakeIdentifier);
+                "No LakeStoragePlugin can be found for datalake format: " + dataLakeFormat);
     }
 
     private static Iterator<LakeStoragePlugin> getAllLakeStoragePlugins(

@@ -24,15 +24,26 @@ sidebar_position: 1
 # Welcome to Fluss Community
 
 ## Issues
-Issues are [tracked in GitHub](https://github.com/alibaba/fluss/issues).
+Issues are [tracked in GitHub](https://github.com/apache/fluss/issues).
 
-If you are not sure on what to work on, look at issue tagged with [good first issue](https://github.com/alibaba/fluss/labels/good%20first%20issue).
+If you are not sure what to work on, look at an issue tagged with [good first issue](https://github.com/apache/fluss/labels/good%20first%20issue).
 
 ## Discussions
 
 The development discussions and user questions happen primarily on [GitHub Discussions](https://github.com/alibaba/fluss/discussions).
 
-## Slack 
+## Mailing Lists
+Fluss has two mailing lists:
+* **Developers**: dev@fluss.apache.org -- used for development discussions and community coordination
+    * [Subscribe](mailto:dev-subscribe@fluss.apache.org)
+    * [Unsubscribe](mailto:dev-unsubscribe@fluss.apache.org)
+    * [Archive](https://lists.apache.org/list.html?dev@fluss.apache.org)
+* **Users**: user@fluss.apache.org -- for user questions, support, and general discussions
+    * [Subscribe](mailto:user-subscribe@fluss.apache.org)
+    * [Unsubscribe](mailto:user-unsubscribe@fluss.apache.org)
+    * [Archive](https://lists.apache.org/list.html?user@fluss.apache.org)
+
+## Slack
 We use the [Fluss workspace](https://fluss-hq.slack.com/) on Slack for real-time communication and collaboration. You can join the community using [this invite link](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw).
 
 Please note that this link may occasionally break when Slack does an upgrade. If you encounter problems using it, please let us know by creating an issue on GitHub.
