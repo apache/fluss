@@ -95,6 +95,12 @@
             <destName>fluss-lake-paimon-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
+        <file>
+            <source>../fluss-lake/fluss-lake-lance/target/fluss-lake-lance-${project.version}.jar</source>
+            <outputDirectory>plugins/lance/</outputDirectory>
+            <destName>fluss-lake-lance-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
     </files>
 
 </assembly>
