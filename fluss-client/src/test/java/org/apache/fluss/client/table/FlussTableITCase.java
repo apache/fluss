@@ -1414,7 +1414,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             Configuration filesystemConf = testFileSystem.getConfiguration();
             assertThat(filesystemConf.toMap())
                     .containsExactlyEntriesOf(
-                            Collections.singletonMap("test.key", "fs_test_value"));
+                            Collections.singletonMap("client.fs.test.key", "fs_test_value"));
         }
     }
 
