@@ -62,6 +62,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
             LOG.debug("Provider already exists");
         }
 
+        // TODO
         if (additionalInfos != null) {
             for (Map.Entry<String, String> entry : additionalInfos.entrySet()) {
                 hadoopConfig.set(entry.getKey(), entry.getValue());
@@ -89,9 +90,13 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
                     "Session credentials updated successfully with access key: {}.",
                     credentials.getAccessKeyId());
         } else {
+            // When token delegation is deactivated, we still distribute the additional infos to the
+            // client, so they do not need to be set in the client config.
             LOG.info(
-                    "Received empty token. This indicates that {} has been disabled.",
-                    ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION);
+                    "Received an empty token. This usually indicates that {} has been disabled. Updating additional infos only.",
+                    ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION.key());
+            additionalInfos = token.getAdditionInfos();
+            LOG.info(additionalInfos.toString());
         }
     }
 
