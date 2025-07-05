@@ -1,0 +1,49 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/27.0.9 Chrome/134.0.6998.205 Electron/35.4.0 Safari/537.36" version="27.0.9">
+  <diagram name="Example 1" id="RuYSnL698J5DEAgA4fre">
+    <mxGraphModel dx="609" dy="473" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.25;entryY=0;entryDx=0;entryDy=0;exitX=0.145;exitY=1;exitDx=0;exitDy=-4.35;exitPerimeter=0;dashed=1;dashPattern=8 8;" edge="1" parent="1" source="yDKIogX2wdGKnFXzXqXA-1" target="yDKIogX2wdGKnFXzXqXA-5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=8 8;" edge="1" parent="1" source="yDKIogX2wdGKnFXzXqXA-1" target="yDKIogX2wdGKnFXzXqXA-9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;dashPattern=8 8;" edge="1" parent="1" source="yDKIogX2wdGKnFXzXqXA-1" target="yDKIogX2wdGKnFXzXqXA-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-1" value="Fluss&lt;div&gt;Analytics&lt;/div&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="200" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;dashPattern=8 8;" edge="1" parent="1" source="yDKIogX2wdGKnFXzXqXA-3" target="yDKIogX2wdGKnFXzXqXA-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-3" value="Microservice&lt;div&gt;&amp;lt;&amp;lt;producer&amp;gt;&amp;gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="210" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-5" value="Microservice&lt;div&gt;&amp;lt;&amp;lt;enricher&amp;gt;&amp;gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="380" y="310" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.75;exitY=0;exitDx=0;exitDy=0;entryX=0.855;entryY=1;entryDx=0;entryDy=-4.35;entryPerimeter=0;dashed=1;dashPattern=8 8;" edge="1" parent="1" source="yDKIogX2wdGKnFXzXqXA-5" target="yDKIogX2wdGKnFXzXqXA-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-9" value="Microservice&lt;div&gt;&amp;lt;&amp;lt;consumer&amp;gt;&amp;gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="550" y="210" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-11" value="&lt;div&gt;Fluss Paimon&lt;/div&gt;&amp;lt;&amp;lt;lakehouse&amp;gt;&amp;gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="385" y="80" width="110" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;dashPattern=8 8;" edge="1" parent="1" source="yDKIogX2wdGKnFXzXqXA-13" target="yDKIogX2wdGKnFXzXqXA-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-13" value="Trino" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="580" y="80" width="60" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="yDKIogX2wdGKnFXzXqXA-15" value="&lt;h1 style=&quot;margin-top: 0px;&quot;&gt;Streaming Processing&lt;/h1&gt;&lt;p&gt;Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.&lt;/p&gt;" style="text;html=1;whiteSpace=wrap;overflow=hidden;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="180" y="40" width="180" height="120" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
