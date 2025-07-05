@@ -12,8 +12,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alibaba/fluss/actions/workflows/ci.yaml"><img src="https://github.com/alibaba/fluss/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/alibaba/fluss/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202-4EB1BA.svg" alt="License"></a>
+  <a href="https://github.com/apache/fluss/actions/workflows/ci.yaml"><img src="https://github.com/apache/fluss/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/apache/fluss/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202-4EB1BA.svg" alt="License"></a>
   <a href="https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw"><img src="https://img.shields.io/badge/slack-join_chat-brightgreen.svg?logo=slack" alt="Slack"></a>
 </p>
 
@@ -44,7 +44,7 @@ Prerequisites for building Fluss:
 - Java 8 or 11
 
 ```bash
-git clone https://github.com/alibaba/fluss.git
+git clone https://github.com/apache/fluss.git
 cd fluss
 ./mvnw clean package -DskipTests
 ```
@@ -53,10 +53,10 @@ Fluss is now installed in `build-target`. The build command uses Maven Wrapper (
 
 ## Contributing
 
-Fluss is open-source, and we’d love your help to keep it growing! Join the [discussions](https://github.com/alibaba/fluss/discussions),
-open [issues](https://github.com/alibaba/fluss/issues) if you find a bug or request features, contribute code and documentation,
+Fluss is open-source, and we’d love your help to keep it growing! Join the [discussions](https://github.com/apache/fluss/discussions),
+open [issues](https://github.com/apache/fluss/issues) if you find a bug or request features, contribute code and documentation,
  or help us improve the project in any way. All contributions are welcome!
 
 ## License
 
-Fluss project is licensed under the [Apache License 2.0](https://github.com/alibaba/fluss/blob/main/LICENSE).
+Fluss project is licensed under the [Apache License 2.0](https://github.com/apache/fluss/blob/main/LICENSE).

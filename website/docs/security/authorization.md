@@ -217,5 +217,5 @@ Steps to implement a custom authorization logic:
 1. **Implement `AuthorizationPlugin` Interfaces**.
 2.  **Server-side Plugin Installation**:
     Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin directory: `<FLUSS_HOME>/plugins/<custom_auth_plugin>/`. The server will automatically load the plugin at startup.
-3. **Configure the desired protocol**: Set  `com.alibaba.fluss.server.authorizer.AuthorizationPlugin.identifier` as the value of `authorizer.type` in the Fluss server configuration file.
+3. **Configure the desired protocol**: Set  `org.apache.fluss.server.authorizer.AuthorizationPlugin.identifier` as the value of `authorizer.type` in the Fluss server configuration file.
 

@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.hdfs;
+package org.apache.fluss.fs.hdfs;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.fs.UnsupportedFileSystemSchemeException;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.UnsupportedFileSystemSchemeException;
 
 import java.net.URI;
 

@@ -43,7 +43,7 @@ function HomepageHeader() {
 
                     <Link
                         className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
-                        to="https://github.com/alibaba/fluss">
+                        to="https://github.com/apache/fluss">
                         <img
                             src="img/github_icon.svg"
                             alt="GitHub"

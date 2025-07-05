@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.gs;
+package org.apache.fluss.fs.gs;
+
+import org.apache.fluss.utils.IOUtils;
 
 import com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
@@ -27,7 +29,6 @@ import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpObject;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpRequest;
 import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
 import com.alibaba.fluss.shaded.netty4.io.netty.util.AsciiString;
-import com.alibaba.fluss.utils.IOUtils;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

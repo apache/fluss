@@ -66,7 +66,7 @@ security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
 internal.listener.name: INTERNAL
 # use SASL/PLAIN
 security.sasl.enabled.mechanisms: PLAIN
-security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_fluss="fluss-pass";
+security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_fluss="fluss-pass";
 ```
 
 
@@ -109,5 +109,5 @@ Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin 
 3.  **Client-side Plugin Packaging**  :
 To enable plugin functionality on the client side, include the plugin JAR in your application’s classpath. This allows the Fluss client to auto-discover the plugin during runtime.
 4. **Configure the desired protocol**:
-  * `security.protocol.map` – for server-side listener authentication and use the `com.alibaba.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier.
-  * `client.security.protocol` – for client-side authentication and use the `com.alibaba.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier
+  * `security.protocol.map` – for server-side listener authentication and use the `org.apache.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier.
+  * `client.security.protocol` – for client-side authentication and use the `org.apache.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier

@@ -26,14 +26,14 @@ const config: Config = {
   favicon: 'img/logo/fluss_favicon.svg',
 
   // Set the production url of your site here
-  url: 'https://alibaba.github.io/',
+  url: 'https://fluss.apache.org/',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/fluss-docs/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'alibaba', // Usually your GitHub org/user name.
+  organizationName: 'Apache', // Usually your GitHub org/user name.
   projectName: 'fluss-docs', // Usually your repo name.
   deploymentBranch: 'gh-pages',
   trailingSlash: true,
@@ -58,7 +58,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           editUrl: ({docPath}) =>
-              `https://github.com/alibaba/fluss/edit/main/website/docs/${docPath}`,
+              `https://github.com/apache/fluss/edit/main/website/docs/${docPath}`,
           remarkPlugins: [versionReplace],
         },
         blog: {
@@ -88,7 +88,7 @@ const config: Config = {
         routeBasePath: 'community',
         sidebarPath: './sidebarsCommunity.js',
         editUrl: ({docPath}) => {
-          return `https://github.com/alibaba/fluss/edit/main/website/community/${docPath}`;
+          return `https://github.com/apache/fluss/edit/main/website/community/${docPath}`;
         },
         // ... other options
       },
@@ -140,7 +140,7 @@ const config: Config = {
           dropdownActiveClassDisabled: true,
         },
         {
-          href: 'https://github.com/alibaba/fluss',
+          href: 'https://github.com/apache/fluss',
           position: 'right',
           className: 'header-github-link',
           'aria-label': 'GitHub repository',
@@ -149,8 +149,9 @@ const config: Config = {
     },
     footer: {
       style: 'dark',
-      copyright: `Copyright © ${new Date().getFullYear()} Alibaba, Inc.
-      Apache®, Apache Flink®, Flink®, Apache Kafka®, Kafka®, Spark® and associated open source project names and logos are trademarks of the Apache Software Foundation.`,
+      copyright: ` Apache Fluss is an effort undergoing incubation at The Apache Software Foundation (ASF), sponsored by the Apache Incubator. Incubation is required of all newly accepted projects until a further review indicates that the infrastructure, communications, and decision making process have stabilized in a manner consistent with other successful ASF projects. While incubation status is not necessarily a reflection of the completeness or stability of the code, it does indicate that the project has yet to be fully endorsed by the ASF.
+      Copyright © 2025 The Apache Software Foundation, Licensed under the Apache License, Version 2.0. Apache, the names of Apache projects, and the feather logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries.
+      `
     },
     prism: {
       theme: prismThemes.vsDark,

@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.hdfs;
+package org.apache.fluss.fs.hdfs;
 
-import com.alibaba.fluss.testutils.common.ClassLoaderUtils;
-import com.alibaba.fluss.utils.ExceptionUtils;
+import org.apache.fluss.testutils.common.ClassLoaderUtils;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.junit.jupiter.api.Test;
 
