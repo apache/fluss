@@ -30,7 +30,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver.PROVIDER_CONFIG_NAME;
 
@@ -48,6 +51,19 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         {"fs.s3a.secret-key", "fs.s3a.secret.key"},
         {"fs.s3a.path-style-access", "fs.s3a.path.style.access"}
     };
+
+    // When the file system is initialized in the client, all filesystem options are passed in with
+    // an additional prefix. We only allow certain options ("whitelist") to avoid that the client
+    // passes in config options that might break the file system.
+    private static final String CLIENT_PREFIX = "client.fs.";
+    private static final Set<String> CLIENT_WHITELISTED_OPTIONS =
+            new HashSet<>(
+                    Arrays.asList(
+                            "access-key",
+                            "access.key",
+                            "secret-key",
+                            "secret.key",
+                            "aws.credentials.provider"));
 
     @Override
     public String getScheme() {
@@ -87,6 +103,7 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
                                 getScheme(), hadoopConfig, delegationTokenProviderType));
     }
 
+    @VisibleForTesting
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
         if (flussConfig == null) {
@@ -94,9 +111,9 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         }
 
         for (String key : flussConfig.keySet()) {
-            for (String prefix : FLUSS_CONFIG_PREFIXES) {
-                if (key.startsWith(prefix)) {
-                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
+            for (String flussPrefix : FLUSS_CONFIG_PREFIXES) {
+                if (key.startsWith(flussPrefix)) {
+                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(flussPrefix.length());
                     String newValue =
                             flussConfig.getString(
                                     ConfigBuilder.key(key).stringType().noDefaultValue(), null);
@@ -104,6 +121,28 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
                     LOG.debug(
                             "Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
+                }
+
+                String flussPrefixWithClientPrefix = CLIENT_PREFIX + flussPrefix;
+                if (key.startsWith(flussPrefixWithClientPrefix)) {
+                    String keyWithoutPrefix = key.substring(flussPrefixWithClientPrefix.length());
+
+                    if (CLIENT_WHITELISTED_OPTIONS.contains(keyWithoutPrefix)) {
+                        String newKey = HADOOP_CONFIG_PREFIX + keyWithoutPrefix;
+                        String newValue =
+                                flussConfig.getString(
+                                        ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                        conf.set(newKey, newValue);
+
+                        LOG.debug(
+                                "Adding Fluss config entry for whitelisted key {} as {} to Hadoop config",
+                                key,
+                                newKey);
+                    } else {
+                        LOG.debug(
+                                "Client passed non-whitelisted key {}. Ignoring it",
+                                keyWithoutPrefix);
+                    }
                 }
             }
         }

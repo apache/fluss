@@ -1,5 +1,6 @@
 package com.alibaba.fluss.fs.s3;
 
+import com.alibaba.fluss.config.ConfigBuilder;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FileSystem;
@@ -9,6 +10,8 @@ import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.net.URI;
@@ -44,5 +47,41 @@ public class S3FileSystemPluginTest {
         assertThat(fileSystem).isInstanceOf(S3FileSystem.class);
         assertThat(((S3FileSystem) fileSystem).s3DelegationTokenProvider.getType())
                 .isEqualTo(S3DelegationTokenProvider.Type.NO_TOKEN);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"client.fs.s3.", "client.fs.s3a.", "client.fs.fs.s3a."})
+    void testWhiteListedOptions(String prefix) throws IOException {
+        org.apache.hadoop.conf.Configuration hadoopConfig;
+        Configuration config = new Configuration();
+        // first test with a single whitelisted option
+        config.set(
+                ConfigBuilder.key(prefix + "access-key").stringType().noDefaultValue(),
+                "fluss-s3-access-key");
+        hadoopConfig = s3FileSystemPlugin.getHadoopConfiguration(config);
+        assertThat(hadoopConfig.get("fs.s3a.access-key")).isEqualTo("fluss-s3-access-key");
+        // then add more whitelisted options trying other valid prefixes
+        config.set(
+                ConfigBuilder.key(prefix + "secret-key").stringType().noDefaultValue(),
+                "fluss-s3-secret-key");
+        config.set(
+                ConfigBuilder.key(prefix + "aws.credentials.provider")
+                        .stringType()
+                        .noDefaultValue(),
+                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+        hadoopConfig = s3FileSystemPlugin.getHadoopConfiguration(config);
+        assertThat(hadoopConfig.get("fs.s3a.access-key")).isEqualTo("fluss-s3-access-key");
+        assertThat(hadoopConfig.get("fs.s3a.secret-key")).isEqualTo("fluss-s3-secret-key");
+        assertThat(hadoopConfig.get("fs.s3a.aws.credentials.provider"))
+                .isEqualTo("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+        // then ad a non-white listed option
+        config.set(
+                ConfigBuilder.key(prefix + "region").stringType().noDefaultValue(), "eu-central-1");
+        hadoopConfig = s3FileSystemPlugin.getHadoopConfiguration(config);
+        assertThat(hadoopConfig.get("fs.s3a.access-key")).isEqualTo("fluss-s3-access-key");
+        assertThat(hadoopConfig.get("fs.s3a.secret-key")).isEqualTo("fluss-s3-secret-key");
+        assertThat(hadoopConfig.get("fs.s3a.aws.credentials.provider"))
+                .isEqualTo("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
+        assertThat(hadoopConfig.get("fs.s3a.region")).isNotEqualTo("eu-central-1");
     }
 }
