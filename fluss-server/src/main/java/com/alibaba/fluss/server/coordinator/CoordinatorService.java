@@ -439,6 +439,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return metadataResponseAccessContextEvent.getResultFuture();
     }
 
+    @Override
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier
