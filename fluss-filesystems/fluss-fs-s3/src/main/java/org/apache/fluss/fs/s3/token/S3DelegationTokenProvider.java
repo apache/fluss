@@ -46,6 +46,7 @@ public class S3DelegationTokenProvider {
 
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
+    private static final String PATH_STYLE_ACCESS_KEY = "fs.s3a.path.style.access";
 
     private final String scheme;
     private final Type type;
@@ -69,7 +70,7 @@ public class S3DelegationTokenProvider {
         this.accessKey = conf.get(ACCESS_KEY_ID);
         this.secretKey = conf.get(ACCESS_KEY_SECRET);
         this.additionalInfos = new HashMap<>();
-        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY)) {
+        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY, PATH_STYLE_ACCESS_KEY)) {
             if (conf.get(key) != null) {
                 additionalInfos.put(key, conf.get(key));
             }
