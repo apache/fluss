@@ -62,7 +62,8 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
             LOG.debug("Provider already exists");
         }
 
-        // TODO
+        // TODO: need a way to determine if we are on the client or server side. if client side and
+        //   additionalInfos is null, we should throw an exception
         if (additionalInfos != null) {
             for (Map.Entry<String, String> entry : additionalInfos.entrySet()) {
                 hadoopConfig.set(entry.getKey(), entry.getValue());
