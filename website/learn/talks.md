@@ -1,6 +1,5 @@
 ---
 title: Talks
-sidebar_position: 1
 ---
 
 <!--

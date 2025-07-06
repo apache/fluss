@@ -1,6 +1,5 @@
 ---
 title: Videos
-sidebar_position: 2
 ---
 
 <!--
