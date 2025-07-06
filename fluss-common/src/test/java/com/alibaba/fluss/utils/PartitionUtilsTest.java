@@ -205,7 +205,7 @@ class PartitionUtilsTest {
         DataTypeRoot type = DataTypeRoot.BINARY;
 
         String toStringResult = convertValueOfType(value, type);
-        assertThat(toStringResult.equals("1020304050ff"));
+        assertThat(toStringResult).isEqualTo("1020304050ff");
         String detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
     }

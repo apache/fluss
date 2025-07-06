@@ -209,6 +209,8 @@ public class PartitionUtils {
                 Long bigIntValue = (Long) value;
                 stringPartitionKey = bigIntValue.toString();
                 break;
+            default:
+                throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
         }
         return stringPartitionKey;
     }
