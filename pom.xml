@@ -98,7 +98,7 @@
         <curator.version>5.4.0</curator.version>
         <netty.version>4.1.104</netty.version>
         <arrow.version>15.0.0</arrow.version>
-        <paimon.version>1.0.1</paimon.version>
+        <paimon.version>1.2.0</paimon.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
