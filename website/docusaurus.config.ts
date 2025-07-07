@@ -94,6 +94,14 @@ const config: Config = {
       },
     ],
     [
+      '@docusaurus/plugin-content-pages',
+      {
+        id: 'learn-pages',
+        path: 'learn',
+        routeBasePath: 'learn',
+      },
+    ],
+    [
       '@docusaurus/plugin-pwa',
       {
           debug: true,
