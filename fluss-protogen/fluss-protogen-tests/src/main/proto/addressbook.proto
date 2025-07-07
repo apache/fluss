@@ -17,7 +17,7 @@
 syntax = "proto2";
 package tutorial;
 
-option java_package = "com.alibaba.fluss.protogen.tests";
+option java_package = "org.apache.fluss.protogen.tests";
 option java_outer_classname = "AddressBookProtos";
 
 message Person {

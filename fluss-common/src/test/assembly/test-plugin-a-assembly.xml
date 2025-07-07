@@ -28,8 +28,8 @@
             <outputDirectory>/</outputDirectory>
             <!-- the service impl -->
             <includes>
-                <include>com/alibaba/fluss/plugin/jar/plugina/TestServiceA.class</include>
-                <include>com/alibaba/fluss/plugin/jar/plugina/DynamicClassA.class</include>
+                <include>org/apache/fluss/plugin/jar/plugina/TestServiceA.class</include>
+                <include>org/apache/fluss/plugin/jar/plugina/DynamicClassA.class</include>
             </includes>
         </fileSet>
         <fileSet>

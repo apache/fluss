@@ -25,7 +25,7 @@ mkdir -p "$VERSIONED_DOCS"
 mkdir -p "$VERSIONED_SIDEBARS"
 
 # Configure the remote repository URL and temporary directory
-REPO_URL="https://github.com/alibaba/fluss.git"
+REPO_URL="https://github.com/apache/fluss.git"
 TEMP_DIR=$(mktemp -d)
 
 # Check if the temporary directory was successfully created

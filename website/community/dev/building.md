@@ -25,7 +25,7 @@ title: Building Fluss
 
 This page covers how to build Fluss from sources.
 
-In order to build Fluss you need to get the source code by [cloning the git repository](https://github.com/alibaba/fluss).
+In order to build Fluss you need to get the source code by [cloning the git repository](https://github.com/apache/fluss).
 
 In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Fluss requires **Java 8 or Java 11** to build.
 
@@ -37,7 +37,7 @@ In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Flus
 To clone from git, enter:
 
 ```bash
-git clone git@github.com:alibaba/fluss.git
+git clone git@github.com:apache/fluss.git
 ```
 
 If you want to build a specific release or release candidate, have a look at the existing tags using 

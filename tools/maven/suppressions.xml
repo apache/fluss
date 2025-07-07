@@ -34,5 +34,5 @@
             files="com[\\/]amazonaws[\\/]services[\\/]s3[\\/]model[\\/]transform[\\/]XmlResponsesSaxParser.java"
             checks=".*"/>
 
-    <suppress files="com[\\/]alibaba[\\/]fluss[\\/]utils[\\/]MapUtils.java" checks="IllegalInstantiation"/>
+    <suppress files="org[\\/]apache[\\/]fluss[\\/]utils[\\/]MapUtils.java" checks="IllegalInstantiation"/>
 </suppressions>

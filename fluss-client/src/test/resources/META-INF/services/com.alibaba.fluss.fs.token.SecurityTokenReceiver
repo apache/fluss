@@ -17,4 +17,4 @@
 #
 
 
-com.alibaba.fluss.client.token.TestingSecurityTokenReceiver
+org.apache.fluss.client.token.TestingSecurityTokenReceiver
