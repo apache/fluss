@@ -102,6 +102,16 @@
             <groupId>com.huaweicloud.sdk</groupId>
             <artifactId>huaweicloud-sdk-iam</artifactId>
             <version>${huaweicloud.sdk.iam.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.bouncycastle</groupId>
+                    <artifactId>bcprov-jdk18on</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openeuler</groupId>
+                    <artifactId>bgmprovider</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
