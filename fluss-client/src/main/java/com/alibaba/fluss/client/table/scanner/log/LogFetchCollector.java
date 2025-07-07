@@ -256,7 +256,10 @@ public class LogFetchCollector {
                 || error == Errors.STORAGE_EXCEPTION
                 || error == Errors.FENCED_LEADER_EPOCH_EXCEPTION) {
             LOG.debug(
-                    "Error in fetch for bucket {}: {}:{}", tb, error.exceptionName(), errorMessage);
+                    "Error in fetch for bucket {}: {}:{}",
+                    tb,
+                    error.exceptionName(),
+                    error.exception(errorMessage));
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
             LOG.warn("Received unknown table or bucket error in fetch for bucket {}", tb);
@@ -265,7 +268,7 @@ public class LogFetchCollector {
             throw new FetchException(
                     String.format(
                             "The fetching offset %s is out of range: %s",
-                            fetchOffset, errorMessage));
+                            fetchOffset, error.exception(errorMessage)));
         } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
             throw new AuthorizationException(errorMessage);
         } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
@@ -273,17 +276,17 @@ public class LogFetchCollector {
                     "Unknown server error while fetching offset {} for bucket {}: {}",
                     fetchOffset,
                     tb,
-                    errorMessage);
+                    error.exception(errorMessage));
         } else if (error == Errors.CORRUPT_MESSAGE) {
             throw new FetchException(
                     String.format(
                             "Encountered corrupt message when fetching offset %s for bucket %s: %s",
-                            fetchOffset, tb, errorMessage));
+                            fetchOffset, tb, error.exception(errorMessage)));
         } else {
             throw new FetchException(
                     String.format(
                             "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
-                            error, fetchOffset, tb, errorMessage));
+                            error, fetchOffset, tb, error.exception(errorMessage)));
         }
     }
 }
