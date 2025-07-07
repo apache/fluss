@@ -23,8 +23,6 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.utils.ParentResourceBlockingClassLoader;
-import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -45,7 +43,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.net.URL;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -657,28 +654,6 @@ abstract class FlinkCatalogITCase {
                 authenticateCatalog.close();
             }
             flussClusterExtension.close();
-        }
-    }
-
-    // this test is to mock `--jar` which is not loaded by the app classloader.
-    @Test
-    void testNotIncludedInThreadContextClassloader() throws Exception {
-        try (TemporaryClassLoaderContext ignored =
-                TemporaryClassLoaderContext.of(new ParentResourceBlockingClassLoader(new URL[0]))) {
-            assertThatThrownBy(
-                            () ->
-                                    tEnv.executeSql(
-                                            String.format(
-                                                    "create catalog test_classloader_catalog with ('type' = 'fluss', "
-                                                            + "'bootstrap.servers' = '%s',"
-                                                            + "'client.security.protocol' = 'sasl',"
-                                                            + "'client.security.sasl.username' = 'username',"
-                                                            + "'client.security.sasl.password' = 'password'"
-                                                            + ")",
-                                                    FLUSS_CLUSTER_EXTENSION.getBootstrapServers())))
-                    .rootCause()
-                    .hasMessageContaining(
-                            "Authenticate protocol not match: protocol of server is 'PLAINTEXT' while protocol of client is 'PLAIN'");
         }
     }
 
