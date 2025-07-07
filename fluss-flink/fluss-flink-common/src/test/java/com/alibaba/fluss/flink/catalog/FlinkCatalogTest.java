@@ -394,6 +394,17 @@ class FlinkCatalogTest {
         assertThat(db2.getComment()).isEqualTo("test comment");
         assertThat(db2.getProperties())
                 .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
+        // test alter db2
+        catalog.alterDatabase(
+                "db2",
+                new CatalogDatabaseImpl(
+                        Collections.singletonMap(SCAN_STARTUP_MODE.key(), "latest"),
+                        "alter comment"),
+                false);
+        db2 = catalog.getDatabase("db2");
+        assertThat(db2.getComment()).isEqualTo("alter comment");
+        assertThat(db2.getProperties())
+                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "latest"));
         // test create table in db1
         ObjectPath path1 = new ObjectPath("db1", "t1");
         CatalogTable table = this.newCatalogTable(new HashMap<>());
@@ -432,8 +443,6 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
-        assertThatThrownBy(() -> catalog.alterDatabase("db2", null, false))
-                .isInstanceOf(UnsupportedOperationException.class);
         assertThat(catalog.getDefaultDatabase()).isEqualTo(DEFAULT_DB);
 
         // Test catalog with null default database

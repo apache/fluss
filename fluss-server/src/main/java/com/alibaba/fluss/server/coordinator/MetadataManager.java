@@ -209,6 +209,32 @@ public class MetadataManager {
         uncheck(() -> zookeeperClient.deleteDatabase(name), "Fail to drop database: " + name);
     }
 
+    public void alterDatabase(
+            String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfNotExists) {
+        if (!databaseExists(databaseName)) {
+            if (ignoreIfNotExists) {
+                return;
+            }
+            throw new DatabaseNotExistException("Database " + databaseName + " does not exist.");
+        }
+
+        try {
+            DatabaseInfo databaseInfo = getDatabase(databaseName);
+            DatabaseRegistration databaseRegistration =
+                    DatabaseRegistration.of(databaseDescriptor, databaseInfo.getCreatedTime());
+            zookeeperClient.alterDatabase(databaseName, databaseRegistration);
+        } catch (Exception e) {
+            if (e instanceof KeeperException.NoNodeException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new DatabaseNotExistException("Database " + databaseName + " not exists.");
+            } else {
+                throw new FlussRuntimeException("Failed to alter database: " + databaseName, e);
+            }
+        }
+    }
+
     public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
             throws TableNotExistException {
         if (!tableExists(tablePath)) {

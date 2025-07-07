@@ -17,6 +17,8 @@
 
 package com.alibaba.fluss.rpc.gateway;
 
+import com.alibaba.fluss.rpc.messages.AlterDatabaseRequest;
+import com.alibaba.fluss.rpc.messages.AlterDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -55,6 +57,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.DROP_DATABASE)
     CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request);
+
+    /**
+     * Alter a database.
+     *
+     * @param request Alter database request.
+     */
+    @RPC(api = ApiKeys.ALTER_DATABASE)
+    CompletableFuture<AlterDatabaseResponse> alterDatabase(AlterDatabaseRequest request);
 
     /**
      * Creates a new table.

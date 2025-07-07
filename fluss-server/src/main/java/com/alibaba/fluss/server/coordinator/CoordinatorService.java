@@ -42,6 +42,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
+import com.alibaba.fluss.rpc.messages.AlterDatabaseRequest;
+import com.alibaba.fluss.rpc.messages.AlterDatabaseResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -217,6 +219,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
+        return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<AlterDatabaseResponse> alterDatabase(AlterDatabaseRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.ALTER,
+                    Resource.database(request.getDatabaseName()));
+        }
+
+        AlterDatabaseResponse response = new AlterDatabaseResponse();
+        DatabaseDescriptor databaseDescriptor =
+                DatabaseDescriptor.fromJsonBytes(request.getDatabaseJson());
+        metadataManager.alterDatabase(
+                request.getDatabaseName(), databaseDescriptor, request.isIgnoreIdNotExists());
         return CompletableFuture.completedFuture(response);
     }
 
