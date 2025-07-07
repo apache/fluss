@@ -72,6 +72,7 @@ import com.alibaba.fluss.exception.UnknownServerException;
 import com.alibaba.fluss.exception.UnknownTableOrBucketException;
 import com.alibaba.fluss.exception.UnknownWriterIdException;
 import com.alibaba.fluss.exception.UnsupportedVersionException;
+import com.alibaba.fluss.exception.WriterIdExpiredException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -214,7 +215,8 @@ public enum Errors {
     INVALID_SERVER_RACK_INFO_EXCEPTION(
             52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
     LAKE_SNAPSHOT_NOT_EXIST(
-            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
+            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new),
+    WRITER_ID_EXPIRE_EXCEPTION(54, "The writer id is expired", WriterIdExpiredException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
