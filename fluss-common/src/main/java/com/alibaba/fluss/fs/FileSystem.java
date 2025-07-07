@@ -266,7 +266,11 @@ public abstract class FileSystem {
                     Collection<Supplier<Iterator<FileSystemPlugin>>> pluginSuppliers =
                             new ArrayList<>(2);
                     pluginSuppliers.add(
-                            () -> ServiceLoader.load(FileSystemPlugin.class).iterator());
+                            () ->
+                                    ServiceLoader.load(
+                                                    FileSystemPlugin.class,
+                                                    FileSystem.class.getClassLoader())
+                                            .iterator());
 
                     if (pluginManager != null) {
                         pluginSuppliers.add(

@@ -61,7 +61,10 @@ class SecurityTokenReceiverRepository {
                             receiver.scheme());
                 };
 
-        ServiceLoader.load(SecurityTokenReceiver.class).iterator().forEachRemaining(loadReceiver);
+        ServiceLoader.load(
+                        SecurityTokenReceiver.class, SecurityTokenReceiver.class.getClassLoader())
+                .iterator()
+                .forEachRemaining(loadReceiver);
 
         LOG.info("Security token receivers loaded successfully");
         return receivers;
