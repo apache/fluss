@@ -121,18 +121,21 @@ public class PredicateBuilder {
     }
 
     public Predicate leaf(NullFalseLeafBinaryFunction function, int idx, Object literal) {
+        validateIndex(idx);
         DataField field = rowType.getFields().get(idx);
         return new LeafPredicate(
                 function, field.getType(), idx, field.getName(), singletonList(literal));
     }
 
     public Predicate leaf(LeafUnaryFunction function, int idx) {
+        validateIndex(idx);
         DataField field = rowType.getFields().get(idx);
         return new LeafPredicate(
                 function, field.getType(), idx, field.getName(), Collections.emptyList());
     }
 
     public Predicate in(int idx, List<Object> literals) {
+        validateIndex(idx);
         // In the IN predicate, 20 literals are critical for performance.
         // If there are more than 20 literals, the performance will decrease.
         if (literals.size() > 20) {
@@ -230,6 +233,12 @@ public class PredicateBuilder {
             }
         } else {
             result.add(predicate);
+        }
+    }
+
+    private void validateIndex(int idx) {
+        if (idx < 0 || idx >= rowType.getFieldCount()) {
+            throw new UnsupportedExpression("idx is not valid");
         }
     }
 

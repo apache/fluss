@@ -22,6 +22,7 @@ import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.predicate.Predicate;
 import com.alibaba.fluss.predicate.PredicateBuilder;
+import com.alibaba.fluss.predicate.UnsupportedExpression;
 import com.alibaba.fluss.utils.TypeUtils;
 
 import org.apache.flink.table.expressions.CallExpression;
@@ -119,11 +120,12 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
             FieldReferenceExpression fieldRefExpr =
                     extractFieldReference(children.get(0)).orElseThrow(UnsupportedExpression::new);
             if (fieldRefExpr
-                    .getOutputDataType()
-                    .getLogicalType()
-                    .getTypeRoot()
-                    .getFamilies()
-                    .contains(LogicalTypeFamily.CHARACTER_STRING)) {
+                            .getOutputDataType()
+                            .getLogicalType()
+                            .getTypeRoot()
+                            .getFamilies()
+                            .contains(LogicalTypeFamily.CHARACTER_STRING)
+                    && builder.indexOf(fieldRefExpr.getName()) != -1) {
                 String sqlPattern =
                         Objects.requireNonNull(
                                         extractLiteral(
@@ -294,7 +296,4 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
             return Optional.empty();
         }
     }
-
-    /** Encounter an unsupported expression, the caller can choose to ignore this filter branch. */
-    public static class UnsupportedExpression extends RuntimeException {}
 }

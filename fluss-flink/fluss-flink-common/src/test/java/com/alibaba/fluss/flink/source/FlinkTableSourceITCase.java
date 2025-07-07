@@ -1185,8 +1185,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
             values[1] = keyValuePairs[1].split("=")[1];
 
             for (int i = 0; i < 10; i++) {
-                rows.add(row(i, "v1", values[0], values[1]));
-                expectedRowValues.add(String.format("+I[%d, v1, %s, %s]", i, values[0], values[1]));
+                rows.add(row(i, "v" + i, values[0], values[1]));
+                expectedRowValues.add(
+                        String.format("+I[%d, v%d, %s, %s]", i, i, values[0], values[1]));
             }
         }
 
@@ -1349,6 +1350,47 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         rowIter =
                 tEnv.executeSql("select * from partitioned_table_like where c like '%3026%'")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadPartitionComplexPushDown() throws Exception {
+
+        tEnv.executeSql(
+                "create table partitioned_table_complex"
+                        + " (a int not null, b varchar, c string,d string, primary key (a, c, d) NOT ENFORCED) partitioned by (c,d) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_complex");
+        tEnv.executeSql("alter table partitioned_table_complex add partition (c=2025,d=1)");
+        tEnv.executeSql("alter table partitioned_table_complex add partition (c=2025,d=2)");
+        tEnv.executeSql("alter table partitioned_table_complex add partition (c=2026,d=1)");
+
+        List<String> allData =
+                writeRowsToTwoPartition(
+                        tablePath, Arrays.asList("c=2025,d=1", "c=2025,d=2", "c=2026,d=1"));
+        List<String> expectedRowValues =
+                allData.stream()
+                        .filter(s -> s.contains("v3") && !s.contains("2025, 2"))
+                        .collect(Collectors.toList());
+        waitUtilAllBucketFinishSnapshot(
+                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
+
+        String plan =
+                tEnv.explainSql(
+                        "select * from partitioned_table_complex where  a = 3\n"
+                                + "    and (c in ('2026')  or d like '%1%') "
+                                + "    and     b like '%v3%'");
+        assertThat(plan)
+                .contains(
+                        "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND LIKE(b, '%v3%'))])\n"
+                                + "+- TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_complex, filter=[OR(=(c, _UTF-16LE'2026'), LIKE(d, _UTF-16LE'%1%'))]]], fields=[a, b, c, d])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from partitioned_table_complex where  a = 3\n"
+                                        + "    and (c in ('2026')  or d like '%1%') "
+                                        + "    and     b like '%v3%'")
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
