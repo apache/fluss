@@ -339,6 +339,8 @@
                                         <exclude>com.alibaba.fluss.flink.tiering.committer.LakeTieringCommitOperatorFactory</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <!-- end exclude for predicate -->
+                                        <exclude>com.alibaba.fluss.predicate.*</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
