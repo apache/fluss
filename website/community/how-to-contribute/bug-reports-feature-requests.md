@@ -23,7 +23,7 @@ sidebar_position: 1
 
 # Bug Reports and Feature Requests
 
-You can report an issue in the [Fluss issue tracker](https://github.com/alibaba/fluss/issues).
+You can report an issue in the [Fluss issue tracker](https://github.com/apache/fluss/issues).
 
 ## Issue Reporting Guide
 
@@ -41,8 +41,8 @@ Considerations before opening an issue:
 
 ## Looking for what to report
 
-- If you have encountered a bug, you can proceed to [the bug reporting process](https://github.com/alibaba/fluss/issues/new?template=bug.yml).
-- If you have a feature idea, you can proceed to [the feature request process](https://github.com/alibaba/fluss/issues/new?template=feature.yml).
+- If you have encountered a bug, you can proceed to [the bug reporting process](https://github.com/apache/fluss/issues/new?template=bug.yml).
+- If you have a feature idea, you can proceed to [the feature request process](https://github.com/apache/fluss/issues/new?template=feature.yml).
 
 ## How to report a bug
 
@@ -61,12 +61,12 @@ When filing an issue, make sure to answer these five questions:
 
 Troubleshooting questions should be posted on:
 * [Slack (#troubleshooting)](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw)
-* [GitHub Discussions](https://github.com/alibaba/fluss/discussions)
+* [GitHub Discussions](https://github.com/apache/fluss/discussions)
 
 ## How to suggest a feature or enhancement
 
 Fluss aims to provide a unified streaming storage for real-time analytics, offering seamless data ingestion, processing, and querying capabilities with strong consistency guarantees and efficient storage management.
 
-If you're looking for a feature that doesn't exist in Fluss, you're probably not alone. Others likely have similar needs. Please open a [GitHub Issue](https://github.com/alibaba/fluss/issues/new) describing the feature you'd like to see, why you need it, and how it should work.
+If you're looking for a feature that doesn't exist in Fluss, you're probably not alone. Others likely have similar needs. Please open a [GitHub Issue](https://github.com/apache/fluss/issues/new) describing the feature you'd like to see, why you need it, and how it should work.
 
-When creating your feature request, document your requirements first. Please, try to not directly describe the solution.
+When creating your feature request, start by clearly documenting your requirements and avoid jumping straight to implementation details. For substantial features or architectural changes that need broader community input, consider submitting a [Fluss Improvement Proposal (FIP)](https://cwiki.apache.org/confluence/display/FLUSS/Fluss+Improvement+Proposals). FIPs offer a formal process to propose, discuss, and document significant project enhancements.
