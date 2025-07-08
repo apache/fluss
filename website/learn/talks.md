@@ -22,7 +22,7 @@ title: Talks
 
 # Talks & Presentations
 
-Talks and presentations about Fluss from conferences, meetups, and community events.
+Talks and presentations about Apache Fluss from conferences, meetups, and community events.
 
 ---
 
