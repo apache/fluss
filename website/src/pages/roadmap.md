@@ -23,9 +23,8 @@ Fluss will support the Kafka network protocol to enable users to use Fluss as a 
 ## Flink Integration
 Fluss will provide deep integration with Apache Flink, enabling users a single engine experience for building real-time analytics applications. The integration will include:
 - Upgrade Flink version to 2.x
-- Support for Flink DataStream API to read/write data from/to Fluss.
 - Support new Delta Join to address the pain-points of Stream-Stream Join.
-- More pushdown optimizations: Filter Pushdown ([#197](https://github.com/alibaba/fluss/issues/197)), Partition Pruning ([#196](https://github.com/alibaba/fluss/issues/196)), Aggregation Pushdown, etc.
+- More pushdown optimizations: Filter Pushdown ([#197](https://github.com/alibaba/fluss/issues/197)), Aggregation Pushdown, etc.
 - Upgrade the Rule-Based Optimization into Cost-Based Optimization in Flink SQL streaming planner with leveraging statistics in Fluss tables.
 ## Streaming Lakehouse
 - Support for Iceberg ([#452](https://github.com/alibaba/fluss/issues/452)) as Lakehouse Storage. And DeltaLake, Hudi as well.
@@ -38,8 +37,6 @@ Fluss will provide deep integration with Apache Flink, enabling users a single e
 ## Storage Engine
 - Support for complex data types: Array ([#168](https://github.com/alibaba/fluss/issues/168)), Map ([#169](https://github.com/alibaba/fluss/issues/169)), Struct ([#170](https://github.com/alibaba/fluss/issues/170)), Variant/JSON.
 - Support for schema evolution.
-- Support for secondary index for Delta Join with Flink.
-
 ## ZooKeeper Removal
 Fluss currently utilizes ZooKeeper for cluster coordination, metadata storage, and cluster configuration management. In upcoming releases, ZooKeeper will be replaced by KvStore for metadata storage and Raft for cluster coordination and ensuring consistency. This transition aims to streamline operations and enhance system reliability.
 
