@@ -94,6 +94,14 @@ const config: Config = {
       },
     ],
     [
+      '@docusaurus/plugin-content-pages',
+      {
+        id: 'learn-pages',
+        path: 'learn',
+        routeBasePath: 'learn',
+      },
+    ],
+    [
       '@docusaurus/plugin-pwa',
       {
           debug: true,
@@ -131,6 +139,21 @@ const config: Config = {
           label: 'Docs',
         },
         {to: '/blog', label: 'Blog', position: 'left'},
+        {
+          label: 'Learn',
+          position: 'left',
+          type: 'dropdown',
+          items: [
+            {
+              label: 'Talks',
+              to: '/learn/talks',
+            },
+            {
+              label: 'Videos',
+              to: '/learn/videos',
+            },
+          ],
+        },
         {to: '/community/welcome', label: 'Community', position: 'left'},
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
