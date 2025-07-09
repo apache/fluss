@@ -1,0 +1,73 @@
+fluss-fs-obs
+Copyright 2025 The Apache Software Foundation
+
+This project includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+This project bundles the following dependencies under the Apache Software License 2.0 (http://www.apache.org/licenses/LICENSE-2.0.txt)
+
+- com.huaweicloud:esdk-obs-java:3.24.12
+- com.huaweicloud.sdk:huaweicloud-sdk-iam:3.1.87
+- com.fasterxml.woodstox:woodstox-core:5.3.0
+- com.google.guava:guava:11.0.2
+- com.jamesmurty.utils:java-xmlbuilder:0.4
+- commons-beanutils:commons-beanutils:1.9.4
+- commons-collections:commons-collections:3.2.2
+- commons-configuration:commons-configuration:1.6
+- commons-digester:commons-digester:1.8
+- commons-io:commons-io:2.5
+- commons-lang:commons-lang:2.6
+- commons-logging:commons-logging:1.1.3
+- org.apache.hadoop:hadoop-huaweicloud:3.4.0
+- org.apache.httpcomponents:httpclient:4.5.13
+- org.apache.httpcomponents:httpcore:4.4.13
+- org.codehaus.jettison:jettison:1.5.4
+- org.ini4j:ini4j:0.5.4
+- net.java.dev.jets3t:jets3t:0.9.0
+- org.apache.commons:commons-compress:1.21
+- org.apache.commons:commons-lang3:3.12.0
+- org.apache.directory.api:api-asn1-api:1.0.0-M20
+- org.apache.directory.api:api-util:1.0.0-M20
+- org.apache.directory.server:apacheds-i18n:2.0.0-M15
+- org.apache.directory.server:apacheds-kerberos-codec:2.0.0-M15
+- org.apache.hadoop:hadoop-annotations:2.10.2
+- org.apache.hadoop:hadoop-auth:2.10.2
+- org.apache.hadoop:hadoop-common:2.10.2
+- org.apache.htrace:htrace-core4:4.1.0-incubating
+- org.codehaus.jackson:jackson-core-asl:1.9.13
+- org.codehaus.jackson:jackson-mapper-asl:1.9.13
+- org.codehaus.woodstox:stax2-api:4.2.1
+- org.mortbay.jetty:jetty-sslengine:6.1.26
+- org.mortbay.jetty:jetty-util:6.1.26
+- org.mortbay.jetty:jetty:6.1.26
+- com.fasterxml.jackson.core:jackson-annotations:2.15.3
+- com.fasterxml.jackson.core:jackson-core:2.15.3
+- com.fasterxml.jackson.core:jackson-databind:2.15.3
+- com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.15.3
+- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.15.3
+- com.huaweicloud.sdk:huaweicloud-sdk-core:3.1.87
+- com.squareup.okhttp3:okhttp:4.12.0
+- com.squareup.okio:okio-jvm:3.8.0
+- com.squareup.okio:okio:3.8.0
+- org.apache.httpcomponents:httpcore:4.1.2
+- org.jetbrains.kotlin:kotlin-stdlib-common:1.8.21
+- org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.21
+- org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.21
+- org.jetbrains.kotlin:kotlin-stdlib:1.8.21
+- org.jetbrains:annotations:13.0
+- org.yaml:snakeyaml:2.0
+
+The binary distribution of this product bundles these dependencies under the Eclipse Public License - v 2.0 (https://www.eclipse.org/org/documents/epl-2.0/EPL-2.0.txt)
+See bundled license files for details.
+
+- org.jacoco:org.jacoco.agent:runtime:0.8.5
+
+This project bundles the following dependencies under the JDOM license.
+See bundled license files for details.
+
+- org.jdom:jdom2:2.0.6.1
+
+This project bundles the following dependencies under the CDDL 1.1 license.
+See bundled license files for details.
+
+- javax.xml.bind:jaxb-api:2.3.1
