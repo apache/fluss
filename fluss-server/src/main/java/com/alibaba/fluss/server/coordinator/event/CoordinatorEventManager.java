@@ -53,7 +53,7 @@ public final class CoordinatorEventManager implements EventManager {
     private final Lock putLock = new ReentrantLock();
 
     // metrics
-    private Histogram eventProcessTime;
+    private Histogram eventProcessingTime;
     private Histogram eventQueueTime;
 
     private static final int WINDOW_SIZE = 100;
@@ -68,9 +68,9 @@ public final class CoordinatorEventManager implements EventManager {
     private void registerMetrics() {
         coordinatorMetricGroup.gauge(MetricNames.EVENT_QUEUE_SIZE, queue::size);
 
-        eventProcessTime =
+        eventProcessingTime =
                 coordinatorMetricGroup.histogram(
-                        MetricNames.EVENT_PROCESS_TIME_MS,
+                        MetricNames.EVENT_PROCESSING_TIME_MS,
                         new DescriptiveStatisticsHistogram(WINDOW_SIZE));
 
         eventQueueTime =
@@ -138,7 +138,7 @@ public final class CoordinatorEventManager implements EventManager {
                 log.error("Uncaught error processing event {}.", coordinatorEvent, e);
             } finally {
                 long eventFinishTimeMs = System.currentTimeMillis();
-                eventProcessTime.update(eventFinishTimeMs - eventStartTimeMs);
+                eventProcessingTime.update(eventFinishTimeMs - eventStartTimeMs);
             }
         }
     }
