@@ -35,7 +35,7 @@ public class ProtoCodeGenerator {
             List<File> inputs, File outputDirectory, String classPrefix, boolean useOuterClass)
             throws Exception {
         for (File input : inputs) {
-            Proto proto = new Proto();
+            Proto proto = new Proto(input);
             ProtoUtil.loadFrom(input, proto);
 
             String fileWithoutExtension = Splitter.on(".").splitToList(input.getName()).get(0);
