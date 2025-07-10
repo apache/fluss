@@ -25,6 +25,7 @@ import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.io.DataFileMeta;
+import org.apache.paimon.manifest.IndexManifestEntry;
 import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.manifest.ManifestEntry;
 import org.apache.paimon.operation.FileStoreCommit;
@@ -37,7 +38,6 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -56,6 +56,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final FileStoreTable fileStoreTable;
     private FileStoreCommit fileStoreCommit;
     private final TablePath tablePath;
+    private Long tempCommitSnapshotId;
 
     public PaimonLakeCommitter(PaimonCatalogProvider paimonCatalogProvider, TablePath tablePath)
             throws IOException {
@@ -77,18 +78,16 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     @Override
     public long commit(PaimonCommittable committable) throws IOException {
         ManifestCommittable manifestCommittable = committable.manifestCommittable();
-        PaimonCommitCallback paimonCommitCallback = new PaimonCommitCallback();
         try {
             fileStoreCommit =
                     fileStoreTable
                             .store()
-                            .newCommit(
-                                    FLUSS_LAKE_TIERING_COMMIT_USER,
-                                    Collections.singletonList(paimonCommitCallback));
-            fileStoreCommit.commit(manifestCommittable, Collections.emptyMap());
-            return checkNotNull(
-                    paimonCommitCallback.commitSnapshotId,
-                    "Paimon committed snapshot id must be non-null.");
+                            .newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
+            fileStoreCommit.commit(manifestCommittable, false);
+            Long commitSnapshotId = tempCommitSnapshotId;
+            tempCommitSnapshotId = null;
+
+            return checkNotNull(commitSnapshotId, "Paimon committed snapshot id must be non-null.");
         } catch (Throwable t) {
             if (fileStoreCommit != null) {
                 // if any error happen while commit, abort the commit to clean committable
@@ -100,7 +99,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     @Override
     public void abort(PaimonCommittable committable) throws IOException {
-        fileStoreCommit = fileStoreTable.store().newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
+        fileStoreCommit =
+                fileStoreTable.store().newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
         fileStoreCommit.abort(committable.manifestCommittable().fileCommittables());
     }
 
@@ -195,13 +195,12 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         }
     }
 
-    private static class PaimonCommitCallback implements CommitCallback {
-
-        private Long commitSnapshotId = null;
+    private class PaimonCommitCallback implements CommitCallback {
 
         @Override
-        public void call(List<ManifestEntry> list, Snapshot snapshot) {
-            this.commitSnapshotId = snapshot.id();
+        public void call(
+                List<ManifestEntry> list, List<IndexManifestEntry> indexFiles, Snapshot snapshot) {
+            tempCommitSnapshotId = snapshot.id();
         }
 
         @Override
