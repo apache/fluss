@@ -37,6 +37,8 @@ import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbTableMetadata;
+import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
@@ -490,12 +492,20 @@ public final class FlussClusterExtension
      * make sure same server info not to make sure table metadata). This method needs to be called
      * in advance for those ITCase which need to get metadata from server.
      */
-    public void waitUtilAllGatewayHasSameMetadata() {
+    public void waitUtilAllGatewayHasSameMetadata() throws Exception {
+        List<TablePath> allTables = getAllTables();
+        List<PbTablePath> allPbTables =
+                allTables.stream()
+                        .map(ServerRpcMessageUtils::fromTablePath)
+                        .collect(Collectors.toList());
         for (AdminReadOnlyGateway gateway : collectAllRpcGateways()) {
             retry(
                     Duration.ofMinutes(1),
                     () -> {
-                        MetadataResponse response = gateway.metadata(new MetadataRequest()).get();
+                        MetadataResponse response =
+                                gateway.metadata(
+                                                new MetadataRequest().addAllTablePaths(allPbTables))
+                                        .get();
                         assertThat(response.hasCoordinatorServer()).isTrue();
                         // check coordinator server node
                         ServerNode coordinatorNode =
@@ -513,6 +523,14 @@ public final class FlussClusterExtension
                                         .collect(Collectors.toList());
                         assertThat(tsNodes)
                                 .containsExactlyInAnyOrderElementsOf(getTabletServerNodes());
+
+                        // check tables
+                        List<TablePath> tableMeta =
+                                response.getTableMetadatasList().stream()
+                                        .map(PbTableMetadata::getTablePath)
+                                        .map(ServerRpcMessageUtils::toTablePath)
+                                        .collect(Collectors.toList());
+                        assertThat(tableMeta).containsExactlyInAnyOrderElementsOf(allTables);
                     });
         }
     }
@@ -804,6 +822,18 @@ public final class FlussClusterExtension
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
                 () -> zkClient.getLeaderAndIsr(tb), Duration.ofMinutes(1), "leader is not ready");
+    }
+
+    private List<TablePath> getAllTables() throws Exception {
+        List<TablePath> tablePaths = new ArrayList<>();
+        List<String> databases = zooKeeperClient.listDatabases();
+        for (String database : databases) {
+            List<String> tables = zooKeeperClient.listTables(database);
+            for (String table : tables) {
+                tablePaths.add(TablePath.of(database, table));
+            }
+        }
+        return tablePaths;
     }
 
     private List<AdminReadOnlyGateway> collectAllRpcGateways() {

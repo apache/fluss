@@ -136,6 +136,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .customProperty("key1", "value1")
                         .build(),
                 false);
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
         DatabaseInfo databaseInfo = admin.getDatabaseInfo("test_db_2").get();
         long timestampAfterCreate = System.currentTimeMillis();
         assertThat(databaseInfo.getCreatedTime()).isEqualTo(databaseInfo.getModifiedTime());
@@ -182,6 +183,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         long timestampBeforeCreate = System.currentTimeMillis();
         TablePath tablePath = TablePath.of("test_db", "table_2");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false);
+        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
         tableInfo = admin.getTableInfo(tablePath).get();
         timestampAfterCreate = System.currentTimeMillis();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
@@ -382,12 +384,16 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // we can create the table now
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
-        TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
-        assertThat(tableInfo.toTableDescriptor())
-                .isEqualTo(
-                        DEFAULT_TABLE_DESCRIPTOR
-                                .withReplicationFactor(3)
-                                .withDataLakeFormat(DataLakeFormat.PAIMON));
+        // recreate the connection because the metadata of tablet server has changed
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
+                Admin admin = conn.getAdmin()) {
+            TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
+            assertThat(tableInfo.toTableDescriptor())
+                    .isEqualTo(
+                            DEFAULT_TABLE_DESCRIPTOR
+                                    .withReplicationFactor(3)
+                                    .withDataLakeFormat(DataLakeFormat.PAIMON));
+        }
     }
 
     @Test
