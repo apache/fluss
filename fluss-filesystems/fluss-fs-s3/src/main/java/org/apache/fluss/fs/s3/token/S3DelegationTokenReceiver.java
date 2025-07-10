@@ -25,6 +25,9 @@ import org.apache.fluss.fs.token.SecurityTokenReceiver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -34,43 +37,54 @@ import java.util.Map;
 /** Security token receiver for S3 filesystem. */
 public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
-    public static final String PROVIDER_CONFIG_NAME = "fs.s3a.aws.credentials.provider";
-
     private static final Logger LOG = LoggerFactory.getLogger(S3DelegationTokenReceiver.class);
 
     static volatile Credentials credentials;
     static volatile Map<String, String> additionalInfos;
 
-    public static void updateHadoopConfig(org.apache.hadoop.conf.Configuration hadoopConfig) {
-        LOG.info("Updating Hadoop configuration");
+    public static void updateHadoopConfigCredentialProviders(
+            org.apache.hadoop.conf.Configuration hadoopConfig, List<String> credentialProvider) {
+        LOG.info("Updating credential providers in Hadoop configuration");
 
-        // We always add the Fluss credential providers to the beginning of the provider chain.
-        // Independently whether token delegation is enabled or disabled, the library will go
-        // through the chain and
-        // find a valid credential provider automatically.
-        String providers = hadoopConfig.get(PROVIDER_CONFIG_NAME, "");
-        if (!providers.contains(DynamicTemporaryAWSCredentialsProvider.NAME)) {
-            if (providers.isEmpty()) {
-                LOG.debug("Setting provider {}", DynamicTemporaryAWSCredentialsProvider.NAME);
-                providers = DynamicTemporaryAWSCredentialsProvider.NAME;
+        String providers = hadoopConfig.get(S3ConfigOptions.PROVIDER_CONFIG_NAME, "");
+        List<String> credentialProviderPrependOrder = new ArrayList<>(credentialProvider);
+        Collections.reverse(credentialProviderPrependOrder);
+
+        for (String credentialProviderName : credentialProviderPrependOrder) {
+            if (!providers.contains(credentialProviderName)) {
+                if (providers.isEmpty()) {
+                    LOG.debug("Setting provider {}", credentialProviderName);
+                    providers = credentialProviderName;
+                } else {
+                    providers = credentialProviderName + "," + providers;
+                    LOG.debug("Prepending provider, new providers value: {}", providers);
+                }
+                hadoopConfig.set(S3ConfigOptions.PROVIDER_CONFIG_NAME, providers);
             } else {
-                providers = DynamicTemporaryAWSCredentialsProvider.NAME + "," + providers;
-                LOG.debug("Prepending provider, new providers value: {}", providers);
+                LOG.debug("Provider {} already exists in chain", credentialProviderName);
             }
-            hadoopConfig.set(PROVIDER_CONFIG_NAME, providers);
-        } else {
-            LOG.debug("Provider already exists");
         }
 
-        // TODO: need a way to determine if we are on the client or server side. if client side and
-        //   additionalInfos is null, we should throw an exception
-        if (additionalInfos != null) {
+        LOG.info("Updated credential providers in Hadoop configuration successfully");
+    }
+
+    public static void updateHadoopConfigAdditionalInfos(
+            org.apache.hadoop.conf.Configuration hadoopConfig) {
+        LOG.info("Updating additional infos in Hadoop configuration");
+
+        if (additionalInfos == null) {
+            LOG.error(
+                    "{} has not received any additional infos.",
+                    S3ADelegationTokenReceiver.class.getName());
+            throw new FlussRuntimeException("Expected additionalInfos to be not null.");
+        } else {
             for (Map.Entry<String, String> entry : additionalInfos.entrySet()) {
+                LOG.debug("Setting configuration '{}' = '{}'", entry.getKey(), entry.getValue());
                 hadoopConfig.set(entry.getKey(), entry.getValue());
             }
         }
 
-        LOG.info("Updated Hadoop configuration successfully");
+        LOG.info("Updating additional infos in Hadoop configuration successfully");
     }
 
     @Override
@@ -80,7 +94,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
     @Override
     public void onNewTokensObtained(ObtainedSecurityToken token) {
-        LOG.info("Trying to update session credentials");
+        LOG.info("Trying to update session credentials and additional infos");
 
         byte[] tokenBytes = token.getToken();
         if (tokenBytes.length != 0) {
@@ -88,16 +102,15 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
             additionalInfos = token.getAdditionInfos();
 
             LOG.info(
-                    "Session credentials updated successfully with access key: {}.",
-                    credentials.getAccessKeyId());
+                    "Session credentials updated successfully with access key: {}. Updated additional infos: {}",
+                    credentials.getAccessKeyId(),
+                    additionalInfos);
         } else {
-            // When token delegation is deactivated, we still distribute the additional infos to the
-            // client, so they do not need to be set in the client config.
-            LOG.info(
-                    "Received an empty token. This usually indicates that {} has been disabled. Updating additional infos only.",
-                    ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION.key());
             additionalInfos = token.getAdditionInfos();
-            LOG.info(additionalInfos.toString());
+            LOG.info(
+                    "Received an empty token. This usually indicates that {} has been disabled. Updated additional infos only: {}",
+                    ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION.key(),
+                    additionalInfos);
         }
     }
 
