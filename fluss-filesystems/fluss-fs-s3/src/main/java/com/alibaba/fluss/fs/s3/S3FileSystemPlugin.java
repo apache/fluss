@@ -17,11 +17,13 @@
 
 package com.alibaba.fluss.fs.s3;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigBuilder;
+import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FileSystemPlugin;
-import com.alibaba.fluss.fs.s3.token.S3ADelegationTokenReceiver;
+import com.alibaba.fluss.fs.s3.token.S3DelegationTokenProvider;
 import com.alibaba.fluss.fs.s3.token.S3DelegationTokenReceiver;
 
 import org.apache.hadoop.fs.s3a.S3AFileSystem;
@@ -30,9 +32,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Objects;
-
-import static com.alibaba.fluss.fs.s3.token.S3DelegationTokenReceiver.PROVIDER_CONFIG_NAME;
+import java.util.Set;
 
 /** Simple factory for the s3 file system. */
 public class S3FileSystemPlugin implements FileSystemPlugin {
@@ -43,13 +46,24 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private static final String HADOOP_CONFIG_PREFIX = "fs.s3a.";
 
-    private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
-
     private static final String[][] MIRRORED_CONFIG_KEYS = {
         {"fs.s3a.access-key", "fs.s3a.access.key"},
         {"fs.s3a.secret-key", "fs.s3a.secret.key"},
         {"fs.s3a.path-style-access", "fs.s3a.path.style.access"}
     };
+
+    // When the file system is initialized in the client, all filesystem options are passed in with
+    // an additional prefix. We only allow certain options ("whitelist") to avoid that the client
+    // passes in config options that might break the file system.
+    private static final String CLIENT_PREFIX = "client.fs.";
+    private static final Set<String> CLIENT_WHITELISTED_OPTIONS =
+            new HashSet<>(
+                    Arrays.asList(
+                            "access-key",
+                            "access.key",
+                            "secret-key",
+                            "secret.key",
+                            "aws.credentials.provider"));
 
     @Override
     public String getScheme() {
@@ -60,16 +74,36 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     public FileSystem create(URI fsUri, Configuration flussConfig) throws IOException {
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 mirrorCertainHadoopConfig(getHadoopConfiguration(flussConfig));
+        // This config option is not added to Hadoop Config on purpose (prefix 'fs.s3.'), because it
+        // is internal to Fluss.
+        final boolean useTokenDelegation =
+                flussConfig.getBoolean(ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION);
 
-        // set credential provider
         setCredentialProvider(hadoopConfig);
 
-        // create the Hadoop FileSystem
         org.apache.hadoop.fs.FileSystem fs = new S3AFileSystem();
         fs.initialize(getInitURI(fsUri, hadoopConfig), hadoopConfig);
-        return new S3FileSystem(getScheme(), fs, hadoopConfig);
+
+        // Currently, if-else conditional is sufficient. If we add additional STS methods for token
+        // delegation
+        // (e.g., AssumeRoleWithWebIdentity), we need to decide based on the configuration set by
+        // the user,
+        // which type to use.
+        final S3DelegationTokenProvider.Type delegationTokenProviderType =
+                useTokenDelegation
+                        ? S3DelegationTokenProvider.Type.STS_SESSION_TOKEN
+                        : S3DelegationTokenProvider.Type.NO_TOKEN;
+
+        LOG.debug("S3DelegationTokenProvider type is {}", delegationTokenProviderType);
+
+        return new S3FileSystem(
+                fs,
+                () ->
+                        new S3DelegationTokenProvider(
+                                getScheme(), hadoopConfig, delegationTokenProviderType));
     }
 
+    @VisibleForTesting
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
         if (flussConfig == null) {
@@ -77,9 +111,9 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         }
 
         for (String key : flussConfig.keySet()) {
-            for (String prefix : FLUSS_CONFIG_PREFIXES) {
-                if (key.startsWith(prefix)) {
-                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
+            for (String flussPrefix : FLUSS_CONFIG_PREFIXES) {
+                if (key.startsWith(flussPrefix)) {
+                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(flussPrefix.length());
                     String newValue =
                             flussConfig.getString(
                                     ConfigBuilder.key(key).stringType().noDefaultValue(), null);
@@ -87,6 +121,28 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
                     LOG.debug(
                             "Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
+                }
+
+                String flussPrefixWithClientPrefix = CLIENT_PREFIX + flussPrefix;
+                if (key.startsWith(flussPrefixWithClientPrefix)) {
+                    String keyWithoutPrefix = key.substring(flussPrefixWithClientPrefix.length());
+
+                    if (CLIENT_WHITELISTED_OPTIONS.contains(keyWithoutPrefix)) {
+                        String newKey = HADOOP_CONFIG_PREFIX + keyWithoutPrefix;
+                        String newValue =
+                                flussConfig.getString(
+                                        ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                        conf.set(newKey, newValue);
+
+                        LOG.debug(
+                                "Adding Fluss config entry for whitelisted key {} as {} to Hadoop config",
+                                key,
+                                newKey);
+                    } else {
+                        LOG.debug(
+                                "Client passed non-whitelisted key {}. Ignoring it",
+                                keyWithoutPrefix);
+                    }
                 }
             }
         }
@@ -122,20 +178,10 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     }
 
     private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
-        if (hadoopConfig.get(ACCESS_KEY_ID) == null) {
-            if (Objects.equals(getScheme(), "s3")) {
-                S3DelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
-            } else if (Objects.equals(getScheme(), "s3a")) {
-                S3ADelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
-            } else {
-                throw new IllegalArgumentException("Unsupported scheme: " + getScheme());
-            }
-            LOG.info(
-                    "{} is not set, using credential provider {}.",
-                    ACCESS_KEY_ID,
-                    hadoopConfig.get(PROVIDER_CONFIG_NAME));
+        if (Objects.equals(getScheme(), "s3") || Objects.equals(getScheme(), "s3a")) {
+            S3DelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
         } else {
-            LOG.info("{} is set, using provided access key id and secret.", ACCESS_KEY_ID);
+            throw new IllegalArgumentException("Unsupported scheme: " + getScheme());
         }
     }
 }
