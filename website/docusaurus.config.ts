@@ -21,21 +21,21 @@ import type * as Preset from '@docusaurus/preset-classic';
 import versionReplace from './src/plugins/remark-version-replace/index';
 
 const config: Config = {
-  title: 'Fluss',
+  title: 'Apache Fluss™ (incubating)',
   tagline: 'Streaming Storage for Real-Time Analytics',
   favicon: 'img/logo/fluss_favicon.svg',
 
   // Set the production url of your site here
-  url: 'https://alibaba.github.io/',
+  url: 'https://fluss.apache.org/',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/fluss-docs/',
+  baseUrl: '/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'alibaba', // Usually your GitHub org/user name.
-  projectName: 'fluss-docs', // Usually your repo name.
-  deploymentBranch: 'gh-pages',
+  organizationName: 'apache', // Usually your GitHub org/user name.
+  projectName: 'fluss-website', // Usually your repo name.
+  deploymentBranch: 'asf-site',
   trailingSlash: true,
 
   onBrokenLinks: 'throw',
@@ -58,7 +58,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           editUrl: ({docPath}) =>
-              `https://github.com/alibaba/fluss/edit/main/website/docs/${docPath}`,
+              `https://github.com/apache/fluss/edit/main/website/docs/${docPath}`,
           remarkPlugins: [versionReplace],
         },
         blog: {
@@ -88,7 +88,7 @@ const config: Config = {
         routeBasePath: 'community',
         sidebarPath: './sidebarsCommunity.js',
         editUrl: ({docPath}) => {
-          return `https://github.com/alibaba/fluss/edit/main/website/community/${docPath}`;
+          return `https://github.com/apache/fluss/edit/main/website/community/${docPath}`;
         },
         // ... other options
       },
@@ -163,7 +163,7 @@ const config: Config = {
           dropdownActiveClassDisabled: true,
         },
         {
-          href: 'https://github.com/alibaba/fluss',
+          href: 'https://github.com/apache/fluss',
           position: 'right',
           className: 'header-github-link',
           'aria-label': 'GitHub repository',
@@ -172,7 +172,7 @@ const config: Config = {
     },
     footer: {
       style: 'dark',
-      copyright: `Copyright © ${new Date().getFullYear()} Alibaba, Inc.
+      copyright: `Copyright © ${new Date().getFullYear()} The Apache Software Foundation.
       Apache®, Apache Flink®, Flink®, Apache Kafka®, Kafka®, Spark® and associated open source project names and logos are trademarks of the Apache Software Foundation.`,
     },
     prism: {

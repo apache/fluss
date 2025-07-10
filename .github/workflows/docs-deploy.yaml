@@ -22,33 +22,19 @@ on:
     paths:
       - 'website/**'
 
+# We use `repository_dispatch` to trigger the deployment job on the apache/fluss-website repository.
+# https://github.com/apache/fluss-website/blob/main/.github/workflows/website-deploy.yaml
+# https://docs.github.com/en/actions/reference/events-that-trigger-workflows#repository_dispatch
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./website
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - name: Generate versioned docs
-        run: ./build_versioned_docs.sh
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 18
-      - name: Install dependencies
-        run: npm install
-      - name: Build website
-        run: npm run build
-      - uses: webfactory/ssh-agent@v0.5.0
-        with:
-          ssh-private-key: ${{ secrets.GH_PAGES_DEPLOY }}
-      - name: Deploy website
-        env:
-          USE_SSH: true
+      - name: Send Event to Trigger Deploy
         run: |
-          git config --global user.email "actions@github.com"
-          git config --global user.name "gh-actions"
-          npm run deploy -- --skip-build
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/apache/fluss-website/dispatches \
+            -d '{"event_type":"website-deploy","client_payload":{"repository": "apache/fluss"}}'

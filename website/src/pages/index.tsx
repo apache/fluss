@@ -72,7 +72,7 @@ export default function Home(): JSX.Element {
     const {siteConfig} = useDocusaurusContext();
     return (
         <Layout
-            title="Fluss"
+            title="Apache Fluss™ (incubating)"
             description="Streaming Storage for Real-Time Analytics">
             <HomepageHeader/>
             <main>

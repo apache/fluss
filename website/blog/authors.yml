@@ -18,19 +18,19 @@
 
 jark:
   name: Jark Wu
-  title: Creator of Fluss project
+  title: PMC member of Apache Fluss
   url: https://github.com/wuchong
   image_url: https://github.com/wuchong.png
 
 giannis:
   name: Giannis Polyzos
-  title: Fluss Contributor
+  title: PMC member of Apache Fluss
   url: https://github.com/polyzos
   image_url: https://github.com/polyzos.png
 
 yuxia:
   name: Luo Yuxia
-  title: Fluss Committer
+  title: PMC member of Apache Fluss
   url: https://github.com/luoyuxia
   image_url: https://github.com/luoyuxia.png
 
