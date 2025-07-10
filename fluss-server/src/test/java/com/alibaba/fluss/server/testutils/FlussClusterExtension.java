@@ -37,12 +37,11 @@ import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
-import com.alibaba.fluss.rpc.messages.PbTableMetadata;
-import com.alibaba.fluss.rpc.messages.PbTablePath;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.DefaultAuthorizer;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
@@ -83,6 +82,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -492,20 +492,12 @@ public final class FlussClusterExtension
      * make sure same server info not to make sure table metadata). This method needs to be called
      * in advance for those ITCase which need to get metadata from server.
      */
-    public void waitUtilAllGatewayHasSameMetadata() throws Exception {
-        List<TablePath> allTables = getAllTables();
-        List<PbTablePath> allPbTables =
-                allTables.stream()
-                        .map(ServerRpcMessageUtils::fromTablePath)
-                        .collect(Collectors.toList());
+    public void waitUtilAllGatewayHasSameMetadata() {
         for (AdminReadOnlyGateway gateway : collectAllRpcGateways()) {
             retry(
                     Duration.ofMinutes(1),
                     () -> {
-                        MetadataResponse response =
-                                gateway.metadata(
-                                                new MetadataRequest().addAllTablePaths(allPbTables))
-                                        .get();
+                        MetadataResponse response = gateway.metadata(new MetadataRequest()).get();
                         assertThat(response.hasCoordinatorServer()).isTrue();
                         // check coordinator server node
                         ServerNode coordinatorNode =
@@ -523,27 +515,12 @@ public final class FlussClusterExtension
                                         .collect(Collectors.toList());
                         assertThat(tsNodes)
                                 .containsExactlyInAnyOrderElementsOf(getTabletServerNodes());
-
-                        // check tables
-                        List<TablePath> tableMeta =
-                                response.getTableMetadatasList().stream()
-                                        .map(PbTableMetadata::getTablePath)
-                                        .map(ServerRpcMessageUtils::toTablePath)
-                                        .collect(Collectors.toList());
-                        assertThat(tableMeta).containsExactlyInAnyOrderElementsOf(allTables);
                     });
         }
     }
 
     /** Wait until all the table assignments buckets are ready for table. */
     public void waitUtilTableReady(long tableId) {
-        waitUtilTableReadyWithAuthorization(tableId, null);
-    }
-
-    /**
-     * Wait until all the table assignments buckets and required authorization are ready for table.
-     */
-    public void waitUtilTableReadyWithAuthorization(long tableId, @Nullable AclBinding aclBinding) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -552,29 +529,40 @@ public final class FlussClusterExtension
                             zkClient.getTableAssignment(tableId);
                     assertThat(tableAssignmentOpt).isPresent();
                     waitReplicaInAssignmentReady(zkClient, tableAssignmentOpt.get(), tableId, null);
+                });
+    }
 
-                    if (aclBinding != null) {
-                        getTabletServers()
-                                .forEach(
-                                        ts -> {
-                                            Authorizer authorizer = ts.getAuthorizer();
-                                            assertThat(authorizer).isNotNull();
-                                            AccessControlEntry accessControlEntry =
-                                                    aclBinding.getAccessControlEntry();
-                                            assertThat(
-                                                            ((DefaultAuthorizer) authorizer)
-                                                                    .aclsAllowAccess(
-                                                                            aclBinding
-                                                                                    .getResource(),
-                                                                            accessControlEntry
-                                                                                    .getPrincipal(),
-                                                                            accessControlEntry
-                                                                                    .getOperationType(),
-                                                                            accessControlEntry
-                                                                                    .getHost()))
-                                                    .isTrue();
-                                        });
-                    }
+    /**
+     * Wait until all authorization are synchronized to all tablet servers.
+     *
+     * @param aclBindings aclBindings to be synchronized.
+     * @param exist whether aclBinding exist.
+     */
+    public void waitUtilAuthenticationSync(Collection<AclBinding> aclBindings, boolean exist) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    Set<ServerBase> servers = new HashSet<>(getTabletServers());
+                    servers.add(getCoordinatorServer());
+                    servers.forEach(
+                            ts -> {
+                                Authorizer authorizer = ts.getAuthorizer();
+                                assertThat(authorizer).isNotNull();
+                                for (AclBinding aclBinding : aclBindings) {
+                                    AccessControlEntry accessControlEntry =
+                                            aclBinding.getAccessControlEntry();
+                                    assertThat(
+                                                    ((DefaultAuthorizer) authorizer)
+                                                            .aclsAllowAccess(
+                                                                    aclBinding.getResource(),
+                                                                    accessControlEntry
+                                                                            .getPrincipal(),
+                                                                    accessControlEntry
+                                                                            .getOperationType(),
+                                                                    accessControlEntry.getHost()))
+                                            .isEqualTo(exist);
+                                }
+                            });
                 });
     }
 
@@ -822,18 +810,6 @@ public final class FlussClusterExtension
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
                 () -> zkClient.getLeaderAndIsr(tb), Duration.ofMinutes(1), "leader is not ready");
-    }
-
-    private List<TablePath> getAllTables() throws Exception {
-        List<TablePath> tablePaths = new ArrayList<>();
-        List<String> databases = zooKeeperClient.listDatabases();
-        for (String database : databases) {
-            List<String> tables = zooKeeperClient.listTables(database);
-            for (String table : tables) {
-                tablePaths.add(TablePath.of(database, table));
-            }
-        }
-        return tablePaths;
     }
 
     private List<AdminReadOnlyGateway> collectAllRpcGateways() {

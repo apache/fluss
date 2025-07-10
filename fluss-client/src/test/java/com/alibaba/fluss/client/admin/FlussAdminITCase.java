@@ -130,13 +130,13 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     void testGetDatabaseInfo() throws Exception {
         long timestampBeforeCreate = System.currentTimeMillis();
         admin.createDatabase(
-                "test_db_2",
-                DatabaseDescriptor.builder()
-                        .comment("test comment")
-                        .customProperty("key1", "value1")
-                        .build(),
-                false);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+                        "test_db_2",
+                        DatabaseDescriptor.builder()
+                                .comment("test comment")
+                                .customProperty("key1", "value1")
+                                .build(),
+                        false)
+                .get();
         DatabaseInfo databaseInfo = admin.getDatabaseInfo("test_db_2").get();
         long timestampAfterCreate = System.currentTimeMillis();
         assertThat(databaseInfo.getCreatedTime()).isEqualTo(databaseInfo.getModifiedTime());
@@ -182,8 +182,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // create and get a new table
         long timestampBeforeCreate = System.currentTimeMillis();
         TablePath tablePath = TablePath.of("test_db", "table_2");
-        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
         tableInfo = admin.getTableInfo(tablePath).get();
         timestampAfterCreate = System.currentTimeMillis();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
