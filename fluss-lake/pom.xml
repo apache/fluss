@@ -31,6 +31,7 @@
     <name>Fluss : Lake :</name>
     <modules>
         <module>fluss-lake-paimon</module>
+        <module>fluss-lake-lance</module>
     </modules>
     <packaging>pom</packaging>
 </project>
