@@ -15,21 +15,29 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metadata;
+package com.alibaba.fluss.lake.lance;
 
-/** An enum for datalake format. */
-public enum DataLakeFormat {
-    PAIMON("paimon"),
-    LANCE("lance");
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lance.tiering.LanceCommittable;
+import com.alibaba.fluss.lake.lance.tiering.LanceWriteResult;
+import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 
-    private final String value;
+/** Lance implementation of {@link LakeStorage}. */
+public class LanceLakeStorage implements LakeStorage {
+    private final Configuration config;
 
-    DataLakeFormat(String value) {
-        this.value = value;
+    public LanceLakeStorage(Configuration configuration) {
+        this.config = configuration;
     }
 
     @Override
-    public String toString() {
-        return value;
+    public LakeTieringFactory<LanceWriteResult, LanceCommittable> createLakeTieringFactory() {
+        return null;
+    }
+
+    @Override
+    public LanceLakeCatalog createLakeCatalog() {
+        return new LanceLakeCatalog(config);
     }
 }

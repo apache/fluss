@@ -46,6 +46,9 @@ public interface KeyEncoder {
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else if (lakeFormat == DataLakeFormat.PAIMON) {
             return new PaimonKeyEncoder(rowType, keyFields);
+        } else if (lakeFormat == DataLakeFormat.LANCE) {
+            // use default compacted key encoder
+            return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else {
             throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }
