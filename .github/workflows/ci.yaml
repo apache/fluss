@@ -46,10 +46,18 @@ jobs:
       - name: Test
         timeout-minutes: 60
         run: |
-          TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }})
-          echo "github ref: ${{ github.ref }}"
-          echo "Start testing modules: $TEST_MODULES"
-          mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
+            TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }})
+            echo "github ref: ${{ github.ref }}"
+            echo "Start testing modules: $TEST_MODULES"
+            
+            if [ "${{ matrix.module }}" = "flink" ]; then
+              # Use watchdog for Flink tests
+              chmod +x ./tools/ci/flink_watchdog.sh
+              ./tools/ci/flink_watchdog.sh mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
+            else
+              # Regular execution for core tests
+              mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties
+            fi
         env:
           MAVEN_OPTS: -Xmx4096m
           ARTIFACTS_OSS_ENDPOINT: ${{ secrets.ARTIFACTS_OSS_ENDPOINT }}
@@ -71,3 +79,9 @@ jobs:
         with:
           name: jacoco-report-${{ matrix.module }}-${{ github.run_number}}#${{ github.run_attempt }}
           path: ${{ github.workspace }}/fluss-test-coverage/target/site/jacoco-aggregate/*
+      - name: Upload Flink debug artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() && matrix.module == 'flink' }}
+        with:
+          name: flink-debug-${{ github.run_number}}
+          path: ${{ runner.temp }}/flink-debug/*
