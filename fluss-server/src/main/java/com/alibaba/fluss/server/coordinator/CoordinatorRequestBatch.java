@@ -211,7 +211,7 @@ public class CoordinatorRequestBatch {
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
                         id -> {
                             Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>
@@ -231,7 +231,7 @@ public class CoordinatorRequestBatch {
         // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
         // updateMetadata request, trace by: https://github.com/alibaba/fluss/issues/983
         addUpdateMetadataRequestForTabletServers(
-                coordinatorContext.getLiveTabletServers().keySet(),
+                coordinatorContext.liveTabletServerIds(),
                 null,
                 null,
                 Collections.singleton(tableBucket));
@@ -243,7 +243,7 @@ public class CoordinatorRequestBatch {
             boolean isDelete,
             int leaderEpoch) {
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
                         id -> {
                             Map<TableBucket, PbStopReplicaReqForBucket> stopBucketReplica =
@@ -288,7 +288,7 @@ public class CoordinatorRequestBatch {
             Set<TableBucket> tableBuckets) {
         // case9:
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(updateMetadataRequestTabletServerSet::add);
 
         if (tableId != null) {
@@ -349,7 +349,7 @@ public class CoordinatorRequestBatch {
             long remoteLogStartOffset,
             long remoteLogEndOffset) {
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
                         id ->
                                 notifyRemoteLogOffsetsRequestMap.put(
@@ -363,7 +363,7 @@ public class CoordinatorRequestBatch {
     public void addNotifyKvSnapshotOffsetRequestForTabletServers(
             List<Integer> tabletServers, TableBucket tableBucket, long minRetainOffset) {
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
                         id ->
                                 notifyKvSnapshotOffsetRequestMap.put(
@@ -377,7 +377,7 @@ public class CoordinatorRequestBatch {
             TableBucket tableBucket,
             LakeTableSnapshot lakeTableSnapshot) {
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
                         id -> {
                             Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket>
@@ -670,7 +670,7 @@ public class CoordinatorRequestBatch {
         // tablet servers.
         return makeUpdateMetadataRequest(
                 coordinatorContext.getCoordinatorServerInfo(),
-                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                coordinatorContext.liveTabletServerInfos(),
                 tableMetadataList,
                 partitionMetadataList);
     }
