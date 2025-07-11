@@ -45,7 +45,7 @@ The `bucket.num` should be a positive integer. If this value is not provided, a 
 :::
 
 ## Bucket Assigning
-Bucketing is the fundamental unit of parallelism and scalability in Fluss.  A single table in Fluss is divided into multiple buckets. A bucket is the smallest storage unit for reads and writes. See more details about [Bucketing](table-design/data-distribution/bucketing.md).
+Bucketing is the fundamental unit of parallelism and scalability in Fluss.  A single table in Fluss is divided into multiple buckets. A bucket is the smallest storage unit for reads and writes. See more details about [Bucketing](../data-distribution/bucketing.md).
 
 When writing records into log table, Fluss will assign each record to a specific bucket based on the bucket assigning strategy. There are 3 strategies for bucket assigning in Fluss:
 1. **Sticky Bucket Strategy**: As the default strategy, randomly select a bucket and consistently write into that bucket until a record batch is full. Sets `client.writer.bucket.no-key-assigner=sticky` to the table property to enable this strategy.
@@ -62,7 +62,7 @@ Log Tables in Fluss allow real-time data consumption, preserving the order of da
 ## Column Pruning
 
 Column pruning is a technique used to reduce the amount of data that needs to be read from storage by eliminating unnecessary columns from the query.
-Fluss supports column pruning for Log Tables and the changelog of PrimaryKey Tables, which can significantly improve query performance by reducing the amount of data that needs to be read from storage and lowering networking costs.
+Fluss supports column pruning for Log Tables and the changelog of Primary Key Tables, which can significantly improve query performance by reducing the amount of data that needs to be read from storage and lowering networking costs.
 
 What sets Fluss apart is its ability to apply **column pruning during streaming reads**, a capability that is both unique and industry-leading. This ensures that even in real-time streaming scenarios, only the required columns are processed, minimizing resource usage and maximizing efficiency.
 
@@ -90,7 +90,7 @@ Additionally, compression is applied to each column independently, preserving th
 
 When compression is enabled:
 - For **Log Tables**, data is compressed by the writer on the client side, written in a compressed format, and decompressed by the log scanner on the client side.
-- For **PrimaryKey Table changelogs**, compression is performed server-side since the changelog is generated on the server.
+- For **Primary Key Table changelogs**, compression is performed server-side since the changelog is generated on the server.
 
 Log compression significantly reduces networking and storage costs. Benchmark results demonstrate that using the ZSTD compression with level 3 achieves a compression ratio of approximately **5x** (e.g., reducing 5GB of data to 1GB).
 Furthermore, read/write throughput improves substantially due to reduced networking overhead.
@@ -133,4 +133,4 @@ In the above example, we set the compression codec to `LZ4_FRAME` and the compre
 :::
 
 ## Log Tiering
-Log Table supports tiering data to different storage tiers. See more details about [Remote Log](maintenance/tiered-storage/remote-storage.md).
+Log Table supports tiering data to different storage tiers. See more details about [Remote Log](../../maintenance/tiered-storage/remote-storage.md).
