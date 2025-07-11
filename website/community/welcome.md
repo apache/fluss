@@ -51,11 +51,11 @@ Please note that this link may occasionally break when Slack does an upgrade. If
 ## Community Events
 Join our monthly community gatherings to get involved:
 
-**Fluss Contributors Call**
+**Fluss Community Call**
 
 Agenda for upcoming meeting: [Community Sync Docs](https://docs.google.com/document/d/18b7G_dvYx-1FogV7LWEFMHXze5D5T9XZ3h9zSU75dDA/edit?tab=t.0#heading=h.w6zqoksn877i)
 
-Invitation link: [Community Events](https://calendar.google.com/calendar/u/0?cid=MjUzMjY2OTFkY2FmNmRiYjk5MzllZmUxNDliYjg1ZjI4ODhhNjU0YzY5Mzc2M2IyZDQ1NzIwNTAyZGU1MjZmOEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t)
+Google Calendar invite: [Community Events](https://calendar.google.com/calendar/u/0?cid=MjUzMjY2OTFkY2FmNmRiYjk5MzllZmUxNDliYjg1ZjI4ODhhNjU0YzY5Mzc2M2IyZDQ1NzIwNTAyZGU1MjZmOEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t)
 
 Community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
 
