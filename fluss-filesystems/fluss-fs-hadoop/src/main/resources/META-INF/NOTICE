@@ -34,7 +34,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - net.minidev:accessors-smart:2.4.7
 - net.minidev:json-smart:2.4.7
 - org.apache.commons:commons-compress:1.21
-- org.apache.commons:commons-lang3:3.12.0
+- org.apache.commons:commons-lang3:3.18.0
 - org.apache.curator:curator-client:4.2.0
 - org.apache.curator:curator-framework:4.2.0
 - org.apache.hadoop.thirdparty:hadoop-shaded-guava:1.1.1
