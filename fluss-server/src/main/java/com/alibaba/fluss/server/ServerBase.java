@@ -61,6 +61,9 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
 
     private static final Duration INITIALIZATION_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30L);
 
+    protected static final long ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS = 60 * 1000L;
+    protected static final long ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS = 3 * 1000L;
+
     protected final Configuration conf;
 
     protected FileSystem remoteFileSystem;

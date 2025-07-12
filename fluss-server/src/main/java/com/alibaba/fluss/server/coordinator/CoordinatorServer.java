@@ -56,7 +56,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -208,7 +207,9 @@ public class CoordinatorServer extends ServerBase {
             rpcServer.start();
 
             registerCoordinatorLeader();
-            registerZookeeperClientReconnectedListener();
+            // when init session, register coordinator server again
+            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
+                    zkClient, this::registerCoordinatorLeader, this);
 
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
@@ -281,52 +282,42 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void registerCoordinatorLeader() throws Exception {
+        long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         CoordinatorAddress coordinatorAddress =
                 new CoordinatorAddress(
                         this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
-        zkClient.registerCoordinatorLeader(coordinatorAddress);
-    }
 
-    private void registerZookeeperClientReconnectedListener() {
-        ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
-                zkClient,
-                () -> {
-                    // we need to retry to register since although
-                    // zkClient reconnect, the ephemeral node may still exist
-                    // for a while time, retry to wait the ephemeral node removed
-                    // see ZOOKEEPER-2985
-                    long startTime = System.currentTimeMillis();
-                    long retryWaitIntervalMs = Duration.ofSeconds(3).toMillis();
-                    long retryTotalWaitTimeMs = Duration.ofMinutes(1).toMillis();
-                    while (true) {
-                        try {
-                            this.registerCoordinatorLeader();
-                            break;
-                        } catch (KeeperException.NodeExistsException nodeExistsException) {
-                            long elapsedTime = System.currentTimeMillis() - startTime;
-                            if (elapsedTime >= retryTotalWaitTimeMs) {
-                                LOG.error(
-                                        "Coordinator Server register to Zookeeper exceeded total retry time of {} ms. "
-                                                + "Aborting registration attempts.",
-                                        retryTotalWaitTimeMs);
-                                throw nodeExistsException;
-                            }
+        // we need to retry to register since although
+        // zkClient reconnect, the ephemeral node may still exist
+        // for a while time, retry to wait the ephemeral node removed
+        // see ZOOKEEPER-2985
+        while (true) {
+            try {
+                zkClient.registerCoordinatorLeader(coordinatorAddress);
+                break;
+            } catch (KeeperException.NodeExistsException nodeExistsException) {
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                if (elapsedTime >= ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS) {
+                    LOG.error(
+                            "Coordinator Server register to Zookeeper exceeded total retry time of {} ms. "
+                                    + "Aborting registration attempts.",
+                            ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS);
+                    throw nodeExistsException;
+                }
 
-                            LOG.warn(
-                                    "Coordinator server already registered in Zookeeper. "
-                                            + "retrying register after {} ms....",
-                                    retryWaitIntervalMs);
-                            try {
-                                Thread.sleep(retryWaitIntervalMs);
-                            } catch (InterruptedException interruptedException) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                        }
-                    }
-                },
-                this);
+                LOG.warn(
+                        "Coordinator server already registered in Zookeeper. "
+                                + "retrying register after {} ms....",
+                        ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
+                try {
+                    Thread.sleep(ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
     }
 
     private void createDefaultDatabase() {
