@@ -16,6 +16,8 @@
 # limitations under the License.
 ################################################################################
 name: Deploy Documentation
+permissions:
+  contents: read
 on:
   push:
     branches: [main, release-*]
