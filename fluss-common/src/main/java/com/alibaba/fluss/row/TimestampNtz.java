@@ -116,7 +116,7 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
     /** Converts this {@link TimestampNtz} object to a {@link LocalDateTime}. */
     public LocalDateTime toLocalDateTime() {
         int date = (int) (millisecond / MILLIS_PER_DAY);
-        int time = (int) (millisecond % MILLIS_PER_DAY);
+        long time = millisecond % MILLIS_PER_DAY;
         if (time < 0) {
             --date;
             time += MILLIS_PER_DAY;
