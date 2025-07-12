@@ -30,7 +30,7 @@
     <name>Fluss : Kafka Compatibility</name>
 
     <properties>
-        <kafka.version>3.9.0</kafka.version>
+        <kafka.version>3.9.1</kafka.version>
     </properties>
 
     <dependencies>
