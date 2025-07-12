@@ -101,6 +101,11 @@ public final class CoordinatorEventManager implements EventManager {
                         QueuedEvent queuedEvent =
                                 new QueuedEvent(event, System.currentTimeMillis());
                         queue.put(queuedEvent);
+
+                        LOG.debug(
+                                "Put coordinator event {} of event type {}.",
+                                event,
+                                event.getClass());
                     } catch (InterruptedException e) {
                         LOG.error("Fail to put coordinator event {}.", event, e);
                     }
@@ -129,6 +134,10 @@ public final class CoordinatorEventManager implements EventManager {
 
             long eventStartTimeMs = System.currentTimeMillis();
 
+            LOG.debug(
+                    "Start processing event {} of event type {}.",
+                    coordinatorEvent,
+                    coordinatorEvent.getClass());
             try {
                 if (!(coordinatorEvent instanceof ShutdownEventThreadEvent)) {
                     eventQueueTime.update(System.currentTimeMillis() - queuedEvent.enqueueTimeMs);
@@ -137,8 +146,13 @@ public final class CoordinatorEventManager implements EventManager {
             } catch (Throwable e) {
                 log.error("Uncaught error processing event {}.", coordinatorEvent, e);
             } finally {
-                long eventFinishTimeMs = System.currentTimeMillis();
-                eventProcessingTime.update(eventFinishTimeMs - eventStartTimeMs);
+                long costTimeMs = System.currentTimeMillis() - eventStartTimeMs;
+                eventProcessingTime.update(costTimeMs);
+                LOG.debug(
+                        "Finished processing event {} of event type {} in {}ms.",
+                        coordinatorEvent,
+                        coordinatorEvent.getClass(),
+                        costTimeMs);
             }
         }
     }
