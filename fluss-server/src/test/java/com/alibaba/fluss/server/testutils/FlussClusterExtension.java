@@ -41,6 +41,7 @@ import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.DefaultAuthorizer;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
@@ -81,6 +82,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -519,13 +521,6 @@ public final class FlussClusterExtension
 
     /** Wait until all the table assignments buckets are ready for table. */
     public void waitUtilTableReady(long tableId) {
-        waitUtilTableReadyWithAuthorization(tableId, null);
-    }
-
-    /**
-     * Wait until all the table assignments buckets and required authorization are ready for table.
-     */
-    public void waitUtilTableReadyWithAuthorization(long tableId, @Nullable AclBinding aclBinding) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -534,29 +529,40 @@ public final class FlussClusterExtension
                             zkClient.getTableAssignment(tableId);
                     assertThat(tableAssignmentOpt).isPresent();
                     waitReplicaInAssignmentReady(zkClient, tableAssignmentOpt.get(), tableId, null);
+                });
+    }
 
-                    if (aclBinding != null) {
-                        getTabletServers()
-                                .forEach(
-                                        ts -> {
-                                            Authorizer authorizer = ts.getAuthorizer();
-                                            assertThat(authorizer).isNotNull();
-                                            AccessControlEntry accessControlEntry =
-                                                    aclBinding.getAccessControlEntry();
-                                            assertThat(
-                                                            ((DefaultAuthorizer) authorizer)
-                                                                    .aclsAllowAccess(
-                                                                            aclBinding
-                                                                                    .getResource(),
-                                                                            accessControlEntry
-                                                                                    .getPrincipal(),
-                                                                            accessControlEntry
-                                                                                    .getOperationType(),
-                                                                            accessControlEntry
-                                                                                    .getHost()))
-                                                    .isTrue();
-                                        });
-                    }
+    /**
+     * Wait until all authorization are synchronized to all tablet servers.
+     *
+     * @param aclBindings aclBindings to be synchronized.
+     * @param exist whether aclBinding exist.
+     */
+    public void waitUtilAuthenticationSync(Collection<AclBinding> aclBindings, boolean exist) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    Set<ServerBase> servers = new HashSet<>(getTabletServers());
+                    servers.add(getCoordinatorServer());
+                    servers.forEach(
+                            ts -> {
+                                Authorizer authorizer = ts.getAuthorizer();
+                                assertThat(authorizer).isNotNull();
+                                for (AclBinding aclBinding : aclBindings) {
+                                    AccessControlEntry accessControlEntry =
+                                            aclBinding.getAccessControlEntry();
+                                    assertThat(
+                                                    ((DefaultAuthorizer) authorizer)
+                                                            .aclsAllowAccess(
+                                                                    aclBinding.getResource(),
+                                                                    accessControlEntry
+                                                                            .getPrincipal(),
+                                                                    accessControlEntry
+                                                                            .getOperationType(),
+                                                                    accessControlEntry.getHost()))
+                                            .isEqualTo(exist);
+                                }
+                            });
                 });
     }
 

@@ -22,6 +22,12 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.metadata.DataLakeFormat;
+import com.alibaba.fluss.security.acl.AccessControlEntry;
+import com.alibaba.fluss.security.acl.AclBinding;
+import com.alibaba.fluss.security.acl.FlussPrincipal;
+import com.alibaba.fluss.security.acl.OperationType;
+import com.alibaba.fluss.security.acl.PermissionType;
+import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -37,6 +43,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
@@ -163,6 +170,16 @@ public abstract class FlinkProcedureITCase {
                                 : "Call %s.sys.drop_acl('cluster', 'allow', 'User:Alice', 'read', '127.0.0.1' )",
                         CATALOG_NAME);
         tEnv.executeSql(addAcl).await();
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.cluster(),
+                                new AccessControlEntry(
+                                        new FlussPrincipal("Alice", "User"),
+                                        "127.0.0.1",
+                                        OperationType.READ,
+                                        PermissionType.ALLOW)));
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
             List<String> acls =
                     CollectionUtil.iteratorToList(listProceduresIterator).stream()
@@ -173,6 +190,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"127.0.0.1\"]");
         }
         tEnv.executeSql(dropAcl).await();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, false);
         try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
             List<String> acls =
                     CollectionUtil.iteratorToList(listProceduresIterator).stream()

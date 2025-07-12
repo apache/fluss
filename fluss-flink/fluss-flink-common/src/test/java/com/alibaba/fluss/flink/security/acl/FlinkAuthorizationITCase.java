@@ -24,8 +24,11 @@ import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.flink.catalog.FlinkCatalogOptions;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.security.acl.AccessControlEntry;
+import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.acl.OperationType;
+import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.auth.sasl.jaas.LoginManager;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
@@ -421,6 +424,13 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()))
                 .await();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(
+                Collections.singletonList(
+                        new AclBinding(
+                                resource,
+                                new AccessControlEntry(
+                                        guest, "*", operationType, PermissionType.ALLOW))),
+                true);
     }
 
     void dropAcl(Resource resource, OperationType operationType)
@@ -433,6 +443,13 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()))
                 .await();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(
+                Collections.singletonList(
+                        new AclBinding(
+                                resource,
+                                new AccessControlEntry(
+                                        guest, "*", operationType, PermissionType.ALLOW))),
+                false);
     }
 
     private static Configuration initConfig() {
