@@ -56,7 +56,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final FileStoreTable fileStoreTable;
     private FileStoreCommit fileStoreCommit;
     private final TablePath tablePath;
-    private Long tempCommitSnapshotId;
+    private static Long tempCommitSnapshotId;
 
     public PaimonLakeCommitter(PaimonCatalogProvider paimonCatalogProvider, TablePath tablePath)
             throws IOException {
@@ -195,7 +195,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         }
     }
 
-    private class PaimonCommitCallback implements CommitCallback {
+    /** A {@link CommitCallback} to save paimon commit snapshot info. */
+    public static class PaimonCommitCallback implements CommitCallback {
 
         @Override
         public void call(
