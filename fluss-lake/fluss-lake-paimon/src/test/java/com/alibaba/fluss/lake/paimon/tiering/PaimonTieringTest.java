@@ -120,7 +120,7 @@ class PaimonTieringTest {
         SimpleVersionedSerializer<PaimonWriteResult> writeResultSerializer =
                 paimonLakeTieringFactory.getWriteResultSerializer();
         SimpleVersionedSerializer<PaimonCommittable> committableSerializer =
-                paimonLakeTieringFactory.getCommitableSerializer();
+                paimonLakeTieringFactory.getCommittableSerializer();
 
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath)) {
@@ -161,7 +161,7 @@ class PaimonTieringTest {
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath)) {
             // serialize/deserialize committable
-            PaimonCommittable paimonCommittable = lakeCommitter.toCommitable(paimonWriteResults);
+            PaimonCommittable paimonCommittable = lakeCommitter.toCommittable(paimonWriteResults);
             byte[] serialized = committableSerializer.serialize(paimonCommittable);
             paimonCommittable =
                     committableSerializer.deserialize(
@@ -246,7 +246,7 @@ class PaimonTieringTest {
         // Commit all data
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath)) {
-            PaimonCommittable committable = lakeCommitter.toCommitable(paimonWriteResults);
+            PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             long snapshot = lakeCommitter.commit(committable);
             assertThat(snapshot).isEqualTo(1);
         }
@@ -295,7 +295,7 @@ class PaimonTieringTest {
         // Commit all data
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath)) {
-            PaimonCommittable committable = lakeCommitter.toCommitable(paimonWriteResults);
+            PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             long snapshot = lakeCommitter.commit(committable);
             assertThat(snapshot).isEqualTo(1);
         }

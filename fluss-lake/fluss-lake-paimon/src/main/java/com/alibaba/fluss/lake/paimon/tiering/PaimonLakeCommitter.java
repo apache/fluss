@@ -65,7 +65,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     @Override
-    public PaimonCommittable toCommitable(List<PaimonWriteResult> paimonWriteResults)
+    public PaimonCommittable toCommittable(List<PaimonWriteResult> paimonWriteResults)
             throws IOException {
         ManifestCommittable committable = new ManifestCommittable(COMMIT_IDENTIFIER);
         for (PaimonWriteResult paimonWriteResult : paimonWriteResults) {

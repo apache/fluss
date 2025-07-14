@@ -166,16 +166,16 @@ public interface LakeTieringFactory {
 
 	SimpleVersionedSerializer<WriteResult> getWriteResultSerializer();
 
-	LakeCommitter<WriteResult, CommitableT> createLakeCommitter(
+	LakeCommitter<WriteResult, CommittableT> createLakeCommitter(
             CommitterInitContext committerInitContext);
 
-	SimpleVersionedSerializer<CommitableT> getCommitableSerializer();
+	SimpleVersionedSerializer<CommittableT> getCommittableSerializer();
 }
 ```
 - **createLakeWriter(WriterInitContext)**: builds a `LakeWriter` to convert Fluss rows into the target table format.
 - **getWriteResultSerializer()**: supplies a serializer for the writer’s output.
 - **createLakeCommitter(CommitterInitContext)**: constructs a `LakeCommitter` to finalize and atomically commit data files.
-- **getCommitableSerializer()**: provides a serializer for committable tokens.```
+- **getCommittableSerializer()**: provides a serializer for committable tokens.```
 
 By default, Fluss includes a Paimon-backed tiering factory; Iceberg support is coming soon. Once the `TieringSourceReader` writes a batch of records through the `LakeWriter`, it emits the resulting write metadata downstream to the **TieringCommitOperator**, which then commits those changes both in the lakehouse and back to the Fluss cluster.
 

@@ -42,7 +42,7 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
      * @return the committable object
      * @throws IOException if an I/O error occurs
      */
-    CommittableT toCommitable(List<WriteResult> writeResults) throws IOException;
+    CommittableT toCommittable(List<WriteResult> writeResults) throws IOException;
 
     /**
      * Commits the given committable object.

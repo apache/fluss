@@ -66,8 +66,9 @@ public class TestingLakeTieringFactory
     }
 
     @Override
-    public SimpleVersionedSerializer<TestingCommittable> getCommitableSerializer() {
-        throw new UnsupportedOperationException("method getCommitableSerializer is not supported.");
+    public SimpleVersionedSerializer<TestingCommittable> getCommittableSerializer() {
+        throw new UnsupportedOperationException(
+                "method getCommittableSerializer is not supported.");
     }
 
     private static final class TestingLakeWriter implements LakeWriter<TestingWriteResult> {
@@ -107,7 +108,7 @@ public class TestingLakeTieringFactory
         }
 
         @Override
-        public TestingCommittable toCommitable(List<TestingWriteResult> testingWriteResults)
+        public TestingCommittable toCommittable(List<TestingWriteResult> testingWriteResults)
                 throws IOException {
             List<Integer> writeResults = new ArrayList<>();
             for (TestingWriteResult testingWriteResult : testingWriteResults) {
