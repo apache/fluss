@@ -331,7 +331,6 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         // test scan a not exist partition's log
         LogScanner logScanner = table.newScan().createLogScanner();
         assertThatThrownBy(() -> logScanner.subscribe(100L, 0, 0))
-                .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining("Partition not exist for partition ids: [100]");
         logScanner.close();

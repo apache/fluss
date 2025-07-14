@@ -124,7 +124,8 @@ public final class ClientUtils {
             InternalRow row,
             PartitionGetter partitionGetter,
             TablePath tablePath,
-            MetadataUpdater metadataUpdater) {
+            MetadataUpdater metadataUpdater)
+            throws PartitionNotExistException {
         checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
         String partitionName = partitionGetter.getPartition(row);
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
