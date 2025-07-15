@@ -39,6 +39,7 @@ jobs:
         with:
           java-version: 8
           distribution: 'temurin'
+
       - name: Build
         run: |
           set -o pipefail
