@@ -22,6 +22,7 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.InternalRow;
@@ -33,6 +34,7 @@ import com.alibaba.fluss.types.BooleanType;
 import com.alibaba.fluss.types.BytesType;
 import com.alibaba.fluss.types.CharType;
 import com.alibaba.fluss.types.DataTypeRoot;
+import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.DateType;
 import com.alibaba.fluss.types.DoubleType;
 import com.alibaba.fluss.types.FloatType;
@@ -154,7 +156,33 @@ class NewPartitionedTableITCase extends ClientToServerITCaseBase {
                     "2025-05-31-03-42-35_428");
 
     @Test
-    void testMultipleTypedPartitionedTable() throws Exception {
+    public void testPartitionedTable() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "person");
+
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("name", DataTypes.STRING())
+                                        .column("dt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "name")
+                        .partitionedBy("id", "dt")
+                        .build();
+        admin.createTable(tablePath, partitionedTable, true).get();
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        assertThat(tableInfo).isNotNull();
+        assertThat(tableInfo.getTablePath()).isEqualTo(tablePath);
+
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+        assertThat(partitionKeys).hasSize(2);
+        assertThat(partitionKeys).containsExactly("id", "dt");
+    }
+
+    @Test
+    public void testMultipleTypedPartitionedTable() throws Exception {
 
         for (int i = 0; i < allPartitionKeyTypes.length; i++) {
             String partitionKey = extraColumn[i].getName();
