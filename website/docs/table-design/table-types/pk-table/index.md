@@ -144,12 +144,15 @@ SELECT * FROM T;
 Generate the following output in the Flink SQL CLI:
 
 ```
++-----------------------------+
 | op   | k    | v1   | v2     |
 | ---- | ---- | ---- | ------ |
 | +I   | 1    | 2.0  | apple  |
 | -U   | 1    | 2.0  | apple  |
 | +U   | 1    | 4.0  | banana |
 | -D   | 1    | 4.0  | banana |
++-----------------------------+
+4 rows in set
 ```
 
 ## Data Queries
