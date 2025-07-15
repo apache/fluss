@@ -27,10 +27,57 @@
         <version>0.8-SNAPSHOT</version>
     </parent>
 
+    <properties>
+        <flink.major.version>1.20</flink.major.version>
+        <flink.version>1.20.1</flink.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-core</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-table-common</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-table-runtime</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-base</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-files</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-table-test-utils</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.alibaba.fluss</groupId>
+                <artifactId>fluss-flink-${flink.major.version}</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+
     <artifactId>fluss-lake</artifactId>
     <name>Fluss : Lake :</name>
     <modules>
         <module>fluss-lake-paimon</module>
+        <module>fluss-lake-iceberg</module>
     </modules>
     <packaging>pom</packaging>
 </project>

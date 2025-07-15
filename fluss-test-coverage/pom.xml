@@ -325,6 +325,8 @@
                                         <exclude>com.alibaba.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>com.alibaba.fluss.lake.committer.CommittedLakeSnapshot</exclude>
                                         <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
+                                        <!-- temporarily exclude iceberg -->
+                                        <exclude>com.alibaba.fluss.lake.iceberg.*</exclude>
                                         <!-- start exclude for flink tiering service -->
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceOptions</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource.Builder</exclude>

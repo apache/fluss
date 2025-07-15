@@ -101,6 +101,13 @@
             <destName>fluss-lake-paimon-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
+
+        <file>
+            <source>../fluss-lake/fluss-lake-iceberg/target/fluss-lake-iceberg-${project.version}.jar</source>
+            <outputDirectory>plugins/iceberg/</outputDirectory>
+            <destName>fluss-lake-iceberg-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
     </files>
 
 </assembly>
