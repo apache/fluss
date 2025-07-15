@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/alibaba/fluss/actions/workflows/ci.yaml"><img src="https://github.com/alibaba/fluss/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/alibaba/fluss/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202-4EB1BA.svg" alt="License"></a>
-  <a href="https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw"><img src="https://img.shields.io/badge/slack-join_chat-brightgreen.svg?logo=slack" alt="Slack"></a>
+  <a href="https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw"><img src="https://img.shields.io/badge/slack-join_chat-brightgreen.svg?logo=slack" alt="Slack"></a>
 </p>
 
 ## What is Apache Fluss (Incubating)?
