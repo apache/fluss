@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.cluster;
 
-import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -56,7 +55,7 @@ class ClusterTest {
                 new ServerNode(11, "localhost", 102, ServerType.TABLET_SERVER, "rack11")
             };
 
-    private Configuration conf;
+    private static final int[] NODES_IDS = new int[] {0, 1, 2, 11};
     private Map<Integer, ServerNode> aliveTabletServersById;
 
     @BeforeEach
@@ -81,8 +80,8 @@ class ClusterTest {
                                                         DATA1_PHYSICAL_TABLE_PATH,
                                                         DATA1_TABLE_ID,
                                                         3,
-                                                        NODES[3],
-                                                        NODES)))
+                                                        NODES_IDS[3],
+                                                        NODES_IDS)))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
@@ -127,8 +126,8 @@ class ClusterTest {
                                         PhysicalTablePath.of(DATA2_TABLE_PATH),
                                         DATA2_TABLE_ID,
                                         1,
-                                        NODES[0],
-                                        NODES)));
+                                        NODES_IDS[0],
+                                        NODES_IDS)));
     }
 
     private Cluster createCluster() {
@@ -137,11 +136,19 @@ class ClusterTest {
                 DATA1_PHYSICAL_TABLE_PATH,
                 Arrays.asList(
                         new BucketLocation(
-                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, NODES[0], NODES),
+                                DATA1_PHYSICAL_TABLE_PATH,
+                                DATA1_TABLE_ID,
+                                0,
+                                NODES_IDS[0],
+                                NODES_IDS),
                         new BucketLocation(
-                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, null, NODES),
+                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, null, NODES_IDS),
                         new BucketLocation(
-                                DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, NODES[2], NODES)));
+                                DATA1_PHYSICAL_TABLE_PATH,
+                                DATA1_TABLE_ID,
+                                2,
+                                NODES_IDS[2],
+                                NODES_IDS)));
         tablePathToBucketLocations.put(
                 PhysicalTablePath.of(DATA2_TABLE_PATH),
                 Arrays.asList(
@@ -150,13 +157,13 @@ class ClusterTest {
                                 DATA2_TABLE_ID,
                                 0,
                                 null,
-                                NODES),
+                                NODES_IDS),
                         new BucketLocation(
                                 PhysicalTablePath.of(DATA2_TABLE_PATH),
                                 DATA2_TABLE_ID,
                                 1,
-                                NODES[0],
-                                NODES)));
+                                NODES_IDS[0],
+                                NODES_IDS)));
 
         Map<TablePath, Long> tablePathToTableId = new HashMap<>();
         tablePathToTableId.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);

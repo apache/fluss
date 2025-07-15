@@ -24,7 +24,6 @@ import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
 import com.alibaba.fluss.cluster.BucketLocation;
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidMetadataException;
@@ -40,8 +39,6 @@ import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
 import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
-import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
@@ -91,7 +88,6 @@ public class LogFetcher implements Closeable {
     //  bytes from remote file.
     private final LogRecordReadContext remoteReadContext;
     @Nullable private final Projection projection;
-    private final RpcClient rpcClient;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final int minFetchBytes;
@@ -114,7 +110,6 @@ public class LogFetcher implements Closeable {
     public LogFetcher(
             TableInfo tableInfo,
             @Nullable Projection projection,
-            RpcClient rpcClient,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater,
@@ -126,7 +121,6 @@ public class LogFetcher implements Closeable {
         this.remoteReadContext =
                 LogRecordReadContext.createReadContext(tableInfo, true, projection);
         this.projection = projection;
-        this.rpcClient = rpcClient;
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
                 (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
@@ -199,18 +193,14 @@ public class LogFetcher implements Closeable {
         TableOrPartitions tableOrPartitionsInFetchRequest =
                 getTableOrPartitionsInFetchRequest(fetchLogRequest);
         // TODO cache the tablet server gateway.
-        ServerNode destinationNode = metadataUpdater.getTabletServer(destination);
-        if (destinationNode == null) {
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
             handleFetchLogException(
                     destination,
                     tableOrPartitionsInFetchRequest,
                     new LeaderNotAvailableException(
                             "Server " + destination + " is not found in metadata cache."));
         } else {
-            TabletServerGateway gateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> destinationNode, rpcClient, TabletServerGateway.class);
-
             final long requestStartTime = System.currentTimeMillis();
             scannerMetricGroup.fetchRequestCount().inc();
 
@@ -485,7 +475,7 @@ public class LogFetcher implements Closeable {
         if (metadataUpdater.getBucketLocation(tableBucket).isPresent()) {
             BucketLocation bucketLocation = metadataUpdater.getBucketLocation(tableBucket).get();
             if (bucketLocation.getLeader() != null) {
-                return bucketLocation.getLeader().id();
+                return bucketLocation.getLeader();
             }
         }
 
