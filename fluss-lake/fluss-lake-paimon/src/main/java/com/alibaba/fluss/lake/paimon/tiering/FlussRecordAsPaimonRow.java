@@ -27,6 +27,7 @@ import org.apache.paimon.data.InternalArray;
 import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
+import org.apache.paimon.data.variant.Variant;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
@@ -187,6 +188,12 @@ public class FlussRecordAsPaimonRow implements InternalRow {
     @Override
     public byte[] getBinary(int pos) {
         return internalRow.getBytes(pos);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        throw new UnsupportedOperationException(
+                "getVariant is not support for Fluss record currently.");
     }
 
     @Override
