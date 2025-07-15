@@ -301,6 +301,37 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Updated {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
     }
 
+    public void batchUpdateLeaderAndIsr(Map<TableBucket, LeaderAndIsr> batchUpdate)
+            throws Exception {
+        if (batchUpdate.isEmpty()) {
+            return;
+        }
+
+        List<CuratorOp> ops = new ArrayList<>(batchUpdate.size());
+
+        for (Map.Entry<TableBucket, LeaderAndIsr> entry : batchUpdate.entrySet()) {
+            String path = LeaderAndIsrZNode.path(entry.getKey());
+
+            CuratorOp nodeUpdate =
+                    zkClient.transactionOp()
+                            .setData()
+                            .forPath(path, LeaderAndIsrZNode.encode(entry.getValue()));
+            ops.add(nodeUpdate);
+            if (ops.size() == MAX_BATCH_SIZE) {
+                zkClient.transaction().forOperations(ops);
+                ops.clear();
+            }
+        }
+        if (!ops.isEmpty()) {
+            zkClient.transaction().forOperations(ops);
+        }
+        TableBucket first = batchUpdate.keySet().iterator().next();
+        LOG.info(
+                "Batch updated leadAndIsr for tableId: {}, partitionId: {} in Zookeeper.",
+                first.getTableId(),
+                first.getPartitionId());
+    }
+
     public void deleteLeaderAndIsr(TableBucket tableBucket) throws Exception {
         String path = LeaderAndIsrZNode.path(tableBucket);
         zkClient.delete().forPath(path);

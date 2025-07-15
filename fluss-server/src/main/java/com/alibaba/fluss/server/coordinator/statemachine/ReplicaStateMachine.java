@@ -33,12 +33,14 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -264,7 +266,9 @@ public class ReplicaStateMachine {
 
                 // then, may remove the offline replica from isr
                 Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr =
-                        doRemoveReplicaFromIsr(validReplicas);
+                        checkIfDropTableOrPartitionRequest(validReplicas)
+                                ? doBatchRemoveReplicaFromIsr(validReplicas)
+                                : doRemoveReplicaFromIsr(validReplicas);
                 // notify leader and isr changes
                 for (Map.Entry<TableBucketReplica, LeaderAndIsr> leaderAndIsrEntry :
                         adjustedLeaderAndIsr.entrySet()) {
@@ -461,6 +465,92 @@ public class ReplicaStateMachine {
         return adjustedLeaderAndIsr;
     }
 
+    private Map<TableBucketReplica, LeaderAndIsr> doBatchRemoveReplicaFromIsr(
+            Collection<TableBucketReplica> tableBucketReplicas) {
+        Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr = new HashMap<>();
+
+        Map<TableBucket, LeaderAndIsr> batchUpdate = new HashMap<>();
+
+        for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
+            // when drop whole table or partition, we don't need to re-election and change isr one
+            // by one
+            // just set leader to NO_LEADER and set isr to empty.
+            TableBucket tableBucket = tableBucketReplica.getTableBucket();
+            if (batchUpdate.containsKey(tableBucket)) {
+                continue;
+            }
+
+            Optional<LeaderAndIsr> optLeaderAndIsr =
+                    coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+            if (!optLeaderAndIsr.isPresent()) {
+                // no leader and isr for this table bucket, skip
+                continue;
+            }
+
+            int newLeader = LeaderAndIsr.NO_LEADER;
+            LeaderAndIsr adjustLeaderAndIsr =
+                    optLeaderAndIsr.get().newLeaderAndIsr(newLeader, new ArrayList<>());
+
+            batchUpdate.put(tableBucket, adjustLeaderAndIsr);
+        }
+        try {
+            // batch update leader and isr
+            zooKeeperClient.batchUpdateLeaderAndIsr(batchUpdate);
+        } catch (Exception e) {
+            LOG.error(
+                    "Fail to batch update bucket LeaderAndIsr, The first bucket info: {}.",
+                    tableBucketReplicas.iterator().next().getTableBucket(),
+                    e);
+            // try to remove one by one
+            return doRemoveReplicaFromIsr(tableBucketReplicas);
+        }
+        for (Map.Entry<TableBucket, LeaderAndIsr> entry : batchUpdate.entrySet()) {
+            coordinatorContext.putBucketLeaderAndIsr(entry.getKey(), entry.getValue());
+        }
+        for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
+            adjustedLeaderAndIsr.put(
+                    tableBucketReplica, batchUpdate.get(tableBucketReplica.getTableBucket()));
+        }
+        return adjustedLeaderAndIsr;
+    }
+
+    private boolean checkIfDropTableOrPartitionRequest(
+            Collection<TableBucketReplica> tableBucketReplicas) {
+        // Check if all bucket replica belong to the same table (partition)
+        // and tableBucketReplicas.size() = total table(partition) replica count.
+        // If so, this is surely a table or partition deletion request.
+        // We will merge the unregister zk requests to speed up in this case.
+        if (tableBucketReplicas.isEmpty()) {
+            return false;
+        }
+
+        TableBucket first = tableBucketReplicas.iterator().next().getTableBucket();
+        TableOrPartition compareTarget =
+                new TableOrPartition(first.getTableId(), first.getPartitionId());
+        for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
+            TableOrPartition compared =
+                    new TableOrPartition(
+                            tableBucketReplica.getTableBucket().getTableId(),
+                            tableBucketReplica.getTableBucket().getPartitionId());
+            if (!compareTarget.equals(compared)) {
+                return false;
+            }
+        }
+
+        Set<TableBucketReplica> allReplicaSet;
+        if (first.getPartitionId() == null) {
+            // non-partitioned table
+            allReplicaSet = coordinatorContext.getAllReplicasForTable(first.getTableId());
+        } else {
+            // partition table
+            allReplicaSet =
+                    coordinatorContext.getAllReplicasForPartition(
+                            first.getTableId(), first.getPartitionId());
+        }
+
+        return allReplicaSet.size() == tableBucketReplicas.size();
+    }
+
     @Nullable
     private String getPartitionName(TableBucket tableBucket) throws PartitionNotExistException {
         String partitionName;
@@ -476,5 +566,32 @@ public class ReplicaStateMachine {
             partitionName = null;
         }
         return partitionName;
+    }
+
+    private static class TableOrPartition {
+        private final long tableId;
+        private final @Nullable Long partitionId;
+
+        private TableOrPartition(long tableId, @Nullable Long partitionId) {
+            this.tableId = tableId;
+            this.partitionId = partitionId;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            TableOrPartition that = (TableOrPartition) o;
+            return tableId == that.tableId && Objects.equals(partitionId, that.partitionId);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(tableId, partitionId);
+        }
     }
 }
