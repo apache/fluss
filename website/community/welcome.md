@@ -44,7 +44,7 @@ Fluss has two mailing lists:
     * [Archive](https://lists.apache.org/list.html?user@fluss.apache.org)
 
 ## Slack
-We use the [Fluss workspace](https://fluss-hq.slack.com/) on Slack for real-time communication and collaboration. You can join the community using [this invite link](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw).
+We use the [Fluss workspace](https://apache-fluss.slack.com/) on Slack for real-time communication and collaboration. You can join the community using [this invite link](https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw).
 
 Please note that this link may occasionally break when Slack does an upgrade. If you encounter problems using it, please let us know by creating an issue on GitHub.
 
