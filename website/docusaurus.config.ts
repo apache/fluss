@@ -158,7 +158,7 @@ const config: Config = {
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
         {
-            label: 'ASF', position: 'left', items: [
+            label: 'ASF', position: 'right', items: [
                 {to: 'https://www.apache.org/', label: 'Foundation'},
                 {to: 'https://www.apache.org/licenses/', label: 'License'},
                 {to: 'https://www.apache.org/foundation/sponsorship.html', label: 'Donate'},
