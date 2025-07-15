@@ -417,8 +417,7 @@ public class FlussAdmin implements Admin {
         ListAclsRequest listAclsRequest =
                 new ListAclsRequest().setAclFilter(toPbAclFilter(aclBindingFilter));
 
-        readOnlyGateway
-                .listAcls(listAclsRequest)
+        gateway.listAcls(listAclsRequest)
                 .whenComplete(
                         (r, t) -> {
                             if (t != null) {

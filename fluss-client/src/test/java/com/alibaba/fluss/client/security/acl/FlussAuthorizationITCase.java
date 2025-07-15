@@ -228,7 +228,6 @@ public class FlussAuthorizationITCase {
                                         OperationType.DESCRIBE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).hasSize(1);
 
         // test whether the user have authorization to operate create and drop acls.
@@ -270,9 +269,7 @@ public class FlussAuthorizationITCase {
                                         OperationType.ALTER,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         guestAdmin.createAcls(noAuthorizationAclBinding).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(noAuthorizationAclBinding, true);
 
         assertThat(
                         guestAdmin
@@ -290,7 +287,6 @@ public class FlussAuthorizationITCase {
         Collection<AclBinding> allAclBinds = rootAdmin.listAcls(AclBindingFilter.ANY).get();
         assertThat(guestAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get())
                 .containsExactlyInAnyOrderElementsOf(allAclBinds);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(allAclBinds, false);
         assertThat(rootAdmin.listAcls(AclBindingFilter.ANY).get()).isEmpty();
     }
 
@@ -316,7 +312,6 @@ public class FlussAuthorizationITCase {
                                         OperationType.CREATE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         guestAdmin.createDatabase("test-database2", DatabaseDescriptor.EMPTY, false).get();
         assertThat(rootAdmin.databaseExists("test-database1").get()).isFalse();
         assertThat(rootAdmin.databaseExists("test-database2").get()).isTrue();
@@ -383,7 +378,6 @@ public class FlussAuthorizationITCase {
                                         OperationType.CREATE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         guestAdmin.createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false).get();
         assertThat(rootAdmin.tableExists(DATA1_TABLE_PATH).get()).isTrue();
     }
