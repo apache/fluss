@@ -98,7 +98,7 @@ public class LakeTieringJobBuilder {
         source.transform(
                         "TieringCommitter",
                         CommittableMessageTypeInfo.of(
-                                () -> lakeTieringFactory.getCommitableSerializer()),
+                                () -> lakeTieringFactory.getCommittableSerializer()),
                         new TieringCommitOperatorFactory(flussConfig, lakeTieringFactory))
                 .setParallelism(1)
                 .setMaxParallelism(1)

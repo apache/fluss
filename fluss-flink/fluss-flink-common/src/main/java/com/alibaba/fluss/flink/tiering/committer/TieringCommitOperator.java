@@ -64,7 +64,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
  *
  * <p>When it collects all {@link TableBucketWriteResult}s of a round of tiering for a table, it
  * will combine all the {@link WriteResult}s to {@link Committable} via method {@link
- * LakeCommitter#toCommitable(List)}, and then call method {@link LakeCommitter#commit(Object)} to
+ * LakeCommitter#toCommittable(List)}, and then call method {@link LakeCommitter#commit(Object)} to
  * commit to lake.
  *
  * <p>Finally, it will also commit the commited lake snapshot to Fluss cluster to make Fluss aware
@@ -180,7 +180,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                             .map(TableBucketWriteResult::writeResult)
                             .collect(Collectors.toList());
             // to committable
-            Committable committable = lakeCommitter.toCommitable(writeResults);
+            Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot commited by fluss
             checkFlussNotMissingLakeSnapshot(tablePath, lakeCommitter, committable);
             long commitedSnapshotId = lakeCommitter.commit(committable);
