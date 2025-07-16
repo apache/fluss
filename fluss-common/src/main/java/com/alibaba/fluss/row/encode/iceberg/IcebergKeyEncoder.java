@@ -15,21 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metadata;
+package com.alibaba.fluss.row.encode.iceberg;
 
-/** An enum for datalake format. */
-public enum DataLakeFormat {
-    PAIMON("paimon"),
-    ICEBERG("iceberg");
+import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.encode.KeyEncoder;
 
-    private final String value;
+/** An implementation of {@link KeyEncoder} to follow Iceberg's encoding strategy. */
+public class IcebergKeyEncoder implements KeyEncoder {
 
-    DataLakeFormat(String value) {
-        this.value = value;
-    }
 
     @Override
-    public String toString() {
-        return value;
+    public byte[] encodeKey(InternalRow row) {
+        return new byte[0];
     }
 }
