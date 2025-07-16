@@ -56,7 +56,7 @@ In the sections that follow, we’ll dive into the **TieringSource** and **Tieri
 ![](assets/tiering_service/tiering-source.png)
 
 The **TieringSource** operator reads records from the Fluss tiering table and writes them into your data lake. 
-Built on Flink’s Source V2 API ([FLIP-27](https://cwiki.apache.org/confluence/display/FLINK/FLIP-238:+Introduce+FLIP-27-based+Data+Generator+Source)), it breaks down into two core components: the **TieringSourceEnumerator** and the **TieringSourceReader**. 
+Built on Flink’s Source V2 API ([FLIP-27](https://cwiki.apache.org/confluence/display/FLINK/FLIP-27%3A+Refactor+Source+Interface)), it breaks down into two core components: the **TieringSourceEnumerator** and the **TieringSourceReader**. 
 The high-level workflow is as follows:
 
 1. The **Enumerator** queries the **CoordinatorService** for current tiering table metadata.
