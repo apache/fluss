@@ -47,8 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       released
  * </ul>
  *
- * <p>Closeable state determination: When reference count is 0, it's in closeable state, no
- * additional state variables needed.
+ * <p>Closeable state determination: When reference count is 0, it's in closeable state.
  *
  * <p>Note: This class is thread-safe and can be used concurrently across multiple threads.
  */
@@ -145,8 +144,6 @@ public class RocksDBSharedResource {
             LOG.debug("Released RocksDBSharedResource, reference count: {}", newCount);
 
             if (newCount == 0) {
-                // When reference count is 0, don't release resources, just enter closeable state
-                LOG.debug("RocksDBSharedResource transitioned to closeable state");
                 // Wake up any waiting close() method
                 lock.notifyAll();
             } else if (newCount < 0) {
@@ -242,6 +239,12 @@ public class RocksDBSharedResource {
         }
 
         long cacheSize = configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes();
+        int cacheNumShardBits =
+                configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_NUM_SHARD_BITS);
+        boolean strictCapacityLimit =
+                configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_STRICT_CAPACITY_LIMIT);
+        double highPriPoolRatio =
+                configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_HIGH_PRI_POOL_RATIO);
 
         // Load RocksDB native library if needed, this operation is idempotent
         RocksDB.loadLibrary();
@@ -252,9 +255,15 @@ public class RocksDBSharedResource {
         // - numShardBits: number of bits for shard count (8 means 256 shards)
         // - strictCapacityLimit: whether to strictly limit capacity
         // - highPriPoolRatio: ratio of high priority pool
-        sharedBlockCache = new LRUCache(cacheSize, 8, true, 0.5);
+        sharedBlockCache =
+                new LRUCache(cacheSize, cacheNumShardBits, strictCapacityLimit, highPriPoolRatio);
 
-        LOG.info("Created shared block cache with size: {} bytes", cacheSize);
+        LOG.info(
+                "Created shared block cache with size: {} bytes, numShardBits: {}, strictCapacityLimit: {}, highPriPoolRatio: {}",
+                cacheSize,
+                cacheNumShardBits,
+                strictCapacityLimit,
+                highPriPoolRatio);
     }
 
     /** Close shared resources. */
