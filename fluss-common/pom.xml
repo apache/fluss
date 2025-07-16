@@ -80,8 +80,8 @@
         the rocksdb should be provided as a kv plugin to used by client & server.
          -->
         <dependency>
-            <groupId>com.ververica</groupId>
-            <artifactId>frocksdbjni</artifactId>
+            <groupId>org.rocksdb</groupId>
+            <artifactId>rocksdbjni</artifactId>
         </dependency>
 
         <!-- test dependencies -->
