@@ -33,6 +33,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.TabletManagerBase;
+import com.alibaba.fluss.server.kv.rocksdb.RocksDBSharedResource;
 import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.LogTablet;
@@ -86,6 +87,9 @@ public final class KvManager extends TabletManagerBase {
 
     private final FileSystem remoteFileSystem;
 
+    /** Global shared RocksDB resource. */
+    private final RocksDBSharedResource sharedResource;
+
     private KvManager(
             File dataDir,
             Configuration conf,
@@ -100,6 +104,9 @@ public final class KvManager extends TabletManagerBase {
         this.zkClient = zkClient;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
+
+        // Initialize global shared resource
+        this.sharedResource = RocksDBSharedResource.getInstance(conf);
     }
 
     public static KvManager create(
@@ -129,6 +136,16 @@ public final class KvManager extends TabletManagerBase {
                 LOG.warn("Exception while closing kv tablet {}.", kvTablet.getTableBucket(), e);
             }
         }
+
+        // Clean up shared resources
+        if (sharedResource != null) {
+            try {
+                sharedResource.close();
+            } catch (Exception e) {
+                LOG.warn("Exception while closing shared RocksDB resource.", e);
+            }
+        }
+
         arrowBufferAllocator.close();
         memorySegmentPool.close();
         LOG.info("Shut down KvManager complete.");

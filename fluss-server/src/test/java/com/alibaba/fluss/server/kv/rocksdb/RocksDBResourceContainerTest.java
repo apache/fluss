@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
@@ -190,5 +191,38 @@ class RocksDBResourceContainerTest {
             assertThat(tableConfig.blockCacheSize()).isEqualTo(512 * SizeUnit.MB);
             assertThat(tableConfig.filterPolicy() instanceof BloomFilter).isTrue();
         }
+    }
+
+    @Test
+    public void testSharedBlockCacheEnabled() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
+        configuration.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(configuration, null, true)) {
+
+            ColumnFamilyOptions options = container.getColumnOptions();
+            BlockBasedTableConfig tableConfig = (BlockBasedTableConfig) options.tableFormatConfig();
+
+            assertThat(container.getSharedBlockCache()).isNotNull();
+        }
+    }
+
+    @Test
+    public void testSharedBlockCacheClosedAfterContainerClose() throws Exception {
+        Configuration config = new Configuration();
+        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
+        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+
+        RocksDBResourceContainer container = new RocksDBResourceContainer(config, null);
+
+        Cache sharedCache = container.getSharedBlockCache();
+        assertThat(sharedCache).isNotNull();
+        assertThat(sharedCache.isOwningHandle()).isTrue();
+
+        container.close();
+
+        assertThat(sharedCache.isOwningHandle()).isFalse();
     }
 }

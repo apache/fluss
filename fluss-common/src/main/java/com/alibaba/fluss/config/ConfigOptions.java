@@ -1535,6 +1535,19 @@ public class ConfigOptions {
                             "The amount of the cache for data blocks in RocksDB. "
                                     + "The default block-cache size is `8MB`.");
 
+    public static final ConfigOption<Boolean> KV_SHARED_BLOCK_CACHE_ENABLED =
+            key("kv.rocksdb.shared-block-cache.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable the shared block cache across all column families.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_BLOCK_CACHE_SIZE =
+            key("kv.rocksdb.shared-block-cache.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("4gb"))
+                    .withDescription("The size of the shared block cache if enabled.");
+
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")
                     .booleanType()
