@@ -60,7 +60,7 @@ When filing an issue, make sure to answer these five questions:
 5. What did you see instead?
 
 Troubleshooting questions should be posted on:
-* [Slack (#troubleshooting)](https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw)
+* [Slack (#troubleshooting)](https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw)
 * [GitHub Discussions](https://github.com/apache/fluss/discussions)
 
 ## How to suggest a feature or enhancement

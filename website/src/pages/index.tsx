@@ -43,7 +43,7 @@ function HomepageHeader() {
 
                     <Link
                         className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
-                        to="https://github.com/alibaba/fluss">
+                        to="https://github.com/apache/fluss">
                         <img
                             src="img/github_icon.svg"
                             alt="GitHub"
@@ -54,7 +54,7 @@ function HomepageHeader() {
 
                     <Link
                         className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
-                        to="https://join.slack.com/t/fluss-hq/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw">
+                        to="https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw">
                         <img
                             src="img/slack_icon.svg"
                             alt="Slack"
