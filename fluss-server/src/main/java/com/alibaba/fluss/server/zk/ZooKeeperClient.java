@@ -71,6 +71,7 @@ import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.transa
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
+import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -94,7 +95,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
@@ -144,7 +144,7 @@ public class ZooKeeperClient implements AutoCloseable {
             return Collections.emptyMap();
         }
 
-        Map<String, ZookeeperResponse> resultMap = new ConcurrentHashMap<>();
+        Map<String, ZookeeperResponse> resultMap = MapUtils.newConcurrentHashMap();
 
         CountDownLatch countDownLatch = new CountDownLatch(paths.size());
 
