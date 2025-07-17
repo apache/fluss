@@ -48,6 +48,35 @@ datalake.paimon.warehouse: hdfs:///path/to/warehouse
 While Fluss includes the core Paimon library, additional jars may still need to be manually added to `${FLUSS_HOME}/plugins/paimon/` according to your needs.
 For example, for OSS filesystem support, you need to put `paimon-oss-<paimon_version>.jar` into directory `${FLUSS_HOME}/plugins/paimon/`.
 
+#### Hadoop Environment Configuration
+
+To use the machine hadoop environment, instead of Fluss' embedded Hadoop, follow these steps:
+
+**Step 1: Set Hadoop Classpath**
+```bash
+export HADOOP_CLASSPATH=`hadoop classpath`
+```
+
+**Step 2: Add the following to your configuration file**
+```yaml
+plugin.classloader.parent-first-patterns.default: java.,com.alibaba.fluss.,javax.annotation.,org.slf4j,org.apache.log4j,org.apache.logging,org.apache.commons.logging,ch.qos.logback,hdfs-site,core-site,org.apache.hadoop.,META-INF
+```
+
+#### Hive Catalog Configuration
+
+To use Hive as the metastore, follow these steps:  
+
+**Step 1: Add Hive Connector Dependency**  
+[Download](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) the Flink SQL Hive Client JAR.Place the downloaded JAR in Paimon's plugin directory:
+`$PAIMON_HOME/plugins/hive`.
+
+**Step 2: Add the following to your configuration file**  
+```yaml
+datalake.paimon.metastore: hive
+# this is recommended in the kerberos environment
+datalake.paimon.hive-conf-dir: '...',
+```
+
 ### Start The Datalake Tiering Service
 Then, you must start the datalake tiering service to tier Fluss's data to the lakehouse storage.
 #### Prerequisites
