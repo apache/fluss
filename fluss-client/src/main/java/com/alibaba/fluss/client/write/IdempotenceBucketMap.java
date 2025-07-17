@@ -29,6 +29,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.alibaba.fluss.client.write.IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE;
+import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
+import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
 
 /** Map to manage {@link IdempotenceBucketEntry} of all table-bucket. */
 @Internal
@@ -97,6 +99,28 @@ public class IdempotenceBucketMap {
                 batch.writerId(),
                 tableBucket);
         get(tableBucket).adjustSequencesDueToFailedBatch(batch);
+    }
+
+    void resetToNoSequenceNum(ReadyWriteBatch readyBatch) {
+        TableBucket tableBucket = readyBatch.tableBucket();
+        if (!contains(tableBucket)) {
+            // Batch sequence are not being tracked for this bucket. This could happen if the
+            // writer id was just reset due to a previous OutOfOrderSequenceException.
+            return;
+        }
+        LOG.debug(
+                "writerId: {}, send to bucket {} failed. Reset all batch sequence numbers",
+                readyBatch.writeBatch().writerId(),
+                tableBucket);
+        // reset all
+        get(tableBucket)
+                .resetSequenceNumbers(
+                        inFlightBatch ->
+                                inFlightBatch.setWriterState(NO_WRITER_ID, NO_BATCH_SEQUENCE));
+
+        // remove the entry for the bucket so that sender will consider all the
+        // inflight batches as new batch to assign new sequence id
+        tableBuckets.remove(tableBucket);
     }
 
     int maybeUpdateLastAckedSequence(TableBucket tableBucket, int sequence) {
