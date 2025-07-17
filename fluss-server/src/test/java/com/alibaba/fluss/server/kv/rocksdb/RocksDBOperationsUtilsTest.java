@@ -21,6 +21,7 @@ import com.alibaba.fluss.rocksdb.RocksDBOperationUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.DBOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -48,7 +49,9 @@ class RocksDBOperationsUtilsTest {
                                 RocksDB rocks =
                                         RocksDBOperationUtils.openDB(
                                                 rocksDir.getAbsolutePath(),
-                                                Collections.emptyList(),
+                                                Collections.singletonList(
+                                                        new ColumnFamilyDescriptor(
+                                                                RocksDB.DEFAULT_COLUMN_FAMILY)),
                                                 Collections.emptyList(),
                                                 dbOptions,
                                                 false);
