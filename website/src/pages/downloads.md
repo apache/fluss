@@ -16,9 +16,15 @@
  limitations under the License.
 -->
 
-# Fluss Downloads
+# Apache Fluss (Incubating) Downloads
 
-## Fluss 0.7.0
+> Apache Fluss (Incubating) is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures. 
+
+**Note:** We are currently preparing for the first release under the Apache Incubator. Previous releases were non-Apache releases.
+
+## Previous Releases (Non-Apache)
+
+### Fluss 0.7.0
 
 #### Fluss
 
@@ -44,7 +50,7 @@
 
 - [fluss-flink-tiering-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar.sha1))
 
-## Fluss 0.6.1
+### Fluss 0.6.1
 
 #### Fluss
 
@@ -60,7 +66,7 @@
 - [fluss-fs-oss-0.6.1.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.6.1/fluss-fs-oss-0.6.1.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.6.1/fluss-fs-oss-0.6.1.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.6.1/fluss-fs-oss-0.6.1.jar.sha1))
 - [fluss-fs-hadoop-0.6.1.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.6.1/fluss-fs-hadoop-0.6.1.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.6.1/fluss-fs-hadoop-0.6.1.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.6.1/fluss-fs-hadoop-0.6.1.jar.sha1))
 
-## Fluss 0.5.0
+### Fluss 0.5.0
 
 #### Fluss
 
