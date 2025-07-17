@@ -65,6 +65,12 @@ import com.alibaba.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TablesZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.WriterIdZNode;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -78,6 +84,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -86,6 +94,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 
@@ -106,6 +118,9 @@ public class ZooKeeperClient implements AutoCloseable {
     private final ZkSequenceIDCounter partitionIdCounter;
     private final ZkSequenceIDCounter writerIdCounter;
 
+    private final int maxInFlightRequests = 100;
+    private final Semaphore inFlightRequests = new Semaphore(maxInFlightRequests);
+
     public ZooKeeperClient(CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper) {
         this.curatorFrameworkWrapper = curatorFrameworkWrapper;
         this.zkClient = curatorFrameworkWrapper.asCuratorFramework();
@@ -121,6 +136,44 @@ public class ZooKeeperClient implements AutoCloseable {
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }
+    }
+
+    public Map<String, ZookeeperResponse> handleFetchDataRequestsAsync(Collection<String> paths)
+            throws InterruptedException {
+        if (paths == null || paths.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, ZookeeperResponse> resultMap = new ConcurrentHashMap<>();
+
+        CountDownLatch countDownLatch = new CountDownLatch(paths.size());
+
+        BackgroundCallback callback =
+                (client, event) -> {
+                    if (event.getResultCode() == KeeperException.Code.OK.intValue()) {
+                        resultMap.put(
+                                event.getPath(),
+                                new ZookeeperResponse(event.getPath(), true, event.getData()));
+                    } else {
+                        resultMap.put(
+                                event.getPath(), new ZookeeperResponse(event.getPath(), false));
+                    }
+                    inFlightRequests.release();
+                    countDownLatch.countDown();
+                };
+
+        for (String path : paths) {
+            try {
+                inFlightRequests.acquire();
+                zkClient.getData().inBackground(callback).forPath(path);
+            } catch (Exception e) {
+                inFlightRequests.release();
+            }
+        }
+        //        countDownLatch.await(10, TimeUnit.SECONDS);
+        countDownLatch.await();
+
+        return resultMap;
     }
 
     // --------------------------------------------------------------------------------------------
@@ -167,6 +220,29 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<TabletServerRegistration> getTabletServer(int tabletServerId) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(ServerIdZNode.path(tabletServerId));
         return bytes.map(ServerIdZNode::decode);
+    }
+
+    /** Get the tablet servers registered in ZK. */
+    public Map<Integer, TabletServerRegistration> getTabletServers(int[] tabletServerIds)
+            throws Exception {
+        Map<String, Integer> path2IdMap =
+                Arrays.stream(tabletServerIds)
+                        .boxed()
+                        .collect(Collectors.toMap(ServerIdZNode::path, id -> id));
+
+        Map<String, ZookeeperResponse> response = handleFetchDataRequestsAsync(path2IdMap.keySet());
+
+        // tablet server id -> TabletServerRegistration
+        Map<Integer, TabletServerRegistration> result = new HashMap<>();
+        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
+            ZookeeperResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess()) {
+                result.put(
+                        path2IdMap.get(entry.getKey()),
+                        ServerIdZNode.decode(entryResponse.getData()));
+            }
+        }
+        return result;
     }
 
     /** Gets the list of sorted server Ids. */
@@ -292,6 +368,29 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<LeaderAndIsr> getLeaderAndIsr(TableBucket tableBucket) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(LeaderAndIsrZNode.path(tableBucket));
         return bytes.map(LeaderAndIsrZNode::decode);
+    }
+
+    /** Get the tablet servers registered in ZK. */
+    public Map<TableBucket, LeaderAndIsr> getLeaderAndIsrs(Collection<TableBucket> tableBuckets)
+            throws Exception {
+        Map<String, TableBucket> path2TableBucketMap =
+                tableBuckets.stream()
+                        .collect(Collectors.toMap(LeaderAndIsrZNode::path, bucket -> bucket));
+
+        Map<String, ZookeeperResponse> response =
+                handleFetchDataRequestsAsync(path2TableBucketMap.keySet());
+
+        // TableBucket -> LeaderAndIsr
+        Map<TableBucket, LeaderAndIsr> result = new HashMap<>();
+        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
+            ZookeeperResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess()) {
+                result.put(
+                        path2TableBucketMap.get(entry.getKey()),
+                        LeaderAndIsrZNode.decode(entryResponse.getData()));
+            }
+        }
+        return result;
     }
 
     public void updateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr)
