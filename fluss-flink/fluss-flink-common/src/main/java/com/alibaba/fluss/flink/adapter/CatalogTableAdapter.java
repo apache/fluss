@@ -15,7 +15,31 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink;
+package com.alibaba.fluss.flink.adapter;
 
-/** This is an empty package to generate a javadoc jar to make Sonatype OSS happy. */
-public class DummyClass119 {}
+import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.catalog.CatalogTable;
+
+import javax.annotation.Nullable;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * A adapter for {@link CatalogTable} constructor. TODO: remove this class when no longer support
+ * flink 1.18 and 1.19.
+ */
+public class CatalogTableAdapter {
+    public static CatalogTable toCatalogTable(
+            Schema schema,
+            @Nullable String comment,
+            List<String> partitionKeys,
+            Map<String, String> options) {
+        return CatalogTable.newBuilder()
+                .schema(schema)
+                .comment(comment)
+                .partitionKeys(partitionKeys)
+                .options(options)
+                .build();
+    }
+}
