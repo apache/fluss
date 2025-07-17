@@ -17,15 +17,49 @@
 
 package com.alibaba.fluss.row.encode.iceberg;
 
+
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
+import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.types.RowType;
+
+import java.util.List;
 
 /** An implementation of {@link KeyEncoder} to follow Iceberg's encoding strategy. */
 public class IcebergKeyEncoder implements KeyEncoder {
 
+    private final InternalRow.FieldGetter[] fieldGetters;
+
+    private final IcebergBinaryRowWriter.FieldWriter[] fieldEncoders;
+
+    private final IcebergBinaryRowWriter icebergBinaryRowWriter;
+
+    public IcebergKeyEncoder(RowType rowType, List<String> keys) {
+        // for get fields from fluss internal row
+        fieldGetters = new InternalRow.FieldGetter[keys.size()];
+        // for encode fields into iceberg
+        fieldEncoders = new IcebergBinaryRowWriter.FieldWriter[keys.size()];
+        for (int i = 0; i < keys.size(); i++) {
+            int keyIndex = rowType.getFieldIndex(keys.get(i));
+            DataType keyDataType = rowType.getTypeAt(keyIndex);
+            fieldGetters[i] = InternalRow.createFieldGetter(keyDataType, keyIndex);
+            fieldEncoders[i] = IcebergBinaryRowWriter.createFieldWriter(keyDataType);
+        }
+
+        icebergBinaryRowWriter = new IcebergBinaryRowWriter(keys.size());
+    }
 
     @Override
     public byte[] encodeKey(InternalRow row) {
-        return new byte[0];
+        icebergBinaryRowWriter.reset();
+
+        // TODO: Discuss with Yuxio Iceberg doesn't store ChangeType in binary format like Paimon
+
+        // iterate all the fields of the row, and encode each field
+        for (int i = 0; i < fieldGetters.length; i++) {
+            fieldEncoders[i].writeField(
+                    icebergBinaryRowWriter, i, fieldGetters[i].getFieldOrNull(row));
+        }
+        return icebergBinaryRowWriter.toBytes();
     }
 }
