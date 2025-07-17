@@ -46,7 +46,7 @@ The following is a list of (but not limited to) use-cases that Fluss shines ✨:
 * **📡 Real-time IoT Pipelines**
 * **🚓 Real-time Fraud Detection**
 * **🚨 Real-time Alerting Systems**
-* **💫 Real-tim ETL/Data Warehouses**
+* **💫 Real-time ETL/Data Warehouses**
 * **🌐 Real-time Geolocation Services**
 * **🚚 Real-time Shipment Update Tracking**
 
