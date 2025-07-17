@@ -242,6 +242,12 @@
                                         <exclude>NOTICE</exclude>
                                     </excludes>
                                 </filter>
+                                <filter>
+                                    <artifact>com.alibaba.fluss:fluss-fs-hadoop</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/**</exclude>
+                                    </excludes>
+                                </filter>
                             </filters>
                             <relocations>
                                 <relocation>
