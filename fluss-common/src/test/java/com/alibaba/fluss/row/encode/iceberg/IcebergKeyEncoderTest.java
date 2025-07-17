@@ -61,11 +61,8 @@ class IcebergKeyEncoderTest {
     @Test
     void testEncodeKeyConsistency() {
         // Test that encoding the same data multiple times produces identical results
-        RowType simpleRowType = RowType.of(
-                DataTypes.INT(),
-                DataTypes.STRING(),
-                DataTypes.BOOLEAN()
-        );
+        RowType simpleRowType =
+                RowType.of(DataTypes.INT(), DataTypes.STRING(), DataTypes.BOOLEAN());
 
         IndexedRow row = genSimpleFlussRow();
         List<String> keys = simpleRowType.getFieldNames();
@@ -128,12 +125,8 @@ class IcebergKeyEncoderTest {
         icebergWriter.writeLong(4, new BigInteger("12345678901234567890").longValue());
         icebergWriter.writeFloat(5, Float.parseFloat("13.2"));
         icebergWriter.writeDouble(6, Double.parseDouble("15.21"));
-        icebergWriter.writeInt(
-                7,
-                (int) TypeUtils.castFromString("2023-10-25", DataTypes.DATE()));
-        icebergWriter.writeInt(
-                8,
-                (int) TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()));
+        icebergWriter.writeInt(7, (int) TypeUtils.castFromString("2023-10-25", DataTypes.DATE()));
+        icebergWriter.writeInt(8, (int) TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()));
         icebergWriter.writeBytes(9, "1234567890".getBytes());
         icebergWriter.writeBytes(10, "20".getBytes());
         icebergWriter.writeString(11, com.alibaba.fluss.row.BinaryString.fromString("1"));

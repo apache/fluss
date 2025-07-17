@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.row.encode.iceberg;
 
-
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.types.DataType;

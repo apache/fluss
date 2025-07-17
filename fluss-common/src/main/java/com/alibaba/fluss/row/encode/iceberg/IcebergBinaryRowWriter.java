@@ -147,7 +147,7 @@ class IcebergBinaryRowWriter {
         writeBytes(pos, bytes);
     }
 
-     void writeBytes(int pos, byte[] bytes) {
+    void writeBytes(int pos, byte[] bytes) {
         if (bytes == null) {
             setNullAt(pos);
             return;
@@ -181,15 +181,21 @@ class IcebergBinaryRowWriter {
         // Pad or truncate to required size
         if (unscaledBytes.length <= requiredBytes) {
             // Pad with sign extension
-            byte paddingByte = (unscaledBytes.length > 0 && (unscaledBytes[0] & 0x80) != 0) ?
-                    (byte) 0xFF : (byte) 0x00;
+            byte paddingByte =
+                    (unscaledBytes.length > 0 && (unscaledBytes[0] & 0x80) != 0)
+                            ? (byte) 0xFF
+                            : (byte) 0x00;
 
             // Write padding
             for (int i = 0; i < requiredBytes - unscaledBytes.length; i++) {
                 segment.put(cursor + i, paddingByte);
             }
             // Write actual bytes
-            segment.put(cursor + (requiredBytes - unscaledBytes.length), unscaledBytes, 0, unscaledBytes.length);
+            segment.put(
+                    cursor + (requiredBytes - unscaledBytes.length),
+                    unscaledBytes,
+                    0,
+                    unscaledBytes.length);
         } else {
             // Truncate if too large
             segment.put(cursor, unscaledBytes, 0, requiredBytes);
@@ -255,7 +261,8 @@ class IcebergBinaryRowWriter {
         }
     }
 
-    private void copyFromFlussSegments(MemorySegment[] segments, int offset, byte[] target, int targetOffset, int length) {
+    private void copyFromFlussSegments(
+            MemorySegment[] segments, int offset, byte[] target, int targetOffset, int length) {
         int remaining = length;
         int currentOffset = offset;
         int currentTargetOffset = targetOffset;
@@ -290,8 +297,12 @@ class IcebergBinaryRowWriter {
 
     private static int getIcebergDecimalBytes(int precision) {
         // Iceberg's decimal storage requirements
-        if (precision <= 9) return 4;
-        if (precision <= 18) return 8;
+        if (precision <= 9) {
+            return 4;
+        }
+        if (precision <= 18) {
+            return 8;
+        }
         return 16;
     }
 
