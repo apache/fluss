@@ -70,10 +70,11 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
-        public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+        public void createTable(
+                TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
                 throws TableAlreadyExistException {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
-                inner.createTable(tablePath, tableDescriptor);
+                inner.createTable(tablePath, tableDescriptor, ignoreIfExists);
             }
         }
 
