@@ -277,10 +277,53 @@ public class ZooKeeperClient implements AutoCloseable {
                         data.length == 0 ? null : TableIdZNode.decode(data));
     }
 
+    /** Get the tables assignments in ZK. */
+    public Map<Long, TableAssignment> getTablesAssignments(List<Long> tableIds) throws Exception {
+        Map<String, Long> path2TableIdMap =
+                tableIds.stream().collect(Collectors.toMap(TableIdZNode::path, id -> id));
+
+        Map<String, ZookeeperResponse> response =
+                handleFetchDataRequestsAsync(path2TableIdMap.keySet());
+
+        // tabletId -> TableAssignment
+        Map<Long, TableAssignment> result = new HashMap<>();
+        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
+            ZookeeperResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess() && entryResponse.getData().length > 0) {
+                result.put(
+                        path2TableIdMap.get(entry.getKey()),
+                        TableIdZNode.decode(entryResponse.getData()));
+            }
+        }
+        return result;
+    }
+
     /** Get the partition assignment in ZK. */
     public Optional<PartitionAssignment> getPartitionAssignment(long partitionId) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(PartitionIdZNode.path(partitionId));
         return bytes.map(PartitionIdZNode::decode);
+    }
+
+    /** Get the tables assignments in ZK. */
+    public Map<Long, PartitionAssignment> getPartitionsAssignments(List<Long> partitionIds)
+            throws Exception {
+        Map<String, Long> path2PartitionIdMap =
+                partitionIds.stream().collect(Collectors.toMap(PartitionIdZNode::path, id -> id));
+
+        Map<String, ZookeeperResponse> response =
+                handleFetchDataRequestsAsync(path2PartitionIdMap.keySet());
+
+        // tabletId -> PartitionAssignment
+        Map<Long, PartitionAssignment> result = new HashMap<>();
+        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
+            ZookeeperResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess()) {
+                result.put(
+                        path2PartitionIdMap.get(entry.getKey()),
+                        PartitionIdZNode.decode(entryResponse.getData()));
+            }
+        }
+        return result;
     }
 
     public void updateTableAssignment(long tableId, TableAssignment tableAssignment)
@@ -519,6 +562,28 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<TableRegistration> getTable(TablePath tablePath) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(TableZNode.path(tablePath));
         return bytes.map(TableZNode::decode);
+    }
+
+    /** Get the tables in ZK. */
+    public Map<TablePath, TableRegistration> getTables(Collection<TablePath> tablePaths)
+            throws Exception {
+        Map<String, TablePath> path2TablePathMap =
+                tablePaths.stream().collect(Collectors.toMap(TableZNode::path, path -> path));
+
+        Map<String, ZookeeperResponse> response =
+                handleFetchDataRequestsAsync(path2TablePathMap.keySet());
+
+        // TableBucket -> LeaderAndIsr
+        Map<TablePath, TableRegistration> result = new HashMap<>();
+        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
+            ZookeeperResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess()) {
+                result.put(
+                        path2TablePathMap.get(entry.getKey()),
+                        TableZNode.decode(entryResponse.getData()));
+            }
+        }
+        return result;
     }
 
     /** Update the table in ZK. */
