@@ -17,46 +17,14 @@
 
 package com.alibaba.fluss.server.kv.rocksdb;
 
-import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.server.exception.KvBuildingException;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Path;
-
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder} . */
 class RocksDBKvBuilderTest {
-
-    /**
-     * This test checks that the RocksDB native code loader still responds to resetting the init
-     * flag.
-     */
-    @Test
-    void testResetInitFlag() throws Exception {
-        RocksDBKvBuilder.resetRocksDBLoadedFlag();
-    }
-
-    @Test
-    void testTempLibFolderDeletedOnFail(@TempDir Path tempDir) {
-        RocksDBKvBuilder.resetRocksDbInitialized();
-        assertThatThrownBy(
-                        () ->
-                                RocksDBKvBuilder.ensureRocksDBIsLoaded(
-                                        tempDir.toString(),
-                                        () -> {
-                                            throw new FlussRuntimeException("expected exception");
-                                        }))
-                .isInstanceOf(IOException.class);
-        File[] files = tempDir.toFile().listFiles();
-        assertThat(files).isNotNull();
-        assertThat(files).isEmpty();
-    }
 
     @Test
     void testBuildFail() {

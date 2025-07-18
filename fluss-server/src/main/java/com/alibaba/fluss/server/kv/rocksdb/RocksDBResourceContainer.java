@@ -102,8 +102,22 @@ public class RocksDBResourceContainer implements AutoCloseable {
         this.handlesToClose = new ArrayList<>();
 
         // Get global shared resource and increase reference count
-        this.sharedResource = RocksDBSharedResource.getInstance(configuration);
+        this.sharedResource = RocksDBSharedResource.getInstance();
         this.sharedResource.acquire();
+
+        // Enable shared block cache if configured
+        if (configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED)) {
+            long cacheSize = configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes();
+            int cacheNumShardBits =
+                    configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_NUM_SHARD_BITS);
+            boolean strictCapacityLimit =
+                    configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_STRICT_CAPACITY_LIMIT);
+            double highPriPoolRatio =
+                    configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_HIGH_PRI_POOL_RATIO);
+
+            this.sharedResource.enableSharedBlockCache(
+                    cacheSize, cacheNumShardBits, strictCapacityLimit, highPriPoolRatio);
+        }
     }
 
     /** Gets the RocksDB {@link DBOptions} to be used for RocksDB instances. */

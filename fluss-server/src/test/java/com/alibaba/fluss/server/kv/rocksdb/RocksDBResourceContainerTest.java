@@ -201,10 +201,6 @@ class RocksDBResourceContainerTest {
 
         try (RocksDBResourceContainer container =
                 new RocksDBResourceContainer(configuration, null, true)) {
-
-            ColumnFamilyOptions options = container.getColumnOptions();
-            BlockBasedTableConfig tableConfig = (BlockBasedTableConfig) options.tableFormatConfig();
-
             assertThat(container.getSharedBlockCache()).isNotNull();
         }
     }

@@ -18,13 +18,10 @@
 package com.alibaba.fluss.server.kv.rocksdb;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.ReadableConfig;
 import com.alibaba.fluss.utils.IOUtils;
 
 import org.rocksdb.Cache;
 import org.rocksdb.LRUCache;
-import org.rocksdb.RocksDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +29,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -59,7 +57,6 @@ public class RocksDBSharedResource {
     /** Global singleton instance. */
     private static volatile RocksDBSharedResource instance;
 
-    private final ReadableConfig configuration;
     private final Object lock = new Object();
 
     /** Reference count for resource lifecycle management. */
@@ -74,25 +71,82 @@ public class RocksDBSharedResource {
     @GuardedBy("lock")
     private boolean closed = false;
 
-    private RocksDBSharedResource(ReadableConfig configuration) {
-        this.configuration = configuration;
+    /** Whether shared block cache is enabled. */
+    @GuardedBy("lock")
+    private boolean sharedBlockCacheEnabled = false;
+
+    private RocksDBSharedResource() {
+        // Load RocksDB native library if needed, this operation is idempotent
+        try {
+            RocksDBJniLoader.ensureRocksDBIsLoaded(System.getProperty("java.io.tmpdir"));
+        } catch (IOException e) {
+            LOG.warn(
+                    "Failed to load RocksDB JNI library during RocksDBSharedResource initialization",
+                    e);
+        }
     }
 
     /**
      * Get the global RocksDBSharedResource instance.
      *
-     * @param configuration configuration parameters
      * @return RocksDBSharedResource instance
      */
-    public static RocksDBSharedResource getInstance(ReadableConfig configuration) {
+    public static RocksDBSharedResource getInstance() {
         if (instance == null) {
             synchronized (RocksDBSharedResource.class) {
                 if (instance == null) {
-                    instance = new RocksDBSharedResource(configuration);
+                    instance = new RocksDBSharedResource();
                 }
             }
         }
         return instance;
+    }
+
+    /**
+     * Enable shared block cache with specified parameters.
+     *
+     * @param cacheSize cache size in bytes
+     * @param numShardBits number of bits for shard count (8 means 256 shards)
+     * @param strictCapacityLimit whether to strictly limit capacity
+     * @param highPriPoolRatio ratio of high priority pool
+     * @return true if successfully enabled, false if already enabled or closed
+     */
+    public boolean enableSharedBlockCache(
+            long cacheSize,
+            int numShardBits,
+            boolean strictCapacityLimit,
+            double highPriPoolRatio) {
+        synchronized (lock) {
+            if (closed) {
+                LOG.warn("Cannot enable shared block cache: RocksDBSharedResource has been closed");
+                return false;
+            }
+
+            if (sharedBlockCacheEnabled) {
+                LOG.debug("Shared block cache is already enabled");
+                return false;
+            }
+
+            // Create LRU cache
+            // Parameters:
+            // - capacity: cache size
+            // - numShardBits: number of bits for shard count (8 means 256 shards)
+            // - strictCapacityLimit: whether to strictly limit capacity
+            // - highPriPoolRatio: ratio of high priority pool
+            sharedBlockCache =
+                    new LRUCache(cacheSize, numShardBits, strictCapacityLimit, highPriPoolRatio);
+
+            sharedBlockCacheEnabled = true;
+
+            LOG.info(
+                    "Enabled shared block cache with size: {} bytes, numShardBits: {}, strictCapacityLimit: {}, highPriPoolRatio: {}",
+                    cacheSize,
+                    numShardBits,
+                    strictCapacityLimit,
+                    highPriPoolRatio);
+
+            return true;
+        }
     }
 
     /**
@@ -104,15 +158,22 @@ public class RocksDBSharedResource {
     @Nullable
     public Cache getSharedBlockCache() {
         synchronized (lock) {
-            if (closed) {
+            if (closed || !sharedBlockCacheEnabled) {
                 return null;
             }
 
-            if (sharedBlockCache == null && shouldCreateSharedBlockCache()) {
-                createSharedBlockCache();
-            }
-
             return sharedBlockCache;
+        }
+    }
+
+    /**
+     * Check if shared block cache is enabled.
+     *
+     * @return true if shared block cache is enabled
+     */
+    public boolean isSharedBlockCacheEnabled() {
+        synchronized (lock) {
+            return sharedBlockCacheEnabled && !closed;
         }
     }
 
@@ -223,54 +284,12 @@ public class RocksDBSharedResource {
         }
     }
 
-    /**
-     * Check if shared block cache should be created.
-     *
-     * @return true if shared block cache should be created
-     */
-    private boolean shouldCreateSharedBlockCache() {
-        return configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED);
-    }
-
-    /** Create shared block cache. */
-    private void createSharedBlockCache() {
-        if (sharedBlockCache != null) {
-            return;
-        }
-
-        long cacheSize = configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes();
-        int cacheNumShardBits =
-                configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_NUM_SHARD_BITS);
-        boolean strictCapacityLimit =
-                configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_STRICT_CAPACITY_LIMIT);
-        double highPriPoolRatio =
-                configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_HIGH_PRI_POOL_RATIO);
-
-        // Load RocksDB native library if needed, this operation is idempotent
-        RocksDB.loadLibrary();
-
-        // Create LRU cache
-        // Parameters:
-        // - capacity: cache size
-        // - numShardBits: number of bits for shard count (8 means 256 shards)
-        // - strictCapacityLimit: whether to strictly limit capacity
-        // - highPriPoolRatio: ratio of high priority pool
-        sharedBlockCache =
-                new LRUCache(cacheSize, cacheNumShardBits, strictCapacityLimit, highPriPoolRatio);
-
-        LOG.info(
-                "Created shared block cache with size: {} bytes, numShardBits: {}, strictCapacityLimit: {}, highPriPoolRatio: {}",
-                cacheSize,
-                cacheNumShardBits,
-                strictCapacityLimit,
-                highPriPoolRatio);
-    }
-
     /** Close shared resources. */
     private void closeSharedResources() {
         if (sharedBlockCache != null) {
             IOUtils.closeQuietly(sharedBlockCache);
             sharedBlockCache = null;
+            sharedBlockCacheEnabled = false;
             LOG.info("Closed shared block cache");
         }
     }

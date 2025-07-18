@@ -79,6 +79,7 @@ public class RocksDBExtension implements BeforeEachCallback, AfterEachCallback {
 
     @Override
     public void beforeEach(ExtensionContext extensionContext) throws Exception {
+        RocksDBSharedResource.resetInstance();
         before();
     }
 }

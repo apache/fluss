@@ -17,9 +17,6 @@
 
 package com.alibaba.fluss.server.kv.rocksdb;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.rocksdb.Cache;
@@ -38,18 +35,15 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testSingletonInstance() {
-        Configuration config = new Configuration();
-
-        RocksDBSharedResource instance1 = RocksDBSharedResource.getInstance(config);
-        RocksDBSharedResource instance2 = RocksDBSharedResource.getInstance(config);
+        RocksDBSharedResource instance1 = RocksDBSharedResource.getInstance();
+        RocksDBSharedResource instance2 = RocksDBSharedResource.getInstance();
 
         assertThat(instance1).isSameAs(instance2);
     }
 
     @Test
     public void testReferenceCountingBasics() {
-        Configuration config = new Configuration();
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
         assertThat(sharedResource.getReferenceCount()).isEqualTo(0);
 
@@ -72,33 +66,33 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testSharedBlockCacheNotEnabledByDefault() {
-        Configuration config = new Configuration();
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
         Cache cache = sharedResource.getSharedBlockCache();
         assertThat(cache).isNull();
+        assertThat(sharedResource.isSharedBlockCacheEnabled()).isFalse();
     }
 
     @Test
     public void testSharedBlockCacheEnabled() {
-        Configuration config = new Configuration();
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        boolean enabled = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled).isTrue();
 
         Cache cache = sharedResource.getSharedBlockCache();
         assertThat(cache).isNotNull();
         assertThat(cache.isOwningHandle()).isTrue();
+        assertThat(sharedResource.isSharedBlockCacheEnabled()).isTrue();
     }
 
     @Test
     public void testSharedBlockCacheLifecycle() {
-        Configuration config = new Configuration();
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        // Enable shared block cache
+        boolean enabled = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled).isTrue();
 
         // Get cache instance
         Cache cache = sharedResource.getSharedBlockCache();
@@ -132,11 +126,11 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testMultipleContainersSharedCache() {
-        Configuration config = new Configuration();
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        // Enable shared block cache
+        boolean enabled = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled).isTrue();
 
         // Simulate multiple RocksDBResourceContainer using same shared resource
         sharedResource.acquire(); // First container
@@ -171,8 +165,7 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testAcquireAfterClose() {
-        Configuration config = new Configuration();
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
         sharedResource.close();
 
@@ -183,11 +176,11 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testGetSharedBlockCacheAfterClose() {
-        Configuration config = new Configuration();
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        // Enable shared block cache
+        boolean enabled = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled).isTrue();
 
         // Get cache first
         Cache cache = sharedResource.getSharedBlockCache();
@@ -206,8 +199,7 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testCloseIsIdempotent() {
-        Configuration config = new Configuration();
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
         // Multiple closes should not cause problems
         sharedResource.close();
@@ -221,11 +213,11 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testCloseWaitsForReferenceCountToBeZero() throws Exception {
-        Configuration config = new Configuration();
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED.key(), "true");
-        config.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "100MB");
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        // Enable shared block cache
+        boolean enabled = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled).isTrue();
 
         // Acquire reference
         sharedResource.acquire();
@@ -268,8 +260,7 @@ public class RocksDBSharedResourceTest {
 
     @Test
     public void testAcquireAfterCloseableStateResetsState() {
-        Configuration config = new Configuration();
-        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance(config);
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
 
         // Acquire and release reference, enter closeable state
         sharedResource.acquire();
@@ -287,5 +278,37 @@ public class RocksDBSharedResourceTest {
         // Clean up
         sharedResource.release();
         sharedResource.close();
+    }
+
+    @Test
+    public void testEnableSharedBlockCacheMultipleTimes() {
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
+
+        // First enable
+        boolean enabled1 = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled1).isTrue();
+        assertThat(sharedResource.isSharedBlockCacheEnabled()).isTrue();
+
+        // Second enable should return false
+        boolean enabled2 = sharedResource.enableSharedBlockCache(200 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled2).isFalse();
+        assertThat(sharedResource.isSharedBlockCacheEnabled()).isTrue();
+
+        // Cache should still be the original one
+        Cache cache = sharedResource.getSharedBlockCache();
+        assertThat(cache).isNotNull();
+    }
+
+    @Test
+    public void testEnableSharedBlockCacheAfterClose() {
+        RocksDBSharedResource sharedResource = RocksDBSharedResource.getInstance();
+
+        // Close first
+        sharedResource.close();
+
+        // Try to enable shared block cache after close
+        boolean enabled = sharedResource.enableSharedBlockCache(100 * 1024 * 1024L, 8, false, 0.0);
+        assertThat(enabled).isFalse();
+        assertThat(sharedResource.isSharedBlockCacheEnabled()).isFalse();
     }
 }

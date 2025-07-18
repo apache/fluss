@@ -30,6 +30,7 @@ import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.KvRecordTestUtils;
 import com.alibaba.fluss.record.TestData;
 import com.alibaba.fluss.row.encode.ValueEncoder;
+import com.alibaba.fluss.server.kv.rocksdb.RocksDBSharedResource;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
@@ -100,6 +101,8 @@ final class KvManagerTest {
 
     @BeforeEach
     void setup() throws Exception {
+        RocksDBSharedResource.resetInstance();
+
         conf = new Configuration();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
 
@@ -153,6 +156,7 @@ final class KvManagerTest {
     @ParameterizedTest
     @MethodSource("partitionProvider")
     void testRecoveryAfterKvManagerShutDown(String partitionName) throws Exception {
+        RocksDBSharedResource.resetInstance();
         initTableBuckets(partitionName);
         KvTablet kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
         int kvRecordCount = 50;

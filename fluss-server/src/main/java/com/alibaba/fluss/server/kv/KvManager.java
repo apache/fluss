@@ -106,7 +106,7 @@ public final class KvManager extends TabletManagerBase {
         this.remoteFileSystem = remoteKvDir.getFileSystem();
 
         // Initialize global shared resource
-        this.sharedResource = RocksDBSharedResource.getInstance(conf);
+        this.sharedResource = RocksDBSharedResource.getInstance();
     }
 
     public static KvManager create(
