@@ -163,9 +163,13 @@ public abstract class AbstractMetricGroup implements MetricGroup {
 
     protected String createLogicalScope(CharacterFilter filter, char delimiter) {
         final String groupName = getGroupName(filter);
-        return parent == null
-                ? groupName
-                : parent.getLogicalScope(filter, delimiter) + delimiter + groupName;
+        if (parent == null) {
+            return groupName;
+        }
+        if (groupName == null || groupName.isEmpty()) {
+            return parent.getLogicalScope(filter, delimiter);
+        }
+        return parent.getLogicalScope(filter, delimiter) + delimiter + groupName;
     }
 
     /** Return the parent of the metric group. */
