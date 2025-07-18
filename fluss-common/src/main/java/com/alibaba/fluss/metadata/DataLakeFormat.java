@@ -19,7 +19,8 @@ package com.alibaba.fluss.metadata;
 
 /** An enum for datalake format. */
 public enum DataLakeFormat {
-    PAIMON("paimon");
+    PAIMON("paimon"),
+    ICEBERG("iceberg");
 
     private final String value;
 
