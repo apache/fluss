@@ -24,6 +24,7 @@ import com.alibaba.fluss.client.lookup.LookupType;
 import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.flink.utils.FlinkUtils;
@@ -141,6 +142,11 @@ public class FlinkLookupFunction extends LookupFunction {
                     }
                 }
                 return projectedRows;
+            } catch (PartitionNotExistException partitionNotExistException) {
+                LOG.debug(
+                        "Partition is not exist. Ignore and return null. ",
+                        partitionNotExistException);
+                return Collections.emptyList();
             } catch (Exception e) {
                 LOG.error(String.format("Fluss lookup error, retry times = %d", retry), e);
                 if (retry >= maxRetryTimes) {
