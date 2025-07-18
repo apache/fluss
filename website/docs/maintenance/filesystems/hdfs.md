@@ -38,6 +38,20 @@ remote.data.dir: hdfs://namenode:50010/path/to/remote/storage
 To allow for easy adoption, you can use the same configuration keys in Fluss' server.yaml as in Hadoop's `core-site.xml`.
 You can see the configuration keys in Hadoop's [`core-site.xml`](https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-common/core-default.xml).
 
+#### Hadoop Environment Configuration
+
+To use the machine hadoop environment, instead of Fluss' embedded Hadoop, follow these steps:
+
+**Step 1: Set Hadoop Classpath**
+```bash
+export HADOOP_CLASSPATH=`hadoop classpath`
+```
+
+**Step 2: Add the following to your configuration file**
+```yaml
+plugin.classloader.parent-first-patterns.default: java.,com.alibaba.fluss.,javax.annotation.,org.slf4j,org.apache.log4j,org.apache.logging,org.apache.commons.logging,ch.qos.logback,hdfs-site,core-site,org.apache.hadoop.,META-INF
+```
+
 
 
 
