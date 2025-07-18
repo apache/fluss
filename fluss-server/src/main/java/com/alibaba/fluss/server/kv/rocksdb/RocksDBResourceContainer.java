@@ -26,11 +26,13 @@ import com.alibaba.fluss.utils.IOUtils;
 
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
 import org.rocksdb.InfoLogLevel;
+import org.rocksdb.LRUCache;
 import org.rocksdb.PlainTableConfig;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.Statistics;
@@ -74,28 +76,25 @@ public class RocksDBResourceContainer implements AutoCloseable {
     /** The handles to be closed when the container is closed. */
     private final ArrayList<AutoCloseable> handlesToClose;
 
+    @Nullable private Statistics statistics;
+    @Nullable private Cache blockCache;
+
     @VisibleForTesting
     RocksDBResourceContainer() {
-        this(new Configuration(), null, false);
+        this(new Configuration(), null);
     }
 
     public RocksDBResourceContainer(ReadableConfig configuration, @Nullable File instanceBasePath) {
-        this(configuration, instanceBasePath, false);
-    }
-
-    public RocksDBResourceContainer(
-            ReadableConfig configuration,
-            @Nullable File instanceBasePath,
-            boolean enableStatistics) {
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
                 instanceBasePath != null
                         ? RocksDBKvBuilder.getInstanceRocksDBPath(instanceBasePath)
                         : null;
-        this.enableStatistics = enableStatistics;
-
+        this.enableStatistics = configuration.get(ConfigOptions.KV_STATISTICS_ENABLED);
         this.handlesToClose = new ArrayList<>();
+        initializeStatisticsIfEnable();
+        initializeBlockCacheIfEnable();
     }
 
     /** Gets the RocksDB {@link DBOptions} to be used for RocksDB instances. */
@@ -116,9 +115,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         opt = opt.setCreateIfMissing(true);
 
         if (enableStatistics) {
-            Statistics statistics = new Statistics();
             opt.setStatistics(statistics);
-            handlesToClose.add(statistics);
         }
 
         return opt;
@@ -151,6 +148,18 @@ public class RocksDBResourceContainer implements AutoCloseable {
         handlesToClose.add(opt);
 
         return opt;
+    }
+
+    /** Gets the Statistics instance if enabled, null otherwise. */
+    @Nullable
+    public Statistics getStatistics() {
+        return statistics;
+    }
+
+    /** Gets the Cache instance if created, null otherwise. */
+    @Nullable
+    public Cache getBlockCache() {
+        return blockCache;
     }
 
     @Override
@@ -259,8 +268,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
         blockBasedTableConfig.setMetadataBlockSize(
                 internalGetOption(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes());
 
-        blockBasedTableConfig.setBlockCacheSize(
-                internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes());
+        // Create explicit cache instance instead of using setBlockCacheSize
+        long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
+        if (blockCacheSize > 0) {
+            blockBasedTableConfig.setBlockCache(blockCache);
+        }
 
         if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
@@ -364,5 +376,20 @@ public class RocksDBResourceContainer implements AutoCloseable {
     private File resolveFileLocation(String logFilePath) {
         File logFile = new File(logFilePath);
         return (logFile.exists() && logFile.canRead()) ? logFile : null;
+    }
+
+    private void initializeStatisticsIfEnable() {
+        if (enableStatistics) {
+            statistics = new Statistics();
+            handlesToClose.add(statistics);
+        }
+    }
+
+    private void initializeBlockCacheIfEnable() {
+        long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
+        if (blockCacheSize > 0) {
+            blockCache = new LRUCache(blockCacheSize);
+            handlesToClose.add(blockCache);
+        }
     }
 }
