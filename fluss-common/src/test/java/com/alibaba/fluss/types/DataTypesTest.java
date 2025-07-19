@@ -575,6 +575,114 @@ public class DataTypesTest {
     }
 
     @Test
+    void testVarCharType() {
+        VarCharType varCharType = new VarCharType();
+        assertThat(varCharType.getLength()).isEqualTo(1);
+        dataTypeBaseAssert(varCharType, true, "VARCHAR(1)", new VarCharType(55));
+
+        varCharType = new VarCharType(44);
+        assertThat(varCharType.getLength()).isEqualTo(44);
+        dataTypeBaseAssert(varCharType, true, "VARCHAR(44)", new VarCharType(55));
+
+        varCharType = new VarCharType(false, 55);
+        assertThat(varCharType.getLength()).isEqualTo(55);
+        dataTypeBaseAssert(varCharType, false, "VARCHAR(55) NOT NULL", new VarCharType(1));
+
+        varCharType = new VarCharType(VarCharType.MAX_LENGTH);
+        assertThat(varCharType.getLength()).isEqualTo(VarCharType.MAX_LENGTH);
+        dataTypeBaseAssert(varCharType, true, "STRING", new VarCharType(1));
+
+        varCharType = new VarCharType(false, VarCharType.MAX_LENGTH);
+        assertThat(varCharType.getLength()).isEqualTo(VarCharType.MAX_LENGTH);
+        dataTypeBaseAssert(varCharType, false, "STRING NOT NULL", new VarCharType(1));
+
+        assertThatThrownBy(() -> new VarCharType(-1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Variable character string length must be between 1 and 2147483647 (both inclusive)");
+
+        assertThatThrownBy(() -> new VarCharType(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Variable character string length must be between 1 and 2147483647 (both inclusive)");
+
+        assertThatThrownBy(() -> new VarCharType(false, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Variable character string length must be between 1 and 2147483647 (both inclusive)");
+
+        // test defaultSize
+        assertThat(varCharType.defaultSize()).isEqualTo(20); // MAX_LENGTH case
+        VarCharType smallVarChar = new VarCharType(10);
+        assertThat(smallVarChar.defaultSize()).isEqualTo(10);
+
+        // test get children
+        assertThat(varCharType.getChildren().size()).isEqualTo(0);
+        // test getTypeRoot
+        assertThat(varCharType.getTypeRoot().getFamilies())
+                .containsExactlyInAnyOrder(
+                        DataTypeFamily.PREDEFINED, DataTypeFamily.CHARACTER_STRING);
+
+        // test stringType static method
+        VarCharType stringType = VarCharType.stringType(true);
+        assertThat(stringType.getLength()).isEqualTo(VarCharType.MAX_LENGTH);
+        assertThat(stringType.isNullable()).isTrue();
+
+        stringType = VarCharType.stringType(false);
+        assertThat(stringType.getLength()).isEqualTo(VarCharType.MAX_LENGTH);
+        assertThat(stringType.isNullable()).isFalse();
+    }
+
+    @Test
+    void testVarBinaryType() {
+        VarBinaryType varBinaryType = new VarBinaryType();
+        assertThat(varBinaryType.getLength()).isEqualTo(1);
+        dataTypeBaseAssert(varBinaryType, true, "VARBINARY(1)", new VarBinaryType(55));
+
+        varBinaryType = new VarBinaryType(33);
+        assertThat(varBinaryType.getLength()).isEqualTo(33);
+        dataTypeBaseAssert(varBinaryType, true, "VARBINARY(33)", new VarBinaryType(55));
+
+        varBinaryType = new VarBinaryType(false, 44);
+        assertThat(varBinaryType.getLength()).isEqualTo(44);
+        dataTypeBaseAssert(varBinaryType, false, "VARBINARY(44) NOT NULL", new VarBinaryType(55));
+
+        varBinaryType = new VarBinaryType(VarBinaryType.MAX_LENGTH);
+        assertThat(varBinaryType.getLength()).isEqualTo(VarBinaryType.MAX_LENGTH);
+        dataTypeBaseAssert(varBinaryType, true, "BYTES", new VarBinaryType(1));
+
+        varBinaryType = new VarBinaryType(false, VarBinaryType.MAX_LENGTH);
+        assertThat(varBinaryType.getLength()).isEqualTo(VarBinaryType.MAX_LENGTH);
+        dataTypeBaseAssert(varBinaryType, false, "BYTES NOT NULL", new VarBinaryType(1));
+
+        assertThatThrownBy(() -> new VarBinaryType(-1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Variable binary string length must be between 1 and 2147483647 (both inclusive)");
+
+        assertThatThrownBy(() -> new VarBinaryType(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Variable binary string length must be between 1 and 2147483647 (both inclusive)");
+
+        assertThatThrownBy(() -> new VarBinaryType(false, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Variable binary string length must be between 1 and 2147483647 (both inclusive)");
+
+        // test defaultSize
+        assertThat(varBinaryType.defaultSize()).isEqualTo(20); // MAX_LENGTH case
+        VarBinaryType smallVarBinary = new VarBinaryType(10);
+        assertThat(smallVarBinary.defaultSize()).isEqualTo(10);
+
+        // test get children
+        assertThat(varBinaryType.getChildren().size()).isEqualTo(0);
+        // test getTypeRoot
+        assertThat(varBinaryType.getTypeRoot().getFamilies())
+                .containsExactlyInAnyOrder(DataTypeFamily.PREDEFINED, DataTypeFamily.BINARY_STRING);
+    }
+
+    @Test
     void testRowType() {
         RowType rowType =
                 new RowType(

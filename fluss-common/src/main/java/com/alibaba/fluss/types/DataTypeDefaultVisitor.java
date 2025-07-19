@@ -122,5 +122,20 @@ public abstract class DataTypeDefaultVisitor<R> implements DataTypeVisitor<R> {
         return defaultMethod(rowType);
     }
 
+    @Override
+    public R visit(MultisetType multisetType) {
+        return defaultMethod(multisetType);
+    }
+
+    @Override
+    public R visit(VarCharType varCharType) {
+        return defaultMethod(varCharType);
+    }
+
+    @Override
+    public R visit(VarBinaryType varBinaryType) {
+        return defaultMethod(varBinaryType);
+    }
+
     protected abstract R defaultMethod(DataType dataType);
 }
