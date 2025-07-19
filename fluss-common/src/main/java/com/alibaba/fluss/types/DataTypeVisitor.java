@@ -31,11 +31,15 @@ public interface DataTypeVisitor<R> {
 
     R visit(CharType charType);
 
+    R visit(VarCharType varCharType);
+
     R visit(StringType stringType);
 
     R visit(BooleanType booleanType);
 
     R visit(BinaryType binaryType);
+
+    R visit(VarBinaryType varBinaryType);
 
     R visit(BytesType bytesType);
 
@@ -66,4 +70,6 @@ public interface DataTypeVisitor<R> {
     R visit(MapType mapType);
 
     R visit(RowType rowType);
+
+    R visit(MultisetType multisetType);
 }

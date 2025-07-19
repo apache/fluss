@@ -47,4 +47,31 @@ public class ManagedPagedOutputView extends AbstractPagedOutputView {
     public List<MemorySegment> allocatedPooledSegments() {
         return pooledSegments;
     }
+
+    @Override
+    public void write(int b) throws IOException {
+        writeByte(b);
+    }
+
+    @Override
+    public void writeChar(int v) throws IOException {
+        // Use the parent class implementation
+        super.writeChar(v);
+    }
+
+    @Override
+    public void writeBytes(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeByte(s.charAt(i));
+        }
+    }
+
+    @Override
+    public void writeChars(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeChar(s.charAt(i));
+        }
+    }
+
+    // writeUTF is implemented in the parent class
 }
