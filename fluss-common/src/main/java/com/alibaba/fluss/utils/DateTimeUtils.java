@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.utils;
 
+import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 
 import java.time.DateTimeException;
@@ -107,6 +108,48 @@ public class DateTimeUtils {
             throws DateTimeException {
         return TimestampNtz.fromLocalDateTime(
                 fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision));
+    }
+
+    public static String formatTimestampNtz(TimestampNtz timestamp, int precision) {
+        LocalDateTime localDateTime = timestamp.toLocalDateTime();
+        if (precision == 0) {
+            return localDateTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        } else {
+            StringBuilder pattern = new StringBuilder("yyyy-MM-dd HH:mm:ss.");
+            for (int i = 0; i < precision; i++) {
+                pattern.append("S");
+            }
+            return localDateTime.format(DateTimeFormatter.ofPattern(pattern.toString()));
+        }
+    }
+
+    public static TimestampNtz parseTimestampNtzData(String dateStr, int precision)
+            throws DateTimeException {
+        return parseTimestampData(dateStr, precision);
+    }
+
+    public static String formatTimestampLtz(TimestampLtz timestamp, int precision) {
+        LocalDateTime localDateTime =
+                timestamp.toInstant().atZone(java.time.ZoneOffset.UTC).toLocalDateTime();
+        if (precision == 0) {
+            return localDateTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        } else {
+            StringBuilder pattern = new StringBuilder("yyyy-MM-dd HH:mm:ss.");
+            for (int i = 0; i < precision; i++) {
+                pattern.append("S");
+            }
+            return localDateTime.format(DateTimeFormatter.ofPattern(pattern.toString()));
+        }
+    }
+
+    public static TimestampLtz parseTimestampLtzData(String dateStr, int precision)
+            throws DateTimeException {
+        // Remove 'Z' suffix if present for parsing
+        String cleanDateStr =
+                dateStr.endsWith("Z") ? dateStr.substring(0, dateStr.length() - 1) : dateStr;
+        LocalDateTime localDateTime =
+                fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(cleanDateStr), precision);
+        return TimestampLtz.fromInstant(localDateTime.atZone(java.time.ZoneOffset.UTC).toInstant());
     }
 
     public static Integer parseDate(String s) {
