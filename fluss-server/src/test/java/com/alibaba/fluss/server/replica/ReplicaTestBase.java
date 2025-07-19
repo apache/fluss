@@ -36,6 +36,7 @@ import com.alibaba.fluss.server.coordinator.MetadataManager;
 import com.alibaba.fluss.server.coordinator.TestCoordinatorGateway;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.KvManager;
+import com.alibaba.fluss.server.kv.rocksdb.RocksDBSharedResource;
 import com.alibaba.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
@@ -162,6 +163,7 @@ public class ReplicaTestBase {
 
     @BeforeEach
     public void setup() throws Exception {
+        RocksDBSharedResource.resetInstance();
         conf = getServerConf();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
