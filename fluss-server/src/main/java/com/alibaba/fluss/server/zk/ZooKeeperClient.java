@@ -145,13 +145,13 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    public Map<String, ZookeeperResponse> handleFetchDataRequestsAsync(Collection<String> paths)
-            throws InterruptedException {
+    public Map<String, ZookeeperGetDataResponse> handleFetchDataRequestsAsync(
+            Collection<String> paths) throws InterruptedException {
         if (paths == null || paths.isEmpty()) {
             return Collections.emptyMap();
         }
 
-        Map<String, ZookeeperResponse> resultMap = MapUtils.newConcurrentHashMap();
+        Map<String, ZookeeperGetDataResponse> resultMap = MapUtils.newConcurrentHashMap();
 
         CountDownLatch countDownLatch = new CountDownLatch(paths.size());
 
@@ -160,10 +160,12 @@ public class ZooKeeperClient implements AutoCloseable {
                     if (event.getResultCode() == KeeperException.Code.OK.intValue()) {
                         resultMap.put(
                                 event.getPath(),
-                                new ZookeeperResponse(event.getPath(), true, event.getData()));
+                                new ZookeeperGetDataResponse(
+                                        event.getPath(), true, event.getData()));
                     } else {
                         resultMap.put(
-                                event.getPath(), new ZookeeperResponse(event.getPath(), false));
+                                event.getPath(),
+                                new ZookeeperGetDataResponse(event.getPath(), false));
                     }
                     inFlightRequests.release();
                     countDownLatch.countDown();
@@ -177,7 +179,45 @@ public class ZooKeeperClient implements AutoCloseable {
                 inFlightRequests.release();
             }
         }
-        //        countDownLatch.await(10, TimeUnit.SECONDS);
+        countDownLatch.await();
+
+        return resultMap;
+    }
+
+    public Map<String, ZookeeperGetChildrenResponse> handleGetChildrenRequestsAsync(
+            Collection<String> paths) throws InterruptedException {
+        if (paths == null || paths.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, ZookeeperGetChildrenResponse> resultMap = MapUtils.newConcurrentHashMap();
+
+        CountDownLatch countDownLatch = new CountDownLatch(paths.size());
+
+        BackgroundCallback callback =
+                (client, event) -> {
+                    if (event.getResultCode() == KeeperException.Code.OK.intValue()) {
+                        resultMap.put(
+                                event.getPath(),
+                                new ZookeeperGetChildrenResponse(
+                                        event.getPath(), true, event.getChildren()));
+                    } else {
+                        resultMap.put(
+                                event.getPath(),
+                                new ZookeeperGetChildrenResponse(event.getPath(), false));
+                    }
+                    inFlightRequests.release();
+                    countDownLatch.countDown();
+                };
+
+        for (String path : paths) {
+            try {
+                inFlightRequests.acquire();
+                zkClient.getChildren().inBackground(callback).forPath(path);
+            } catch (Exception e) {
+                inFlightRequests.release();
+            }
+        }
         countDownLatch.await();
 
         return resultMap;
@@ -237,12 +277,13 @@ public class ZooKeeperClient implements AutoCloseable {
                         .boxed()
                         .collect(Collectors.toMap(ServerIdZNode::path, id -> id));
 
-        Map<String, ZookeeperResponse> response = handleFetchDataRequestsAsync(path2IdMap.keySet());
+        Map<String, ZookeeperGetDataResponse> response =
+                handleFetchDataRequestsAsync(path2IdMap.keySet());
 
         // tablet server id -> TabletServerRegistration
         Map<Integer, TabletServerRegistration> result = new HashMap<>();
-        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
-            ZookeeperResponse entryResponse = entry.getValue();
+        for (Map.Entry<String, ZookeeperGetDataResponse> entry : response.entrySet()) {
+            ZookeeperGetDataResponse entryResponse = entry.getValue();
             if (entryResponse.isSuccess()) {
                 result.put(
                         path2IdMap.get(entry.getKey()),
@@ -289,13 +330,13 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<String, Long> path2TableIdMap =
                 tableIds.stream().collect(Collectors.toMap(TableIdZNode::path, id -> id));
 
-        Map<String, ZookeeperResponse> response =
+        Map<String, ZookeeperGetDataResponse> response =
                 handleFetchDataRequestsAsync(path2TableIdMap.keySet());
 
         // tabletId -> TableAssignment
         Map<Long, TableAssignment> result = new HashMap<>();
-        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
-            ZookeeperResponse entryResponse = entry.getValue();
+        for (Map.Entry<String, ZookeeperGetDataResponse> entry : response.entrySet()) {
+            ZookeeperGetDataResponse entryResponse = entry.getValue();
             if (entryResponse.isSuccess() && entryResponse.getData().length > 0) {
                 result.put(
                         path2TableIdMap.get(entry.getKey()),
@@ -317,13 +358,13 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<String, Long> path2PartitionIdMap =
                 partitionIds.stream().collect(Collectors.toMap(PartitionIdZNode::path, id -> id));
 
-        Map<String, ZookeeperResponse> response =
+        Map<String, ZookeeperGetDataResponse> response =
                 handleFetchDataRequestsAsync(path2PartitionIdMap.keySet());
 
         // tabletId -> PartitionAssignment
         Map<Long, PartitionAssignment> result = new HashMap<>();
-        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
-            ZookeeperResponse entryResponse = entry.getValue();
+        for (Map.Entry<String, ZookeeperGetDataResponse> entry : response.entrySet()) {
+            ZookeeperGetDataResponse entryResponse = entry.getValue();
             if (entryResponse.isSuccess()) {
                 result.put(
                         path2PartitionIdMap.get(entry.getKey()),
@@ -427,13 +468,13 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableBuckets.stream()
                         .collect(Collectors.toMap(LeaderAndIsrZNode::path, bucket -> bucket));
 
-        Map<String, ZookeeperResponse> response =
+        Map<String, ZookeeperGetDataResponse> response =
                 handleFetchDataRequestsAsync(path2TableBucketMap.keySet());
 
         // TableBucket -> LeaderAndIsr
         Map<TableBucket, LeaderAndIsr> result = new HashMap<>();
-        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
-            ZookeeperResponse entryResponse = entry.getValue();
+        for (Map.Entry<String, ZookeeperGetDataResponse> entry : response.entrySet()) {
+            ZookeeperGetDataResponse entryResponse = entry.getValue();
             if (entryResponse.isSuccess()) {
                 result.put(
                         path2TableBucketMap.get(entry.getKey()),
@@ -577,13 +618,13 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<String, TablePath> path2TablePathMap =
                 tablePaths.stream().collect(Collectors.toMap(TableZNode::path, path -> path));
 
-        Map<String, ZookeeperResponse> response =
+        Map<String, ZookeeperGetDataResponse> response =
                 handleFetchDataRequestsAsync(path2TablePathMap.keySet());
 
-        // TableBucket -> LeaderAndIsr
+        // TablePath -> TableRegistration
         Map<TablePath, TableRegistration> result = new HashMap<>();
-        for (Map.Entry<String, ZookeeperResponse> entry : response.entrySet()) {
-            ZookeeperResponse entryResponse = entry.getValue();
+        for (Map.Entry<String, ZookeeperGetDataResponse> entry : response.entrySet()) {
+            ZookeeperGetDataResponse entryResponse = entry.getValue();
             if (entryResponse.isSuccess()) {
                 result.put(
                         path2TablePathMap.get(entry.getKey()),
@@ -626,6 +667,25 @@ public class ZooKeeperClient implements AutoCloseable {
         return new HashSet<>(getChildren(path));
     }
 
+    /** Get the partitions of tables in ZK. */
+    public Map<TablePath, List<String>> getPartitions4tables(List<TablePath> tablePaths)
+            throws Exception {
+        Map<String, TablePath> path2TablePathMap =
+                tablePaths.stream().collect(Collectors.toMap(PartitionsZNode::path, path -> path));
+
+        Map<String, ZookeeperGetChildrenResponse> response =
+                handleGetChildrenRequestsAsync(path2TablePathMap.keySet());
+
+        Map<TablePath, List<String>> result = new HashMap<>();
+        for (Map.Entry<String, ZookeeperGetChildrenResponse> entry : response.entrySet()) {
+            ZookeeperGetChildrenResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess()) {
+                result.put(path2TablePathMap.get(entry.getKey()), entryResponse.getChildren());
+            }
+        }
+        return result;
+    }
+
     /** Get the partition and the id for the partitions of a table in ZK. */
     public Map<String, Long> getPartitionNameAndIds(TablePath tablePath) throws Exception {
         Map<String, Long> partitions = new HashMap<>();
@@ -635,6 +695,50 @@ public class ZooKeeperClient implements AutoCloseable {
                     partition -> partitions.put(partitionName, partition.getPartitionId()));
         }
         return partitions;
+    }
+
+    /** Get the partition and the id for the partitions of a table in ZK. */
+    public Map<TablePath, Map<String, Long>> getPartitionNameAndIds4tables(
+            List<TablePath> tablePaths) throws Exception {
+        Map<TablePath, Map<String, Long>> result = new HashMap<>();
+
+        Map<TablePath, List<String>> tablePath2Partitions = getPartitions4tables(tablePaths);
+
+        // each TablePath has a list of partitions
+        Map<String, TablePath> zkPath2TablePath = new HashMap<>();
+        Map<String, String> zkPath2PartitionName = new HashMap<>();
+        for (Map.Entry<TablePath, List<String>> entry : tablePath2Partitions.entrySet()) {
+            TablePath tablePath = entry.getKey();
+            List<String> partitions = entry.getValue();
+            for (String partitionName : partitions) {
+                zkPath2TablePath.put(PartitionZNode.path(tablePath, partitionName), tablePath);
+                zkPath2PartitionName.put(
+                        PartitionZNode.path(tablePath, partitionName), partitionName);
+            }
+        }
+
+        Map<String, ZookeeperGetDataResponse> response =
+                handleFetchDataRequestsAsync(zkPath2TablePath.keySet());
+
+        for (Map.Entry<String, ZookeeperGetDataResponse> entry : response.entrySet()) {
+            ZookeeperGetDataResponse entryResponse = entry.getValue();
+            if (entryResponse.isSuccess()) {
+                String zkPath = entry.getKey();
+                TablePath tablePath = zkPath2TablePath.get(zkPath);
+                String partitionName = zkPath2PartitionName.get(zkPath);
+                long partitionId = PartitionZNode.decode(entryResponse.getData()).getPartitionId();
+                result.compute(
+                        tablePath,
+                        (key, map) -> {
+                            if (map == null) {
+                                map = new HashMap<>();
+                            }
+                            map.put(partitionName, partitionId);
+                            return map;
+                        });
+            }
+        }
+        return result;
     }
 
     /** Get the partition and the id for the partitions of a table in ZK by partition spec. */

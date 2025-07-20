@@ -129,6 +129,9 @@ class ZooKeeperClientTest {
         // get tablet server1
         assertThat(zookeeperClient.getTabletServer(1)).contains(registration1);
         assertThat(zookeeperClient.getTabletServer(2)).contains(registration2);
+        // fetch all tablet servers
+        assertThat(zookeeperClient.getTabletServers(new int[] {1, 2}))
+                .containsValues(registration1, registration2);
     }
 
     @Test

@@ -317,12 +317,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
         }
         Map<TablePath, TableInfo> tablePath2TableInfoMap = metadataManager.getTables(tablePathSet);
-        //        Set<TablePath> partitionedTablePathSet =
-        // tablePath2TableInfoMap.entrySet().stream().filter(entry ->
-        // entry.getValue().isPartitioned())
-        //                .map(Map.Entry::getKey)
-        //                .collect(Collectors.toSet());
-
+        List<TablePath> partitionedTablePathList =
+                tablePath2TableInfoMap.entrySet().stream()
+                        .filter(entry -> entry.getValue().isPartitioned())
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+        Map<TablePath, Map<String, Long>> tablePathMapMap =
+                zooKeeperClient.getPartitionNameAndIds4tables(partitionedTablePathList);
         for (TablePath tablePath : tablePathSet) {
             TableInfo tableInfo = tablePath2TableInfoMap.get(tablePath);
             coordinatorContext.putTablePath(tableInfo.getTableId(), tablePath);
@@ -333,7 +334,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 lakeTables.add(Tuple2.of(tableInfo, System.currentTimeMillis()));
             }
             if (tableInfo.isPartitioned()) {
-                Map<String, Long> partitions = zooKeeperClient.getPartitionNameAndIds(tablePath);
+                Map<String, Long> partitions = tablePathMapMap.get(tablePath);
                 for (Map.Entry<String, Long> partition : partitions.entrySet()) {
                     // put partition info to coordinator context
                     coordinatorContext.putPartition(
