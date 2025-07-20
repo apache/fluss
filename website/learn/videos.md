@@ -22,7 +22,7 @@ title: Videos
 
 # Videos
 
-Video tutorials, and demos about Apache Fluss streaming storage.
+Video tutorials and demos about Apache Fluss streaming storage.
 
 ---
 
