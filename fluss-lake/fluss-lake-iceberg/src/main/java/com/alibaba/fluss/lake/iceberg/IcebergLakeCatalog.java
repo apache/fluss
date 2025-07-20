@@ -1,3 +1,20 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.alibaba.fluss.lake.iceberg;
 
 import com.alibaba.fluss.config.Configuration;
@@ -5,6 +22,7 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.types.Type;
@@ -21,45 +39,47 @@ import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 /** A Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
 
-  private static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
-  static {
-    // We need __bucket system column to filter out the given bucket
-    // for iceberg bucket append only table & primary key table.
-    SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, Types.IntegerType.get());
-    SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, Types.LongType.get());
-    SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone());
-  }
+    static {
+        // We need __bucket system column to filter out the given bucket
+        // for iceberg bucket append only table & primary key table.
+        SYSTEM_COLUMNS.put(BUCKET_COLUMN_NAME, Types.IntegerType.get());
+        SYSTEM_COLUMNS.put(OFFSET_COLUMN_NAME, Types.LongType.get());
+        SYSTEM_COLUMNS.put(TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone());
+    }
 
-  private final Catalog icebergCatalog;
+    private final Catalog icebergCatalog;
 
-  // for fluss config
-  private static final String FLUSS_CONF_PREFIX = "fluss.";
-  // for iceberg config
-  private static final String ICEBERG_CONF_PREFIX = "iceberg.";
+    // for fluss config
+    private static final String FLUSS_CONF_PREFIX = "fluss.";
+    // for iceberg config
+    private static final String ICEBERG_CONF_PREFIX = "iceberg.";
 
-  public IcebergLakeCatalog(Configuration configuration) {
-    Map<String, String> icebergConf = stripPrefix(configuration.toMap(), ICEBERG_CONF_PREFIX);
-    this.icebergCatalog =
-        CatalogUtil.loadCatalog(
-            "org.apache.iceberg.hive.HiveCatalog",
-            "hive-iceberg",
-            icebergConf,
-            new org.apache.hadoop.conf.Configuration());
-  }
+    public IcebergLakeCatalog(Configuration configuration) {
+        Map<String, String> icebergConf = stripPrefix(configuration.toMap(), ICEBERG_CONF_PREFIX);
+        this.icebergCatalog =
+                CatalogUtil.loadCatalog(
+                        "org.apache.iceberg.hive.HiveCatalog",
+                        "hive-iceberg",
+                        icebergConf,
+                        new org.apache.hadoop.conf.Configuration());
+    }
 
-  @Override
-  public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-      throws TableAlreadyExistException {}
+    @Override
+    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+            throws TableAlreadyExistException {}
 
-  @Override
-  public void close() throws Exception {
-    LakeCatalog.super.close();
-  }
+    @Override
+    public void close() throws Exception {
+        LakeCatalog.super.close();
+    }
 
-  private Map<String, String> stripPrefix(Map<String, String> conf, String prefix) {
-    return conf.entrySet().stream()
-        .filter(e -> e.getKey().startsWith(prefix))
-        .collect(Collectors.toMap(e -> e.getKey().substring(prefix.length()), Map.Entry::getValue));
-  }
+    private Map<String, String> stripPrefix(Map<String, String> conf, String prefix) {
+        return conf.entrySet().stream()
+                .filter(e -> e.getKey().startsWith(prefix))
+                .collect(
+                        Collectors.toMap(
+                                e -> e.getKey().substring(prefix.length()), Map.Entry::getValue));
+    }
 }
