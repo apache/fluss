@@ -31,7 +31,7 @@ Talks and presentations about Apache Fluss from conferences, meetups, and commun
 
 Exploring Fluss's core architecture and key technological breakthroughs, covering deep integration with Apache Flink, streaming and Lakehouse architecture fusion, and support for multimodal AI data pipelines.
 
-[📹 Watch on YouTube](https://www.youtube.com/live/pzT6vCCmwq8?si=8Cpx7Rr25yGsdzFd&t=8412)
+[📹 Watch on YouTube](https://www.youtube.com/live/pzT6vCCmwq8?si=8Cpx7Rr25yGsdzFd&t=8412) | [Slides](https://speakerdeck.com/jark/ffa2025-fluss-redefining-streaming-storage-for-real-time-data-analytics-and-ai)
 
 ---
 
@@ -40,7 +40,7 @@ Exploring Fluss's core architecture and key technological breakthroughs, coverin
 
 Deep dive into the new features and capabilities introduced in Fluss 0.7, including enhanced stability, new streaming lakehouse architecture, and enterprise-grade security features.
 
-[📹 Watch on YouTube](https://youtu.be/G-1yiYN2qoo?si=4LFSW45GehWSIj_9)
+[📹 Watch on YouTube](https://youtu.be/G-1yiYN2qoo?si=4LFSW45GehWSIj_9) | [Slides](https://speakerdeck.com/jark/fluss-0-dot-7-webinar)
 
 ---
 
@@ -49,7 +49,7 @@ Deep dive into the new features and capabilities introduced in Fluss 0.7, includ
 
 The session addresses the limitations of Kafka in creating real-time lakehouses necessary for modern AI applications. Fluss is introduced as a novel system built from scratch to integrate seamlessly with Lakehouse architectures.
 
-[📹 Watch on YouTube](https://youtu.be/OzE0mVD0GPs?si=8JrS6jhVSJoykY1t)
+[📹 Watch on YouTube](https://youtu.be/OzE0mVD0GPs?si=8JrS6jhVSJoykY1t) | [Slides](https://speakerdeck.com/jark/dss2025-fluss-reinventing-kafka-for-the-real-time-lakehouse)
 
 ---
 
