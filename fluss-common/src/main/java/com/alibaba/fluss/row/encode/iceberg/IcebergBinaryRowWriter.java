@@ -20,7 +20,6 @@ package com.alibaba.fluss.row.encode.iceberg;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
-import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.utils.UnsafeUtils;
@@ -151,18 +150,6 @@ class IcebergBinaryRowWriter {
         writeBytes(unscaled); // Adds 4-byte length prefix before the actual bytes
     }
 
-    public void writeTimestampNtz(TimestampNtz value, int precision) {
-        long micros = value.getMillisecond() * 1000L + (value.getNanoOfMillisecond() / 1000L);
-        writeLong(micros);
-    }
-
-    public void writeTimestampLtz(TimestampLtz value, int precision) {
-        long epochMillis = value.getEpochMillisecond();
-        int nanoOfMilli = value.getNanoOfMillisecond();
-        long totalMicros = epochMillis * 1000L + (nanoOfMilli / 1000L);
-        writeLong(totalMicros);
-    }
-
     private void ensureCapacity(int neededSize) {
         if (buffer.length < cursor + neededSize) {
             grow(cursor + neededSize);
@@ -181,23 +168,6 @@ class IcebergBinaryRowWriter {
     private void setBuffer(byte[] buffer) {
         this.buffer = buffer;
         this.segment = MemorySegment.wrap(buffer);
-    }
-
-    /**
-     * Returns the number of bytes required to store a decimal with the given precision. Based on
-     * Iceberg's decimal storage specification.
-     *
-     * @param precision the decimal precision
-     * @return number of bytes required
-     */
-    private static int getIcebergDecimalBytes(int precision) {
-        if (precision <= 9) {
-            return 4; // Can fit in 4 bytes
-        } else if (precision <= 18) {
-            return 8; // Can fit in 8 bytes
-        } else {
-            return 16; // Requires 16 bytes
-        }
     }
 
     /**
