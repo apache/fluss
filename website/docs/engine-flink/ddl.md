@@ -41,17 +41,17 @@ The following properties can be set if using the Fluss catalog:
 
 | Option                         | Required | Default   | Description                                                                                                                                                                          |
 |--------------------------------|----------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| type                           | required | (none)    | Catalog type, must to be 'fluss' here.                                                                                                                                               |
+| type                           | required | (none)    | Catalog type, must be 'fluss' here.                                                                                                                                               |
 | bootstrap.servers              | required | (none)    | Comma separated list of Fluss servers.                                                                                                                                               |
 | default-database               | optional | fluss     | The default database to use when switching to this catalog.                                                                                                                          |
 | client.security.protocol       | optional | PLAINTEXT | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                           |
-| `client.security.{protocol}.*` | optional | (none)    | Client-side configuration properties for a specific authentication protocol. E.g., client.security.sasl.jaas.config. More Details in [authentication](../security/authentication.md) | (none)        |
+| `client.security.{protocol}.*` | optional | (none)    | Client-side configuration properties for a specific authentication protocol. E.g., client.security.sasl.jaas.config. More Details in [authentication](../security/authentication.md) |
 
-The following introduced statements assuming the current catalog is switched to the Fluss catalog using `USE CATALOG <catalog_name>` statement.
+The following statements assume that the current catalog has been switched to the Fluss catalog using the `USE CATALOG <catalog_name>` statement.
 
 ## Create Database
 
-By default, FlussCatalog will use the `fluss` database in Flink. Using the following example to create a separate database in order to avoid creating tables under the default `fluss` database:
+By default, FlussCatalog will use the `fluss` database in Flink. You can use the following example to create a separate database to avoid creating tables under the default `fluss` database:
 
 ```sql title="Flink SQL"
 CREATE DATABASE my_db;
@@ -77,9 +77,9 @@ DROP DATABASE my_db;
 
 ## Create Table
 
-### PrimaryKey Table
+### Primary Key Table
 
-The following SQL statement will create a [PrimaryKey Table](table-design/table-types/pk-table/index.md) with a primary key consisting of shop_id and user_id.
+The following SQL statement will create a [Primary Key Table](table-design/table-types/pk-table/index.md) with a primary key consisting of shop_id and user_id.
 ```sql title="Flink SQL"
 CREATE TABLE my_pk_table (
   shop_id BIGINT,
@@ -107,14 +107,14 @@ CREATE TABLE my_log_table (
 );
 ```
 
-### Partitioned (PrimaryKey/Log) Table
+### Partitioned (Primary Key/Log) Table
 
 :::note
 1. Currently, Fluss only supports partitioned field with `STRING` type
-2. For the Partitioned PrimaryKey Table, the partitioned field (`dt` in this case) must be a subset of the primary key (`dt, shop_id, user_id` in this case)
+2. For the Partitioned Primary Key Table, the partitioned field (`dt` in this case) must be a subset of the primary key (`dt, shop_id, user_id` in this case)
 :::
 
-The following SQL statement creates a Partitioned PrimaryKey Table in Fluss.
+The following SQL statement creates a Partitioned Primary Key Table in Fluss.
 
 ```sql title="Flink SQL"
 CREATE TABLE my_part_pk_table (
@@ -147,7 +147,7 @@ But you can still use the [Add Partition](engine-flink/ddl.md#add-partition) sta
 
 #### Multi-Fields Partitioned Table
 
-Fluss also support [Multi-Fields Partitioning](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables), the following SQL statement creates a Multi-Fields Partitioned Log Table in Fluss:
+Fluss also supports [Multi-Fields Partitioning](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables), the following SQL statement creates a Multi-Fields Partitioned Log Table in Fluss:
 
 ```sql title="Flink SQL"
 CREATE TABLE my_multi_fields_part_log_table (
@@ -160,9 +160,9 @@ CREATE TABLE my_multi_fields_part_log_table (
 ) PARTITIONED BY (dt, nation);
 ```
 
-#### Auto partitioned (PrimaryKey/Log) table
+#### Auto Partitioned (Primary Key/Log) Table
 
-Fluss also support creat Auto Partitioned (PrimaryKey/Log) Table. The following SQL statement creates an Auto Partitioned PrimaryKey Table in Fluss.
+Fluss also supports creating Auto Partitioned (Primary Key/Log) Table. The following SQL statement creates an Auto Partitioned Primary Key Table in Fluss.
 
 ```sql title="Flink SQL"
 CREATE TABLE my_auto_part_pk_table (
@@ -195,7 +195,7 @@ CREATE TABLE my_auto_part_log_table (
 );
 ```
 
-For more details about Auto Partitioned (PrimaryKey/Log) Table, refer to [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
+For more details about Auto Partitioned (Primary Key/Log) Table, refer to [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
 
 
 ### Options
@@ -240,8 +240,8 @@ This will entirely remove all the data of the table in the Fluss cluster.
 
 ## Add Partition
 
-Fluss support manually add partitions to an exists partitioned table by Fluss Catalog. If the specified partition 
-not exists, Fluss will create the partition. If the specified partition already exists, Fluss will ignore the request 
+Fluss supports manually adding partitions to an existing partitioned table through the Fluss Catalog. If the specified partition 
+does not exist, Fluss will create the partition. If the specified partition already exists, Fluss will ignore the request 
 or throw an exception.
 
 To add partitions, run:
@@ -277,8 +277,8 @@ For more details, refer to the [Flink SHOW PARTITIONS](https://nightlies.apache.
 
 ## Drop Partition
 
-Fluss also support manually drop partitions from an exists partitioned table by Fluss Catalog. If the specified partition 
-not exists, Fluss will ignore the request or throw an exception.
+Fluss also supports manually dropping partitions from an existing partitioned table through the Fluss Catalog. If the specified partition 
+does not exist, Fluss will ignore the request or throw an exception.
 
 
 To drop partitions, run:
@@ -291,5 +291,3 @@ ALTER TABLE my_multi_fields_part_log_table DROP PARTITION (dt = '2025-03-05', na
 ```
 
 For more details, refer to the [Flink ALTER TABLE(DROP)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#drop) documentation.
-
-

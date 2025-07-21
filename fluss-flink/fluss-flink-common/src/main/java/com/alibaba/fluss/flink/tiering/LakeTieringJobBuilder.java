@@ -102,7 +102,9 @@ public class LakeTieringJobBuilder {
                         new TieringCommitOperatorFactory(flussConfig, lakeTieringFactory))
                 .setParallelism(1)
                 .setMaxParallelism(1)
-                .sinkTo(new DiscardingSink());
+                .sinkTo(new DiscardingSink())
+                .name("end")
+                .setParallelism(1);
         String jobName =
                 env.getConfiguration()
                         .getOptional(PipelineOptions.NAME)

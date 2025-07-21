@@ -33,6 +33,7 @@ import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
@@ -217,18 +218,16 @@ public class FlussAuthorizationITCase {
     void testAclOperation() throws Exception {
         // Test whether the user has authorization to perform the "list ACLs" operation.
         assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).isEmpty();
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.cluster(),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                WILD_CARD_HOST,
-                                                OperationType.DESCRIBE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.cluster(),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        WILD_CARD_HOST,
+                                        OperationType.DESCRIBE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
         assertThat(guestAdmin.listAcls(AclBindingFilter.ANY).get()).hasSize(1);
 
         // test whether the user have authorization to operate create and drop acls.
@@ -238,7 +237,7 @@ public class FlussAuthorizationITCase {
                         Resource.table("test_db", "test_table"),
                         new AccessControlEntry(
                                 user1, "*", OperationType.CREATE, PermissionType.ALLOW));
-        List<AclBinding> aclBindings =
+        List<AclBinding> noAuthorizationAclBinding =
                 Arrays.asList(
                         user1AclBinding,
                         new AclBinding(
@@ -255,24 +254,22 @@ public class FlussAuthorizationITCase {
                                         "127.0.0.1",
                                         OperationType.DROP,
                                         PermissionType.ALLOW)));
-        assertThatThrownBy(() -> guestAdmin.createAcls(aclBindings).all().get())
+        assertThatThrownBy(() -> guestAdmin.createAcls(noAuthorizationAclBinding).all().get())
                 .hasMessageContaining(
                         "Principal %s have no authorization to operate ALTER on resource",
                         guestPrincipal);
 
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.cluster(),
-                                        new AccessControlEntry(
-                                                WILD_CARD_PRINCIPAL,
-                                                WILD_CARD_HOST,
-                                                OperationType.ALTER,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
-        guestAdmin.createAcls(aclBindings).all().get();
+        aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.cluster(),
+                                new AccessControlEntry(
+                                        WILD_CARD_PRINCIPAL,
+                                        WILD_CARD_HOST,
+                                        OperationType.ALTER,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        guestAdmin.createAcls(noAuthorizationAclBinding).all().get();
 
         assertThat(
                         guestAdmin
@@ -305,18 +302,16 @@ public class FlussAuthorizationITCase {
                         String.format(
                                 "Principal %s have no authorization to operate CREATE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.cluster(),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.CREATE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.cluster(),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.CREATE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
         guestAdmin.createDatabase("test-database2", DatabaseDescriptor.EMPTY, false).get();
         assertThat(rootAdmin.databaseExists("test-database1").get()).isFalse();
         assertThat(rootAdmin.databaseExists("test-database2").get()).isTrue();
@@ -330,32 +325,30 @@ public class FlussAuthorizationITCase {
                 .containsExactlyInAnyOrderElementsOf(
                         Lists.newArrayList("fluss", DATA1_TABLE_PATH_PK.getDatabaseName()));
 
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.database("fluss"),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.DESCRIBE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.database("fluss"),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.DESCRIBE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listDatabases().get()).isEqualTo(Collections.singletonList("fluss"));
 
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.cluster(),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.ALL,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.cluster(),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.ALL,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listDatabases().get())
                 .containsExactlyInAnyOrderElementsOf(
                         Lists.newArrayList("fluss", DATA1_TABLE_PATH_PK.getDatabaseName()));
@@ -374,18 +367,17 @@ public class FlussAuthorizationITCase {
                                 "Principal %s have no authorization to operate CREATE on resource Resource{type=DATABASE, name='test_db_1'}",
                                 guestPrincipal));
         assertThat(rootAdmin.tableExists(DATA1_TABLE_PATH).get()).isFalse();
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.database(DATA1_TABLE_PATH.getDatabaseName()),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.CREATE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.database(DATA1_TABLE_PATH.getDatabaseName()),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.CREATE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
         guestAdmin.createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false).get();
         assertThat(rootAdmin.tableExists(DATA1_TABLE_PATH).get()).isTrue();
     }
@@ -394,18 +386,18 @@ public class FlussAuthorizationITCase {
     void testListTables() throws Exception {
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
                 .isEqualTo(Collections.emptyList());
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.database(DATA1_TABLE_PATH_PK.getDatabaseName()),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.DESCRIBE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.database(DATA1_TABLE_PATH_PK.getDatabaseName()),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.DESCRIBE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
                 .isEqualTo(Collections.singletonList(DATA1_TABLE_PATH_PK.getTableName()));
     }
@@ -428,19 +420,17 @@ public class FlussAuthorizationITCase {
                     .isEmpty();
 
             // if add acl to allow guest read any resource, it will allow to get metadata.
-            rootAdmin
-                    .createAcls(
-                            Collections.singletonList(
-                                    new AclBinding(
-                                            Resource.table(DATA1_TABLE_PATH_PK),
-                                            new AccessControlEntry(
-                                                    guestPrincipal,
-                                                    "*",
-                                                    OperationType.DESCRIBE,
-                                                    PermissionType.ALLOW))))
-                    .all()
-                    .get();
-
+            List<AclBinding> aclBindings =
+                    Collections.singletonList(
+                            new AclBinding(
+                                    Resource.table(DATA1_TABLE_PATH_PK),
+                                    new AccessControlEntry(
+                                            guestPrincipal,
+                                            "*",
+                                            OperationType.DESCRIBE,
+                                            PermissionType.ALLOW)));
+            rootAdmin.createAcls(aclBindings).all().get();
+            FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
             assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
                     .hasSize(1);
         }
@@ -454,16 +444,20 @@ public class FlussAuthorizationITCase {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(writeAclTable, descriptor, false).get();
+        TableInfo tableInfo = rootAdmin.getTableInfo(writeAclTable).get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableInfo.getTableId());
         // create acl to allow guest write.
-        AclBinding aclBinding =
-                new AclBinding(
-                        Resource.table(writeAclTable),
-                        new AccessControlEntry(
-                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
-        rootAdmin.createAcls(Collections.singletonList(aclBinding)).all().get();
-
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
-                rootAdmin.getTableInfo(writeAclTable).get().getTableId(), aclBinding);
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(writeAclTable),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
 
         FlussConnection flussConnection = (FlussConnection) guestConn;
         TabletServerGateway tabletServerGateway =
@@ -512,26 +506,31 @@ public class FlussAuthorizationITCase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(writeAclTable, descriptor, false).get();
         rootAdmin.createTable(noWriteAclTable, descriptor, false).get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(writeAclTable).get().getTableId());
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(noWriteAclTable).get().getTableId());
 
         // create acl to allow guest write for writeAclTable.
-        AclBinding aclBindingOfWriteAclTable =
-                new AclBinding(
-                        Resource.table(writeAclTable),
-                        new AccessControlEntry(
-                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
-        AclBinding aclBindingOfNoWriteAclTable =
-                new AclBinding(
-                        Resource.table(noWriteAclTable),
-                        new AccessControlEntry(guestPrincipal, "*", READ, PermissionType.ALLOW));
-        rootAdmin.createAcls(Collections.singletonList(aclBindingOfWriteAclTable)).all().get();
-        rootAdmin.createAcls(Collections.singletonList(aclBindingOfNoWriteAclTable)).all().get();
-
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
-                rootAdmin.getTableInfo(writeAclTable).get().getTableId(),
-                aclBindingOfWriteAclTable);
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
-                rootAdmin.getTableInfo(noWriteAclTable).get().getTableId(),
-                aclBindingOfNoWriteAclTable);
+        List<AclBinding> aclBindingOfWriteAclTables =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(writeAclTable),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        List<AclBinding> aclBindingOfNoWriteAclTables =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(noWriteAclTable),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindingOfWriteAclTables).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindingOfWriteAclTables, true);
+        rootAdmin.createAcls(aclBindingOfNoWriteAclTables).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindingOfNoWriteAclTables, true);
 
         // 1. Try to write data to noWriteAclTable. It should throw AuthorizationException because
         // of request writeId failed.
@@ -577,15 +576,20 @@ public class FlussAuthorizationITCase {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(DATA1_TABLE_PATH, descriptor, false).get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId());
         // create acl to allow guest write.
-        AclBinding aclBinding =
-                new AclBinding(
-                        Resource.table(DATA1_TABLE_PATH),
-                        new AccessControlEntry(
-                                guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW));
-        rootAdmin.createAcls(Collections.singletonList(aclBinding)).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReadyWithAuthorization(
-                rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId(), aclBinding);
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
         try (Table table = guestConn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();

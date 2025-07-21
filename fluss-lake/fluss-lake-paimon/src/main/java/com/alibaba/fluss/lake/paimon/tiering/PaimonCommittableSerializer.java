@@ -54,7 +54,8 @@ public class PaimonCommittableSerializer implements SimpleVersionedSerializer<Pa
                             + ".");
         }
         ManifestCommittable manifestCommittable =
-                manifestCommittableSerializer.deserialize(version, serialized);
+                manifestCommittableSerializer.deserialize(
+                        manifestCommittableSerializer.getVersion(), serialized);
         return new PaimonCommittable(manifestCommittable);
     }
 }

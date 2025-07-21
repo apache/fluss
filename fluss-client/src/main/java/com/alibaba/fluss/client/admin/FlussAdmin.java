@@ -38,6 +38,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
+import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -99,6 +100,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 public class FlussAdmin implements Admin {
 
     private final AdminGateway gateway;
+    private final AdminReadOnlyGateway readOnlyGateway;
     private final MetadataUpdater metadataUpdater;
     private final RpcClient client;
 
@@ -106,6 +108,9 @@ public class FlussAdmin implements Admin {
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
+        this.readOnlyGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
         this.client = client;
     }
@@ -119,7 +124,7 @@ public class FlussAdmin implements Admin {
                         List<ServerNode> serverNodeList = new ArrayList<>();
                         Cluster cluster =
                                 sendMetadataRequestAndRebuildCluster(
-                                        gateway,
+                                        readOnlyGateway,
                                         false,
                                         metadataUpdater.getCluster(),
                                         null,
@@ -142,7 +147,8 @@ public class FlussAdmin implements Admin {
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.getTableSchema(request)
+        return readOnlyGateway
+                .getTableSchema(request)
                 .thenApply(
                         r ->
                                 new SchemaInfo(
@@ -157,7 +163,8 @@ public class FlussAdmin implements Admin {
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.getTableSchema(request)
+        return readOnlyGateway
+                .getTableSchema(request)
                 .thenApply(
                         r ->
                                 new SchemaInfo(
@@ -179,7 +186,8 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<DatabaseInfo> getDatabaseInfo(String databaseName) {
         GetDatabaseInfoRequest request = new GetDatabaseInfoRequest();
         request.setDatabaseName(databaseName);
-        return gateway.getDatabaseInfo(request)
+        return readOnlyGateway
+                .getDatabaseInfo(request)
                 .thenApply(
                         r ->
                                 new DatabaseInfo(
@@ -204,13 +212,14 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<Boolean> databaseExists(String databaseName) {
         DatabaseExistsRequest request = new DatabaseExistsRequest();
         request.setDatabaseName(databaseName);
-        return gateway.databaseExists(request).thenApply(DatabaseExistsResponse::isExists);
+        return readOnlyGateway.databaseExists(request).thenApply(DatabaseExistsResponse::isExists);
     }
 
     @Override
     public CompletableFuture<List<String>> listDatabases() {
         ListDatabasesRequest request = new ListDatabasesRequest();
-        return gateway.listDatabases(request)
+        return readOnlyGateway
+                .listDatabases(request)
                 .thenApply(ListDatabasesResponse::getDatabaseNamesList);
     }
 
@@ -233,7 +242,8 @@ public class FlussAdmin implements Admin {
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.getTableInfo(request)
+        return readOnlyGateway
+                .getTableInfo(request)
                 .thenApply(
                         r ->
                                 TableInfo.of(
@@ -261,14 +271,14 @@ public class FlussAdmin implements Admin {
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.tableExists(request).thenApply(TableExistsResponse::isExists);
+        return readOnlyGateway.tableExists(request).thenApply(TableExistsResponse::isExists);
     }
 
     @Override
     public CompletableFuture<List<String>> listTables(String databaseName) {
         ListTablesRequest request = new ListTablesRequest();
         request.setDatabaseName(databaseName);
-        return gateway.listTables(request).thenApply(ListTablesResponse::getTableNamesList);
+        return readOnlyGateway.listTables(request).thenApply(ListTablesResponse::getTableNamesList);
     }
 
     @Override
@@ -289,7 +299,8 @@ public class FlussAdmin implements Admin {
             PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
             request.setPartialPartitionSpec(pbPartitionSpec);
         }
-        return gateway.listPartitionInfos(request)
+        return readOnlyGateway
+                .listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
     }
 
@@ -315,7 +326,8 @@ public class FlussAdmin implements Admin {
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.getLatestKvSnapshots(request)
+        return readOnlyGateway
+                .getLatestKvSnapshots(request)
                 .thenApply(ClientRpcMessageUtils::toKvSnapshots);
     }
 
@@ -328,7 +340,8 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         request.setPartitionName(partitionName);
-        return gateway.getLatestKvSnapshots(request)
+        return readOnlyGateway
+                .getLatestKvSnapshots(request)
                 .thenApply(ClientRpcMessageUtils::toKvSnapshots);
     }
 
@@ -342,7 +355,8 @@ public class FlussAdmin implements Admin {
         request.setTableId(bucket.getTableId())
                 .setBucketId(bucket.getBucket())
                 .setSnapshotId(snapshotId);
-        return gateway.getKvSnapshotMetadata(request)
+        return readOnlyGateway
+                .getKvSnapshotMetadata(request)
                 .thenApply(ClientRpcMessageUtils::toKvSnapshotMetadata);
     }
 
@@ -353,7 +367,8 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
 
-        return gateway.getLatestLakeSnapshot(request)
+        return readOnlyGateway
+                .getLatestLakeSnapshot(request)
                 .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
     }
 
