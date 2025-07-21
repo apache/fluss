@@ -24,6 +24,10 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -533,6 +537,33 @@ public class FlussAdmin implements Admin {
                         });
 
         return future;
+    }
+
+    @Override
+    public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTag(
+            List<Integer> tabletServers, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+            List<GoalType> priorityGoals, boolean dryRun) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess() {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelRebalance() {
+        throw new UnsupportedOperationException("Support soon");
     }
 
     @Override
