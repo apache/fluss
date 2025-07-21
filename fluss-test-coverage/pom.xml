@@ -246,6 +246,7 @@
                                             com.alibaba.fluss.row.columnar.BytesColumnVector.Bytes
                                         </exclude>
                                         <exclude>com.alibaba.fluss.row.encode.RowEncoder</exclude>
+                                        <exclude>com.alibaba.fluss.row.encode.KeyEncoder</exclude>
                                         <exclude>com.alibaba.fluss.table.*</exclude>
                                         <exclude>com.alibaba.fluss.record.*</exclude>
                                         <exclude>com.alibaba.fluss.kv.*</exclude>
@@ -269,7 +270,9 @@
                                         <exclude>com.alibaba.fluss.Bucket</exclude>
                                         <exclude>com.alibaba.fluss.remote.*</exclude>
                                         <exclude>com.alibaba.fluss.compression.*</exclude>
-                                        <exclude>com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory</exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory
+                                        </exclude>
                                         <exclude>com.alibaba.fluss.security.auth.ServerAuthenticator</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.flink.utils.*</exclude>
@@ -307,7 +310,8 @@
                                         <exclude>com.alibaba.fluss.fs.oss.*</exclude>
                                         <exclude>com.alibaba.fluss.fs.s3.*</exclude>
                                         <exclude>com.alibaba.fluss.fs.obs.*</exclude>
-                                        <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*</exclude>
+                                        <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
+                                        </exclude>
                                         <exclude>com.alibaba.fluss.rocksdb.RocksIteratorWrapper
                                         </exclude>
                                         <exclude>com.alibaba.fluss.plugin.PluginUtils</exclude>
@@ -331,15 +335,28 @@
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceOptions</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource.Builder</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringWriterInitContext</exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator
+                                        </exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper
+                                        </exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringWriterInitContext
+                                        </exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceReader</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultEmitter</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo*</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.committer.TieringCommitOperatorFactory</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo*</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.committer.LakeTieringCommitOperatorFactory</exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultEmitter
+                                        </exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo*
+                                        </exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.flink.tiering.committer.TieringCommitOperatorFactory
+                                        </exclude>
+                                        <exclude>com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
+                                        </exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.flink.tiering.committer.LakeTieringCommitOperatorFactory
+                                        </exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
                                     </excludes>
