@@ -763,7 +763,11 @@ class CoordinatorEventProcessorTest {
                                 completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
                         responseCompletableFuture2));
         responseCompletableFuture2.get();
-        verifyReceiveRequestExceptFor(3, leader, NotifyKvSnapshotOffsetRequest.class);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyReceiveRequestExceptFor(
+                                3, leader, NotifyKvSnapshotOffsetRequest.class));
     }
 
     @Test
@@ -1082,6 +1086,7 @@ class CoordinatorEventProcessorTest {
                         .hasMessage("No requests pending for inbound response.");
             } else {
                 // should contain NotifyKvSnapshotOffsetRequest
+                assertThat(testTabletServerGateway.pendingRequestSize()).isNotZero();
                 assertThat(testTabletServerGateway.getRequest(0)).isInstanceOf(requestClass);
             }
         }
