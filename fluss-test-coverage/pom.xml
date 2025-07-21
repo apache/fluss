@@ -246,7 +246,6 @@
                                             com.alibaba.fluss.row.columnar.BytesColumnVector.Bytes
                                         </exclude>
                                         <exclude>com.alibaba.fluss.row.encode.RowEncoder</exclude>
-                                        <exclude>com.alibaba.fluss.row.encode.KeyEncoder</exclude>
                                         <exclude>com.alibaba.fluss.table.*</exclude>
                                         <exclude>com.alibaba.fluss.record.*</exclude>
                                         <exclude>com.alibaba.fluss.kv.*</exclude>
