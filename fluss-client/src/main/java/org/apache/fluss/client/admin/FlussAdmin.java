@@ -24,6 +24,9 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.maintencance.GoalType;
+import org.apache.fluss.cluster.maintencance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.maintencance.ServerTag;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -70,6 +73,7 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.CompleteFuture;
 import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
@@ -462,6 +466,33 @@ public class FlussAdmin implements Admin {
                             }
                         });
         return result;
+    }
+
+    @Override
+    public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTag(
+            List<Integer> tabletServers, ServerTag serverTag) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompleteFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+            List<GoalType> priorityGoals, boolean dryRun) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompleteFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess() {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelRebalance() {
+        throw new UnsupportedOperationException("Support soon");
     }
 
     @Override
