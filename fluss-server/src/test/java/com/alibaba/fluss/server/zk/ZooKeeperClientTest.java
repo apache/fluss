@@ -19,6 +19,9 @@ package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.TabletServerInfo;
+import com.alibaba.fluss.cluster.maintencance.RebalancePlanForBucket;
+import com.alibaba.fluss.cluster.maintencance.RebalanceStatus;
+import com.alibaba.fluss.cluster.maintencance.ServerTag;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
@@ -33,6 +36,8 @@ import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
+import com.alibaba.fluss.server.zk.data.RebalancePlan;
+import com.alibaba.fluss.server.zk.data.ServerTags;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
@@ -443,6 +448,64 @@ class ZooKeeperClientTest {
         zookeeperClient.deletePartition(tablePath, "p1");
         partitions = zookeeperClient.getPartitions(tablePath);
         assertThat(partitions).containsExactly("p2");
+    }
+
+    @Test
+    void testServerTag() throws Exception {
+        Map<Integer, ServerTag> serverTags = new HashMap<>();
+        serverTags.put(0, ServerTag.PERMANENT_OFFLINE);
+        serverTags.put(1, ServerTag.TEMPORARY_OFFLINE);
+
+        zookeeperClient.registerServerTags(new ServerTags(serverTags));
+        assertThat(zookeeperClient.getServerTags()).hasValue(new ServerTags(serverTags));
+
+        // update server tags.
+        serverTags.put(0, ServerTag.TEMPORARY_OFFLINE);
+        serverTags.remove(1);
+        zookeeperClient.registerServerTags(new ServerTags(serverTags));
+        assertThat(zookeeperClient.getServerTags()).hasValue(new ServerTags(serverTags));
+
+        zookeeperClient.registerServerTags(new ServerTags(Collections.emptyMap()));
+        assertThat(zookeeperClient.getServerTags())
+                .hasValue(new ServerTags(Collections.emptyMap()));
+    }
+
+    @Test
+    void testRebalancePlan() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        0, 0, 3, Arrays.asList(0, 1, 2), Arrays.asList(3, 4, 5)));
+        bucketPlan.put(
+                new TableBucket(0L, 1),
+                new RebalancePlanForBucket(
+                        1, 1, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 3)));
+        bucketPlan.put(
+                new TableBucket(1L, 1L, 0),
+                new RebalancePlanForBucket(
+                        0, 1, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 3)));
+        bucketPlan.put(
+                new TableBucket(1L, 1L, 1),
+                new RebalancePlanForBucket(
+                        1, 1, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 3)));
+        zookeeperClient.registerRebalancePlan(
+                new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan())
+                .hasValue(new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
+
+        bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        0, 0, 3, Arrays.asList(0, 1, 2), Arrays.asList(3, 4, 5)));
+        zookeeperClient.registerRebalancePlan(
+                new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan())
+                .hasValue(new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
+
+        zookeeperClient.deleteRebalancePlan();
+        assertThat(zookeeperClient.getRebalancePlan()).isEmpty();
     }
 
     @Test

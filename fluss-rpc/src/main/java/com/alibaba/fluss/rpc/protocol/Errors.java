@@ -48,6 +48,7 @@ import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.exception.LogOffsetOutOfRangeException;
 import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.exception.NetworkException;
+import com.alibaba.fluss.exception.NoRebalanceInProgressException;
 import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.NotEnoughReplicasAfterAppendException;
 import com.alibaba.fluss.exception.NotEnoughReplicasException;
@@ -56,11 +57,14 @@ import com.alibaba.fluss.exception.OperationNotAttemptedException;
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.RebalanceFailureException;
 import com.alibaba.fluss.exception.RecordTooLargeException;
 import com.alibaba.fluss.exception.RetriableAuthenticationException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.SecurityTokenException;
+import com.alibaba.fluss.exception.ServerNotExistException;
+import com.alibaba.fluss.exception.ServerTagAlreadyExistException;
 import com.alibaba.fluss.exception.StorageException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
@@ -214,7 +218,15 @@ public enum Errors {
     INVALID_SERVER_RACK_INFO_EXCEPTION(
             52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
     LAKE_SNAPSHOT_NOT_EXIST(
-            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
+            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new),
+    SERVER_NOT_EXIST_EXCEPTION(54, "The server is not exist.", ServerNotExistException::new),
+    SEVER_TAG_ALREADY_EXIST_EXCEPTION(
+            55, "The server tag already exist.", ServerTagAlreadyExistException::new),
+    SEVER_TAG_NOT_EXIST_EXCEPTION(
+            56, "The server tag not exist.", ServerTagAlreadyExistException::new),
+    REBALANCE_FAILURE_EXCEPTION(57, "The rebalance task failure.", RebalanceFailureException::new),
+    NO_REBALANCE_IN_PROGRESS_EXCEPTION(
+            58, "No rebalance task in progress.", NoRebalanceInProgressException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
