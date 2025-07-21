@@ -20,7 +20,6 @@ package com.alibaba.fluss.rocksdb;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.RocksIteratorInterface;
-import org.rocksdb.Snapshot;
 
 import javax.annotation.Nonnull;
 
@@ -126,11 +125,5 @@ public class RocksIteratorWrapper implements RocksIteratorInterface, Closeable {
     @Override
     public void close() {
         iterator.close();
-    }
-
-    @Override
-    public void refresh(Snapshot snapshot) throws RocksDBException {
-        iterator.refresh(snapshot);
-        status();
     }
 }

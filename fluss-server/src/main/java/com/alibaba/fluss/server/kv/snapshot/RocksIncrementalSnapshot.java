@@ -58,9 +58,6 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     /** File suffix of sstable files. */
     public static final String SST_FILE_SUFFIX = ".sst";
 
-    /** File suffix of wal files. */
-    public static final String WAL_FILE_SUFFIX = ".log";
-
     /** RocksDB instance from the backend. */
     @Nonnull protected RocksDB db;
 
@@ -296,8 +293,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                     } else {
                         sstFilePaths.add(filePath); // re-upload
                     }
-                } else if (!fileName.endsWith(WAL_FILE_SUFFIX)) {
-                    // the wal files are always empty and should be ignored
+                } else {
                     miscFilePaths.add(filePath);
                 }
             }
