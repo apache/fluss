@@ -20,24 +20,19 @@ package com.alibaba.fluss.row.encode.iceberg;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
-import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.utils.UnsafeUtils;
 
 import java.io.Serializable;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.Arrays;
 
 import static com.alibaba.fluss.types.DataTypeChecks.getPrecision;
 
 /**
- * A writer to encode Fluss's {@link InternalRow} using Iceberg's binary encoding format.
- *
- * <p>This implementation follows Iceberg's binary encoding specification for partition and bucket
- * keys. Reference: https://iceberg.apache.org/spec/#partition-transforms
+ * A writer to encode Fluss's {@link com.alibaba.fluss.row.InternalRow} using Iceberg's binary
+ * encoding format.
  *
  * <p>The encoding logic is based on Iceberg's Conversions.toByteBuffer() implementation:
  * https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/types/Conversions.java
@@ -46,9 +41,8 @@ import static com.alibaba.fluss.types.DataTypeChecks.getPrecision;
  *
  * <ul>
  *   <li>All numeric types (int, long, float, double, timestamps) use LITTLE-ENDIAN byte order
- *   <li>Decimal and UUID types use BIG-ENDIAN byte order
- *   <li>NO length prefix for any type - the buffer size determines the length
- *   <li>Strings are encoded as UTF-8 bytes without length prefix
+ *   <li>Decimal types use BIG-ENDIAN byte order
+ *   <li>Strings are encoded as UTF-8 bytes
  *   <li>Timestamps are stored as long values (microseconds since epoch)
  * </ul>
  *
@@ -91,6 +85,7 @@ class IcebergBinaryRowWriter {
                 "Null values are not supported in Iceberg key encoding");
     }
 
+    // todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support
     public void writeBoolean(boolean value) {
         ensureCapacity(1);
         UnsafeUtils.putBoolean(buffer, cursor, value);
@@ -134,68 +129,34 @@ class IcebergBinaryRowWriter {
     }
 
     public void writeString(BinaryString value) {
-        // Based on Iceberg's Conversions.toByteBuffer() for STRING type:
-        // Strings are encoded as UTF-8 bytes without length prefix
-        // Reference:https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/types/Conversions.java
+        // Convert to UTF-8 byte array
         byte[] bytes = BinaryString.encodeUTF8(value.toString());
-        ensureCapacity(bytes.length);
+        // Write length prefix followed by UTF-8 bytes
+        writeInt(bytes.length); // 4-byte length prefix
+        ensureCapacity(bytes.length); // Ensure space for actual string bytes
         segment.put(cursor, bytes, 0, bytes.length);
         cursor += bytes.length;
     }
 
-    void writeBytes(byte[] bytes) {
-        // Based on Iceberg's Conversions.toByteBuffer() for BINARY type:
-        // Binary data is stored directly without length prefix
-        ensureCapacity(bytes.length);
+    public void writeBytes(byte[] bytes) {
+        // Write length prefix followed by binary data
+        writeInt(bytes.length); // 4-byte length prefix
+        ensureCapacity(bytes.length); // Ensure space for actual binary bytes
         segment.put(cursor, bytes, 0, bytes.length);
         cursor += bytes.length;
     }
 
     public void writeDecimal(Decimal value, int precision) {
-        // Iceberg stores decimals as unscaled big-endian byte arrays
-        // Reference:https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/types/Conversions.java
-        byte[] unscaledBytes = value.toUnscaledBytes();
-
-        // For Iceberg, decimals are stored with fixed byte lengths based on precision
-        int requiredBytes = getIcebergDecimalBytes(precision);
-
-        byte[] icebergBytes = new byte[requiredBytes];
-
-        // Convert to big-endian format with proper padding
-        if (unscaledBytes.length <= requiredBytes) {
-            // Pad with sign extension
-            byte paddingByte =
-                    (unscaledBytes.length > 0 && (unscaledBytes[0] & 0x80) != 0)
-                            ? (byte) 0xFF
-                            : (byte) 0x00;
-
-            Arrays.fill(icebergBytes, 0, requiredBytes - unscaledBytes.length, paddingByte);
-            System.arraycopy(
-                    unscaledBytes,
-                    0,
-                    icebergBytes,
-                    requiredBytes - unscaledBytes.length,
-                    unscaledBytes.length);
-        } else {
-            // Truncate if too large (should not happen with proper validation)
-            System.arraycopy(unscaledBytes, 0, icebergBytes, 0, requiredBytes);
-        }
-
-        writeBytes(icebergBytes);
+        byte[] unscaled = value.toUnscaledBytes();
+        writeBytes(unscaled); // Adds 4-byte length prefix before the actual bytes
     }
 
     public void writeTimestampNtz(TimestampNtz value, int precision) {
-        // Iceberg stores timestamps as microseconds since epoch
-        // Reference:
-        // https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/types/Conversions.java
         long micros = value.getMillisecond() * 1000L + (value.getNanoOfMillisecond() / 1000L);
         writeLong(micros);
     }
 
     public void writeTimestampLtz(TimestampLtz value, int precision) {
-        // Iceberg stores timestamptz as microseconds since epoch in UTC
-        // Reference:
-        // https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/types/Conversions.java
         long epochMillis = value.getEpochMillisecond();
         int nanoOfMilli = value.getNanoOfMillisecond();
         long totalMicros = epochMillis * 1000L + (nanoOfMilli / 1000L);
@@ -230,8 +191,6 @@ class IcebergBinaryRowWriter {
      * @return number of bytes required
      */
     private static int getIcebergDecimalBytes(int precision) {
-        // Reference:
-        // https://github.com/apache/iceberg/blob/main/api/src/main/java/org/apache/iceberg/types/Conversions.java
         if (precision <= 9) {
             return 4; // Can fit in 4 bytes
         } else if (precision <= 18) {
@@ -241,82 +200,51 @@ class IcebergBinaryRowWriter {
         }
     }
 
-    public ByteBuffer toByteBuffer() {
-        // Create a ByteBuffer that wraps only the valid data
-        return ByteBuffer.wrap(buffer, 0, cursor).order(ByteOrder.LITTLE_ENDIAN);
-    }
-
     /**
      * Creates an accessor for writing the elements of an iceberg binary row writer during runtime.
      *
      * @param fieldType the field type to write
      */
     public static FieldWriter createFieldWriter(DataType fieldType) {
-        final FieldWriter fieldWriter;
-
         switch (fieldType.getTypeRoot()) {
-            case CHAR:
-            case STRING:
-                fieldWriter = (writer, value) -> writer.writeString((BinaryString) value);
-                break;
-            case BOOLEAN:
-                fieldWriter = (writer, value) -> writer.writeBoolean((boolean) value);
-                break;
-            case BINARY:
-            case BYTES:
-                fieldWriter = (writer, value) -> writer.writeBytes((byte[]) value);
-                break;
-            case DECIMAL:
-                final int decimalPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, value) -> writer.writeDecimal((Decimal) value, decimalPrecision);
-                break;
-            case TINYINT:
-                fieldWriter = (writer, value) -> writer.writeByte((byte) value);
-                break;
-            case SMALLINT:
-                fieldWriter = (writer, value) -> writer.writeShort((short) value);
-                break;
             case INTEGER:
             case DATE:
+                return (writer, value) -> writer.writeInt((int) value);
+
             case TIME_WITHOUT_TIME_ZONE:
-                // Fluss stores TIME as int (milliseconds), Iceberg expects long (microseconds)
-                fieldWriter =
-                        (writer, value) -> {
-                            int millis = (int) value;
-                            long micros = millis * 1000L;
-                            writer.writeLong(micros);
-                        };
-                break;
+                // Write time as microseconds long (milliseconds * 1000)
+                return (writer, value) -> {
+                    int millis = (int) value;
+                    long micros = millis * 1000L;
+                    writer.writeLong(micros);
+                };
+
             case BIGINT:
-                fieldWriter = (writer, value) -> writer.writeLong((long) value);
-                break;
-            case FLOAT:
-                fieldWriter = (writer, value) -> writer.writeFloat((float) value);
-                break;
-            case DOUBLE:
-                fieldWriter = (writer, value) -> writer.writeDouble((double) value);
-                break;
+                return (writer, value) -> writer.writeLong((long) value);
+                // support for nanoseconds come check again after #1195 merge
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                final int timestampNtzPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, value) ->
-                                writer.writeTimestampNtz(
-                                        (TimestampNtz) value, timestampNtzPrecision);
-                break;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                final int timestampLtzPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, value) ->
-                                writer.writeTimestampLtz(
-                                        (TimestampLtz) value, timestampLtzPrecision);
-                break;
+                return (writer, value) -> {
+                    TimestampNtz ts = (TimestampNtz) value;
+                    long micros = ts.getMillisecond() * 1000L + (ts.getNanoOfMillisecond() / 1000L);
+                    writer.writeLong(micros);
+                };
+
+            case DECIMAL:
+                final int decimalPrecision = getPrecision(fieldType);
+                return (writer, value) -> writer.writeDecimal((Decimal) value, decimalPrecision);
+
+            case STRING:
+            case CHAR:
+                return (writer, value) -> writer.writeString((BinaryString) value);
+
+            case BINARY:
+            case BYTES:
+                return (writer, value) -> writer.writeBytes((byte[]) value);
+
             default:
                 throw new IllegalArgumentException(
                         "Unsupported type for Iceberg binary row writer: " + fieldType);
         }
-
-        return fieldWriter;
     }
 
     /** Accessor for writing the elements of an iceberg binary row writer during runtime. */

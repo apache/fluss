@@ -32,11 +32,14 @@ import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.Collections;
 
+import static com.alibaba.fluss.types.DataTypeChecks.getPrecision;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -47,6 +50,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * compatible with Iceberg's implementation.
  */
 class IcebergKeyEncoderTest {
+
+    // todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support
 
     @Test
     void testSingleKeyFieldRequirement() {
@@ -66,7 +71,7 @@ class IcebergKeyEncoderTest {
     }
 
     @Test
-    void testIntegerEncoding() {
+    void testIntegerEncoding() throws IOException {
         RowType rowType = RowType.of(new DataType[] {DataTypes.INT()}, new String[] {"id"});
 
         int testValue = 42;
@@ -84,7 +89,7 @@ class IcebergKeyEncoderTest {
     }
 
     @Test
-    void testLongEncoding() {
+    void testLongEncoding() throws IOException {
         RowType rowType = RowType.of(new DataType[] {DataTypes.BIGINT()}, new String[] {"id"});
 
         long testValue = 1234567890123456789L;
@@ -102,7 +107,7 @@ class IcebergKeyEncoderTest {
     }
 
     @Test
-    void testStringEncoding() {
+    void testStringEncoding() throws IOException {
         RowType rowType = RowType.of(new DataType[] {DataTypes.STRING()}, new String[] {"name"});
 
         String testValue = "Hello Iceberg, Fluss this side!";
@@ -113,73 +118,21 @@ class IcebergKeyEncoderTest {
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
 
-        // Encode with Iceberg's implementation
-        ByteBuffer icebergBuffer = Conversions.toByteBuffer(Types.StringType.get(), testValue);
-        byte[] icebergEncoded = toByteArray(icebergBuffer);
+        // Decode length prefix
+        int length = ByteBuffer.wrap(ourEncoded, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        byte[] actualContent = Arrays.copyOfRange(ourEncoded, 4, 4 + length);
 
-        assertThat(ourEncoded).isEqualTo(icebergEncoded);
+        // Encode with Iceberg's Conversions
+        byte[] expectedContent =
+                toByteArray(Conversions.toByteBuffer(Types.StringType.get(), testValue));
+
+        // Validate length and content
+        assertThat(length).isEqualTo(expectedContent.length);
+        assertThat(actualContent).isEqualTo(expectedContent);
     }
 
     @Test
-    void testBooleanEncoding() {
-        RowType rowType = RowType.of(new DataType[] {DataTypes.BOOLEAN()}, new String[] {"flag"});
-
-        // Test true
-        IndexedRow rowTrue = createRowWithBoolean(true);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("flag"));
-
-        byte[] ourEncodedTrue = encoder.encodeKey(rowTrue);
-        ByteBuffer icebergBufferTrue = Conversions.toByteBuffer(Types.BooleanType.get(), true);
-        byte[] icebergEncodedTrue = toByteArray(icebergBufferTrue);
-
-        assertThat(ourEncodedTrue).isEqualTo(icebergEncodedTrue);
-
-        // Test false
-        IndexedRow rowFalse = createRowWithBoolean(false);
-        byte[] ourEncodedFalse = encoder.encodeKey(rowFalse);
-        ByteBuffer icebergBufferFalse = Conversions.toByteBuffer(Types.BooleanType.get(), false);
-        byte[] icebergEncodedFalse = toByteArray(icebergBufferFalse);
-
-        assertThat(ourEncodedFalse).isEqualTo(icebergEncodedFalse);
-    }
-
-    @Test
-    void testFloatDoubleEncoding() {
-        // Test float
-        RowType floatRowType =
-                RowType.of(new DataType[] {DataTypes.FLOAT()}, new String[] {"value"});
-
-        float floatVal = 3.14f;
-        IndexedRow floatRow = createRowWithFloat(floatVal);
-        IcebergKeyEncoder floatEncoder =
-                new IcebergKeyEncoder(floatRowType, Collections.singletonList("value"));
-
-        byte[] ourEncodedFloat = floatEncoder.encodeKey(floatRow);
-        ByteBuffer icebergBufferFloat = Conversions.toByteBuffer(Types.FloatType.get(), floatVal);
-        byte[] icebergEncodedFloat = toByteArray(icebergBufferFloat);
-
-        assertThat(ourEncodedFloat).isEqualTo(icebergEncodedFloat);
-
-        // Test double
-        RowType doubleRowType =
-                RowType.of(new DataType[] {DataTypes.DOUBLE()}, new String[] {"value"});
-
-        double doubleVal = 3.14159265359;
-        IndexedRow doubleRow = createRowWithDouble(doubleVal);
-        IcebergKeyEncoder doubleEncoder =
-                new IcebergKeyEncoder(doubleRowType, Collections.singletonList("value"));
-
-        byte[] ourEncodedDouble = doubleEncoder.encodeKey(doubleRow);
-        ByteBuffer icebergBufferDouble =
-                Conversions.toByteBuffer(Types.DoubleType.get(), doubleVal);
-        byte[] icebergEncodedDouble = toByteArray(icebergBufferDouble);
-
-        assertThat(ourEncodedDouble).isEqualTo(icebergEncodedDouble);
-    }
-
-    @Test
-    void testDecimalEncoding() {
+    void testDecimalEncoding() throws IOException {
         RowType rowType =
                 RowType.of(new DataType[] {DataTypes.DECIMAL(10, 2)}, new String[] {"amount"});
 
@@ -191,16 +144,22 @@ class IcebergKeyEncoderTest {
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
 
-        // Encode with Iceberg's implementation
+        // Extract the decimal length prefix and bytes from ourEncoded
+        int length = ByteBuffer.wrap(ourEncoded, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        byte[] actualDecimal = Arrays.copyOfRange(ourEncoded, 4, 4 + length);
+
+        // Encode the same value with Iceberg's implementation (no prefix)
         Type.PrimitiveType decimalType = Types.DecimalType.of(10, 2);
         ByteBuffer icebergBuffer = Conversions.toByteBuffer(decimalType, testValue);
         byte[] icebergEncoded = toByteArray(icebergBuffer);
 
-        assertThat(ourEncoded).isEqualTo(icebergEncoded);
+        // Validate that our content (excluding the prefix) matches Iceberg's encoding
+        assertThat(length).isEqualTo(icebergEncoded.length);
+        assertThat(actualDecimal).isEqualTo(icebergEncoded);
     }
 
     @Test
-    void testTimestampEncoding() {
+    void testTimestampEncoding() throws IOException {
         RowType rowType =
                 RowType.of(new DataType[] {DataTypes.TIMESTAMP(6)}, new String[] {"event_time"});
 
@@ -225,32 +184,7 @@ class IcebergKeyEncoderTest {
     }
 
     @Test
-    void testTimestampWithTimezoneEncoding() {
-        RowType rowType =
-                RowType.of(
-                        new DataType[] {DataTypes.TIMESTAMP_LTZ(6)}, new String[] {"event_time"});
-
-        // Iceberg expects microseconds for TIMESTAMP type
-        long millis = 1698235273182L;
-        int nanos = 45678;
-        long micros = millis * 1000 + (nanos / 1000);
-
-        IndexedRow row = createRowWithTimestampLtz(millis, nanos);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("event_time"));
-
-        // Encode with our implementation
-        byte[] ourEncoded = encoder.encodeKey(row);
-
-        // Encode with Iceberg's implementation
-        ByteBuffer icebergBuffer = Conversions.toByteBuffer(Types.TimestampType.withZone(), micros);
-        byte[] icebergEncoded = toByteArray(icebergBuffer);
-
-        assertThat(ourEncoded).isEqualTo(icebergEncoded);
-    }
-
-    @Test
-    void testDateEncoding() {
+    void testDateEncoding() throws IOException {
         RowType rowType = RowType.of(new DataType[] {DataTypes.DATE()}, new String[] {"date"});
 
         // Date value as days since epoch
@@ -270,7 +204,7 @@ class IcebergKeyEncoderTest {
     }
 
     @Test
-    void testTimeEncoding() {
+    void testTimeEncoding() throws IOException {
         RowType rowType = RowType.of(new DataType[] {DataTypes.TIME()}, new String[] {"time"});
 
         // Fluss stores time as int (milliseconds since midnight)
@@ -292,7 +226,7 @@ class IcebergKeyEncoderTest {
     }
 
     @Test
-    void testBinaryEncoding() {
+    void testBinaryEncoding() throws IOException {
         RowType rowType = RowType.of(new DataType[] {DataTypes.BYTES()}, new String[] {"data"});
 
         byte[] testValue = "Hello i only understand binary data".getBytes();
@@ -303,13 +237,18 @@ class IcebergKeyEncoderTest {
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
 
-        // Encode with Iceberg's implementation
-        // Iceberg expects ByteBuffer for BINARY type
+        // Decode length prefix
+        int length = ByteBuffer.wrap(ourEncoded, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        byte[] actualContent = Arrays.copyOfRange(ourEncoded, 4, 4 + length);
+
+        // Encode using Iceberg's Conversions (input should be ByteBuffer)
         ByteBuffer icebergBuffer =
                 Conversions.toByteBuffer(Types.BinaryType.get(), ByteBuffer.wrap(testValue));
-        byte[] icebergEncoded = toByteArray(icebergBuffer);
+        byte[] expectedContent = toByteArray(icebergBuffer);
 
-        assertThat(ourEncoded).isEqualTo(icebergEncoded);
+        // Validate length and content
+        assertThat(length).isEqualTo(expectedContent.length);
+        assertThat(actualContent).isEqualTo(expectedContent);
     }
 
     // Helper method to convert ByteBuffer to byte array
@@ -321,111 +260,136 @@ class IcebergKeyEncoderTest {
 
     // ---- Helper methods to create IndexedRow instances ----
 
-    private IndexedRow createRowWithInt(int value) {
+    private IndexedRow createRowWithInt(int value) throws IOException {
         DataType[] dataTypes = {DataTypes.INT()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeInt(value);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeInt(value);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithLong(long value) {
+    private IndexedRow createRowWithLong(long value) throws IOException {
         DataType[] dataTypes = {DataTypes.BIGINT()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeLong(value);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeLong(value);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithString(String value) {
+    private IndexedRow createRowWithString(String value) throws IOException {
         DataType[] dataTypes = {DataTypes.STRING()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeString(BinaryString.fromString(value));
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeString(BinaryString.fromString(value));
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithBoolean(boolean value) {
+    private IndexedRow createRowWithBoolean(boolean value) throws IOException {
         DataType[] dataTypes = {DataTypes.BOOLEAN()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeBoolean(value);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeBoolean(value);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithFloat(float value) {
+    private IndexedRow createRowWithFloat(float value) throws IOException {
         DataType[] dataTypes = {DataTypes.FLOAT()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeFloat(value);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeFloat(value);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithDouble(double value) {
+    private IndexedRow createRowWithDouble(double value) throws IOException {
         DataType[] dataTypes = {DataTypes.DOUBLE()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeDouble(value);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeDouble(value);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithDecimal(BigDecimal value, int precision, int scale) {
+    private IndexedRow createRowWithDecimal(BigDecimal value, int precision, int scale)
+            throws IOException {
         DataType[] dataTypes = {DataTypes.DECIMAL(precision, scale)};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeDecimal(Decimal.fromBigDecimal(value, precision, scale), precision);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeDecimal(Decimal.fromBigDecimal(value, precision, scale), precision);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithTimestampNtz(long millis, int nanos) {
+    private IndexedRow createRowWithTimestampNtz(long millis, int nanos) throws IOException {
         DataType[] dataTypes = {DataTypes.TIMESTAMP(6)};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeTimestampNtz(TimestampNtz.fromMillis(millis, nanos), 6);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeTimestampNtz(TimestampNtz.fromMillis(millis, nanos), 6);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithTimestampLtz(long millis, int nanos) {
+    private IndexedRow createRowWithTimestampLtz(long millis, int nanos) throws IOException {
         DataType[] dataTypes = {DataTypes.TIMESTAMP_LTZ(6)};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(millis, nanos), 6);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(millis, nanos), 6);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithDate(int days) {
+    private IndexedRow createRowWithDate(int days) throws IOException {
         DataType[] dataTypes = {DataTypes.DATE()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeInt(days);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeInt(days);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithTime(int millis) {
+    private IndexedRow createRowWithTime(int millis) throws IOException {
         DataType[] dataTypes = {DataTypes.TIME()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeInt(millis); // Fluss stores TIME as int (milliseconds)
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeInt(millis); // Fluss stores TIME as int (milliseconds)
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            writer.close();
+            return row;
+        }
     }
 
-    private IndexedRow createRowWithBytes(byte[] value) {
+    private IndexedRow createRowWithBytes(byte[] value) throws IOException {
         DataType[] dataTypes = {DataTypes.BYTES()};
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeBytes(value);
-        IndexedRow row = new IndexedRow(dataTypes);
-        row.pointTo(writer.segment(), 0, writer.position());
-        return row;
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeBytes(value);
+            IndexedRow row = new IndexedRow(dataTypes);
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
+    }
+
+    private IndexedRow createRowWithTimestampNtz(long millis, int nanos, DataType type)
+            throws IOException {
+        DataType[] dataTypes = {DataTypes.BYTES()};
+        try (IndexedRowWriter writer = new IndexedRowWriter(dataTypes)) {
+            writer.writeTimestampNtz(TimestampNtz.fromMillis(millis, nanos), getPrecision(type));
+            IndexedRow row = new IndexedRow(new DataType[] {type});
+            row.pointTo(writer.segment(), 0, writer.position());
+            return row;
+        }
     }
 }

@@ -22,7 +22,6 @@ import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
@@ -42,7 +41,7 @@ public class IcebergKeyEncoder implements KeyEncoder {
         checkArgument(
                 keys.size() == 1,
                 "Key fields must have exactly one field for iceberg format, but got: %s",
-                keys.size());
+                keys);
 
         // for get fields from fluss internal row
         fieldGetters = new InternalRow.FieldGetter[keys.size()];
@@ -67,18 +66,5 @@ public class IcebergKeyEncoder implements KeyEncoder {
                     icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
         }
         return icebergBinaryRowWriter.toBytes();
-    }
-
-    /**
-     * Returns the encoded key as a ByteBuffer for Iceberg-compatible operations. This is useful
-     * when interfacing with Iceberg's hash functions which expect ByteBuffer.
-     */
-    public ByteBuffer encodeKeyAsBuffer(InternalRow row) {
-        icebergBinaryRowWriter.reset();
-        for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeField(
-                    icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
-        }
-        return icebergBinaryRowWriter.toByteBuffer();
     }
 }
