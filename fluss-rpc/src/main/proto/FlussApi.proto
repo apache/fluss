@@ -569,6 +569,44 @@ message AlterClusterConfigsRequest{
 message AlterClusterConfigsResponse{
 }
 
+message AddServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message AddServerTagResponse {
+}
+
+message RemoveServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagResponse {
+}
+
+message RebalanceRequest {
+  repeated int32 goals = 1 [packed = true];
+  required bool dry_run = 2;
+}
+
+message RebalanceResponse {
+  repeated PbRebalancePlanForTable plan_for_table = 1;
+}
+
+message ListRebalanceProcessRequest {
+}
+
+message ListRebalanceProcessResponse {
+  repeated PbRebalanceProcessForTable process_for_table = 1;
+}
+
+message CancelRebalanceRequest {
+}
+
+message CancelRebalanceResponse {
+}
+
 
 
 // --------------- Inner classes ----------------
@@ -921,3 +959,40 @@ message PbDescribeConfig{
   required string config_source = 3;
 }
 
+message PbRebalancePlanForTable {
+  required int64 table_id = 1;
+  repeated PbRebalancePlanForPartition partitions_plan = 2; // for none-partition table, this is empty
+  repeated PbRebalancePlanForBucket buckets_plan = 3; // for partition table, this is empty
+
+}
+
+message PbRebalancePlanForPartition {
+  required int64 partition_id = 1;
+  repeated PbRebalancePlanForBucket buckets_plan = 2;
+}
+
+message PbRebalancePlanForBucket {
+  required int32 bucket_id = 1;
+  optional int32 original_leader = 2;
+  optional int32 new_leader = 3;
+  repeated int32 original_replicas = 4 [packed = true];
+  repeated int32 new_replicas = 5 [packed = true];
+}
+
+message PbRebalanceProcessForTable {
+  required int64 table_id = 1;
+  repeated PbRebalanceProcessForPartition partitions_process = 2;
+  repeated PbRebalanceProcessForBucket buckets_process = 3;
+}
+
+message PbRebalanceProcessForPartition {
+  required int64 partition_id = 1;
+  repeated PbRebalanceProcessForBucket buckets_process = 2;
+}
+
+message PbRebalanceProcessForBucket {
+  required int32 bucket_id = 1;
+  repeated int32 original_replicas = 2 [packed = true];
+  repeated int32 new_replicas = 3 [packed = true];
+  required int32 rebalance_status = 4;
+}
