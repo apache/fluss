@@ -21,6 +21,7 @@ import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
 import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.data.BinaryRow;
@@ -38,6 +39,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -56,7 +58,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final FileStoreTable fileStoreTable;
     private FileStoreCommit fileStoreCommit;
     private final TablePath tablePath;
-    private static Long tempCommitSnapshotId;
+    private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
     public PaimonLakeCommitter(PaimonCatalogProvider paimonCatalogProvider, TablePath tablePath)
             throws IOException {
@@ -84,8 +86,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                             .store()
                             .newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
             fileStoreCommit.commit(manifestCommittable, false);
-            Long commitSnapshotId = tempCommitSnapshotId;
-            tempCommitSnapshotId = null;
+            Long commitSnapshotId = currentCommitSnapshotId.get();
+            currentCommitSnapshotId.remove();
 
             return checkNotNull(commitSnapshotId, "Paimon committed snapshot id must be non-null.");
         } catch (Throwable t) {
@@ -189,7 +191,17 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     private FileStoreTable getTable(TablePath tablePath) throws IOException {
         try {
-            return (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable table =
+                    (FileStoreTable)
+                            paimonCatalog
+                                    .getTable(toPaimon(tablePath))
+                                    .copy(
+                                            Collections.singletonMap(
+                                                    CoreOptions.COMMIT_CALLBACKS.key(),
+                                                    PaimonLakeCommitter.PaimonCommitCallback.class
+                                                            .getName()));
+
+            return table;
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
         }
@@ -201,7 +213,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         @Override
         public void call(
                 List<ManifestEntry> list, List<IndexManifestEntry> indexFiles, Snapshot snapshot) {
-            tempCommitSnapshotId = snapshot.id();
+            currentCommitSnapshotId.set(snapshot.id());
         }
 
         @Override

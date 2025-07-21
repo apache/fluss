@@ -21,7 +21,6 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
-import com.alibaba.fluss.lake.paimon.tiering.PaimonLakeCommitter;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.IOUtils;
@@ -179,11 +178,6 @@ public class PaimonLakeCatalog implements LakeCatalog {
         tableDescriptor
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
-        // set commit callback class
-        options.set(
-                CoreOptions.COMMIT_CALLBACKS.key(),
-                PaimonLakeCommitter.PaimonCommitCallback.class.getName());
-        schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }
 
