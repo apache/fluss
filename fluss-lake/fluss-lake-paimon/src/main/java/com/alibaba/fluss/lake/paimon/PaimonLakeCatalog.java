@@ -178,6 +178,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
         tableDescriptor
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
+        schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }
 
