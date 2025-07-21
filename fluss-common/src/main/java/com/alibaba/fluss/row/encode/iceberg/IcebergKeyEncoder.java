@@ -22,7 +22,10 @@ import com.alibaba.fluss.row.encode.KeyEncoder;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 
+import java.nio.ByteBuffer;
 import java.util.List;
+
+import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link KeyEncoder} to follow Iceberg's encoding strategy. */
 public class IcebergKeyEncoder implements KeyEncoder {
@@ -34,6 +37,13 @@ public class IcebergKeyEncoder implements KeyEncoder {
     private final IcebergBinaryRowWriter icebergBinaryRowWriter;
 
     public IcebergKeyEncoder(RowType rowType, List<String> keys) {
+
+        // Validate single key field requirement as per FIP
+        checkArgument(
+                keys.size() == 1,
+                "Key fields must have exactly one field for iceberg format, but got: %s",
+                keys.size());
+
         // for get fields from fluss internal row
         fieldGetters = new InternalRow.FieldGetter[keys.size()];
         // for encode fields into iceberg
@@ -51,14 +61,24 @@ public class IcebergKeyEncoder implements KeyEncoder {
     @Override
     public byte[] encodeKey(InternalRow row) {
         icebergBinaryRowWriter.reset();
-
-        // TODO: Discuss with Yuxio Iceberg doesn't store ChangeType in binary format like Paimon
-
         // iterate all the fields of the row, and encode each field
         for (int i = 0; i < fieldGetters.length; i++) {
             fieldEncoders[i].writeField(
-                    icebergBinaryRowWriter, i, fieldGetters[i].getFieldOrNull(row));
+                    icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
         }
         return icebergBinaryRowWriter.toBytes();
+    }
+
+    /**
+     * Returns the encoded key as a ByteBuffer for Iceberg-compatible operations. This is useful
+     * when interfacing with Iceberg's hash functions which expect ByteBuffer.
+     */
+    public ByteBuffer encodeKeyAsBuffer(InternalRow row) {
+        icebergBinaryRowWriter.reset();
+        for (int i = 0; i < fieldGetters.length; i++) {
+            fieldEncoders[i].writeField(
+                    icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
+        }
+        return icebergBinaryRowWriter.toByteBuffer();
     }
 }
