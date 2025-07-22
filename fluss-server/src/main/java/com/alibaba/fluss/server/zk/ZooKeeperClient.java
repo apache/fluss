@@ -145,6 +145,10 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
+    /**
+     * Send a pipelined sequence of requests and wait for all of their responses. This method can
+     * speed up getting data from ZK in an async callback way.
+     */
     public Map<String, ZookeeperGetDataResponse> handleFetchDataRequestsAsync(
             Collection<String> paths) throws InterruptedException {
         if (paths == null || paths.isEmpty()) {
