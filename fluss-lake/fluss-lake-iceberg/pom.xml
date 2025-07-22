@@ -31,10 +31,6 @@
     <name>Fluss : Lake : Iceberg</name>
 
     <packaging>jar</packaging>
-    <!--    todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support-->
-    <properties>
-        <iceberg.version>1.4.3</iceberg.version>
-    </properties>
 
     <dependencies>
         <dependency>

@@ -30,7 +30,6 @@
     <name>Fluss : Common</name>
     <packaging>jar</packaging>
 
-
     <dependencies>
         <dependency>
             <groupId>org.apache.commons</groupId>
