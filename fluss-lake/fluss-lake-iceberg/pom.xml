@@ -32,10 +32,6 @@
 
     <packaging>jar</packaging>
 
-    <properties>
-        <iceberg.version>1.9.1</iceberg.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>org.apache.iceberg</groupId>
@@ -69,14 +65,14 @@
                                 </includes>
                             </artifactSet>
                             <filters>
-                                 <filter>
-                                     <artifact>*</artifact>
-                                     <excludes>
-                                         <exclude>LICENSE</exclude>
-                                         <exclude>NOTICE</exclude>
-                                     </excludes>
-                                 </filter>
-                             </filters>
+                                <filter>
+                                    <artifact>*</artifact>
+                                    <excludes>
+                                        <exclude>LICENSE</exclude>
+                                        <exclude>NOTICE</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>

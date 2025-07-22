@@ -99,6 +99,8 @@
         <netty.version>4.1.104</netty.version>
         <arrow.version>15.0.0</arrow.version>
         <paimon.version>1.2.0</paimon.version>
+        <!--    todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support-->
+        <iceberg.version>1.4.3</iceberg.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
@@ -550,7 +552,7 @@
                             under the License.
                         -->
                         <license implementation="org.apache.rat.analysis.license.SimplePatternBasedLicense">
-                            <licenseFamilyCategory>AL2 </licenseFamilyCategory>
+                            <licenseFamilyCategory>AL2</licenseFamilyCategory>
                             <licenseFamilyName>Apache License 2.0</licenseFamilyName>
                             <patterns>
                                 <pattern>Licensed to the Apache Software Foundation (ASF) under one</pattern>

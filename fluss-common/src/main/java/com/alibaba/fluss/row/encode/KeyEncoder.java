@@ -19,6 +19,7 @@ package com.alibaba.fluss.row.encode;
 
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.encode.iceberg.IcebergKeyEncoder;
 import com.alibaba.fluss.row.encode.paimon.PaimonKeyEncoder;
 import com.alibaba.fluss.types.RowType;
 
@@ -46,6 +47,8 @@ public interface KeyEncoder {
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else if (lakeFormat == DataLakeFormat.PAIMON) {
             return new PaimonKeyEncoder(rowType, keyFields);
+        } else if (lakeFormat == DataLakeFormat.ICEBERG) {
+            return new IcebergKeyEncoder(rowType, keyFields);
         } else {
             throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }
