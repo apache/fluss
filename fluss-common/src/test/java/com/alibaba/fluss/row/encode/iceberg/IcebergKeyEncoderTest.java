@@ -51,8 +51,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class IcebergKeyEncoderTest {
 
-    // todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support
-
     @Test
     void testSingleKeyFieldRequirement() {
         RowType rowType =

@@ -84,7 +84,6 @@ class IcebergBinaryRowWriter {
                 "Null values are not supported in Iceberg key encoding");
     }
 
-    // todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support
     public void writeBoolean(boolean value) {
         ensureCapacity(1);
         UnsafeUtils.putBoolean(buffer, cursor, value);

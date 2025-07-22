@@ -98,7 +98,6 @@
         <curator.version>5.4.0</curator.version>
         <netty.version>4.1.104</netty.version>
         <arrow.version>15.0.0</arrow.version>
-        <iceberg.version>1.4.3</iceberg.version>
         <paimon.version>1.2.0</paimon.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
@@ -122,13 +121,13 @@
         <spotless.license.header>
             /*
             * Licensed to the Apache Software Foundation (ASF) under one or more
-            * contributor license agreements.  See the NOTICE file distributed with
+            * contributor license agreements. See the NOTICE file distributed with
             * this work for additional information regarding copyright ownership.
             * The ASF licenses this file to You under the Apache License, Version 2.0
             * (the "License"); you may not use this file except in compliance with
-            * the License.  You may obtain a copy of the License at
+            * the License. You may obtain a copy of the License at
             *
-            *    http://www.apache.org/licenses/LICENSE-2.0
+            * http://www.apache.org/licenses/LICENSE-2.0
             *
             * Unless required by applicable law or agreed to in writing, software
             * distributed under the License is distributed on an "AS IS" BASIS,
@@ -833,10 +832,10 @@
                     <transformers combine.children="append">
                         <!-- The service transformer is needed to merge META-INF/services files -->
                         <transformer
-                            implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                         <!-- The ApacheNoticeResourceTransformer collects and aggregates NOTICE files -->
                         <transformer
-                            implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer">
+                                implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer">
                             <projectName>Fluss</projectName>
                             <encoding>UTF-8</encoding>
                         </transformer>
