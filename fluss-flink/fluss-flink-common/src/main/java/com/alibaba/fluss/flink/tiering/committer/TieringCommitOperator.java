@@ -24,6 +24,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
 import com.alibaba.fluss.flink.tiering.event.FailedTieringEvent;
 import com.alibaba.fluss.flink.tiering.event.FinishedTieringEvent;
+import com.alibaba.fluss.flink.tiering.event.TieringRestoreEvent;
 import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
 import com.alibaba.fluss.flink.tiering.source.TieringSource;
 import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
@@ -38,6 +39,7 @@ import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
+import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -113,6 +115,18 @@ public class TieringCommitOperator<WriteResult, Committable>
         flussTableLakeSnapshotCommitter.open();
         connection = ConnectionFactory.createConnection(flussConfig);
         admin = connection.getAdmin();
+    }
+
+    @Override
+    public void initializeState(StateInitializationContext context) throws Exception {
+        super.initializeState(context);
+        int attemptNumber = getRuntimeContext().getAttemptNumber();
+        LOG.info("Attempt number is {}", attemptNumber);
+        if (attemptNumber > 0) {
+            LOG.info("Send TieringRestoreEvent");
+            operatorEventGateway.sendEventToCoordinator(
+                    new SourceEventWrapper(new TieringRestoreEvent()));
+        }
     }
 
     @Override

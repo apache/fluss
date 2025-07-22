@@ -26,6 +26,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
 import com.alibaba.fluss.flink.tiering.event.FailedTieringEvent;
 import com.alibaba.fluss.flink.tiering.event.FinishedTieringEvent;
+import com.alibaba.fluss.flink.tiering.event.TieringRestoreEvent;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
 import com.alibaba.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -214,6 +215,14 @@ public class TieringSourceEnumerator
                 failedTableEpochs.put(failedTableId, tieringEpoch);
             }
         }
+        if (sourceEvent instanceof TieringRestoreEvent) {
+            LOG.info(
+                    "Receiving tiering restore event, current tiering table epoch is {} .",
+                    tieringTableEpochs);
+            // we need to make all as failed
+            failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
+            tieringTableEpochs.clear();
+        }
 
         if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
@@ -256,6 +265,9 @@ public class TieringSourceEnumerator
     private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
         Map<Long, Long> currentFinishedTableEpochs = new HashMap<>(this.finishedTableEpochs);
         Map<Long, Long> currentFailedTableEpochs = new HashMap<>(this.failedTableEpochs);
+        LOG.info(
+                "Requesting tiering table splits via heartbeat, failed table epoch is {}.",
+                currentFailedTableEpochs);
         LakeTieringHeartbeatRequest tieringHeartbeatRequest =
                 tieringTableHeartBeat(
                         basicHeartBeat(),
