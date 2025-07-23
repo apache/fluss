@@ -54,7 +54,6 @@ import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.types.StringType;
 
 import org.apache.commons.lang3.StringUtils;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -115,7 +114,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    @Disabled("TODO, fix me in #116")
     void testAppendWithSmallBuffer(boolean indexedFormat) throws Exception {
         TableDescriptor desc =
                 indexedFormat
