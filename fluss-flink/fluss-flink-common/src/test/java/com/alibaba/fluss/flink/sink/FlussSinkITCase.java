@@ -375,7 +375,7 @@ public class FlussSinkITCase extends FlinkTestBase {
             row.setField(0, value.orderId);
             row.setField(1, value.itemId);
             row.setField(2, value.amount);
-            row.setField(3, BinaryString.fromString(value.address));
+            row.setField(3, value.address != null ? BinaryString.fromString(value.address) : null);
 
             RowKind rowKind = value.rowKind;
             switch (rowKind) {
@@ -453,5 +453,78 @@ public class FlussSinkITCase extends FlinkTestBase {
         assertThat(rows.containsAll(orders)).isTrue();
 
         logScanner.close();
+    }
+    
+    @Test
+    public void testPartialUpdateWithTwoWriters() throws Exception {
+        createTable(TablePath.of(DEFAULT_DB, "partial_update_two_writers_test"), pkTableDescriptor);
+
+        // Initial inserts
+        ArrayList<TestOrder> initialOrders = new ArrayList<>();
+        initialOrders.add(new TestOrder(2001, 3001, -1, null, RowKind.INSERT));
+        initialOrders.add(new TestOrder(2002, 3002, -1, null, RowKind.INSERT));
+        initialOrders.add(new TestOrder(2003, 3003, -1, null, RowKind.INSERT));
+
+        DataStream<TestOrder> initialStream = env.fromData(initialOrders);
+
+        FlinkSink<TestOrder> initialSink =
+                FlussSink.<TestOrder>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable("partial_update_two_writers_test")
+                        .setPartialUpdateColumns("itemId")
+                        .setSerializationSchema(new TestOrderSerializationSchema())
+                        .build();
+
+        initialStream.sinkTo(initialSink).name("Fluss Initial Data Sink");
+        env.execute("First Stream Updates");
+
+
+        ArrayList<TestOrder> itemIdUpdates = new ArrayList<>();
+        itemIdUpdates.add(new TestOrder(2001, -1, 100, "addr1", RowKind.UPDATE_AFTER));
+        itemIdUpdates.add(new TestOrder(2003, -1, 300, "addr3", RowKind.UPDATE_AFTER));
+
+        DataStream<TestOrder> updateStream = env.fromData(itemIdUpdates);
+
+        FlinkSink<TestOrder> updateSink =
+                FlussSink.<TestOrder>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable("partial_update_two_writers_test")
+                        .setPartialUpdateColumns("amount", "address")
+                        .setSerializationSchema(new TestOrderSerializationSchema())
+                        .build();
+
+        updateStream.sinkTo(updateSink).name("Fluss Amount/Address Update Sink");
+        env.execute("Test Amount/Address Updates"); // Execute synchronously to ensure updates are applied
+
+        Table table = conn.getTable(new TablePath(DEFAULT_DB, "partial_update_two_writers_test"));
+        System.out.println("Starting log scanner ...");
+        LogScanner logScanner = table.newScan().createLogScanner();
+
+        int numBuckets = table.getTableInfo().getNumBuckets();
+        for (int i = 0; i < numBuckets; i++) {
+            logScanner.subscribeFromBeginning(i);
+        }
+
+        List<TestOrder> allRecords = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (TableBucket bucket : scanRecords.buckets()) {
+                for (ScanRecord record : scanRecords.records(bucket)) {
+                    InternalRow row = record.getRow();
+                    String address = row.getString(3) != null ? row.getString(3).toString() : null;
+                    TestOrder order =
+                            new TestOrder(
+                                    row.getLong(0),
+                                    row.getLong(1),
+                                    row.getInt(2),
+                                    address,
+                                    toFlinkRowKind(record.getChangeType()));
+                    allRecords.add(order);
+                }
+            }
+        }
+        allRecords.forEach(System.out::println);
     }
 }
