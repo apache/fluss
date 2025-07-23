@@ -35,7 +35,6 @@ import com.alibaba.fluss.rpc.messages.ControlledShutdownResponse;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.server.ServerBase;
-import com.alibaba.fluss.server.ServerState;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
@@ -202,7 +201,6 @@ public class TabletServer extends ServerBase {
 
             this.logManager = LogManager.create(conf, zkClient, scheduler, clock);
             logManager.startup();
-            serverState = ServerState.RECOVERY;
 
             this.kvManager = KvManager.create(conf, zkClient, logManager);
             kvManager.startup();
@@ -275,7 +273,6 @@ public class TabletServer extends ServerBase {
 
             controlledShutDown();
 
-            serverState = ServerState.SHUTTING_DOWN;
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
 
             serviceShutdownFuture.whenComplete(
@@ -287,8 +284,6 @@ public class TabletServer extends ServerBase {
                         }
                     }));
         }
-
-        serverState = ServerState.NOT_RUNNING;
 
         return terminationFuture;
     }
@@ -427,7 +422,6 @@ public class TabletServer extends ServerBase {
 
     private void controlledShutDown() {
         LOG.info("Starting controlled shutdown.");
-        serverState = ServerState.PENDING_CONTROLLED_SHUTDOWN;
 
         // We request the CoordinatorServer to do a controlled shutdown. On failure, we backoff for
         // a period of time and try again for a number of retries. If all the attempt fails, we
