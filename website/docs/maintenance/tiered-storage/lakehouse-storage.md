@@ -37,7 +37,7 @@ datalake.paimon.warehouse: /tmp/paimon
 
 Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog. Checkout the [Paimon documentation](https://paimon.apache.org/docs/1.1/maintenance/configurations/) for more details on the available configurations.
 
-For example, if you want to configure to use Hive catalog, you can configure like following:
+For example, to configure the use of a Hive catalog, you need to [download](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) the Flink SQL Hive Client JAR, place the downloaded JAR in Paimon's plugin directory at $FLUSS_HOME/plugins/paimon, and then add the following configuration:
 ```yaml
 datalake.format: paimon
 datalake.paimon.metastore: hive
@@ -60,21 +60,6 @@ export HADOOP_CLASSPATH=`hadoop classpath`
 **Step 2: Add the following to your configuration file**
 ```yaml
 plugin.classloader.parent-first-patterns.default: java.,com.alibaba.fluss.,javax.annotation.,org.slf4j,org.apache.log4j,org.apache.logging,org.apache.commons.logging,ch.qos.logback,hdfs-site,core-site,org.apache.hadoop.,META-INF
-```
-
-#### Hive Catalog Configuration
-
-To use Hive as the metastore, follow these steps:  
-
-**Step 1: Add Hive Connector Dependency**  
-[Download](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) the Flink SQL Hive Client JAR.Place the downloaded JAR in Paimon's plugin directory:
-`$PAIMON_HOME/plugins/hive`.
-
-**Step 2: Add the following to your configuration file**  
-```yaml
-datalake.paimon.metastore: hive
-# this is recommended in the kerberos environment
-datalake.paimon.hive-conf-dir: '...',
 ```
 
 ### Start The Datalake Tiering Service
