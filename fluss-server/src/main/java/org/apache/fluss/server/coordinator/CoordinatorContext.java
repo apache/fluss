@@ -111,17 +111,11 @@ public class CoordinatorContext {
         return coordinatorEpoch;
     }
 
-    public Set<ServerInfo> liveTabletServerInfos() {
-        Set<ServerInfo> liveTabletServers = new HashSet<>();
-        for (ServerInfo serverInfo : this.liveTabletServers.values()) {
-            if (!shuttingDownTabletServers.contains(serverInfo.id())) {
-                liveTabletServers.add(serverInfo);
-            }
-        }
+    public Map<Integer, ServerInfo> getLiveTabletServers() {
         return liveTabletServers;
     }
 
-    public Set<Integer> liveTabletServerIds() {
+    public Set<Integer> liveTabletServerSet() {
         Set<Integer> liveTabletServers = new HashSet<>();
         for (Integer brokerId : this.liveTabletServers.keySet()) {
             if (!shuttingDownTabletServers.contains(brokerId)) {
@@ -171,7 +165,7 @@ public class CoordinatorContext {
         if (includeShuttingDownTabletServers) {
             serverOnline = liveOrShuttingDownTabletServers().contains(serverId);
         } else {
-            serverOnline = liveTabletServerIds().contains(serverId);
+            serverOnline = liveTabletServerSet().contains(serverId);
         }
 
         return serverOnline
@@ -674,10 +668,5 @@ public class CoordinatorContext {
         // clear the live tablet servers
         liveTabletServers.clear();
         shuttingDownTabletServers.clear();
-    }
-
-    @VisibleForTesting
-    public Map<Integer, ServerInfo> getLiveTabletServers() {
-        return liveTabletServers;
     }
 }
