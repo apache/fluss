@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.server.log;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.record.LogRecordBatch;
 
 import javax.annotation.Nullable;
@@ -36,6 +37,8 @@ import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
  */
 public class WriterStateEntry {
     private static final int NUM_BATCHES_TO_RETAIN = 5;
+    public static final int BATCH_SEQUENCE_AFTER_EXPIRE = -2;
+
     private final long writerId;
     private final Deque<BatchMetadata> batchMetadata = new ArrayDeque<>();
 
@@ -96,6 +99,10 @@ public class WriterStateEntry {
         update(nextEntry.lastTimestamp, nextEntry.batchMetadata);
     }
 
+    public void removeAllBatches() {
+        batchMetadata.clear();
+    }
+
     private void update(long lastTimestamp, Deque<BatchMetadata> batchMetadata) {
         while (!batchMetadata.isEmpty()) {
             addBatchMetadata(batchMetadata.removeFirst());
@@ -104,6 +111,13 @@ public class WriterStateEntry {
     }
 
     private void addBatchMetadata(BatchMetadata batch) {
+        // If batchMetadata size is 1 and the first batch is BATCH_SEQUENCE_AFTER_EXPIRE, we need to
+        // remove it as it was an expired batch.
+        if (batchMetadata.size() == 1
+                && batchMetadata.getFirst().batchSequence == BATCH_SEQUENCE_AFTER_EXPIRE) {
+            batchMetadata.removeFirst();
+        }
+
         if (batchMetadata.size() == NUM_BATCHES_TO_RETAIN) {
             batchMetadata.removeFirst();
         }
@@ -127,6 +141,11 @@ public class WriterStateEntry {
     public WriterStateEntry withWriterIdAndBatchMetadata(
             long writerId, @Nullable BatchMetadata batchMetadata) {
         return new WriterStateEntry(writerId, this.lastTimestamp, batchMetadata);
+    }
+
+    @VisibleForTesting
+    public int size() {
+        return batchMetadata.size();
     }
 
     /** Metadata of a batch. */

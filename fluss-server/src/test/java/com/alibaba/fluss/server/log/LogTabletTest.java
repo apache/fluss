@@ -421,7 +421,11 @@ final class LogTabletTest extends LogTestBase {
         assertThat(log.activeWriters().keySet()).isEqualTo(Collections.singleton(writerId1));
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(log.activeWriters().keySet()).isEqualTo(Collections.emptySet()));
+                () -> {
+                    assertThat(log.activeWriters().get(writerId1).firstBatchSequence())
+                            .isEqualTo(-2);
+                    assertThat(log.activeWriters().get(writerId1).size()).isEqualTo(1);
+                });
     }
 
     @Test
