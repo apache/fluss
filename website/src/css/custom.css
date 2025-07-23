@@ -187,6 +187,7 @@
             position: relative;
             list-style: initial;
         }
+        /*
         code {
             border-radius: 4px;
             background-color: #edf2fa;
@@ -194,7 +195,7 @@
             padding: 3px 4px;
             font-size: 14px;
             color: #4c576c;
-        }
+        }*/
     }
     ol {
         margin: 16px 0;
@@ -202,6 +203,7 @@
         li {
             list-style: decimal;
         }
+        /*
         code {
             border-radius: 4px;
             background-color: #edf2fa;
@@ -210,6 +212,7 @@
             font-size: 14px;
             color: #4c576c;
         }
+        */
     }
 }
 
