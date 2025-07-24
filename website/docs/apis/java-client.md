@@ -3,6 +3,24 @@ title: "Java Client"
 sidebar_position: 1
 ---
 
+<!--
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 # Fluss Java Client
 ## Overview
 Fluss `Admin` API that supports asynchronous operations for managing and inspecting Fluss resources. It communicates with the Fluss cluster and provides methods for:
@@ -170,8 +188,8 @@ List<User> users = List.of(
 );
 ```
 
-**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`, while the Fluss community is working to provide
-a more user-friendly API for writing data.
+**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`. You can use the `ConverterUtils` helper class (see below) or manually convert your objects as shown here:
+
 ```java
 Table table = connection.getTable(tablePath);
 
@@ -245,3 +263,65 @@ LookupResult prefixLookup = table.newLookup()
         .lookup(rowKey)
         .get();
 ```
+
+## Converter Utilities
+The `ConverterUtils` class is a helper utility for converting Java POJOs to Fluss's `InternalRow` format and vice versa. This utility simplifies the process of working with Fluss tables by handling the conversion between your domain objects and Fluss's internal row representation.
+
+#### Usage Example
+Here's an example of how to use `ConverterUtils` to convert between POJOs and Fluss rows:
+
+```java
+// Define your POJO class
+public class Order {
+ ...
+}
+
+// Create a schema that matches your POJO
+Schema schema = Schema.newBuilder()
+        .column("orderId", DataTypes.BIGINT())
+        .column("customerId", DataTypes.BIGINT())
+        .column("quantity", DataTypes.INT())
+        .column("address", DataTypes.STRING())
+        .column("orderTime", DataTypes.TIMESTAMP())
+        .build();
+
+// Create a RowType from the schema
+RowType rowType = RowType.of(
+        new DataType[] {
+                DataTypes.BIGINT(),
+                DataTypes.BIGINT(),
+                DataTypes.INT(),
+                DataTypes.STRING(),
+                DataTypes.TIMESTAMP()
+        },
+        new String[] {"orderId", "customerId", "quantity", "address", "orderTime"});
+
+// Create a converter for your POJO class
+ConverterUtils<Order> converter = new ConverterUtils<>(Order.class, rowType);
+
+// Convert a POJO to a GenericRow
+Order order = new Order(1001L, 5001L, 10, "123 Athens", LocalDateTime.now());
+GenericRow row = converter.toRow(order);
+
+// Write the row to a table
+Table table = connection.getTable(tablePath);
+UpsertWriter writer = table.newUpsert().createWriter();
+writer.upsert(row);
+writer.flush();
+
+// Read a row from a table and convert it back to a POJO
+LogScanner logScanner = table.newScan().createLogScanner();
+logScanner.subscribeFromBeginning(0);
+ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+for (ScanRecord scanRecord : scanRecords) {
+    InternalRow readRow = scanRecord.getRow();
+    // Convert row back to POJO
+    Order readOrder = converter.fromRow(readRow);
+    System.out.println("Read order: " + readOrder.orderId);
+}
+```
+
+#### Limitations
+- Nested POJO fields are not currently supported
+- All POJO classes must have a default (no-argument) constructor
+- Field names in the POJO must match column names in the schema (case-sensitive)
