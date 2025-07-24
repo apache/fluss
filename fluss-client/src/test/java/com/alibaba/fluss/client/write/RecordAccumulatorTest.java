@@ -99,19 +99,23 @@ class RecordAccumulatorTest {
     ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
     ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
     ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
-    private final ServerNode[] serverNodes = new ServerNode[] {node1, node2, node3};
+    private final int[] serverNodes = new int[] {node1.id(), node2.id(), node3.id()};
     private final TableBucket tb1 = new TableBucket(DATA1_TABLE_ID, 0);
     private final TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1);
     private final TableBucket tb3 = new TableBucket(DATA1_TABLE_ID, 2);
     private final TableBucket tb4 = new TableBucket(DATA1_TABLE_ID, 3);
     private final BucketLocation bucket1 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1.id(), serverNodes);
     private final BucketLocation bucket2 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, node1, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, node1.id(), serverNodes);
     private final BucketLocation bucket3 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2.id(), serverNodes);
     private final BucketLocation bucket4 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 3, node2, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 3, node2.id(), serverNodes);
 
     private final WriteCallback writeCallback =
             exception -> {
@@ -151,7 +155,10 @@ class RecordAccumulatorTest {
         // drain batches from 2 nodes: node1 => tb1, node2 => tb3, because the max request size is
         // full after the first batch drained
         Map<Integer, List<ReadyWriteBatch>> batches1 =
-                accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
+                accum.drain(
+                        cluster,
+                        new HashSet<>(Arrays.asList(node1.id(), node2.id())),
+                        (int) batchSize);
         verifyTableBucketInBatches(batches1, tb1, tb3);
 
         // add record for tb1, tb3
@@ -162,12 +169,18 @@ class RecordAccumulatorTest {
         // full after the first batch drained. The drain index should start from next table bucket,
         // that is, node1 => tb2, node2 => tb4
         Map<Integer, List<ReadyWriteBatch>> batches2 =
-                accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
+                accum.drain(
+                        cluster,
+                        new HashSet<>(Arrays.asList(node1.id(), node2.id())),
+                        (int) batchSize);
         verifyTableBucketInBatches(batches2, tb2, tb4);
 
         // make sure in next run, the drain index will start from the beginning.
         Map<Integer, List<ReadyWriteBatch>> batches3 =
-                accum.drain(cluster, new HashSet<>(Arrays.asList(node1, node2)), (int) batchSize);
+                accum.drain(
+                        cluster,
+                        new HashSet<>(Arrays.asList(node1.id(), node2.id())),
+                        (int) batchSize);
         verifyTableBucketInBatches(batches3, tb1, tb3);
     }
 
@@ -182,7 +195,7 @@ class RecordAccumulatorTest {
         for (int b = 0; b < bucketNum; b++) {
             bucketLocations.add(
                     new BucketLocation(
-                            ZSTD_PHYSICAL_TABLE_PATH, ZSTD_TABLE_ID, b, node1, serverNodes));
+                            ZSTD_PHYSICAL_TABLE_PATH, ZSTD_TABLE_ID, b, node1.id(), serverNodes));
         }
         // all buckets are located in node1
         cluster = updateCluster(bucketLocations);
@@ -195,7 +208,7 @@ class RecordAccumulatorTest {
 
         // all 3 buckets are located in node1
         Map<Integer, List<ReadyWriteBatch>> batches =
-                accum.drain(cluster, Collections.singleton(node1), batchSize * bucketNum);
+                accum.drain(cluster, Collections.singleton(node1.id()), batchSize * bucketNum);
         // the compression ratio is smaller than 1.0,
         // so bucketNum * batch_size should contain all compressed batches for each bucket
         assertThat(batches.containsKey(node1.id())).isTrue();
@@ -215,7 +228,7 @@ class RecordAccumulatorTest {
         while (true) {
             appendUntilBatchFull(accum, 0);
             Map<Integer, List<ReadyWriteBatch>> batches =
-                    accum.drain(cluster, Collections.singleton(node1), Integer.MAX_VALUE);
+                    accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
             WriteBatch batch = batches.get(node1.id()).get(0).writeBatch();
             int actualSize = batch.build().getBytesLength();
             if (actualSize > batchSize * ArrowWriter.BUFFER_USAGE_RATIO) {
@@ -266,10 +279,10 @@ class RecordAccumulatorTest {
         Iterator<WriteBatch> bucketBatchesIterator = writeBatches.iterator();
         assertThat(bucketBatchesIterator.next().isClosed()).isTrue();
         // Bucket's leader should be ready.
-        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
+        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
 
         List<ReadyWriteBatch> batches =
-                accum.drain(cluster, Collections.singleton(node1), Integer.MAX_VALUE)
+                accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
                         .get(node1.id());
         assertThat(batches.size()).isEqualTo(1);
         WriteBatch batch = batches.get(0).writeBatch();
@@ -301,7 +314,7 @@ class RecordAccumulatorTest {
         // row size > 10;
         accum.append(createRecord(row1), writeCallback, cluster, 0, false);
         // bucket's leader should be ready for bucket0.
-        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
+        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
 
         Deque<WriteBatch> writeBatches =
                 accum.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
@@ -405,9 +418,9 @@ class RecordAccumulatorTest {
             }
         }
 
-        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1));
+        assertThat(accum.ready(cluster).readyNodes).isEqualTo(Collections.singleton(node1.id()));
         List<ReadyWriteBatch> batches =
-                accum.drain(cluster, Collections.singleton(node1), 1024).get(node1.id());
+                accum.drain(cluster, Collections.singleton(node1.id()), 1024).get(node1.id());
         // Due to size bound only one bucket should have been retrieved.
         assertThat(batches.size()).isEqualTo(1);
     }
@@ -462,7 +475,7 @@ class RecordAccumulatorTest {
 
         bucket1 =
                 new BucketLocation(
-                        DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1, serverNodes);
+                        DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1.id(), serverNodes);
         // update the bucket info with leader.
         cluster = updateCluster(Collections.singletonList(bucket1));
 
@@ -517,7 +530,7 @@ class RecordAccumulatorTest {
 
         result = accum.ready(cluster);
         // server for bucket1 should be ready now
-        assertThat(result.readyNodes).hasSize(1).contains(node1);
+        assertThat(result.readyNodes).hasSize(1).contains(node1.id());
         // Note this can actually be < batchTimeout because it may use delays from bucket that
         // aren't sendable
         // but have leaders with other sendable data.
@@ -533,9 +546,10 @@ class RecordAccumulatorTest {
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {
-        Map<Integer, ServerNode> aliveTabletServersById =
-                Arrays.stream(serverNodes)
-                        .collect(Collectors.toMap(ServerNode::id, serverNode -> serverNode));
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
+        aliveTabletServersById.put(node1.id(), node1);
+        aliveTabletServersById.put(node2.id(), node2);
+        aliveTabletServersById.put(node3.id(), node3);
 
         Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
         bucketsByPath.put(DATA1_PHYSICAL_TABLE_PATH, bucketLocations);
