@@ -335,7 +335,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
             if (tableInfo.isPartitioned()) {
                 Map<String, Long> partitions = tablePathMap.get(tablePath);
-                if(partitions != null) {
+                if (partitions != null) {
                     for (Map.Entry<String, Long> partition : partitions.entrySet()) {
                         // put partition info to coordinator context
                         coordinatorContext.putPartition(
