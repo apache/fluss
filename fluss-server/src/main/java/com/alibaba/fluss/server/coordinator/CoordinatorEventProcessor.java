@@ -322,7 +322,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         .filter(entry -> entry.getValue().isPartitioned())
                         .map(Map.Entry::getKey)
                         .collect(Collectors.toList());
-        Map<TablePath, Map<String, Long>> tablePathMapMap =
+        Map<TablePath, Map<String, Long>> tablePathMap =
                 zooKeeperClient.getPartitionNameAndIds4tables(partitionedTablePathList);
         for (TablePath tablePath : tablePathSet) {
             TableInfo tableInfo = tablePath2TableInfoMap.get(tablePath);
@@ -334,12 +334,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 lakeTables.add(Tuple2.of(tableInfo, System.currentTimeMillis()));
             }
             if (tableInfo.isPartitioned()) {
-                Map<String, Long> partitions = tablePathMapMap.get(tablePath);
-                for (Map.Entry<String, Long> partition : partitions.entrySet()) {
-                    // put partition info to coordinator context
-                    coordinatorContext.putPartition(
-                            partition.getValue(),
-                            PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()));
+                Map<String, Long> partitions = tablePathMap.get(tablePath);
+                if(partitions != null) {
+                    for (Map.Entry<String, Long> partition : partitions.entrySet()) {
+                        // put partition info to coordinator context
+                        coordinatorContext.putPartition(
+                                partition.getValue(),
+                                PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()));
+                    }
                 }
                 // if the table is auto partition, put the partitions info
                 if (tableInfo
