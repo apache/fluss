@@ -65,6 +65,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
+import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -222,8 +223,7 @@ public enum Errors {
     SERVER_NOT_EXIST_EXCEPTION(54, "The server is not exist.", ServerNotExistException::new),
     SEVER_TAG_ALREADY_EXIST_EXCEPTION(
             55, "The server tag already exist.", ServerTagAlreadyExistException::new),
-    SEVER_TAG_NOT_EXIST_EXCEPTION(
-            56, "The server tag not exist.", ServerTagAlreadyExistException::new),
+    SEVER_TAG_NOT_EXIST_EXCEPTION(56, "The server tag not exist.", ServerTagNotExistException::new),
     REBALANCE_FAILURE_EXCEPTION(57, "The rebalance task failure.", RebalanceFailureException::new),
     NO_REBALANCE_IN_PROGRESS_EXCEPTION(
             58, "No rebalance task in progress.", NoRebalanceInProgressException::new);

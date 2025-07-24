@@ -44,6 +44,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -68,6 +69,7 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -470,13 +472,17 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
-        throw new UnsupportedOperationException("Support soon");
+        AddServerTagRequest request = new AddServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.addServerTag(request).thenApply(r -> null);
     }
 
     @Override
     public CompletableFuture<Void> removeServerTag(
             List<Integer> tabletServers, ServerTag serverTag) {
-        throw new UnsupportedOperationException("Support soon");
+        RemoveServerTagRequest request = new RemoveServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.removeServerTag(request).thenApply(r -> null);
     }
 
     @Override
