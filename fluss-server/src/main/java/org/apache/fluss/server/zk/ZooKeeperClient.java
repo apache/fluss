@@ -175,20 +175,31 @@ public class ZooKeeperClient implements AutoCloseable {
     // Coordinator server
     // --------------------------------------------------------------------------------------------
 
-    /** Register a coordinator leader server to ZK. */
+    /** Register a coordinator server to ZK. */
+    public void registerCoordinatorServer(int coordinatorId) throws Exception {
+        String path = ZkData.CoordinatorIdZNode.path(coordinatorId);
+        zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.EPHEMERAL).forPath(path);
+        LOG.info("Registered Coordinator server {} at path {}.", coordinatorId, path);
+    }
+
+    /**
+     * Register a coordinator leader to ZK. Don't need to create node because leader election
+     * process already do it.
+     */
     public void registerCoordinatorLeader(CoordinatorAddress coordinatorAddress) throws Exception {
-        String path = CoordinatorZNode.path();
-        zkClient.create()
-                .creatingParentsIfNeeded()
-                .withMode(CreateMode.EPHEMERAL)
-                .forPath(path, CoordinatorZNode.encode(coordinatorAddress));
-        LOG.info("Registered leader {} at path {}.", coordinatorAddress, path);
+        String path = ZkData.CoordinatorLeaderZNode.path();
+        zkClient.setData().forPath(path, ZkData.CoordinatorLeaderZNode.encode(coordinatorAddress));
+        LOG.info("Registered Coordinator leader {} at path {}.", coordinatorAddress, path);
     }
 
     /** Get the leader address registered in ZK. */
     public Optional<CoordinatorAddress> getCoordinatorAddress() throws Exception {
-        Optional<byte[]> bytes = getOrEmpty(CoordinatorZNode.path());
-        return bytes.map(CoordinatorZNode::decode);
+        Optional<byte[]> bytes = getOrEmpty(ZkData.CoordinatorLeaderZNode.path());
+        //        return bytes.map(CoordinatorZNode::decode);
+        return bytes.map(
+                data ->
+                        // maybe a empty node when a leader is elected but not registered
+                        data.length == 0 ? null : ZkData.CoordinatorLeaderZNode.decode(data));
     }
 
     // --------------------------------------------------------------------------------------------

@@ -94,7 +94,8 @@ public abstract class ServerTestBase {
         // get the EPHEMERAL node of server
         String path =
                 server instanceof CoordinatorServer
-                        ? CoordinatorZNode.path()
+                        ? ZkData.CoordinatorIdZNode.path(
+                                server.conf.getInt(ConfigOptions.COORDINATOR_ID))
                         : ServerIdZNode.path(server.conf.getInt(ConfigOptions.TABLET_SERVER_ID));
 
         long oldNodeCtime = zookeeperClient.getStat(path).get().getCtime();
