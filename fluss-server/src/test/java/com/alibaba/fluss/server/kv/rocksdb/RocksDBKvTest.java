@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.kv.rocksdb;
 
 import com.alibaba.fluss.config.Configuration;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -30,6 +31,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link com.alibaba.fluss.server.kv.rocksdb.RocksDBKv}. */
 class RocksDBKvTest {
+
+    @BeforeEach
+    void reset() {
+        RocksDBSharedResource.resetInstance();
+    }
 
     @Test
     void testRocksDbKv(@TempDir Path tempDir) throws Exception {
