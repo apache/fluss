@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -91,11 +92,13 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -117,12 +120,14 @@ import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -579,13 +584,33 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        CompletableFuture<AddServerTagResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new AddServerTagEvent(
+                                Arrays.stream(request.getServerIds())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
     }
 
     @Override
     public CompletableFuture<RemoveServerTagResponse> removeServerTag(
             RemoveServerTagRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        CompletableFuture<RemoveServerTagResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new RemoveServerTagEvent(
+                                Arrays.stream(request.getServerIds())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
     }
 
     @Override
