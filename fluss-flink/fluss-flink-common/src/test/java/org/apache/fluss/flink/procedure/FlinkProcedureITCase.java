@@ -17,12 +17,15 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ServerTags;
 
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
@@ -38,9 +41,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.cluster.rebalance.ServerTag.PERMANENT_OFFLINE;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,7 +102,9 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.drop_acl]",
                             "+I[sys.get_cluster_config]",
                             "+I[sys.list_acl]",
-                            "+I[sys.set_cluster_config]");
+                            "+I[sys.set_cluster_config]",
+                            "+I[sys.add_server_tag]",
+                            "+I[sys.remove_server_tag]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -134,13 +142,11 @@ public abstract class FlinkProcedureITCase {
                                 String.format(
                                         "Call %s.sys.list_acl( resource => 'ANY')", CATALOG_NAME))
                         .collect()) {
-            List<String> acls =
-                    CollectionUtil.iteratorToList(listProceduresIterator).stream()
-                            .map(Row::toString)
-                            .collect(Collectors.toList());
-            assertThat(acls)
-                    .containsExactlyInAnyOrder(
-                            "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"*\"]");
+            assertCallResult(
+                    listProceduresIterator,
+                    new String[] {
+                        "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"*\"]"
+                    });
         }
     }
 
@@ -169,21 +175,15 @@ public abstract class FlinkProcedureITCase {
                         CATALOG_NAME);
         tEnv.executeSql(addAcl).await();
         try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
-            List<String> acls =
-                    CollectionUtil.iteratorToList(listProceduresIterator).stream()
-                            .map(Row::toString)
-                            .collect(Collectors.toList());
-            assertThat(acls)
-                    .containsExactlyInAnyOrder(
-                            "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"127.0.0.1\"]");
+            assertCallResult(
+                    listProceduresIterator,
+                    new String[] {
+                        "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"127.0.0.1\"]"
+                    });
         }
         tEnv.executeSql(dropAcl).await();
         try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
-            List<String> acls =
-                    CollectionUtil.iteratorToList(listProceduresIterator).stream()
-                            .map(Row::toString)
-                            .collect(Collectors.toList());
-            assertThat(acls).isEmpty();
+            assertCallResult(listProceduresIterator, new String[0]);
         }
     }
 
@@ -391,6 +391,75 @@ public abstract class FlinkProcedureITCase {
                         "The config key invalid.config.key is not allowed to be changed dynamically");
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAddAndRemoveServerTag(boolean upperCase) throws Exception {
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        assertThat(zkClient.getServerTags()).isNotPresent();
+
+        String addServerTag =
+                String.format(
+                        upperCase
+                                ? "Call %s.sys.add_server_tag('0', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.add_server_tag('0', 'permanent_offline')",
+                        CATALOG_NAME);
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(addServerTag).collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+        Optional<ServerTags> serverTags = zkClient.getServerTags();
+        assertThat(serverTags).isPresent();
+        Map<Integer, ServerTag> tags = serverTags.get().getServerTags();
+        assertThat(tags.size()).isEqualTo(1);
+        assertThat(tags.get(0)).isEqualTo(PERMANENT_OFFLINE);
+
+        // test add duplicated server tag. no error will be thrown.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(addServerTag).collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+        serverTags = zkClient.getServerTags();
+        assertThat(serverTags).isPresent();
+        tags = serverTags.get().getServerTags();
+        assertThat(tags.size()).isEqualTo(1);
+        assertThat(tags.get(0)).isEqualTo(PERMANENT_OFFLINE);
+
+        // test add multi.
+        String addMultiServerTag =
+                String.format(
+                        upperCase
+                                ? "Call %s.sys.add_server_tag('1;2', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.add_server_tag('1;2', 'permanent_offline')",
+                        CATALOG_NAME);
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(addMultiServerTag).collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+        serverTags = zkClient.getServerTags();
+        assertThat(serverTags).isPresent();
+        tags = serverTags.get().getServerTags();
+        assertThat(tags.keySet()).containsExactlyInAnyOrder(0, 1, 2);
+
+        String removeServerTag =
+                String.format(
+                        upperCase
+                                ? "Call %s.sys.remove_server_tag('0;1;2', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.remove_server_tag('0;1;2', 'permanent_offline')",
+                        CATALOG_NAME);
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(removeServerTag).collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+        serverTags = zkClient.getServerTags();
+        assertThat(serverTags).isNotPresent();
+
+        // test remove non-exist server tag, no error will be thrown.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(removeServerTag).collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -418,5 +487,17 @@ public abstract class FlinkProcedureITCase {
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
+    }
+
+    private static void assertCallResult(CloseableIterator<Row> rows, String[] expected) {
+        List<String> actual =
+                CollectionUtil.iteratorToList(rows).stream()
+                        .map(Row::toString)
+                        .collect(Collectors.toList());
+        if (expected.length == 0) {
+            assertThat(actual).isEmpty();
+        } else {
+            assertThat(actual).containsExactlyInAnyOrder(expected);
+        }
     }
 }
