@@ -55,6 +55,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @Override
     protected ServerBase getStartFailServer() {
         Configuration configuration = createConfiguration();
+        configuration.set(ConfigOptions.COORDINATOR_ID, 0);
         configuration.set(ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:-12");
         return new CoordinatorServer(configuration);
     }

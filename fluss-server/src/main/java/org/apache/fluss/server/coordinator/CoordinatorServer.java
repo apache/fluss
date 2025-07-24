@@ -104,9 +104,6 @@ public class CoordinatorServer extends ServerBase {
     private RpcClient rpcClient;
 
     @GuardedBy("lock")
-    private List<Endpoint> endpoints;
-
-    @GuardedBy("lock")
     private ClientMetricGroup clientMetricGroup;
 
     @GuardedBy("lock")
@@ -166,7 +163,6 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void electCoordinatorLeader() throws Exception {
-        this.endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
         this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
         // Coordinator Server supports high availability. If 3 coordinator servers are alive,
