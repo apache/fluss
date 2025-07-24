@@ -292,10 +292,9 @@ public class ConverterUtils<T> {
                                 decimalType.getPrecision(),
                                 decimalType.getScale());
                     } else {
-                        LOG.warn(
-                                "Field {} is not a BigDecimal. Cannot convert to DecimalData.",
-                                field.getName());
-                        return null;
+                        throw new IllegalArgumentException(
+                                String.format("Field %s is not a BigDecimal. Cannot convert to DecimalData.",
+                                        field.getName()));
                     }
                 };
             case DATE:
