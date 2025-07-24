@@ -26,6 +26,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RetriableException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -187,7 +188,8 @@ public class MetadataUpdater {
      *
      * <p>and update partition metadata .
      */
-    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath) {
+    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath)
+            throws PartitionNotExistException {
         if (!cluster.getPartitionId(physicalTablePath).isPresent()) {
             updateMetadata(null, Collections.singleton(physicalTablePath), null);
         }
@@ -251,7 +253,8 @@ public class MetadataUpdater {
     protected void updateMetadata(
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
-            @Nullable Collection<Long> tablePartitionIds) {
+            @Nullable Collection<Long> tablePartitionIds)
+            throws PartitionNotExistException {
         try {
             synchronized (this) {
                 cluster =
@@ -266,6 +269,9 @@ public class MetadataUpdater {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (t instanceof RetriableException || t instanceof TimeoutException) {
                 LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
+            } else if (t instanceof PartitionNotExistException) {
+                LOG.warn("Failed to update metadata because partition is not exist", t);
+                throw (PartitionNotExistException) t;
             } else {
                 throw new FlussRuntimeException("Failed to update metadata", t);
             }
