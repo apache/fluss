@@ -35,7 +35,7 @@ import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
  * for the incoming batch.
  */
 public class WriterStateEntry {
-    private static final int NUM_BATCHES_TO_RETAIN = 5;
+    public static final int NUM_BATCHES_TO_RETAIN = 5;
     private final long writerId;
     private final Deque<BatchMetadata> batchMetadata = new ArrayDeque<>();
 

@@ -101,14 +101,14 @@ public class WriterStateManagerTest {
     @Test
     void testValidationOnFirstEntryWhenLoadingLog() {
         // When the first entry is added, the batch sequence should only be 0.
-        int batchSequence = 16;
+        int batchSequence = 3;
         long offset = 735L;
         assertThatThrownBy(() -> append(stateManager, writerId, batchSequence, offset))
                 .isInstanceOf(OutOfOrderSequenceException.class)
                 .hasMessageContaining(
                         "Out of order batch sequence for writer 1 at offset 735 in "
                                 + "table-bucket TableBucket{tableId=1001, bucket=0}"
-                                + " : 16 (incoming batch seq.), -1 (current batch seq.)");
+                                + " : 3 (incoming batch seq.), -1 (current batch seq.)");
 
         append(stateManager, writerId, 0, offset);
         Optional<WriterStateEntry> maybeLastEntry = stateManager.lastEntry(writerId);

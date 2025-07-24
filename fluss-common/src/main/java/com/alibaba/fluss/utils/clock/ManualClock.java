@@ -66,4 +66,9 @@ public final class ManualClock implements Clock {
     public void advanceTime(Duration duration) {
         currentTimeNs.addAndGet(duration.toNanos());
     }
+
+    /** Rewind the time by the given duration. */
+    public void rewindTime(Duration duration) {
+        currentTimeNs.addAndGet(-duration.toNanos());
+    }
 }
