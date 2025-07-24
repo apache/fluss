@@ -65,6 +65,7 @@ import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.SecurityTokenException;
 import com.alibaba.fluss.exception.ServerNotExistException;
 import com.alibaba.fluss.exception.ServerTagAlreadyExistException;
+import com.alibaba.fluss.exception.ServerTagNotExistException;
 import com.alibaba.fluss.exception.StorageException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
@@ -222,8 +223,7 @@ public enum Errors {
     SERVER_NOT_EXIST_EXCEPTION(54, "The server is not exist.", ServerNotExistException::new),
     SEVER_TAG_ALREADY_EXIST_EXCEPTION(
             55, "The server tag already exist.", ServerTagAlreadyExistException::new),
-    SEVER_TAG_NOT_EXIST_EXCEPTION(
-            56, "The server tag not exist.", ServerTagAlreadyExistException::new),
+    SEVER_TAG_NOT_EXIST_EXCEPTION(56, "The server tag not exist.", ServerTagNotExistException::new),
     REBALANCE_FAILURE_EXCEPTION(57, "The rebalance task failure.", RebalanceFailureException::new),
     NO_REBALANCE_IN_PROGRESS_EXCEPTION(
             58, "No rebalance task in progress.", NoRebalanceInProgressException::new);
