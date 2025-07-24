@@ -293,7 +293,8 @@ public class ConverterUtils<T> {
                                 decimalType.getScale());
                     } else {
                         throw new IllegalArgumentException(
-                                String.format("Field %s is not a BigDecimal. Cannot convert to DecimalData.",
+                                String.format(
+                                        "Field %s is not a BigDecimal. Cannot convert to DecimalData.",
                                         field.getName()));
                     }
                 };
@@ -534,8 +535,8 @@ public class ConverterUtils<T> {
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
             LOG.error(
                     "Failed to create instance of POJO class {} using the default constructor. "
-                    + "Ensure the class has a public default constructor and that it is accessible. "
-                    + "Error: {}",
+                            + "Ensure the class has a public default constructor and that it is accessible. "
+                            + "Error: {}",
                     pojoClass.getName(),
                     e.getMessage(),
                     e);
