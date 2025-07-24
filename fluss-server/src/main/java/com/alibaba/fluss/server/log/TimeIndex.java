@@ -29,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static com.alibaba.fluss.utils.concurrent.LockUtils.inReadLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -90,16 +91,20 @@ public class TimeIndex extends AbstractIndex {
         TimestampOffset entry = lastEntry();
         long lastTimestamp = entry.timestamp;
         long lastOffset = entry.offset;
-        if (entries() != 0 && lastTimestamp < timestamp(mmap(), 0)) {
-            throw new CorruptIndexException(
-                    "Corrupt time index found, time index file ("
-                            + file().getAbsolutePath()
-                            + ") has "
-                            + "non-zero size but the last timestamp is "
-                            + lastTimestamp
-                            + " which is less than the first timestamp "
-                            + timestamp(mmap(), 0));
-        }
+        inReadLock(
+                remapLock,
+                () -> {
+                    if (entries() != 0 && lastTimestamp < timestamp(mmap(), 0)) {
+                        throw new CorruptIndexException(
+                                "Corrupt time index found, time index file ("
+                                        + file().getAbsolutePath()
+                                        + ") has "
+                                        + "non-zero size but the last timestamp is "
+                                        + lastTimestamp
+                                        + " which is less than the first timestamp "
+                                        + timestamp(mmap(), 0));
+                    }
+                });
         if (entries() != 0 && lastOffset < baseOffset()) {
             throw new CorruptIndexException(
                     "Corrupt time index found, time index file ("
@@ -170,8 +175,8 @@ public class TimeIndex extends AbstractIndex {
      * @return The timestamp/offset pair at that entry
      */
     public TimestampOffset entry(int n) {
-        return maybeLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     if (n >= entries()) {
                         throw new IllegalArgumentException(
@@ -195,8 +200,8 @@ public class TimeIndex extends AbstractIndex {
      * @return The time index entry found.
      */
     public TimestampOffset lookup(long targetTimestamp) {
-        return maybeLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     ByteBuffer idx = mmap().duplicate();
                     int slot = largestLowerBoundSlotFor(idx, targetTimestamp, IndexSearchType.KEY);
@@ -332,8 +337,8 @@ public class TimeIndex extends AbstractIndex {
 
     /** Read the last entry from the index file. This operation involves disk access. */
     private TimestampOffset lastEntryFromIndexFile() {
-        return inLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     int entries = entries();
                     if (entries == 0) {
