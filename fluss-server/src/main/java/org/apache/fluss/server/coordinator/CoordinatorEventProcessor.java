@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
@@ -28,7 +29,11 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.ServerNotExistException;
+import org.apache.fluss.exception.ServerTagAlreadyExistException;
+import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -36,14 +41,17 @@ import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
+import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -62,6 +70,7 @@ import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -83,6 +92,7 @@ import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
@@ -318,6 +328,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // init tablet server channels
         coordinatorChannelManager.startup(internalServerNodes);
 
+        // load server tags.
+        zooKeeperClient
+                .getServerTags()
+                .ifPresent(tags -> coordinatorContext.initSeverTags(tags.getServerTags()));
+
         // load all tables
         long start4loadTables = System.currentTimeMillis();
         List<TableInfo> autoPartitionTables = new ArrayList<>();
@@ -541,6 +556,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     controlledShutdownEvent.getRespCallback(),
                     () -> tryProcessControlledShutdown(controlledShutdownEvent));
+        } else if (event instanceof AddServerTagEvent) {
+            AddServerTagEvent addServerTagEvent = (AddServerTagEvent) event;
+            completeFromCallable(
+                    addServerTagEvent.getRespCallback(),
+                    () -> processAddServerTag(addServerTagEvent));
+        } else if (event instanceof RemoveServerTagEvent) {
+            RemoveServerTagEvent removeServerTagEvent = (RemoveServerTagEvent) event;
+            completeFromCallable(
+                    removeServerTagEvent.getRespCallback(),
+                    () -> processRemoveServerTag(removeServerTagEvent));
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -921,6 +946,90 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // update tabletServer metadata cache by send updateMetadata request.
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);
+    }
+
+    private AddServerTagResponse processAddServerTag(AddServerTagEvent event) {
+        AddServerTagResponse addServerTagResponse = new AddServerTagResponse();
+        List<Integer> serverIds = event.getServerIds();
+        ServerTag serverTag = event.getServerTag();
+
+        // Verify that dose serverTag exist for input serverIds. If any of them exists, throw
+        // an error and none of them will be written to coordinatorContext and zk.
+        Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
+        for (Integer serverId : serverIds) {
+            if (!liveTabletServers.containsKey(serverId)) {
+                throw new ServerNotExistException(
+                        String.format(
+                                "Server %s not exists when trying to add server tag.", serverId));
+            }
+
+            if (coordinatorContext.getServerTag(serverId).isPresent()) {
+                throw new ServerTagAlreadyExistException(
+                        String.format(
+                                "Server tag %s already exists for server %s.",
+                                serverTag, serverId));
+            }
+        }
+
+        // First register to zk, and then update coordinatorContext.
+        Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
+        for (Integer serverId : serverIds) {
+            serverTags.put(serverId, serverTag);
+        }
+
+        try {
+            zooKeeperClient.registerServerTags(new ServerTags(serverTags));
+        } catch (Exception e) {
+            LOG.error("Error when register server tags to zookeeper.", e);
+            throw new UnknownServerException("Error when register server tags to zookeeper.", e);
+        }
+
+        // Then update coordinatorContext.
+        serverIds.forEach(serverId -> coordinatorContext.putServerTag(serverId, serverTag));
+
+        return addServerTagResponse;
+    }
+
+    private RemoveServerTagResponse processRemoveServerTag(RemoveServerTagEvent event) {
+        RemoveServerTagResponse removeServerTagResponse = new RemoveServerTagResponse();
+        List<Integer> serverIds = event.getServerIds();
+        ServerTag serverTag = event.getServerTag();
+
+        // Verify that dose serverTag not exist for input serverIds. If any of them not exists,
+        // throw an error and none of them will be removed form coordinatorContext and zk.
+        Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
+        for (Integer serverId : serverIds) {
+            if (!liveTabletServers.containsKey(serverId)) {
+                throw new ServerNotExistException(
+                        String.format(
+                                "Server %s not exists when trying to removing server tag.",
+                                serverId));
+            }
+
+            if (!coordinatorContext.getServerTag(serverId).isPresent()) {
+                throw new ServerTagNotExistException(
+                        String.format(
+                                "Server tag %s not exists for server %s.", serverTag, serverId));
+            }
+        }
+
+        // First register to zk, and then update coordinatorContext.
+        Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
+        for (Integer serverId : serverIds) {
+            serverTags.remove(serverId);
+        }
+
+        try {
+            zooKeeperClient.registerServerTags(new ServerTags(serverTags));
+        } catch (Exception e) {
+            LOG.error("Error when register server tags to zookeeper.", e);
+            throw new UnknownServerException("Error when register server tags to zookeeper.", e);
+        }
+
+        // Then update coordinatorContext.
+        serverIds.forEach(coordinatorContext::removeServerTag);
+
+        return removeServerTagResponse;
     }
 
     private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(
