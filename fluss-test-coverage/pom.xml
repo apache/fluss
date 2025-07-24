@@ -329,6 +329,12 @@
                                         <exclude>com.alibaba.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>com.alibaba.fluss.lake.committer.CommittedLakeSnapshot</exclude>
                                         <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
+                                        <!-- start exclude for lake lance -->
+                                        <exclude>com.alibaba.fluss.lake.lance.*</exclude>
+                                        <exclude>com.alibaba.fluss.lake.lance.utils.LanceArrowUtils.DataTypeToArrowTypeConverter</exclude>
+                                        <exclude>com.alibaba.fluss.lake.lance.writers.*</exclude>
+                                        <exclude>com.alibaba.fluss.lake.lance.LanceConfig</exclude>
+                                        <exclude>com.alibaba.fluss.lake.lance.utils.LanceArrowUtils</exclude>
                                         <!-- temporarily exclude iceberg -->
                                         <exclude>com.alibaba.fluss.lake.iceberg.*</exclude>
                                         <!-- start exclude for flink tiering service -->
