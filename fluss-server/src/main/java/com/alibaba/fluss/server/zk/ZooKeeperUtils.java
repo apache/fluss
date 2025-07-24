@@ -120,7 +120,7 @@ public class ZooKeeperUtils {
             }
         }
         return new ZooKeeperClient(
-                startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler));
+                startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler), configuration);
     }
 
     /**

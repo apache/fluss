@@ -289,8 +289,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
         int[] currentServers = zooKeeperClient.getSortedTabletServerList();
         List<ServerInfo> tabletServerInfos = new ArrayList<>();
         List<ServerNode> internalServerNodes = new ArrayList<>();
+
+        long start4loadTabletServer = System.currentTimeMillis();
+        Map<Integer, TabletServerRegistration> tabletServerRegistrations =
+                zooKeeperClient.getTabletServers(currentServers);
         for (int server : currentServers) {
-            TabletServerRegistration registration = zooKeeperClient.getTabletServer(server).get();
+            TabletServerRegistration registration = tabletServerRegistrations.get(server);
             ServerInfo serverInfo =
                     new ServerInfo(
                             server,
@@ -316,48 +320,74 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         coordinatorContext.setLiveTabletServers(tabletServerInfos);
+        LOG.info(
+                "Load tablet servers success in {}ms when initializing coordinator context.",
+                System.currentTimeMillis() - start4loadTabletServer);
+
         // init tablet server channels
         coordinatorChannelManager.startup(internalServerNodes);
 
         // load all tables
+        long start4loadTables = System.currentTimeMillis();
         List<TableInfo> autoPartitionTables = new ArrayList<>();
         List<Tuple2<TableInfo, Long>> lakeTables = new ArrayList<>();
+        Set<TablePath> tablePathSet = new HashSet<>();
         for (String database : metadataManager.listDatabases()) {
             for (String tableName : metadataManager.listTables(database)) {
-                TablePath tablePath = TablePath.of(database, tableName);
-                TableInfo tableInfo = metadataManager.getTable(tablePath);
-                coordinatorContext.putTablePath(tableInfo.getTableId(), tablePath);
-                coordinatorContext.putTableInfo(tableInfo);
-                if (tableInfo.getTableConfig().isDataLakeEnabled()) {
-                    // always set to current time,
-                    // todo: should get from the last lake snapshot
-                    lakeTables.add(Tuple2.of(tableInfo, System.currentTimeMillis()));
-                }
-                if (tableInfo.isPartitioned()) {
-                    Map<String, Long> partitions =
-                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                tablePathSet.add(TablePath.of(database, tableName));
+            }
+        }
+        Map<TablePath, TableInfo> tablePath2TableInfoMap = metadataManager.getTables(tablePathSet);
+        List<TablePath> partitionedTablePathList =
+                tablePath2TableInfoMap.entrySet().stream()
+                        .filter(entry -> entry.getValue().isPartitioned())
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+        Map<TablePath, Map<String, Long>> tablePathMap =
+                zooKeeperClient.getPartitionNameAndIds4tables(partitionedTablePathList);
+        for (TablePath tablePath : tablePathSet) {
+            TableInfo tableInfo = tablePath2TableInfoMap.get(tablePath);
+            coordinatorContext.putTablePath(tableInfo.getTableId(), tablePath);
+            coordinatorContext.putTableInfo(tableInfo);
+            if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+                // always set to current time,
+                // todo: should get from the last lake snapshot
+                lakeTables.add(Tuple2.of(tableInfo, System.currentTimeMillis()));
+            }
+            if (tableInfo.isPartitioned()) {
+                Map<String, Long> partitions = tablePathMap.get(tablePath);
+                if (partitions != null) {
                     for (Map.Entry<String, Long> partition : partitions.entrySet()) {
                         // put partition info to coordinator context
                         coordinatorContext.putPartition(
                                 partition.getValue(),
                                 PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()));
                     }
-                    // if the table is auto partition, put the partitions info
-                    if (tableInfo
-                            .getTableConfig()
-                            .getAutoPartitionStrategy()
-                            .isAutoPartitionEnabled()) {
-                        autoPartitionTables.add(tableInfo);
-                    }
+                }
+                // if the table is auto partition, put the partitions info
+                if (tableInfo
+                        .getTableConfig()
+                        .getAutoPartitionStrategy()
+                        .isAutoPartitionEnabled()) {
+                    autoPartitionTables.add(tableInfo);
                 }
             }
         }
+        LOG.info(
+                "Load tables success in {}ms when initializing coordinator context.",
+                System.currentTimeMillis() - start4loadTables);
+
         autoPartitionManager.initAutoPartitionTables(autoPartitionTables);
         lakeTableTieringManager.initWithLakeTables(lakeTables);
 
         // load all assignment
+        long start4loadAssignment = System.currentTimeMillis();
         loadTableAssignment();
         loadPartitionAssignment();
+        LOG.info(
+                "Load table and partition assignment success in {}ms when initializing coordinator context.",
+                System.currentTimeMillis() - start4loadAssignment);
+
         long end = System.currentTimeMillis();
         LOG.info("Current total {} tables in the cluster.", coordinatorContext.allTables().size());
         LOG.info(
@@ -372,17 +402,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void loadTableAssignment() throws Exception {
         List<String> assignmentTables = zooKeeperClient.getChildren(TableIdsZNode.path());
         Set<Long> deletedTables = new HashSet<>();
-        for (String tableIdStr : assignmentTables) {
-            long tableId = Long.parseLong(tableIdStr);
+        List<Long> tableIds =
+                assignmentTables.stream().map(Long::parseLong).collect(Collectors.toList());
+        Map<Long, TableAssignment> tableId2tableAssignmentMap =
+                zooKeeperClient.getTablesAssignments(tableIds);
+        for (Long tableId : tableIds) {
             // if table id not in current coordinator context,
             // we'll consider it as deleted
             if (!coordinatorContext.containsTableId(tableId)) {
                 deletedTables.add(tableId);
             }
-            Optional<TableAssignment> optAssignment = zooKeeperClient.getTableAssignment(tableId);
-            if (optAssignment.isPresent()) {
-                TableAssignment tableAssignment = optAssignment.get();
-                loadAssignment(tableId, tableAssignment, null);
+            TableAssignment assignment = tableId2tableAssignmentMap.get(tableId);
+            if (assignment != null) {
+                loadAssignment(tableId, assignment, null);
             } else {
                 LOG.warn(
                         "Can't get the assignment for table {} with id {}.",
@@ -395,24 +427,25 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void loadPartitionAssignment() throws Exception {
         // load all assignment
-        List<String> partitionAssignmentNodes =
-                zooKeeperClient.getChildren(PartitionIdsZNode.path());
+        List<Long> partitionAssignmentNodes =
+                zooKeeperClient.getChildren(PartitionIdsZNode.path()).stream()
+                        .map(Long::parseLong)
+                        .collect(Collectors.toList());
         Set<TablePartition> deletedPartitions = new HashSet<>();
-        for (String partitionIdStr : partitionAssignmentNodes) {
-            long partitionId = Long.parseLong(partitionIdStr);
-            Optional<PartitionAssignment> optAssignment =
-                    zooKeeperClient.getPartitionAssignment(partitionId);
-            if (!optAssignment.isPresent()) {
+        Map<Long, PartitionAssignment> partitionId2partitionAssignmentMap =
+                zooKeeperClient.getPartitionsAssignments(partitionAssignmentNodes);
+        for (Long partitionId : partitionAssignmentNodes) {
+            PartitionAssignment assignment = partitionId2partitionAssignmentMap.get(partitionId);
+            if (assignment == null) {
                 LOG.warn("Can't get the assignment for table partition {}.", partitionId);
                 continue;
             }
-            PartitionAssignment partitionAssignment = optAssignment.get();
-            long tableId = partitionAssignment.getTableId();
+            long tableId = assignment.getTableId();
             // partition id doesn't exist in coordinator context, consider it as deleted
             if (!coordinatorContext.containsPartitionId(partitionId)) {
                 deletedPartitions.add(new TablePartition(tableId, partitionId));
             }
-            loadAssignment(tableId, optAssignment.get(), partitionId);
+            loadAssignment(tableId, assignment, partitionId);
         }
         coordinatorContext.queuePartitionDeletion(deletedPartitions);
     }
@@ -420,19 +453,25 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void loadAssignment(
             long tableId, TableAssignment tableAssignment, @Nullable Long partitionId)
             throws Exception {
+        Set<TableBucket> tableBucketSet = new HashSet<>();
         for (Map.Entry<Integer, BucketAssignment> entry :
                 tableAssignment.getBucketAssignments().entrySet()) {
             int bucketId = entry.getKey();
             BucketAssignment bucketAssignment = entry.getValue();
             // put the assignment information to context
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+            tableBucketSet.add(tableBucket);
             coordinatorContext.updateBucketReplicaAssignment(
                     tableBucket, bucketAssignment.getReplicas());
-            Optional<LeaderAndIsr> optLeaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket);
+        }
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrMap =
+                zooKeeperClient.getLeaderAndIsrs(tableBucketSet);
+        for (TableBucket tableBucket : tableBucketSet) {
+            LeaderAndIsr leaderAndIsr = leaderAndIsrMap.get(tableBucket);
             // update bucket LeaderAndIsr info
-            optLeaderAndIsr.ifPresent(
-                    leaderAndIsr ->
-                            coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr));
+            if (leaderAndIsr != null) {
+                coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+            }
         }
     }
 
