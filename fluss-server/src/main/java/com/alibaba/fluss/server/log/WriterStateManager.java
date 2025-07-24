@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.server.log.WriterStateEntry.BATCH_SEQUENCE_AFTER_EXPIRE;
 import static com.alibaba.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
 import static com.alibaba.fluss.utils.FlussPaths.writerSnapshotFile;
 
@@ -143,8 +144,7 @@ public class WriterStateManager {
      * UnknownWriterIdException} errors. Note that the log end offset is assumed to be less than or
      * equal to the high watermark.
      */
-    public void truncateAndReload(long logStartOffset, long logEndOffset, long currentTimeMs)
-            throws IOException {
+    public void truncateAndReload(long logStartOffset, long logEndOffset) throws IOException {
         // remove all out of range snapshots.
         for (SnapshotFile snapshot : snapshots.values()) {
             if (snapshot.offset > logEndOffset || snapshot.offset <= logStartOffset) {
@@ -154,7 +154,7 @@ public class WriterStateManager {
 
         if (logEndOffset != mapEndOffset()) {
             clearWriterIds();
-            loadFromSnapshot(logStartOffset, currentTimeMs);
+            loadFromSnapshot(logStartOffset);
         } else {
             if (lastMapOffset < logStartOffset) {
                 lastMapOffset = logStartOffset;
@@ -304,19 +304,14 @@ public class WriterStateManager {
         this.snapshots = snapshots;
     }
 
-    private void loadFromSnapshot(long logStartOffset, long currentTime) throws IOException {
+    private void loadFromSnapshot(long logStartOffset) throws IOException {
         while (true) {
             Optional<SnapshotFile> latestSnapshotFileOptional = latestSnapshotFile();
             if (latestSnapshotFileOptional.isPresent()) {
                 SnapshotFile snapshot = latestSnapshotFileOptional.get();
                 try {
                     LOG.info("Loading writer state from snapshot file '{}'", snapshot);
-                    Stream<WriterStateEntry> loadedWriters =
-                            readSnapshot(snapshot.file()).stream()
-                                    .filter(
-                                            writerStateEntry ->
-                                                    !isWriterExpired(
-                                                            currentTime, writerStateEntry));
+                    Stream<WriterStateEntry> loadedWriters = readSnapshot(snapshot.file()).stream();
                     loadedWriters.forEach(this::loadWriterEntry);
                     lastSnapOffset = snapshot.offset;
                     lastMapOffset = lastSnapOffset;
@@ -352,8 +347,13 @@ public class WriterStateManager {
     }
 
     private void removeWriterIds(List<Long> keys) {
-        keys.forEach(writers::remove);
-        writerIdCount = writers.size();
+        for (long writerId : keys) {
+            WriterStateEntry writerStateEntry = writers.get(writerId);
+            writerStateEntry.removeAllBatches();
+            // For writer id expiration, we add a batch with sequence BATCH_SEQUENCE_AFTER_EXPIRE to
+            // identify.
+            writerStateEntry.addBath(BATCH_SEQUENCE_AFTER_EXPIRE, -1L, 0, -1L);
+        }
     }
 
     private void clearWriterIds() {
