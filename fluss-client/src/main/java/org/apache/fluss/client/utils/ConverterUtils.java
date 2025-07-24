@@ -532,7 +532,13 @@ public class ConverterUtils<T> {
 
             return pojo;
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
-            LOG.error("Failed to create instance of POJO class {}.", pojoClass.getName(), e);
+            LOG.error(
+                    "Failed to create instance of POJO class {} using the default constructor. "
+                    + "Ensure the class has a public default constructor and that it is accessible. "
+                    + "Error: {}",
+                    pojoClass.getName(),
+                    e.getMessage(),
+                    e);
             return null;
         }
     }
