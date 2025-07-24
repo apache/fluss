@@ -112,7 +112,7 @@ public abstract class ServerITCaseBase {
     }
 
     private void waitUntilServerStartup(TestProcessBuilder.TestProcess process) {
-        CommonTestUtils.waitUtil(
+        CommonTestUtils.waitUntil(
                 () ->
                         process.getProcessOutput().toString().contains(SERVER_STARTED_MARKER)
                                 || !process.getErrorOutput().toString().isEmpty(),

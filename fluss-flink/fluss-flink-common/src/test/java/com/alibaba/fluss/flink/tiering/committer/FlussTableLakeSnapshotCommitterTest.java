@@ -74,7 +74,7 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         List<String> partitions;
         Map<String, Long> partitionNameAndIds = Collections.emptyMap();
         if (!isPartitioned) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
             partitions = Collections.singletonList(null);
         } else {
             partitionNameAndIds = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);

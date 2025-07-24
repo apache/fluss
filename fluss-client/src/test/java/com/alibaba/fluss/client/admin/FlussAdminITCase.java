@@ -613,7 +613,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             Map<Integer, CompletedSnapshot> expectedSnapshots = new HashMap<>();
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 CompletedSnapshot completedSnapshot =
-                        FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(
+                        FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(
                                 new TableBucket(tableId, bucket), 0);
                 expectedSnapshots.put(bucket, completedSnapshot);
             }
@@ -628,9 +628,9 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             upsertWriter.flush();
 
             TableBucket tb = new TableBucket(snapshots.getTableId(), 0);
-            // wait util the snapshot finish
+            // wait until the snapshot finish
             expectedSnapshots.put(
-                    tb.getBucket(), FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tb, 1));
+                    tb.getBucket(), FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tb, 1));
 
             // check snapshot
             snapshots = admin.getLatestKvSnapshots(tablePath1).get();

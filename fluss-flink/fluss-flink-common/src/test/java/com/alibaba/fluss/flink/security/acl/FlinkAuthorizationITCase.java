@@ -424,7 +424,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()))
                 .await();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(
                 Collections.singletonList(
                         new AclBinding(
                                 resource,
@@ -443,7 +443,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                 String.format("%s:%s", guest.getType(), guest.getName()),
                                 operationType.name()))
                 .await();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(
                 Collections.singletonList(
                         new AclBinding(
                                 resource,

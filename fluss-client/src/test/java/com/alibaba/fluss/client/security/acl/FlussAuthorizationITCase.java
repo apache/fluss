@@ -335,7 +335,7 @@ public class FlussAuthorizationITCase {
                                         OperationType.DESCRIBE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listDatabases().get()).isEqualTo(Collections.singletonList("fluss"));
 
         aclBindings =
@@ -348,7 +348,7 @@ public class FlussAuthorizationITCase {
                                         OperationType.ALL,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listDatabases().get())
                 .containsExactlyInAnyOrderElementsOf(
                         Lists.newArrayList("fluss", DATA1_TABLE_PATH_PK.getDatabaseName()));
@@ -397,7 +397,7 @@ public class FlussAuthorizationITCase {
                                         OperationType.DESCRIBE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
                 .isEqualTo(Collections.singletonList(DATA1_TABLE_PATH_PK.getTableName()));
     }
@@ -430,7 +430,7 @@ public class FlussAuthorizationITCase {
                                             OperationType.DESCRIBE,
                                             PermissionType.ALLOW)));
             rootAdmin.createAcls(aclBindings).all().get();
-            FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
             assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
                     .hasSize(1);
         }
@@ -445,7 +445,7 @@ public class FlussAuthorizationITCase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(writeAclTable, descriptor, false).get();
         TableInfo tableInfo = rootAdmin.getTableInfo(writeAclTable).get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableInfo.getTableId());
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableInfo.getTableId());
         // create acl to allow guest write.
         List<AclBinding> aclBindings =
                 Collections.singletonList(
@@ -457,7 +457,7 @@ public class FlussAuthorizationITCase {
                                         OperationType.WRITE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
 
         FlussConnection flussConnection = (FlussConnection) guestConn;
         TabletServerGateway tabletServerGateway =
@@ -506,9 +506,9 @@ public class FlussAuthorizationITCase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(writeAclTable, descriptor, false).get();
         rootAdmin.createTable(noWriteAclTable, descriptor, false).get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
                 rootAdmin.getTableInfo(writeAclTable).get().getTableId());
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
                 rootAdmin.getTableInfo(noWriteAclTable).get().getTableId());
 
         // create acl to allow guest write for writeAclTable.
@@ -528,9 +528,9 @@ public class FlussAuthorizationITCase {
                                 new AccessControlEntry(
                                         guestPrincipal, "*", READ, PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindingOfWriteAclTables).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindingOfWriteAclTables, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindingOfWriteAclTables, true);
         rootAdmin.createAcls(aclBindingOfNoWriteAclTables).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindingOfNoWriteAclTables, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindingOfNoWriteAclTables, true);
 
         // 1. Try to write data to noWriteAclTable. It should throw AuthorizationException because
         // of request writeId failed.
@@ -576,7 +576,7 @@ public class FlussAuthorizationITCase {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
         rootAdmin.createTable(DATA1_TABLE_PATH, descriptor, false).get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
                 rootAdmin.getTableInfo(DATA1_TABLE_PATH).get().getTableId());
         // create acl to allow guest write.
         List<AclBinding> aclBindings =
@@ -589,7 +589,7 @@ public class FlussAuthorizationITCase {
                                         OperationType.WRITE,
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUtilAuthenticationSync(aclBindings, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
         try (Table table = guestConn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
