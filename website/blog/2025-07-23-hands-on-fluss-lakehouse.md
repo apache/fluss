@@ -1,6 +1,6 @@
 ---
 slug: hands-on-fluss-lakehouse
-title: "Hands-on Fluss Lakehouse with Paimon S3"
+title: "From Stream to Lake: Hands-On with Fluss Tiering into Paimon on Minio"
 authors: [gyang94]
 toc_max_heading_level: 5
 ---
@@ -23,7 +23,7 @@ toc_max_heading_level: 5
  limitations under the License.
 -->
 
-# Hands-on Fluss Lakehouse with Paimon S3
+# From Stream to Lake: Hands-On with Fluss Tiering into Paimon on Minio
 
 Fluss stores historical data in a lakehouse storage layer while keeping real-time data in the Fluss server. Its built-in tiering service continuously moves fresh events into the lakehouse, allowing various query engines to analyze both hot and cold data. The real magic happens with Fluss's union-read capability, which lets Flink jobs seamlessly query both the Fluss cluster and the lakehouse for truly integrated real-time processing.
 
@@ -31,9 +31,9 @@ Fluss stores historical data in a lakehouse storage layer while keeping real-tim
 
 In this hands-on tutorial, we'll walk you through setting up a local Fluss lakehouse environment, running some practical data operations, and getting first-hand experience with the complete Fluss lakehouse architecture. By the end, you'll have a working environment for experimenting with Fluss's powerful data processing capabilities.
 
-## Integrate Paimon S3 Lakehouse
+## Integrate with Paimon Minio Lakehouse
 
-For this tutorial, we'll use **Fluss 0.7** and **Flink 1.20** to run the tiering service on a local cluster. We'll configure **Paimon** as our lake format and **S3** as the storage backend. Let's get started:
+For this tutorial, we'll use **Fluss 0.7** and **Flink 1.20** to run the tiering service on a local cluster. We'll configure **Paimon** as our lake format on **Minio** as the storage backend. Let's get started:
 
 ### Minio Setup
 
@@ -97,7 +97,7 @@ For this tutorial, we'll use **Fluss 0.7** and **Flink 1.20** to run the tiering
    datalake.paimon.s3.path.style.access: true
    ```
 
-   This configures Paimon as the datalake format with S3 as the warehouse.
+   This configures Paimon as the datalake format on Minio as the warehouse.
 
 4. Start Fluss
 
@@ -366,4 +366,4 @@ Now let's dive into some actual data processing. We'll use the Flink SQL Client 
 
 ## Summary
 
-In this guide, we've explored the Fluss lakehouse architecture and set up a complete local environment with Fluss, Flink, Paimon, and S3. We've walked through practical examples of data processing that showcase how Fluss seamlessly integrates real-time and historical data. With this setup, you now have a solid foundation for experimenting with Fluss's powerful lakehouse capabilities on your own machine.
+In this guide, we've explored the Fluss lakehouse architecture and set up a complete local environment with Fluss, Flink, Paimon, and Minio. We've walked through practical examples of data processing that showcase how Fluss seamlessly integrates real-time and historical data. With this setup, you now have a solid foundation for experimenting with Fluss's powerful lakehouse capabilities on your own machine.
