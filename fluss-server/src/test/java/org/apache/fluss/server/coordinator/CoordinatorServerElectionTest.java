@@ -64,7 +64,7 @@ class CoordinatorServerElectionTest {
         List<CoordinatorServer> coordinatorServerList =
                 Arrays.asList(coordinatorServer1, coordinatorServer2, coordinatorServer3);
 
-        waitUtilCoordinatorServerElected();
+        waitUntilCoordinatorServerElected();
 
         CoordinatorAddress firstLeaderAddress = zookeeperClient.getCoordinatorAddress().get();
 
@@ -82,7 +82,7 @@ class CoordinatorServerElectionTest {
         elected.close();
 
         // coordinator leader changed.
-        waitUtilCoordinatorServerReelected(firstLeaderAddress);
+        waitUntilCoordinatorServerReelected(firstLeaderAddress);
         CoordinatorAddress secondLeaderAddress = zookeeperClient.getCoordinatorAddress().get();
         assertThat(secondLeaderAddress).isNotEqualTo(firstLeaderAddress);
     }
@@ -107,16 +107,16 @@ class CoordinatorServerElectionTest {
         return configuration;
     }
 
-    public void waitUtilCoordinatorServerElected() {
+    public void waitUntilCoordinatorServerElected() {
         waitUtil(
                 () -> {
                     return zookeeperClient.getCoordinatorAddress().isPresent();
                 },
                 Duration.ofMinutes(1),
-                String.format("Fail to wait coordinator server elected"));
+                "Fail to wait coordinator server elected");
     }
 
-    public void waitUtilCoordinatorServerReelected(CoordinatorAddress address) {
+    public void waitUntilCoordinatorServerReelected(CoordinatorAddress address) {
         waitUtil(
                 () -> {
                     return zookeeperClient.getCoordinatorAddress().isPresent()
