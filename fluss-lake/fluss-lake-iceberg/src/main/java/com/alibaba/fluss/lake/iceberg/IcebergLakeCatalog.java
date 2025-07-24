@@ -22,12 +22,19 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.utils.IOUtils;
 
-import org.apache.iceberg.CatalogUtil;
+import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.Schema;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.Namespace;
+import org.apache.iceberg.catalog.SupportsNamespaces;
+import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -55,31 +62,113 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private static final String FLUSS_CONF_PREFIX = "fluss.";
     // for iceberg config
     private static final String ICEBERG_CONF_PREFIX = "iceberg.";
+    private static final String ICEBERG_CATALOG_PREFIX = "iceberg.catalog.";
 
     public IcebergLakeCatalog(Configuration configuration) {
-        Map<String, String> icebergConf = stripPrefix(configuration.toMap(), ICEBERG_CONF_PREFIX);
+        // Extract Iceberg catalog properties from Fluss configuration
+        Map<String, String> icebergProps =
+                configuration.toMap().entrySet().stream()
+                        .filter(e -> e.getKey().startsWith(ICEBERG_CATALOG_PREFIX))
+                        .collect(
+                                Collectors.toMap(
+                                        e -> e.getKey().substring(ICEBERG_CATALOG_PREFIX.length()),
+                                        Map.Entry::getValue));
+
+        String catalogType = icebergProps.get("type");
+        if (catalogType == null) {
+            throw new IllegalArgumentException(
+                    "Missing required Iceberg catalog type. Set 'iceberg.catalog.type' in your configuration (e.g., 'hive', 'hadoop', or 'rest').");
+        }
+        String catalogName = icebergProps.getOrDefault("name", "fluss-iceberg-catalog");
+
         this.icebergCatalog =
-                CatalogUtil.loadCatalog(
-                        "org.apache.iceberg.hive.HiveCatalog",
-                        "hive-iceberg",
-                        icebergConf,
-                        new org.apache.hadoop.conf.Configuration());
+                org.apache.iceberg.CatalogUtil.loadCatalog(
+                        catalogType,
+                        catalogName,
+                        icebergProps,
+                        null // Optional: pass Hadoop configuration if available
+                        );
     }
 
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws TableAlreadyExistException {}
+            throws TableAlreadyExistException {
+        TableIdentifier icebergId = toIcebergIdentifier(tablePath);
+        Schema icebergSchema = toIcebergSchema(tableDescriptor);
+        PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
 
-    @Override
-    public void close() throws Exception {
-        LakeCatalog.super.close();
+        Map<String, String> icebergProperties = new HashMap<>();
+        tableDescriptor
+                .getProperties()
+                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
+        tableDescriptor
+                .getCustomProperties()
+                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
+
+        // Create namespace if it does not exist
+        createDatabase(tablePath.getDatabaseName());
+
+        try {
+            createTable(icebergId, icebergSchema, partitionSpec, icebergProperties);
+        } catch (org.apache.iceberg.exceptions.AlreadyExistsException e) {
+            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+        }
     }
 
-    private Map<String, String> stripPrefix(Map<String, String> conf, String prefix) {
-        return conf.entrySet().stream()
-                .filter(e -> e.getKey().startsWith(prefix))
-                .collect(
-                        Collectors.toMap(
-                                e -> e.getKey().substring(prefix.length()), Map.Entry::getValue));
+    private void createTable(
+            TableIdentifier icebergId,
+            Schema icebergSchema,
+            PartitionSpec partitionSpec,
+            Map<String, String> icebergTableProperties)
+            throws org.apache.iceberg.exceptions.NoSuchNamespaceException,
+                    org.apache.iceberg.exceptions.AlreadyExistsException {
+
+        icebergCatalog.createTable(icebergId, icebergSchema, partitionSpec, icebergTableProperties);
+    }
+
+    private TableIdentifier toIcebergIdentifier(TablePath tablePath) {
+        return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    private Schema toIcebergSchema(TableDescriptor tableDescriptor) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    private Types convertFlussToIcebergType(DataTypes dataType) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    private PartitionSpec createPartitionSpec(
+            TableDescriptor tableDescriptor, Schema icebergSchema) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    private void setFlussPropertyToIceberg(
+            String key, String value, Map<String, String> icebergProperties) {
+
+        if (key.startsWith(ICEBERG_CONF_PREFIX)) {
+            icebergProperties.put(key.substring(ICEBERG_CONF_PREFIX.length()), value);
+        } else {
+            icebergProperties.put(FLUSS_CONF_PREFIX + key, value);
+        }
+    }
+
+    private void createDatabase(String databaseName) {
+        if (icebergCatalog instanceof SupportsNamespaces) {
+            SupportsNamespaces supportsNamespaces = (SupportsNamespaces) icebergCatalog;
+            try {
+                supportsNamespaces.createNamespace(Namespace.of(databaseName));
+            } catch (org.apache.iceberg.exceptions.AlreadyExistsException e) {
+                // Namespace/database already exists, nothing to do
+            }
+        } else {
+            throw new UnsupportedOperationException(
+                    "The underlying Iceberg catalog does not support namespace operations.");
+        }
+    }
+
+    @Override
+    public void close() {
+        IOUtils.closeQuietly((AutoCloseable) icebergCatalog, "fluss-iceberg-catalog");
     }
 }

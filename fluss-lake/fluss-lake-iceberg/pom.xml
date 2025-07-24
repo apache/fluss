@@ -33,7 +33,7 @@
     <packaging>jar</packaging>
 
     <properties>
-        <iceberg.version>1.9.1</iceberg.version>
+        <iceberg.version>1.4.3</iceberg.version>
     </properties>
 
     <dependencies>
@@ -43,17 +43,6 @@
             <version>${iceberg.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-hive-runtime</artifactId>
-            <version>${iceberg.hive.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.hive</groupId>
-            <artifactId>hive-metastore</artifactId>
-            <version>3.1.2</version>
-        </dependency>
-
-        <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
@@ -62,18 +51,6 @@
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
             <version>RELEASE</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testng</groupId>
-            <artifactId>testng</artifactId>
-            <version>7.11.0</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testng</groupId>
-            <artifactId>testng</artifactId>
-            <version>7.11.0</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
