@@ -43,6 +43,7 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.AddServerTagRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
@@ -67,6 +68,7 @@ import com.alibaba.fluss.rpc.messages.ListTablesResponse;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+import com.alibaba.fluss.rpc.messages.RemoveServerTagRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
@@ -471,13 +473,17 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
-        throw new UnsupportedOperationException("Support soon");
+        AddServerTagRequest request = new AddServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.addServerTag(request).thenApply(r -> null);
     }
 
     @Override
     public CompletableFuture<Void> removeServerTag(
             List<Integer> tabletServers, ServerTag serverTag) {
-        throw new UnsupportedOperationException("Support soon");
+        RemoveServerTagRequest request = new RemoveServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.removeServerTag(request).thenApply(r -> null);
     }
 
     @Override
