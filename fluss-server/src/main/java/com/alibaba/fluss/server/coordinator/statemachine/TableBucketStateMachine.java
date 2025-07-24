@@ -40,6 +40,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.controlledShutdownReplicaLeaderElection;
+import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.defaultReplicaLeaderElection;
+import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.CONTROLLED_SHUTDOWN_ELECTION;
+import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.DEFAULT_ELECTION;
+
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -85,7 +90,7 @@ public class TableBucketStateMachine {
                             .map(
                                     leaderAndIsr -> {
                                         // ONLINE if the leader is alive, otherwise, it's OFFLINE
-                                        if (coordinatorContext.isReplicaAndServerOnline(
+                                        if (coordinatorContext.isReplicaOnline(
                                                 leaderAndIsr.leader(), tableBucket)) {
                                             return BucketState.OnlineBucket;
                                         } else {
@@ -115,6 +120,13 @@ public class TableBucketStateMachine {
     }
 
     public void handleStateChange(Set<TableBucket> tableBuckets, BucketState targetState) {
+        handleStateChange(tableBuckets, targetState, DEFAULT_ELECTION);
+    }
+
+    public void handleStateChange(
+            Set<TableBucket> tableBuckets,
+            BucketState targetState,
+            ReplicaLeaderElectionStrategy replicaLeaderElectionStrategy) {
         try {
             coordinatorRequestBatch.newBatch();
 
@@ -123,7 +135,7 @@ public class TableBucketStateMachine {
                 batchHandleOnlineChangeAndInitLeader(tableBuckets);
             } else {
                 for (TableBucket tableBucket : tableBuckets) {
-                    doHandleStateChange(tableBucket, targetState);
+                    doHandleStateChange(tableBucket, targetState, replicaLeaderElectionStrategy);
                 }
             }
             coordinatorRequestBatch.sendRequestToTabletServers(
@@ -175,8 +187,12 @@ public class TableBucketStateMachine {
      *
      * @param tableBucket The table bucket that is to do state change
      * @param targetState the target state that is to change to
+     * @param replicaLeaderElectionStrategy the strategy to choose a new leader
      */
-    private void doHandleStateChange(TableBucket tableBucket, BucketState targetState) {
+    private void doHandleStateChange(
+            TableBucket tableBucket,
+            BucketState targetState,
+            ReplicaLeaderElectionStrategy replicaLeaderElectionStrategy) {
         coordinatorContext.putBucketStateIfNotExists(tableBucket, BucketState.NonExistentBucket);
         if (!checkValidTableBucketStateChange(tableBucket, targetState)) {
             return;
@@ -224,7 +240,8 @@ public class TableBucketStateMachine {
                     // current state is Online or Offline
                     // not new bucket, we then need to update leader/epoch for the bucket
                     Optional<ElectionResult> optionalElectionResult =
-                            electNewLeaderForTableBuckets(tableBucket);
+                            electNewLeaderForTableBuckets(
+                                    tableBucket, replicaLeaderElectionStrategy);
                     if (!optionalElectionResult.isPresent()) {
                         logFailedStateChange(tableBucket, currentState, targetState);
                     } else {
@@ -389,10 +406,7 @@ public class TableBucketStateMachine {
         // filter out the live servers
         List<Integer> liveServers =
                 assignedServers.stream()
-                        .filter(
-                                (server) ->
-                                        coordinatorContext.isReplicaAndServerOnline(
-                                                server, tableBucket))
+                        .filter((server) -> coordinatorContext.isReplicaOnline(server, tableBucket))
                         .collect(Collectors.toList());
         // todo, consider this case, may reassign with other servers?
         if (liveServers.isEmpty()) {
@@ -415,8 +429,7 @@ public class TableBucketStateMachine {
         // servers as inSyncReplica set.
         List<Integer> isr = liveServers;
         Optional<Integer> leaderOpt =
-                ReplicaLeaderElectionAlgorithms.defaultReplicaLeaderElection(
-                        assignedServers, liveServers, isr);
+                defaultReplicaLeaderElection(assignedServers, liveServers, isr);
         if (!leaderOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
@@ -449,7 +462,8 @@ public class TableBucketStateMachine {
         return registerSuccessList;
     }
 
-    private Optional<ElectionResult> electNewLeaderForTableBuckets(TableBucket tableBucket) {
+    private Optional<ElectionResult> electNewLeaderForTableBuckets(
+            TableBucket tableBucket, ReplicaLeaderElectionStrategy electionStrategy) {
         LeaderAndIsr leaderAndIsr;
         try {
             leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -469,7 +483,7 @@ public class TableBucketStateMachine {
         }
         // re-election
         Optional<ElectionResult> optionalElectionResult =
-                leaderForOffline(tableBucket, leaderAndIsr);
+                electLeader(tableBucket, leaderAndIsr, electionStrategy);
         if (!optionalElectionResult.isPresent()) {
             LOG.error(
                     "The result of elect leader for table bucket {} is empty.",
@@ -564,19 +578,29 @@ public class TableBucketStateMachine {
     }
 
     /**
-     * Elect a new leader for new or offline bucket, it'll always elect one from the live replicas
-     * in isr set.
+     * Elect a new leader for bucket, it'll always elect one from the live replicas in isr set.
+     *
+     * <p>The elect cases including:
+     *
+     * <ol>
+     *   <li>new or offline bucket
+     *   <li>tabletServer controlled shutdown
+     * </ol>
      */
-    private Optional<ElectionResult> leaderForOffline(
-            TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
+    private Optional<ElectionResult> electLeader(
+            TableBucket tableBucket,
+            LeaderAndIsr leaderAndIsr,
+            ReplicaLeaderElectionStrategy electionStrategy) {
         List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
         // filter out the live servers
         List<Integer> liveReplicas =
                 assignment.stream()
                         .filter(
                                 replica ->
-                                        coordinatorContext.isReplicaAndServerOnline(
-                                                replica, tableBucket))
+                                        coordinatorContext.isReplicaOnline(
+                                                replica,
+                                                tableBucket,
+                                                electionStrategy == CONTROLLED_SHUTDOWN_ELECTION))
                         .collect(Collectors.toList());
         // we'd like use the first live replica as the new leader
         if (liveReplicas.isEmpty()) {
@@ -584,9 +608,19 @@ public class TableBucketStateMachine {
             return Optional.empty();
         }
 
-        Optional<Integer> leaderOpt =
-                ReplicaLeaderElectionAlgorithms.defaultReplicaLeaderElection(
-                        assignment, liveReplicas, leaderAndIsr.isr());
+        Optional<Integer> leaderOpt = Optional.empty();
+        if (electionStrategy == DEFAULT_ELECTION) {
+            leaderOpt = defaultReplicaLeaderElection(assignment, liveReplicas, leaderAndIsr.isr());
+        } else if (electionStrategy == CONTROLLED_SHUTDOWN_ELECTION) {
+            Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
+            leaderOpt =
+                    controlledShutdownReplicaLeaderElection(
+                            assignment,
+                            leaderAndIsr.isr(),
+                            liveReplicas,
+                            shuttingDownTabletServers);
+        }
+
         if (!leaderOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
@@ -599,7 +633,18 @@ public class TableBucketStateMachine {
                 new LeaderAndIsr(
                         leaderOpt.get(),
                         leaderAndIsr.leaderEpoch() + 1,
-                        leaderAndIsr.isr(),
+                        leaderAndIsr.isr().stream()
+                                .filter(
+                                        isr -> {
+                                            if (electionStrategy == CONTROLLED_SHUTDOWN_ELECTION) {
+                                                return !coordinatorContext
+                                                        .shuttingDownTabletServers()
+                                                        .contains(isr);
+                                            } else {
+                                                return true;
+                                            }
+                                        })
+                                .collect(Collectors.toList()),
                         coordinatorContext.getCoordinatorEpoch(),
                         leaderAndIsr.bucketEpoch() + 1);
 

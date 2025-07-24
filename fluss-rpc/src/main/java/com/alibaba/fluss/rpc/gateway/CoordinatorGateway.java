@@ -26,6 +26,8 @@ import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import com.alibaba.fluss.rpc.messages.ControlledShutdownRequest;
+import com.alibaba.fluss.rpc.messages.ControlledShutdownResponse;
 import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
@@ -78,4 +80,9 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
     @RPC(api = ApiKeys.LAKE_TIERING_HEARTBEAT)
     CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
             LakeTieringHeartbeatRequest request);
+
+    /** Try to controlled shutdown for tabletServer with specify tabletServerId. */
+    @RPC(api = ApiKeys.CONTROLLED_SHUTDOWN)
+    CompletableFuture<ControlledShutdownResponse> controlledShutdown(
+            ControlledShutdownRequest request);
 }

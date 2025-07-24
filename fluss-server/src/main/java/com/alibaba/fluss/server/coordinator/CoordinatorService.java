@@ -48,6 +48,8 @@ import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import com.alibaba.fluss.rpc.messages.ControlledShutdownRequest;
+import com.alibaba.fluss.rpc.messages.ControlledShutdownResponse;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -85,6 +87,7 @@ import com.alibaba.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
+import com.alibaba.fluss.server.coordinator.event.ControlledShutdownEvent;
 import com.alibaba.fluss.server.coordinator.event.EventManager;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.LakeTieringTableInfo;
@@ -565,6 +568,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
         return CompletableFuture.completedFuture(heartbeatResponse);
+    }
+
+    @Override
+    public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
+            ControlledShutdownRequest request) {
+        CompletableFuture<ControlledShutdownResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new ControlledShutdownEvent(
+                                request.getTabletServerId(),
+                                request.getTabletServerEpoch(),
+                                response));
+        return response;
     }
 
     private void validateHeartbeatRequest(
