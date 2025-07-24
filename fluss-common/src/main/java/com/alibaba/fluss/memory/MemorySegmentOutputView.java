@@ -74,6 +74,9 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
+    public void write(int b) throws IOException {}
+
+    @Override
     public void write(byte[] b) throws IOException {
         write(b, 0, b.length);
     }
@@ -105,6 +108,9 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
         memorySegment.putShort(position, (short) v);
         position += 2;
     }
+
+    @Override
+    public void writeChar(int v) throws IOException {}
 
     @Override
     public void writeInt(int v) throws IOException {
@@ -149,6 +155,15 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
         memorySegment.putDouble(position, v);
         position += 8;
     }
+
+    @Override
+    public void writeBytes(String s) throws IOException {}
+
+    @Override
+    public void writeChars(String s) throws IOException {}
+
+    @Override
+    public void writeUTF(String s) throws IOException {}
 
     @Override
     public void write(MemorySegment segment, int off, int len) throws IOException {

@@ -359,6 +359,20 @@
                                         </exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <!-- start exclude for Row Type Foundation and related classes -->
+                                        <exclude>com.alibaba.fluss.types.RowType</exclude>
+                                        <exclude>com.alibaba.fluss.types.DataField</exclude>
+                                        <exclude>com.alibaba.fluss.flink.row.*</exclude>
+                                        <exclude>com.alibaba.fluss.row.indexed.*</exclude>
+                                        <exclude>com.alibaba.fluss.row.decode.*</exclude>
+                                        <exclude>com.alibaba.fluss.row.encode.*</exclude>
+                                        <exclude>com.alibaba.fluss.row.serializer.*</exclude>
+                                        <exclude>com.alibaba.fluss.utils.InternalRowUtils</exclude>
+                                        <exclude>com.alibaba.fluss.connector.flink.*</exclude>
+                                        <exclude>com.alibaba.fluss.cli.*</exclude>
+                                        <exclude>com.alibaba.fluss.fs.*</exclude>
+                                        <exclude>com.alibaba.fluss.format.*</exclude>
+                                        <!-- end exclude for Row Type Foundation and related classes -->
                                     </excludes>
                                 </rule>
                             </rules>
