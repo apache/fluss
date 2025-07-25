@@ -31,8 +31,7 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 /** A {@link LeafFunction} to eval not in. */
 public class NotIn extends LeafFunction {
 
-    private static final long serialVersionUID = 1L;
-
+    private static final long serialVersionUID = 8953845894700582887L;
     public static final NotIn INSTANCE = new NotIn();
 
     private NotIn() {}

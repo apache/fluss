@@ -30,7 +30,7 @@ import java.util.Optional;
 /** A {@link CompoundPredicate.Function} to eval or. */
 public class Or extends CompoundPredicate.Function {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = -2110346319473699418L;
 
     public static final Or INSTANCE = new Or();
 

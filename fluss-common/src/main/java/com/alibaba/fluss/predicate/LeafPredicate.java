@@ -34,7 +34,7 @@ import java.util.Optional;
 /** Leaf node of a {@link Predicate} tree. Compares a field in the row with literals. */
 public class LeafPredicate implements Predicate {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = -9033842253303772188L;
 
     private final LeafFunction function;
     private final DataType type;

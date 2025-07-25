@@ -31,7 +31,7 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 /** A {@link LeafFunction} to eval in. */
 public class In extends LeafFunction {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = -9115697441080586485L;
 
     public static final In INSTANCE = new In();
 
