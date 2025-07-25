@@ -28,7 +28,7 @@ public class TestingMetricGroups {
             new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "host", 0);
 
     public static final CoordinatorMetricGroup COORDINATOR_METRICS =
-            new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
+            new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", 0);
 
     public static final PhysicalTableMetricGroup TABLE_METRICS =
             new PhysicalTableMetricGroup(

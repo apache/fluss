@@ -249,6 +249,7 @@ public final class FlussClusterExtension
         if (coordinatorServer == null) {
             // if no coordinator server exists, create a new coordinator server and start
             Configuration conf = new Configuration(clusterConf);
+            conf.set(ConfigOptions.COORDINATOR_ID, 0);
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
             conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
             setRemoteDataDir(conf);

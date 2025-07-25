@@ -25,7 +25,7 @@ import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
-import com.alibaba.fluss.server.zk.data.ZkData.CoordinatorZNode;
+import com.alibaba.fluss.server.zk.data.ZkData;
 import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
 import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
@@ -95,7 +95,8 @@ public abstract class ServerTestBase {
         // get the EPHEMERAL node of server
         String path =
                 server instanceof CoordinatorServer
-                        ? CoordinatorZNode.path()
+                        ? ZkData.CoordinatorIdZNode.path(
+                                server.conf.getInt(ConfigOptions.COORDINATOR_ID))
                         : ServerIdZNode.path(server.conf.getInt(ConfigOptions.TABLET_SERVER_ID));
 
         long oldNodeCtime = zookeeperClient.getStat(path).get().getCtime();
@@ -143,6 +144,7 @@ public abstract class ServerTestBase {
     }
 
     public static CoordinatorServer startCoordinatorServer(Configuration conf) throws Exception {
+        conf.set(ConfigOptions.COORDINATOR_ID, 0);
         CoordinatorServer coordinatorServer = new CoordinatorServer(conf);
         coordinatorServer.start();
         return coordinatorServer;

@@ -97,7 +97,7 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getCoordinatorAddress()).isEmpty();
         CoordinatorAddress coordinatorAddress =
                 new CoordinatorAddress(
-                        "2", Endpoint.fromListenersString("CLIENT://localhost1:10012"));
+                        2, Endpoint.fromListenersString("CLIENT://localhost1:10012"));
         // register leader address
         zookeeperClient.registerCoordinatorLeader(coordinatorAddress);
         // check get leader address
