@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.predicate;
 
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.DataType;
 
 import java.util.List;
@@ -39,8 +38,8 @@ public class StartsWith extends NullFalseLeafBinaryFunction {
 
     @Override
     public boolean test(DataType type, Object field, Object patternLiteral) {
-        BinaryString fieldString = (BinaryString) field;
-        return fieldString.startsWith((BinaryString) patternLiteral);
+        String fieldString = field.toString();
+        return fieldString.startsWith((String) patternLiteral);
     }
 
     @Override
@@ -51,9 +50,9 @@ public class StartsWith extends NullFalseLeafBinaryFunction {
             Object max,
             Long nullCount,
             Object patternLiteral) {
-        BinaryString minStr = (BinaryString) min;
-        BinaryString maxStr = (BinaryString) max;
-        BinaryString pattern = (BinaryString) patternLiteral;
+        String minStr = min.toString();
+        String maxStr = max.toString();
+        String pattern = patternLiteral.toString();
         return (minStr.startsWith(pattern) || minStr.compareTo(pattern) <= 0)
                 && (maxStr.startsWith(pattern) || maxStr.compareTo(pattern) >= 0);
     }

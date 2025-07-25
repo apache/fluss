@@ -237,13 +237,30 @@ public class PredicateTest {
     @Test
     public void testEndsWith() {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
-        Predicate predicate = builder.endsWith(0, fromString("bcc"));
+        Predicate predicate = builder.endsWith(0, ("bcc"));
         GenericRow row = GenericRow.of(fromString("aabbcc"));
 
-        GenericRow max = GenericRow.of(fromString("aaba"));
-        GenericRow min = GenericRow.of(fromString("aabb"));
-        Integer[] nullCount = {null};
         assertThat(predicate.test(row)).isEqualTo(true);
+    }
+
+    @Test
+    public void testStartWith() {
+        PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
+        Predicate predicate = builder.startsWith(0, ("aab"));
+        GenericRow row = GenericRow.of(fromString("aabbcc"));
+
+        assertThat(predicate.test(row)).isEqualTo(true);
+    }
+
+    @Test
+    public void testContainsWith() {
+        PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
+        Predicate predicate = builder.contains(0, ("def"));
+        GenericRow row1 = GenericRow.of(fromString("aabbdefcc"));
+        GenericRow row2 = GenericRow.of(fromString("aabbdcefcc"));
+
+        assertThat(predicate.test(row1)).isEqualTo(true);
+        assertThat(predicate.test(row2)).isEqualTo(false);
     }
 
     @Test
