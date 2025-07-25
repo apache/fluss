@@ -188,7 +188,7 @@ public class ReplicaTestBase {
                 new TabletServerMetadataCache(new MetadataManager(zkClient, conf), zkClient);
         initMetadataCache(serverMetadataCache);
 
-        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance());
+        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false);
 
         snapshotReporter = new TestingCompletedKvSnapshotCommitter();
 

@@ -301,7 +301,11 @@ public class TieringSplitReader<WriteResult>
         if (lakeWriter == null) {
             lakeWriter =
                     lakeTieringFactory.createLakeWriter(
-                            new TieringWriterInitContext(currentTablePath, bucket, partitionName));
+                            new TieringWriterInitContext(
+                                    currentTablePath,
+                                    bucket,
+                                    partitionName,
+                                    currentTable.getTableInfo().getSchema()));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;

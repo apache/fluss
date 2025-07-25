@@ -62,7 +62,7 @@ class MessageCodecTest {
     @BeforeEach
     void beforeEach() {
         this.responseReceiver = new ResponseReceiver();
-        this.clientHandler = new NettyClientHandler(responseReceiver);
+        this.clientHandler = new NettyClientHandler(responseReceiver, false);
         this.requestChannel = new RequestChannel(100);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         this.serverHandler =

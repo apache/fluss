@@ -39,7 +39,8 @@ body:
       description: What Fluss version are you using?
       multiple: false
       options:
-        - "0.6.0 (latest release)"
+        - "0.7.0 (latest release)"
+        - "0.6.0"
         - "0.5.0"
         - "main (development)"
     validations:

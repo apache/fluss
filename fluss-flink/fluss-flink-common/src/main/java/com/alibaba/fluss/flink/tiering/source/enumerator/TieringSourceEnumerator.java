@@ -126,7 +126,7 @@ public class TieringSourceEnumerator
         FlinkMetricRegistry metricRegistry = new FlinkMetricRegistry(enumeratorMetricGroup);
         ClientMetricGroup clientMetricGroup =
                 new ClientMetricGroup(metricRegistry, "LakeTieringService");
-        this.rpcClient = RpcClient.create(flussConf, clientMetricGroup);
+        this.rpcClient = RpcClient.create(flussConf, clientMetricGroup, false);
         MetadataUpdater metadataUpdater = new MetadataUpdater(flussConf, rpcClient);
         this.coordinatorGateway =
                 GatewayClientProxy.createGatewayProxy(

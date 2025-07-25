@@ -41,14 +41,14 @@ much higher latency.
 
 Overall, these data lake formats typically achieve data freshness at best within minute-level granularity, even under optimal usage conditions.
 
-## Streaming Lakehouse: Streaming & Lakehouse Unification
+## Streaming Lakehouse: Unified Stream & Lakehouse
 
 Fluss is a streaming storage supporting streaming reads and writes with sub-second low latency.
 With [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md), Fluss unifies data streaming and data Lakehouse by serving real-time streaming data on top of Lakehouse.
 This not only brings low latency to data Lakehouse, but also adds powerful analytics to data streams.
 
 To build a Streaming Lakehouse, Fluss maintains a tiering service that compacts real-time data from the Fluss cluster into the data lake format stored in the Lakehouse Storage.
-The data in Fluss cluster (streaming Arrow format) is write-optimized for low-latency read and write, and the compacted data in Lakehouse (Parquet format with compressions) is read-optimized for powerful analytics and space-optimized for storing long-term data.
+The data in the Fluss cluster, stored in streaming Arrow format, is optimized for low-latency read and write operations, making it ideal for short-term data storage. In contrast, the compacted data in the Lakehouse, stored in Parquet format with higher compression, is optimized for efficient analytics and long-term storage.
 So the data in Fluss cluster serves real-time data layer which retains days with sub-second-level freshness, and the data in Lakehouse serves historical data layer which retains months with minute-level freshness.
 
 ![streamhouse](../assets/streamhouse.png)

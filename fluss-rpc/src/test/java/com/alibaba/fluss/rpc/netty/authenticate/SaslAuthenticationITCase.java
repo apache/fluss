@@ -206,7 +206,7 @@ public class SaslAuthenticationITCase {
                     new ServerNode(
                             1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
             try (NettyClient nettyClient =
-                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
                 ListTablesRequest request =
                         new ListTablesRequest().setDatabaseName("test-database");
                 ListTablesResponse listTablesResponse =

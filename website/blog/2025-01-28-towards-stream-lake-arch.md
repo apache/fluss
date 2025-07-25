@@ -1,6 +1,7 @@
 ---
 slug: unified-streaming-lakehouse
 title: "Towards A Unified Streaming & Lakehouse Architecture"
+sidebar_label: "Toward Streaming Lakehouse"
 authors: [yuxia]
 ---
 

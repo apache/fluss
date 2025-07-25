@@ -18,6 +18,7 @@
 package com.alibaba.fluss.lake.writer;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -53,4 +54,11 @@ public interface WriterInitContext {
      */
     @Nullable
     String partition();
+
+    /**
+     * Returns the table schema.
+     *
+     * @return the table schema
+     */
+    Schema schema();
 }

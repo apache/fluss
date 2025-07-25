@@ -250,14 +250,14 @@ public class FlinkTestBase extends AbstractTestBase {
                                 new TabletServerInfo(2, "rack2")
                             });
 
-            // register partition assignments
-            zkClient.registerPartitionAssignment(
+            // register partition assignments and metadata
+            zkClient.registerPartitionAssignmentAndMetadata(
                     partitionId,
+                    partition,
                     new PartitionAssignment(
-                            tableInfo.getTableId(), assignment.getBucketAssignments()));
-
-            // register partition
-            zkClient.registerPartition(tablePath, tableInfo.getTableId(), partition, partitionId);
+                            tableInfo.getTableId(), assignment.getBucketAssignments()),
+                    tablePath,
+                    tableInfo.getTableId());
         }
         return newPartitionIds;
     }

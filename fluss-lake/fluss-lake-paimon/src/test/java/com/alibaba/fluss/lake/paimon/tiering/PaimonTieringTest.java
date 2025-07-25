@@ -658,6 +658,12 @@ class PaimonTieringTest {
                     public String partition() {
                         return partition;
                     }
+
+                    @Override
+                    public com.alibaba.fluss.metadata.Schema schema() {
+                        throw new UnsupportedOperationException(
+                                "The lake writer in Paimon currently uses paimonCatalog to determine the schema.");
+                    }
                 });
     }
 

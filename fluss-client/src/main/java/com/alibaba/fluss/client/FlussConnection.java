@@ -79,7 +79,7 @@ public final class FlussConnection implements Connection {
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);
         this.metricRegistry = metricRegistry;
         this.clientMetricGroup = new ClientMetricGroup(metricRegistry, clientId);
-        this.rpcClient = RpcClient.create(conf, clientMetricGroup);
+        this.rpcClient = RpcClient.create(conf, clientMetricGroup, false);
 
         // TODO this maybe remove after we introduce client metadata.
         this.metadataUpdater = new MetadataUpdater(conf, rpcClient);

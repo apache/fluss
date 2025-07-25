@@ -36,7 +36,7 @@ public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
     }
 
     public TestCoordinatorChannelManager(Map<Integer, TabletServerGateway> gateways) {
-        super(RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance()));
+        super(RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance(), false));
         this.gateways = gateways;
     }
 

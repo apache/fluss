@@ -266,13 +266,18 @@ class TableManagerTest {
 
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, createAssignment().getBucketAssignments());
-        zookeeperClient.registerPartitionAssignment(
-                zookeeperClient.getPartitionIdAndIncrement(), partitionAssignment);
+        String partitionName = "2024";
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                zookeeperClient.getPartitionIdAndIncrement(),
+                partitionName,
+                partitionAssignment,
+                DATA1_TABLE_PATH,
+                tableId);
 
         // create partition
         long partitionId = 1L;
         tableManager.onCreateNewPartition(
-                DATA1_TABLE_PATH, tableId, partitionId, "2024", partitionAssignment);
+                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
 
         // all replicas should be online
         checkReplicaOnline(tableId, partitionId, partitionAssignment);

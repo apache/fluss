@@ -99,6 +99,7 @@ public class ProtobufMessage {
         generateZeroCopySize(w);
         generateParseFrom(w);
         generateIsLazilyParsed(w);
+        generateGetParsedByteBuf(w);
         generateCheckRequiredFields(w);
         generateClear(w);
         generateCopyFrom(w);
@@ -172,6 +173,14 @@ public class ProtobufMessage {
         w.format(
                 "            return %s;\n",
                 RecordsFieldFinder.hasRecordsField(message) ? "true" : "false");
+        w.format("        }\n");
+    }
+
+    private void generateGetParsedByteBuf(PrintWriter w) {
+        w.println();
+        w.println("       @Override");
+        w.format("        public ByteBuf getParsedByteBuf() {\n");
+        w.format("            return _parsedBuffer;\n");
         w.format("        }\n");
     }
 

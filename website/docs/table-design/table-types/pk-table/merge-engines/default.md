@@ -54,6 +54,8 @@ SELECT * FROM T WHERE k = 1;
 
 -- Update
 INSERT INTO T(k, v1, v2) VALUES (2, 2.0, 't2');
+-- Switch to batch mode to perform update operation for UPDATE statement is only supported for batch mode currently
+SET execution.runtime-mode = batch;
 UPDATE T SET v1 = 4.0 WHERE k = 2;
 SELECT * FROM T WHERE k = 2;
  -- Output:
@@ -83,7 +85,9 @@ SELECT * FROM T WHERE k = 3;
 +----+-----+----+
  
 -- Delete
-DELETE FROM T WHERE k > 2;
+DELETE FROM T WHERE k = 2;
+-- Switch to streaming mode
+SET execution.runtime-mode = streaming;
 SELECT * FROM T;
 -- Output:
 +----+-----+----+

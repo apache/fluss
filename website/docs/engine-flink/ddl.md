@@ -39,7 +39,7 @@ USE CATALOG fluss_catalog;
 
 The following properties can be set if using the Fluss catalog:
 
-| Option                         | Required | Default   | Description                                                                                                                                                                          | 
+| Option                         | Required | Default   | Description                                                                                                                                                                          |
 |--------------------------------|----------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | type                           | required | (none)    | Catalog type, must to be 'fluss' here.                                                                                                                                               |
 | bootstrap.servers              | required | (none)    | Comma separated list of Fluss servers.                                                                                                                                               |
@@ -238,6 +238,24 @@ DROP TABLE my_table;
 
 This will entirely remove all the data of the table in the Fluss cluster.
 
+## Add Partition
+
+Fluss support manually add partitions to an exists partitioned table by Fluss Catalog. If the specified partition 
+not exists, Fluss will create the partition. If the specified partition already exists, Fluss will ignore the request 
+or throw an exception.
+
+To add partitions, run:
+
+```sql title="Flink SQL"
+-- Add a partition to a single field partitioned table
+ALTER TABLE my_part_pk_table ADD PARTITION (dt = '2025-03-05');
+
+-- Add a partition to a multi-field partitioned table
+ALTER TABLE my_multi_fields_part_log_table ADD PARTITION (dt = '2025-03-05', nation = 'US');
+```
+
+For more details, refer to the [Flink ALTER TABLE(ADD)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#add) documentation.
+
 ## Show Partitions
 
 To show all the partitions of a partitioned table, run:
@@ -256,23 +274,6 @@ SHOW PARTITIONS my_multi_fields_part_log_table PARTITION (dt = '2025-03-05', nat
 ```
 
 For more details, refer to the [Flink SHOW PARTITIONS](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/show/#show-partitions) documentation.
-
-## Add Partition
-
-Fluss support manually add partitions to an exists partitioned table by Fluss Catalog. If the specified partition 
-not exists, Fluss will create the partition. If the specified partition already exists, Fluss will ignore the request 
-or throw an exception.
-
-To add partitions, run:
-```sql title="Flink SQL"
--- Add a partition to a single field partitioned table
-ALTER TABLE my_part_pk_table ADD PARTITION (dt = '2025-03-05');
-
--- Add a partition to a multi-field partitioned table
-ALTER TABLE my_multi_fields_part_log_table ADD PARTITION (dt = '2025-03-05', nation = 'US');
-```
-
-For more details, refer to the [Flink ALTER TABLE(ADD)](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/alter/#add) documentation.
 
 ## Drop Partition
 

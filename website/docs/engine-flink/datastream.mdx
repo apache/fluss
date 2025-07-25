@@ -262,7 +262,7 @@ In this example, `OrderPartial` is a class that only contains the `orderId` and 
 The main entry point for the Fluss DataStream Sink API is the `FlussSink` class. You create a `FlussSink` instance using the `FlussSinkBuilder`, which allows for step-by-step configuration of the sink connector.
 
 ```java
-FlinkSink<RowData> flussSink =
+FlussSink<RowData> flussSink =
         FlussSink.<RowData>builder()
                 .setBootstrapServers("localhost:9123")
                 .setDatabase("mydb")
