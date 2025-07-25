@@ -1075,12 +1075,16 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
 
         List<InternalRow> rows = new ArrayList<>();
-        List<String> expectedRowValues = new ArrayList<>();
+        List<String> expectedRowValues1 = new ArrayList<>();
+        List<String> expectedRowValues2 = new ArrayList<>();
 
         for (int i = 0; i < 10; i++) {
             rows.add(row(i, "v" + i, "2025", i * 100));
             if (i % 2 == 0) {
-                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+                expectedRowValues1.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+            }
+            if (i == 2) {
+                expectedRowValues2.add(String.format("+I[%d, 2025, %d]", i, i * 100));
             }
         }
         writeRows(conn, tablePath, rows, false);
@@ -1107,37 +1111,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
                         .collect();
 
-        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
-    }
+        assertResultsIgnoreOrder(rowIter, expectedRowValues1, true);
 
-    @Test
-    void testStreamingReadWithCombinedFilters2() throws Exception {
-        tEnv.executeSql(
-                "create table combined_filters_table"
-                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
-
-        List<InternalRow> rows = new ArrayList<>();
-        List<String> expectedRowValues = new ArrayList<>();
-
-        for (int i = 0; i < 10; i++) {
-            rows.add(row(i, "v" + i, "2025", i * 100));
-            if (i == 2) {
-                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
-            }
-        }
-        writeRows(conn, tablePath, rows, false);
-
-        for (int i = 0; i < 10; i++) {
-            rows.add(row(i, "v" + i, "2026", i * 100));
-        }
-
-        writeRows(conn, tablePath, rows, false);
-        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
-
-        String plan =
+        plan =
                 tEnv.explainSql(
                         "select a,c,d from combined_filters_table where c ='2025' and d = 200");
         assertThat(plan)
@@ -1147,12 +1123,12 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 + "project=[a, d]]], fields=[a, d])");
 
         // test column filter、partition filter and flink runtime filter
-        org.apache.flink.util.CloseableIterator<Row> rowIter =
+        rowIter =
                 tEnv.executeSql(
                                 "select a,c,d from combined_filters_table where c ='2025' and d = 200")
                         .collect();
 
-        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+        assertResultsIgnoreOrder(rowIter, expectedRowValues2, true);
     }
 
     @Test
