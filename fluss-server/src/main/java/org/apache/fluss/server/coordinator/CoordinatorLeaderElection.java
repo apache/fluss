@@ -43,7 +43,7 @@ public class CoordinatorLeaderElection {
         LeaderSelector leaderSelector =
                 new LeaderSelector(
                         zkClient,
-                        ZkData.CoordinatorLeaderZNode.path(),
+                        ZkData.CoordinatorElectionZNode.path(),
                         new LeaderSelectorListener() {
                             @Override
                             public void takeLeadership(CuratorFramework client) {

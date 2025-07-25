@@ -172,17 +172,25 @@ public class CoordinatorServer extends ServerBase {
         // "/coordinators/ids/1","/coordinators/ids/2","/coordinators/ids/3".
         // but the leader will be elected in path "/coordinators/leader" additionally.
         registerCoordinatorServer();
+        ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
+                zkClient, this::registerCoordinatorServer, this);
 
-        CoordinatorLeaderElection coordinatorLeaderElection =
-                new CoordinatorLeaderElection(zkClient.getCuratorClient(), serverId);
-        coordinatorLeaderElection.startElectLeader(
-                () -> {
-                    try {
-                        startCoordinatorLeaderService();
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                });
+        // try to register Coordinator leader once
+        if (tryElectCoordinatorLeaderOnce()) {
+            startCoordinatorLeaderService();
+        } else {
+            // standby
+            CoordinatorLeaderElection coordinatorLeaderElection =
+                    new CoordinatorLeaderElection(zkClient.getCuratorClient(), serverId);
+            coordinatorLeaderElection.startElectLeader(
+                    () -> {
+                        try {
+                            startCoordinatorLeaderService();
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
     }
 
     protected void startCoordinatorLeaderService() throws Exception {
@@ -249,9 +257,9 @@ public class CoordinatorServer extends ServerBase {
             rpcServer.start();
 
             registerCoordinatorLeader();
-            //            // when init session, register coordinator server again
-            //            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
-            //                    zkClient, this::registerCoordinatorLeader, this);
+            // when init session, register coordinator server again
+            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
+                    zkClient, this::registerCoordinatorLeader, this);
 
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
@@ -336,6 +344,19 @@ public class CoordinatorServer extends ServerBase {
                     break;
                 }
             }
+        }
+    }
+
+    private boolean tryElectCoordinatorLeaderOnce() throws Exception {
+        try {
+            zkClient.electCoordinatorLeader();
+            LOG.info("Coordinator server {} win the leader in election now.", serverId);
+            return true;
+        } catch (KeeperException.NodeExistsException nodeExistsException) {
+            LOG.warn(
+                    "Coordinator leader already registered in Zookeeper. Coordinator {} will be standby",
+                    serverId);
+            return false;
         }
     }
 

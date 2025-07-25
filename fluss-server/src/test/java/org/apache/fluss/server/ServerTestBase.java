@@ -144,16 +144,6 @@ public abstract class ServerTestBase {
         conf.set(ConfigOptions.COORDINATOR_ID, 0);
         CoordinatorServer coordinatorServer = new CoordinatorServer(conf);
         coordinatorServer.start();
-        waitUntilCoordinatorLeaderElected();
         return coordinatorServer;
-    }
-
-    private static void waitUntilCoordinatorLeaderElected() {
-        waitUtil(
-                () -> {
-                    return zookeeperClient.getCoordinatorAddress().isPresent();
-                },
-                Duration.ofSeconds(30),
-                "Fail to wait coordinator server elected");
     }
 }

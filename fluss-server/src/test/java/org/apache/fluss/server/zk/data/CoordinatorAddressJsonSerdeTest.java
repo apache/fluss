@@ -49,7 +49,7 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"id\":\"1\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
+            "{\"version\":2,\"id\":1,\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
         };
     }
 
@@ -58,7 +58,7 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
         JsonNode jsonInVersion1 =
                 new ObjectMapper()
                         .readTree(
-                                "{\"version\":1,\"id\":\"1\",\"host\":\"localhost\",\"port\":1001}"
+                                "{\"version\":1,\"id\":1,\"host\":\"localhost\",\"port\":1001}"
                                         .getBytes(StandardCharsets.UTF_8));
 
         CoordinatorAddress coordinatorAddress =

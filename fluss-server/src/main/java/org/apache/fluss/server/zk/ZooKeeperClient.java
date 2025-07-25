@@ -186,9 +186,18 @@ public class ZooKeeperClient implements AutoCloseable {
      * Register a coordinator leader to ZK. Don't need to create node because leader election
      * process already do it.
      */
+    public void electCoordinatorLeader() throws Exception {
+        String path = ZkData.CoordinatorElectionZNode.path();
+        zkClient.create().creatingParentsIfNeeded().withMode(CreateMode.EPHEMERAL).forPath(path);
+    }
+
+    /** Register a coordinator leader to ZK. */
     public void registerCoordinatorLeader(CoordinatorAddress coordinatorAddress) throws Exception {
         String path = ZkData.CoordinatorLeaderZNode.path();
-        zkClient.setData().forPath(path, ZkData.CoordinatorLeaderZNode.encode(coordinatorAddress));
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.EPHEMERAL)
+                .forPath(path, ZkData.CoordinatorLeaderZNode.encode(coordinatorAddress));
         LOG.info("Registered Coordinator leader {} at path {}.", coordinatorAddress, path);
     }
 

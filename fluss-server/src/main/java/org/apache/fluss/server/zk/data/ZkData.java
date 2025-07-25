@@ -325,6 +325,17 @@ public final class ZkData {
     }
 
     /**
+     * The znode for the coordinator leader election. The znode path is:
+     *
+     * <p>/coordinators/election
+     */
+    public static final class CoordinatorElectionZNode {
+        public static String path() {
+            return "/coordinators/election";
+        }
+    }
+
+    /**
      * The znode for the active coordinator leader. The znode path is:
      *
      * <p>/coordinators/leader
