@@ -54,7 +54,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Helper class for converting Java POJOs to Fluss's {@link InternalRow} format and vice versa.
+ * Helper class for converting Java objects to Fluss's {@link InternalRow} format and vice versa.
  *
  * <p>This utility uses reflection to map fields from POJOs to InternalRow and back based on a given
  * schema. It includes caching mechanisms to avoid repeated reflection operations for the same POJO
@@ -63,8 +63,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Example usage:
  *
  * <pre>{@code
- * // Create a converter
- * ConverterUtils<Order> converter = new ConverterUtils<>(Order.class, rowType);
+ * // Create a converter using the static factory method
+ * ConverterUtils<Order> converter = ConverterUtils.getConverter(Order.class, rowType);
  *
  * // Convert a POJO to GenericRow
  * Order order = new Order(1001L, 5001L, 10, "123 Athens");
@@ -138,7 +138,7 @@ public class ConverterUtils<T> {
      * @param rowType The row schema to use for conversion
      */
     @SuppressWarnings("unchecked")
-    public ConverterUtils(Class<T> pojoClass, RowType rowType) {
+    private ConverterUtils(Class<T> pojoClass, RowType rowType) {
         this.pojoClass = pojoClass;
         this.rowType = rowType;
 
@@ -198,11 +198,10 @@ public class ConverterUtils<T> {
                 // Create the appropriate converter for this field
                 converters[i] = createFieldToRowConverter(fieldType, field);
             } else {
-                LOG.warn(
-                        "Field '{}' not found in POJO class {}. Will return null for this field.",
-                        fieldName,
-                        pojoClass.getName());
-                converters[i] = obj -> null;
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' not found in POJO class %s.",
+                                fieldName, pojoClass.getName()));
             }
         }
 
@@ -222,7 +221,11 @@ public class ConverterUtils<T> {
                 converters[i] = createRowToFieldConverter(fieldType, field);
             } else {
                 // Field not found in POJO
-                converters[i] = (row, pos) -> null;
+                String fieldName = rowType.getFieldNames().get(i);
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' not found in POJO class %s.",
+                                fieldName, pojoClass.getName()));
             }
         }
 
@@ -363,11 +366,10 @@ public class ConverterUtils<T> {
                     }
                 };
             default:
-                LOG.warn(
-                        "Unsupported type {} for field {}. Will use null for it.",
-                        fieldType.getTypeRoot(),
-                        field.getName());
-                return obj -> null;
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Unsupported type %s for field %s.",
+                                fieldType.getTypeRoot(), field.getName()));
         }
     }
 

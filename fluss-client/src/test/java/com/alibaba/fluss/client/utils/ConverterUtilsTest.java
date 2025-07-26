@@ -26,7 +26,6 @@ import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
@@ -74,7 +73,7 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
     @Test
     public void testToRow() {
         ConverterUtils<TestPojo> converter =
-                new ConverterUtils<>(TestPojo.class, createTestPojoRowType());
+                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         TestPojo pojo = createTestPojo();
 
@@ -107,7 +106,7 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
     @Test
     public void testFromRow() {
         ConverterUtils<TestPojo> converter =
-                new ConverterUtils<>(TestPojo.class, createTestPojoRowType());
+                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         TestPojo originalPojo = createTestPojo();
 
@@ -140,7 +139,7 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
     @Test
     public void testNullValues() {
         ConverterUtils<TestPojo> converter =
-                new ConverterUtils<>(TestPojo.class, createTestPojoRowType());
+                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         assertThat(converter.toRow(null)).isNull();
 
@@ -191,36 +190,12 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
                         .field("extraField", DataTypes.DOUBLE()) // Not in POJO
                         .build();
 
-        // Create a converter
-        ConverterUtils<PartialTestPojo> converter =
-                new ConverterUtils<>(PartialTestPojo.class, rowType);
-
-        // Create a test POJO
-        PartialTestPojo pojo = new PartialTestPojo(true, 42, "Hello");
-
-        // Convert to row
-        GenericRow row = converter.toRow(pojo);
-
-        // Verify the row
-        assertThat(row).isNotNull();
-        assertThat(row.getFieldCount()).isEqualTo(4);
-        assertThat(row.getBoolean(0)).isEqualTo(true);
-        assertThat(row.getInt(1)).isEqualTo(42);
-        assertThat(row.getString(2).toString()).isEqualTo("Hello");
-        assertThat(row.getField(3)).isNull(); // Extra field is null
-
-        // Create a row with an extra field
-        GenericRow rowWithExtra = new GenericRow(4);
-        rowWithExtra.setField(0, true);
-        rowWithExtra.setField(1, 42);
-        rowWithExtra.setField(2, BinaryString.fromString("Hello"));
-        rowWithExtra.setField(3, 3.14); // Extra field
-
-        PartialTestPojo convertedPojo = converter.fromRow(rowWithExtra);
-
-        // Verify the POJO
-        assertThat(convertedPojo).isNotNull();
-        assertThat(convertedPojo).isEqualTo(pojo); // Extra field is ignored
+        // Expect an IllegalArgumentException when creating a converter with a field not in the POJO
+        assertThat(
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                IllegalArgumentException.class,
+                                () -> ConverterUtils.getConverter(PartialTestPojo.class, rowType)))
+                .hasMessageContaining("Field 'extraField' not found in POJO class");
     }
 
     @Test
@@ -233,7 +208,7 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
                         .field("stringField", DataTypes.STRING())
                         .build();
 
-        ConverterUtils<TestPojo> converter = new ConverterUtils<>(TestPojo.class, rowType);
+        ConverterUtils<TestPojo> converter = ConverterUtils.getConverter(TestPojo.class, rowType);
 
         TestPojo pojo = createTestPojo();
 
@@ -298,9 +273,8 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
 
         // Create a converter for TestPojo
         ConverterUtils<TestPojo> converter =
-                new ConverterUtils<>(TestPojo.class, createTestPojoRowType());
+                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
-        // Create 5 test POJOs
         List<TestPojo> originalPojos = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
             originalPojos.add(createTestPojo());
@@ -345,7 +319,6 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
                         break;
                     }
                 }
-                // Assert that we found a matching POJO
                 assertThat(found)
                         .withFailMessage(
                                 "Could not find matching POJO: " + originalPojo.stringField)

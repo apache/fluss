@@ -271,9 +271,11 @@ The `ConverterUtils` class is a helper utility for converting Java POJOs to Flus
 Here's an example of how to use `ConverterUtils` to convert between POJOs and Fluss rows:
 
 ```java
-// Define your POJO class
+// Define your POJO class with a Default Constructor
 public class Order {
- ...
+ public Order() {}
+ 
+ ......
 }
 
 // Create a schema that matches your POJO
@@ -296,8 +298,8 @@ RowType rowType = RowType.of(
         },
         new String[] {"orderId", "customerId", "quantity", "address", "orderTime"});
 
-// Create a converter for your POJO class
-ConverterUtils<Order> converter = new ConverterUtils<>(Order.class, rowType);
+// Create a converter for your POJO class using the static factory method
+ConverterUtils<Order> converter = ConverterUtils.getConverter(Order.class, rowType);
 
 // Convert a POJO to a GenericRow
 Order order = new Order(1001L, 5001L, 10, "123 Athens", LocalDateTime.now());
