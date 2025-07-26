@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ConverterUtils}. */
 public class ConverterUtilsTest extends ClientToServerITCaseBase {
@@ -191,10 +192,8 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
                         .build();
 
         // Expect an IllegalArgumentException when creating a converter with a field not in the POJO
-        assertThat(
-                        org.junit.jupiter.api.Assertions.assertThrows(
-                                IllegalArgumentException.class,
-                                () -> ConverterUtils.getConverter(PartialTestPojo.class, rowType)))
+        assertThatThrownBy(() -> ConverterUtils.getConverter(PartialTestPojo.class, rowType))
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Field 'extraField' not found in POJO class");
     }
 
