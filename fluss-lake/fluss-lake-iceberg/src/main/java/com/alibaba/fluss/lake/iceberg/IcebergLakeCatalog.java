@@ -22,9 +22,8 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.utils.IOUtils;
-
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.catalog.Catalog;
@@ -34,8 +33,10 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -131,16 +132,81 @@ public class IcebergLakeCatalog implements LakeCatalog {
     }
 
     private Schema toIcebergSchema(TableDescriptor tableDescriptor) {
-        throw new UnsupportedOperationException("Not implemented");
+        List<Types.NestedField> fields = new ArrayList<>();
+        int fieldId = 1; // Start user field IDs from 1
+
+        for (com.alibaba.fluss.metadata.Schema.Column column :
+                tableDescriptor.getSchema().getColumns()) {
+            String colName = column.getName();
+            if (SYSTEM_COLUMNS.containsKey(colName)) {
+                throw new IllegalArgumentException(
+                        "Column '" + colName + "' conflicts with a reserved system column name.");
+            }
+            fields.add(
+                    Types.NestedField.optional(
+                            fieldId++, colName, convertFlussToIcebergType(column.getDataType())));
+        }
+
+        // Add Fluss system columns with fixed high field IDs
+        fields.add(
+                Types.NestedField.optional(fieldId, BUCKET_COLUMN_NAME, Types.IntegerType.get()));
+        fields.add(
+                Types.NestedField.optional(fieldId + 1, OFFSET_COLUMN_NAME, Types.LongType.get()));
+        fields.add(
+                Types.NestedField.optional(
+                        fieldId + 2, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone()));
+
+        return new Schema(fields);
     }
 
-    private Types convertFlussToIcebergType(DataTypes dataType) {
-        throw new UnsupportedOperationException("Not implemented");
+    private Type convertFlussToIcebergType(DataType dataType) {
+        if (dataType.equals("INT")) {
+            return Types.IntegerType.get();
+        } else if (dataType.equals("BIGINT")) {
+            return Types.LongType.get();
+        } else if (dataType.equals("STRING")) {
+            return Types.StringType.get();
+        } else if (dataType.equals("TIMESTAMP")) {
+            return Types.TimestampType.withZone();
+        } else if (dataType.equals("BOOLEAN")) {
+            return Types.BooleanType.get();
+        } else if (dataType.equals("DOUBLE")) {
+            return Types.DoubleType.get();
+        } else if (dataType.equals("FLOAT")) {
+            return Types.FloatType.get();
+        } else if (dataType.equals("DATE")) {
+            return Types.DateType.get();
+        }
+        throw new UnsupportedOperationException("Unsupported Fluss data type: " + dataType);
     }
 
     private PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema) {
-        throw new UnsupportedOperationException("Not implemented");
+        PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
+
+        // Add partition keys as identity partitions
+        for (String partitionKey : tableDescriptor.getPartitionKeys()) {
+            builder.identity(partitionKey);
+        }
+
+        // For bucketing: only support a single bucket key for Iceberg currently
+        List<String> bucketKeys = tableDescriptor.getBucketKeys();
+        if (bucketKeys.size() == 1) {
+            int bucketCount =
+                    tableDescriptor
+                            .getTableDistribution()
+                            .flatMap(td -> td.getBucketCount())
+                            .orElseThrow(
+                                    () ->
+                                            new IllegalArgumentException(
+                                                    "Bucket count must be set for bucketing."));
+            builder.bucket(bucketKeys.get(0), bucketCount);
+        } else if (bucketKeys.size() > 1) {
+            throw new UnsupportedOperationException(
+                    "Multiple bucket keys are not supported for Iceberg partition spec.");
+        }
+
+        return builder.build();
     }
 
     private void setFlussPropertyToIceberg(
