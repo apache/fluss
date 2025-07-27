@@ -18,10 +18,9 @@
 package com.alibaba.fluss.rpc.netty.client;
 
 import com.alibaba.fluss.cluster.ServerNode;
-import com.alibaba.fluss.exception.DisconnectException;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.exception.NetworkException;
-import com.alibaba.fluss.exception.RetriableAuthenticationException;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.*;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
@@ -68,8 +67,9 @@ final class ServerConnection {
 
     private final ServerNode node;
 
-    // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
+    @GuardedBy("lock")
     private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
+
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetricGroup connectionMetricGroup;
     private final ClientAuthenticator authenticator;
@@ -98,7 +98,10 @@ final class ServerConnection {
     @GuardedBy("lock")
     private int retryAuthCount = 0;
 
+    private final int maxInflightRequestPerConnection;
+
     ServerConnection(
+            Configuration conf,
             Bootstrap bootstrap,
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
@@ -106,6 +109,18 @@ final class ServerConnection {
             boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
+
+        this.maxInflightRequestPerConnection =
+                conf.getInt(ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_CONNECTION);
+
+        if (maxInflightRequestPerConnection <= 0) {
+            throw new IllegalConfigurationException(
+                    "The value of "
+                            + ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_CONNECTION.key()
+                            + " must be greater than 0, but was: "
+                            + maxInflightRequestPerConnection);
+        }
+
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         bootstrap
                 .connect(node.host(), node.port())
@@ -241,6 +256,7 @@ final class ServerConnection {
                         response.totalSize());
                 request.responseFuture.complete(response);
             }
+            processPendingRequests();
         }
 
         @Override
@@ -251,6 +267,7 @@ final class ServerConnection {
                         ApiKeys.forId(request.apiKey), request.requestStartTime, 0);
                 request.responseFuture.completeExceptionally(cause);
             }
+            processPendingRequests();
         }
 
         @Override
@@ -310,6 +327,12 @@ final class ServerConnection {
                         new PendingRequest(apiKey, rawRequest, isInternalRequest, responseFuture));
                 return responseFuture;
             }
+            // 3. connection is ready but non-internal requests reach max inflight limit:
+            // non-internal requests are queued
+            if (!isInternalRequest && inflightRequests.size() >= maxInflightRequestPerConnection) {
+                pendingRequests.add(new PendingRequest(apiKey, rawRequest, false, responseFuture));
+                return responseFuture;
+            }
 
             // version equals highestSupportedVersion might happen when requesting api version check
             // before serverApiVersions is  initialized. We always use the highest version for api
@@ -366,6 +389,50 @@ final class ServerConnection {
                                         }
                                     });
             return inflight.responseFuture;
+        }
+    }
+
+    /**
+     * Process pending requests in the queue, sending them if possible.
+     *
+     * <p>This method will:
+     *
+     * <ul>
+     *   <li>1. Process requests when connection is ready and queue is not empty
+     *   <li>2. Prioritize internal requests over non-internal requests
+     *   <li>3. Respect the max in-flight requests limit for non-internal requests
+     *   <li>4. Stop processing when:
+     *       <ul>
+     *         <li>- Connection is not ready
+     *         <li>- No more pending requests
+     *         <li>- Next non-internal request cannot be sent due to in-flight limit
+     *       </ul>
+     * </ul>
+     */
+    private void processPendingRequests() {
+        while (true) {
+            PendingRequest pending;
+            synchronized (lock) {
+                if (!state.isReady() || pendingRequests.isEmpty()) {
+                    return;
+                }
+                PendingRequest peek = pendingRequests.peekFirst();
+                boolean inflightFull = inflightRequests.size() >= maxInflightRequestPerConnection;
+                if (!peek.isInternalRequest && inflightFull) {
+                    return;
+                }
+
+                pending = pendingRequests.pollFirst();
+            }
+
+            if (pending == null) {
+                return;
+            }
+            doSend(
+                    pending.apikey,
+                    pending.request,
+                    pending.responseFuture,
+                    pending.isInternalRequest);
         }
     }
 
@@ -468,14 +535,7 @@ final class ServerConnection {
         state = targetState;
         if (targetState == ConnectionState.READY) {
             // process pending requests
-            PendingRequest pending;
-            while ((pending = pendingRequests.pollFirst()) != null) {
-                doSend(
-                        pending.apikey,
-                        pending.request,
-                        pending.responseFuture,
-                        pending.isInternalRequest);
-            }
+            processPendingRequests();
         }
     }
 

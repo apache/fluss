@@ -22,6 +22,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.IllegalConfigurationException;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
 import com.alibaba.fluss.rpc.TestingGatewayService;
@@ -41,6 +42,8 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -230,6 +233,28 @@ final class NettyClientTest {
                         .get();
                 assertThat(client.connections().size()).isEqualTo(1);
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void testInvalidMaxInflightRequestsPerConnectionConfig(int invalidValue) throws Exception {
+        Configuration invalidConf = new Configuration();
+        invalidConf.setInt(
+                ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_CONNECTION, invalidValue);
+
+        try (NettyClient client =
+                new NettyClient(invalidConf, TestingClientMetricGroup.newInstance(), false)) {
+            ApiVersionsRequest request =
+                    new ApiVersionsRequest()
+                            .setClientSoftwareName("testing_client")
+                            .setClientSoftwareVersion("1.0");
+
+            assertThatThrownBy(
+                            () ->
+                                    client.sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
+                                            .get())
+                    .isInstanceOf(IllegalConfigurationException.class);
         }
     }
 

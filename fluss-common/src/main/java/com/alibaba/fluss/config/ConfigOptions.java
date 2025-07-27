@@ -937,6 +937,15 @@ public class ConfigOptions {
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
                                     + "requests to complete before sending out new requests.");
 
+    public static final ConfigOption<Integer> CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_CONNECTION =
+            key("client.writer.max-inflight-requests-per-connection")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of requests that can be sent concurrently on a single connection. "
+                                    + "If the number of inflight requests exceeds this limit, subsequent requests are queued until earlier responses are received. "
+                                    + "The default value is 5.");
+
     public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED =
             key("client.writer.dynamic-create-partition.enabled")
                     .booleanType()
