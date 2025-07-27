@@ -130,8 +130,8 @@ be generated. For example, the following Flink SQL statements illustrate this be
 SET execution.runtime-mode = batch;
 
 -- insert to records with the same primary key k=1
-INSERT INTO T (k, v1) VALUES (1, 2.0,'apple');
-INSERT INTO T (k, v1) VALUES (1, 4.0,'banana');
+INSERT INTO T (k, v1, v2) VALUES (1, 2.0, 'apple');
+INSERT INTO T (k, v1, v2) VALUES (1, 4.0, 'banana');
 
 -- delete the record with primary key k=1
 DELETE FROM T WHERE k = 1;
@@ -144,14 +144,14 @@ SELECT * FROM T;
 Generate the following output in the Flink SQL CLI:
 
 ```
-+-----------------------------+
++------+------+------+--------+
 | op   | k    | v1   | v2     |
 | ---- | ---- | ---- | ------ |
 | +I   | 1    | 2.0  | apple  |
 | -U   | 1    | 2.0  | apple  |
 | +U   | 1    | 4.0  | banana |
 | -D   | 1    | 4.0  | banana |
-+-----------------------------+
++------+------+------+--------+
 4 rows in set
 ```
 
