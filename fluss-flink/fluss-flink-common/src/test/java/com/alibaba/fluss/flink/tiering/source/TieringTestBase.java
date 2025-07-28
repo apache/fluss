@@ -205,7 +205,7 @@ public class TieringTestBase extends AbstractTestBase {
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         long tableId = admin.getTableInfo(tablePath).get().getTableId();
-        FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         return tableId;
     }
 
@@ -228,7 +228,7 @@ public class TieringTestBase extends AbstractTestBase {
         for (Map.Entry<String, Long> entry : partitionNameByIds.entrySet()) {
             for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
                 TableBucket tableBucket = new TableBucket(tableId, entry.getValue(), i);
-                FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tableBucket, snapshotId);
+                FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
             }
         }
     }
@@ -236,7 +236,7 @@ public class TieringTestBase extends AbstractTestBase {
     protected void waitUntilSnapshot(long tableId, @Nullable Long partitionId, long snapshotId) {
         for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tableBucket, snapshotId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 

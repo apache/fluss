@@ -69,7 +69,7 @@ import java.util.Optional;
 import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -167,7 +167,7 @@ public class FlinkPaimonTieringTestBase {
     protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
         for (int i = 0; i < bucketNum; i++) {
             TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tableBucket, snapshotId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 
@@ -408,26 +408,26 @@ public class FlinkPaimonTieringTestBase {
                 });
     }
 
-    protected void waitUtilBucketSynced(
+    protected void waitUntilBucketSynced(
             TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
         if (isPartition) {
             Map<Long, String> partitionById = waitUntilPartitions(tablePath);
             for (Long partitionId : partitionById.keySet()) {
                 for (int i = 0; i < bucketCount; i++) {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-                    waitUtilBucketSynced(tableBucket);
+                    waitUntilBucketSynced(tableBucket);
                 }
             }
         } else {
             for (int i = 0; i < bucketCount; i++) {
                 TableBucket tableBucket = new TableBucket(tableId, i);
-                waitUtilBucketSynced(tableBucket);
+                waitUntilBucketSynced(tableBucket);
             }
         }
     }
 
-    protected void waitUtilBucketSynced(TableBucket tb) {
-        waitUtil(
+    protected void waitUntilBucketSynced(TableBucket tb) {
+        waitUntil(
                 () -> {
                     Replica replica = getLeaderReplica(tb);
                     return replica.getLogTablet().getLakeTableSnapshotId() >= 0;

@@ -90,7 +90,7 @@ class MetadataUpdateITCase {
     @Test
     void testMetadataUpdateForServerStartAndStop() throws Exception {
         // get metadata and check it
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         Map<Long, TableContext> expectedTablePathById = new HashMap<>();
         // create non-partitioned table
@@ -171,7 +171,7 @@ class MetadataUpdateITCase {
 
     @Test
     void testMetadataUpdateForTableCreateAndDrop() throws Exception {
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
         Map<Long, TableContext> expectedTablePathById = new HashMap<>();
         assertUpdateMetadataEquals(
                 coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
@@ -252,7 +252,7 @@ class MetadataUpdateITCase {
 
     @Test
     void testMetadataUpdateForPartitionCreateAndDrop() throws Exception {
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
         Map<Long, TableContext> expectedTablePathById = new HashMap<>();
         Map<Long, TableContext> expectedPartitionNameById = new HashMap<>();
         assertUpdateMetadataEquals(

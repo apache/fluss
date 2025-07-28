@@ -51,7 +51,7 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
                 .put(snapshot.getSnapshotID(), bucketLeaderEpoch);
     }
 
-    public CompletedSnapshot waitUtilSnapshotComplete(
+    public CompletedSnapshot waitUntilSnapshotComplete(
             TableBucket tableBucket, int snapshotIdToWait) {
         return waitValue(
                 () -> {

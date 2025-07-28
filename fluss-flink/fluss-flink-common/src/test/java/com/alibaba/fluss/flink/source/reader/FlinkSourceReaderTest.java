@@ -65,7 +65,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
         TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR;
         long tableId = createTable(tablePath, tableDescriptor);
 
-        // wait util partitions are created
+        // wait until partitions are created
         ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         Map<Long, String> partitionNameByIds = waitUntilPartitions(zooKeeperClient, tablePath);
 

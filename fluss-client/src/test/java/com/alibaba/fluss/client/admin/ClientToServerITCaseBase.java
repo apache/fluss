@@ -231,7 +231,7 @@ public abstract class ClientToServerITCaseBase {
     public static void waitAllReplicasReady(long tableId, int expectBucketCount) {
         // retry until all replica ready.
         for (int i = 0; i < expectBucketCount; i++) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(new TableBucket(tableId, i));
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, i));
         }
     }
 

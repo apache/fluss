@@ -130,7 +130,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                         partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
         long tableId = tableIdAndDescriptor.f0;
 
-        // wait util synced to paimon
+        // wait until synced to paimon
         for (Long partitionId : partitionNameByIds.keySet()) {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
             assertReplicaStatus(tableBucket, 3);

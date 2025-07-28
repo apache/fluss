@@ -97,7 +97,7 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeStopBucke
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.zk.ZooKeeperTestUtils.createZooKeeperClient;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static com.alibaba.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -213,7 +213,7 @@ public final class FlussClusterExtension
         startTabletServers();
         // wait coordinator knows all tablet servers to make cluster
         // have enough replication factor when creating table.
-        waitUtilAllGatewayHasSameMetadata();
+        waitUntilAllGatewayHasSameMetadata();
     }
 
     public void close() throws Exception {
@@ -492,7 +492,7 @@ public final class FlussClusterExtension
      * make sure same server info not to make sure table metadata). This method needs to be called
      * in advance for those ITCase which need to get metadata from server.
      */
-    public void waitUtilAllGatewayHasSameMetadata() {
+    public void waitUntilAllGatewayHasSameMetadata() {
         for (AdminReadOnlyGateway gateway : collectAllRpcGateways()) {
             retry(
                     Duration.ofMinutes(1),
@@ -520,7 +520,7 @@ public final class FlussClusterExtension
     }
 
     /** Wait until all the table assignments buckets are ready for table. */
-    public void waitUtilTableReady(long tableId) {
+    public void waitUntilTableReady(long tableId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -538,7 +538,7 @@ public final class FlussClusterExtension
      * @param aclBindings aclBindings to be synchronized.
      * @param exist whether aclBinding exist.
      */
-    public void waitUtilAuthenticationSync(Collection<AclBinding> aclBindings, boolean exist) {
+    public void waitUntilAuthenticationSync(Collection<AclBinding> aclBindings, boolean exist) {
         retry(
                 Duration.ofMinutes(1),
                 () -> {
@@ -566,7 +566,7 @@ public final class FlussClusterExtension
                 });
     }
 
-    public void waitUtilTablePartitionReady(long tableId, long partitionId) {
+    public void waitUntilTablePartitionReady(long tableId, long partitionId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -600,7 +600,7 @@ public final class FlussClusterExtension
     }
 
     /** Wait until the input replica is kicked out of isr. */
-    public void waitUtilReplicaShrinkFromIsr(TableBucket tableBucket, int replicaId) {
+    public void waitUntilReplicaShrinkFromIsr(TableBucket tableBucket, int replicaId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -613,7 +613,7 @@ public final class FlussClusterExtension
     }
 
     /** Wait until the input replica is expended into isr. */
-    public void waitUtilReplicaExpandToIsr(TableBucket tableBucket, int replicaId) {
+    public void waitUntilReplicaExpandToIsr(TableBucket tableBucket, int replicaId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -626,7 +626,7 @@ public final class FlussClusterExtension
     }
 
     /** Wait until all the replicas are ready if we have multi replica for one table bucket. */
-    public void waitUtilAllReplicaReady(TableBucket tableBucket) {
+    public void waitUntilAllReplicaReady(TableBucket tableBucket) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
@@ -660,7 +660,7 @@ public final class FlussClusterExtension
      * least one log segment has been copied to remote, but it does not ensure that all log segments
      * have been copied to remote.
      */
-    public void waitUtilSomeLogSegmentsCopyToRemote(TableBucket tableBucket) {
+    public void waitUntilSomeLogSegmentsCopyToRemote(TableBucket tableBucket) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
                 Duration.ofMinutes(2),
@@ -671,7 +671,7 @@ public final class FlussClusterExtension
                 });
     }
 
-    public CompletedSnapshot waitUtilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
+    public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
                 () -> {
@@ -763,7 +763,7 @@ public final class FlussClusterExtension
 
     public Map<String, Long> waitUntilPartitionAllReady(TablePath tablePath) {
         int preCreatePartitions = ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue();
-        // wait util table partition is created
+        // wait until table partition is created
         return waitUntilPartitionsCreated(tablePath, preCreatePartitions);
     }
 
@@ -787,7 +787,7 @@ public final class FlussClusterExtension
     }
 
     public void waitUntilPartitionsDropped(TablePath tablePath, List<String> droppedPartitions) {
-        waitUtil(
+        waitUntil(
                 () -> {
                     Map<String, Long> partitions =
                             zooKeeperClient.getPartitionNameAndIds(tablePath);

@@ -75,13 +75,13 @@ public class StopReplicaITCase {
 
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         long tableId =
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
 
         List<Integer> isr = waitAndGetIsr(tb);
         List<Path> tableDirs = assertReplicaExistAndGetTableOrPartitionDirs(tb, isr, isPkTable);
@@ -99,7 +99,7 @@ public class StopReplicaITCase {
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb1 = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb1);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb1);
 
         isr = waitAndGetIsr(tb1);
         tableDirs = assertReplicaExistAndGetTableOrPartitionDirs(tb1, isr, isPkTable);
@@ -116,7 +116,7 @@ public class StopReplicaITCase {
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb2 = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb2);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb2);
 
         List<Integer> isr2 = waitAndGetIsr(tb2);
         List<Path> tableDirs2 = assertReplicaExistAndGetTableOrPartitionDirs(tb2, isr2, isPkTable);

@@ -175,7 +175,7 @@ public class LogFetchBuffer implements AutoCloseable {
      *   <li>The thread was interrupted
      * </ol>
      *
-     * @param deadlineNanos the deadline time to wait util
+     * @param deadlineNanos the deadline time to wait until
      * @return false if the waiting time detectably elapsed before return from the method, else true
      */
     boolean awaitNotEmpty(long deadlineNanos) throws InterruptedException {

@@ -101,7 +101,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         Map<TableBucket, List<InternalRow>> expectedRowByBuckets = putRows(tableId, tablePath, 10);
 
         // wait snapshot finish
-        waitUtilAllSnapshotFinished(expectedRowByBuckets.keySet(), 0);
+        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 0);
 
         // test read snapshot
         testSnapshotRead(tablePath, expectedRowByBuckets);
@@ -110,7 +110,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         expectedRowByBuckets = putRows(tableId, tablePath, 20);
 
         // wait snapshot finish
-        waitUtilAllSnapshotFinished(expectedRowByBuckets.keySet(), 1);
+        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 1);
 
         // test read snapshot
         testSnapshotRead(tablePath, expectedRowByBuckets);
@@ -166,9 +166,9 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         return function.bucketing(key, DEFAULT_BUCKET_NUM);
     }
 
-    private void waitUtilAllSnapshotFinished(Set<TableBucket> tableBuckets, long snapshotId) {
+    private void waitUntilAllSnapshotFinished(Set<TableBucket> tableBuckets, long snapshotId) {
         for (TableBucket tableBucket : tableBuckets) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tableBucket, snapshotId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 }

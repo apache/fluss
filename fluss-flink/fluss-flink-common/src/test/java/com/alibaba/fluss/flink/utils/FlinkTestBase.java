@@ -197,7 +197,7 @@ public class FlinkTestBase extends AbstractTestBase {
     protected void waitUntilSnapshot(long tableId, long snapshotId) {
         for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
             TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tableBucket, snapshotId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 
