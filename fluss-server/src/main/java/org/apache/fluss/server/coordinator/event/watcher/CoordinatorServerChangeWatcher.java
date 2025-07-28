@@ -15,41 +15,39 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.event.watcher;
+package com.alibaba.fluss.server.coordinator.event.watcher;
 
-import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
-import org.apache.fluss.server.coordinator.event.EventManager;
-import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
-import org.apache.fluss.server.metadata.ServerInfo;
-import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.TabletServerRegistration;
-import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
-import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
-import org.apache.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
+import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
+import com.alibaba.fluss.server.coordinator.event.EventManager;
+import com.alibaba.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
+import com.alibaba.fluss.server.zk.data.ZkData;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** A watcher to watch the tablet server changes(new/delete) in zookeeper. */
-public class TabletServerChangeWatcher {
+/** A watcher to watch the coordinator server changes(new/delete) in zookeeper. */
+public class CoordinatorServerChangeWatcher {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TabletServerChangeWatcher.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorServerChangeWatcher.class);
     private final CuratorCache curatorCache;
 
     private volatile boolean running;
 
     private final EventManager eventManager;
 
-    public TabletServerChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
+    public CoordinatorServerChangeWatcher(
+            ZooKeeperClient zooKeeperClient, EventManager eventManager) {
         this.curatorCache =
-                CuratorCache.build(zooKeeperClient.getCuratorClient(), ServerIdsZNode.path());
+                CuratorCache.build(
+                        zooKeeperClient.getCuratorClient(), ZkData.CoordinatorIdsZNode.path());
         this.eventManager = eventManager;
-        this.curatorCache.listenable().addListener(new TabletServerChangeListener());
+        this.curatorCache.listenable().addListener(new CoordinatorServerChangeListener());
     }
 
     public void start() {
@@ -62,11 +60,11 @@ public class TabletServerChangeWatcher {
             return;
         }
         running = false;
-        LOG.info("Stopping TabletServerChangeWatcher");
+        LOG.info("Stopping CoordinatorServerChangeWatcher");
         curatorCache.close();
     }
 
-    private final class TabletServerChangeListener implements CuratorCacheListener {
+    private final class CoordinatorServerChangeListener implements CuratorCacheListener {
 
         @Override
         public void event(Type type, ChildData oldData, ChildData newData) {
@@ -81,16 +79,8 @@ public class TabletServerChangeWatcher {
                     {
                         if (newData != null && newData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(newData);
-                            TabletServerRegistration registration =
-                                    ServerIdZNode.decode(newData.getData());
                             LOG.info("Received CHILD_ADDED event for server {}.", serverId);
-                            eventManager.put(
-                                    new NewTabletServerEvent(
-                                            new ServerInfo(
-                                                    serverId,
-                                                    registration.getRack(),
-                                                    registration.getEndpoints(),
-                                                    ServerType.TABLET_SERVER)));
+                            eventManager.put(new NewCoordinatorServerEvent(serverId));
                         }
                         break;
                     }
@@ -99,7 +89,7 @@ public class TabletServerChangeWatcher {
                         if (oldData != null && oldData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(oldData);
                             LOG.info("Received CHILD_REMOVED event for server {}.", serverId);
-                            eventManager.put(new DeadTabletServerEvent(serverId));
+                            eventManager.put(new DeadCoordinatorServerEvent(serverId));
                         }
                         break;
                     }

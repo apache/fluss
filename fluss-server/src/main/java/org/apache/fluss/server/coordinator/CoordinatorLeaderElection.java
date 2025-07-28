@@ -23,9 +23,14 @@ import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFra
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderSelector;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderSelectorListener;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /** Using by coordinator server. Coordinator servers listen ZK node and elect leadership. */
 public class CoordinatorLeaderElection {
@@ -33,13 +38,28 @@ public class CoordinatorLeaderElection {
 
     private final CuratorFramework zkClient;
     private final int serverId;
+    private final ScheduledExecutorService executor;
 
     public CoordinatorLeaderElection(CuratorFramework zkClient, int serverId) {
-        this.zkClient = zkClient;
-        this.serverId = serverId;
+        this(
+                zkClient,
+                serverId,
+                Executors.newSingleThreadScheduledExecutor(
+                        new ExecutorThreadFactory("fluss-coordinator-leader-election")));
     }
 
-    public void startElectLeader(Runnable startLeaderServices) {
+    protected CoordinatorLeaderElection(
+            CuratorFramework zkClient, int serverId, ScheduledExecutorService executor) {
+        this.zkClient = zkClient;
+        this.serverId = serverId;
+        this.executor = executor;
+    }
+
+    public void startElectLeader(Runnable initLeaderServices) {
+        executor.schedule(() -> electLeader(initLeaderServices), 0, TimeUnit.MILLISECONDS);
+    }
+
+    private void electLeader(Runnable initLeaderServices) {
         LeaderSelector leaderSelector =
                 new LeaderSelector(
                         zkClient,
@@ -50,7 +70,15 @@ public class CoordinatorLeaderElection {
                                 LOG.info(
                                         "Coordinator server {} win the leader in election now.",
                                         serverId);
-                                startLeaderServices.run();
+                                initLeaderServices.run();
+
+                                // Do not return, otherwise the leader will be released immediately.
+                                while (true) {
+                                    try {
+                                        Thread.sleep(1000);
+                                    } catch (InterruptedException e) {
+                                    }
+                                }
                             }
 
                             @Override

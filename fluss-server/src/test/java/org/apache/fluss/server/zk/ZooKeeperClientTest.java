@@ -105,14 +105,14 @@ class ZooKeeperClientTest {
     void testCoordinatorLeader() throws Exception {
         // try to get leader address, should return empty since node leader address stored in
         // zk
-        assertThat(zookeeperClient.getCoordinatorAddress()).isEmpty();
+        assertThat(zookeeperClient.getCoordinatorLeaderAddress()).isEmpty();
         CoordinatorAddress coordinatorAddress =
                 new CoordinatorAddress(
                         2, Endpoint.fromListenersString("CLIENT://localhost1:10012"));
         // register leader address
         zookeeperClient.registerCoordinatorLeader(coordinatorAddress);
         // check get leader address
-        CoordinatorAddress gottenAddress = zookeeperClient.getCoordinatorAddress().get();
+        CoordinatorAddress gottenAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
         assertThat(gottenAddress).isEqualTo(coordinatorAddress);
     }
 

@@ -202,13 +202,19 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Get the leader address registered in ZK. */
-    public Optional<CoordinatorAddress> getCoordinatorAddress() throws Exception {
+    public Optional<CoordinatorAddress> getCoordinatorLeaderAddress() throws Exception {
         Optional<byte[]> bytes = getOrEmpty(ZkData.CoordinatorLeaderZNode.path());
         //        return bytes.map(CoordinatorZNode::decode);
         return bytes.map(
                 data ->
                         // maybe a empty node when a leader is elected but not registered
                         data.length == 0 ? null : ZkData.CoordinatorLeaderZNode.decode(data));
+    }
+
+    /** Gets the list of coordinator server Ids. */
+    public int[] getCoordinatorServerList() throws Exception {
+        List<String> coordinatorServers = getChildren(ZkData.CoordinatorIdsZNode.path());
+        return coordinatorServers.stream().mapToInt(Integer::parseInt).toArray();
     }
 
     // --------------------------------------------------------------------------------------------

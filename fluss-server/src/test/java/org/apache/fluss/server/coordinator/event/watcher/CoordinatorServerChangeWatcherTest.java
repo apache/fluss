@@ -15,34 +15,29 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.event.watcher;
+package com.alibaba.fluss.server.coordinator.event.watcher;
 
-import org.apache.fluss.cluster.Endpoint;
-import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
-import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
-import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
-import org.apache.fluss.server.coordinator.event.TestingEventManager;
-import org.apache.fluss.server.metadata.ServerInfo;
-import org.apache.fluss.server.zk.NOPErrorHandler;
-import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperExtension;
-import org.apache.fluss.server.zk.data.TabletServerRegistration;
-import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
+import com.alibaba.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
+import com.alibaba.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import com.alibaba.fluss.server.coordinator.event.TestingEventManager;
+import com.alibaba.fluss.server.zk.NOPErrorHandler;
+import com.alibaba.fluss.server.zk.ZooKeeperClient;
+import com.alibaba.fluss.server.zk.ZooKeeperExtension;
+import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link TabletServerChangeWatcher} . */
-class TabletServerChangeWatcherTest {
+/** Test for {@link CoordinatorServerChangeWatcher} . */
+class CoordinatorServerChangeWatcherTest {
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -55,26 +50,15 @@ class TabletServerChangeWatcherTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         TestingEventManager eventManager = new TestingEventManager();
-        TabletServerChangeWatcher tabletServerChangeWatcher =
-                new TabletServerChangeWatcher(zookeeperClient, eventManager);
-        tabletServerChangeWatcher.start();
+        CoordinatorServerChangeWatcher coordinatorServerChangeWatcher =
+                new CoordinatorServerChangeWatcher(zookeeperClient, eventManager);
+        coordinatorServerChangeWatcher.start();
 
         // register new servers
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            TabletServerRegistration tabletServerRegistration =
-                    new TabletServerRegistration(
-                            "rack" + i,
-                            Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
-                            System.currentTimeMillis());
-            expectedEvents.add(
-                    new NewTabletServerEvent(
-                            new ServerInfo(
-                                    i,
-                                    tabletServerRegistration.getRack(),
-                                    tabletServerRegistration.getEndpoints(),
-                                    ServerType.TABLET_SERVER)));
-            zookeeperClient.registerTabletServer(i, tabletServerRegistration);
+            expectedEvents.add(new NewCoordinatorServerEvent(i));
+            zookeeperClient.registerCoordinatorServer(i);
         }
 
         retry(
@@ -88,7 +72,7 @@ class TabletServerChangeWatcherTest {
 
         // unregister servers
         for (int i = 0; i < 10; i++) {
-            expectedEvents.add(new DeadTabletServerEvent(i));
+            expectedEvents.add(new DeadCoordinatorServerEvent(i));
         }
 
         retry(
@@ -97,6 +81,6 @@ class TabletServerChangeWatcherTest {
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
-        tabletServerChangeWatcher.stop();
+        coordinatorServerChangeWatcher.stop();
     }
 }

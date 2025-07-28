@@ -67,6 +67,7 @@ public class CoordinatorContext {
     // a success deletion.
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
+    private final Set<Integer> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
@@ -113,6 +114,24 @@ public class CoordinatorContext {
 
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
+    }
+
+    public Set<Integer> getLiveCoordinatorServers() {
+        return liveCoordinatorServers;
+    }
+
+    @VisibleForTesting
+    public void setLiveCoordinatorServers(Set<Integer> servers) {
+        liveCoordinatorServers.clear();
+        liveCoordinatorServers.addAll(servers);
+    }
+
+    public void addLiveCoordinatorServer(int serverId) {
+        this.liveCoordinatorServers.add(serverId);
+    }
+
+    public void removeLiveCoordinatorServer(int serverId) {
+        this.liveCoordinatorServers.remove(serverId);
     }
 
     public Map<Integer, ServerInfo> getLiveTabletServers() {

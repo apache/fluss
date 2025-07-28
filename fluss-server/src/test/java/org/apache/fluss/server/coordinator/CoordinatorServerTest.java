@@ -64,7 +64,8 @@ class CoordinatorServerTest extends ServerTestBase {
     protected void checkAfterStartServer() throws Exception {
         assertThat(coordinatorServer.getRpcServer()).isNotNull();
         // check the data put in zk after coordinator server start
-        Optional<CoordinatorAddress> optCoordinatorAddr = zookeeperClient.getCoordinatorAddress();
+        Optional<CoordinatorAddress> optCoordinatorAddr =
+                zookeeperClient.getCoordinatorLeaderAddress();
         assertThat(optCoordinatorAddr).isNotEmpty();
         verifyEndpoint(
                 optCoordinatorAddr.get().getEndpoints(),
