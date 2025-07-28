@@ -17,12 +17,16 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -32,6 +36,8 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -48,6 +54,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.ServerTag.PERMANENT_OFFLINE;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -57,15 +64,28 @@ public abstract class FlinkProcedureITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
+                    .setNumOfTabletServers(4)
                     .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
                     .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
                     .setClusterConf(initConfig())
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = "defaultdb";
+    static Configuration clientConf;
+    static String bootstrapServers;
+    static Connection conn;
+    static Admin admin;
 
     TableEnvironment tEnv;
+
+    @BeforeAll
+    protected static void beforeAll() {
+        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+    }
 
     @BeforeEach
     void before() throws ExecutionException, InterruptedException {
@@ -90,6 +110,14 @@ public abstract class FlinkProcedureITCase {
                         CATALOG_NAME, bootstrapServers);
         tEnv.executeSql(catalogDDL).await();
         tEnv.executeSql("use catalog " + CATALOG_NAME);
+        tEnv.executeSql("create database " + DEFAULT_DB);
+        tEnv.useDatabase(DEFAULT_DB);
+    }
+
+    @AfterEach
+    void after() {
+        tEnv.useDatabase(BUILTIN_DATABASE);
+        tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
     @Test
@@ -104,7 +132,9 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.list_acl]",
                             "+I[sys.set_cluster_config]",
                             "+I[sys.add_server_tag]",
-                            "+I[sys.remove_server_tag]");
+                            "+I[sys.remove_server_tag]",
+                            "+I[sys.rebalance]",
+                            "+I[sys.cancel_rebalance]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -456,6 +486,44 @@ public abstract class FlinkProcedureITCase {
         // test remove non-exist server tag, no error will be thrown.
         try (CloseableIterator<Row> listProceduresIterator =
                 tEnv.executeSql(removeServerTag).collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRebalance(boolean upperCase) throws Exception {
+        // first create some unbalance assignment table.
+        for (int i = 0; i < 10; i++) {
+            String tableName = "reblance_test_tab_" + i;
+            tEnv.executeSql(
+                    String.format(
+                            "create table %s (a int, b varchar, c bigint, d int ) "
+                                    + "with ('connector' = 'fluss', 'table.generate-unbalance-table-assignment'='true')",
+                            tableName));
+            long tableId =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, tableName)).get().getTableId();
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        String rebalance =
+                String.format(
+                        upperCase
+                                ? "Call %s.sys.rebalance('REPLICA_DISTRIBUTION_GOAL;LEADER_DISTRIBUTION_GOAL', true)"
+                                : "Call %s.sys.rebalance('replica_distribution_goal;leader_distribution_goal', true)",
+                        CATALOG_NAME);
+        try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
+            List<String> actual =
+                    CollectionUtil.iteratorToList(rows).stream()
+                            .map(Row::toString)
+                            .collect(Collectors.toList());
+            assertThat(actual.size()).isGreaterThan(1);
+        }
+
+        // test cancel rebalance.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(String.format("Call %s.sys.cancel_rebalance()", CATALOG_NAME))
+                        .collect()) {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
     }
