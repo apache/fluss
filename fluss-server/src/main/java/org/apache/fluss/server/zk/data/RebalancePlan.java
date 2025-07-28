@@ -17,8 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
-import org.apache.fluss.cluster.maintencance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.maintencance.RebalanceStatus;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
 
@@ -37,9 +36,6 @@ import java.util.Objects;
  */
 public class RebalancePlan {
 
-    /** The rebalance status of this rebalance plan. */
-    private final RebalanceStatus rebalanceStatus;
-
     /** A mapping from tableBucket to RebalancePlanForBuckets of none-partitioned table. */
     private final Map<Long, List<RebalancePlanForBucket>> planForBuckets;
 
@@ -47,8 +43,7 @@ public class RebalancePlan {
     private final Map<TablePartition, List<RebalancePlanForBucket>>
             planForBucketsOfPartitionedTable;
 
-    public RebalancePlan(
-            RebalanceStatus rebalanceStatus, Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+    public RebalancePlan(Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
 
@@ -67,8 +62,6 @@ public class RebalancePlan {
                         .add(rebalancePlanForBucket);
             }
         }
-
-        this.rebalanceStatus = rebalanceStatus;
     }
 
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
@@ -79,8 +72,24 @@ public class RebalancePlan {
         return planForBucketsOfPartitionedTable;
     }
 
-    public RebalanceStatus getRebalanceStatus() {
-        return rebalanceStatus;
+    public Map<TableBucket, RebalancePlanForBucket> getExecutePlan() {
+        Map<TableBucket, RebalancePlanForBucket> executePlan = new HashMap<>();
+        planForBuckets.forEach(
+                (tableId, rebalancePlanForBuckets) ->
+                        rebalancePlanForBuckets.forEach(
+                                rebalancePlanForBucket ->
+                                        executePlan.put(
+                                                rebalancePlanForBucket.getTableBucket(),
+                                                rebalancePlanForBucket)));
+
+        planForBucketsOfPartitionedTable.forEach(
+                (tablePartition, rebalancePlanForBuckets) ->
+                        rebalancePlanForBuckets.forEach(
+                                rebalancePlanForBucket ->
+                                        executePlan.put(
+                                                rebalancePlanForBucket.getTableBucket(),
+                                                rebalancePlanForBucket)));
+        return executePlan;
     }
 
     @Override
@@ -90,8 +99,6 @@ public class RebalancePlan {
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
                 + planForBucketsOfPartitionedTable
-                + ", rebalanceStatus="
-                + rebalanceStatus
                 + '}';
     }
 
@@ -110,12 +117,11 @@ public class RebalancePlan {
             return false;
         }
         return Objects.equals(
-                        planForBucketsOfPartitionedTable, that.planForBucketsOfPartitionedTable)
-                && rebalanceStatus == that.rebalanceStatus;
+                planForBucketsOfPartitionedTable, that.planForBucketsOfPartitionedTable);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(planForBuckets, planForBucketsOfPartitionedTable, rebalanceStatus);
+        return Objects.hash(planForBuckets, planForBucketsOfPartitionedTable);
     }
 }

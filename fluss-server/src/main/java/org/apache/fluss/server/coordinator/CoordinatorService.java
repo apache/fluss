@@ -19,12 +19,14 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
-import org.apache.fluss.cluster.maintencance.ServerTag;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -94,11 +96,15 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.CancalRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ExecuteRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -111,10 +117,14 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -131,6 +141,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
@@ -138,6 +149,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -146,6 +158,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
+
+    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorService.class);
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
@@ -157,6 +171,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final @Nullable DataLakeFormat dataLakeFormat;
     private final @Nullable LakeCatalog lakeCatalog;
     private final LakeTableTieringManager lakeTableTieringManager;
+    private final RebalanceManager rebalanceManager;
 
     public CoordinatorService(
             Configuration conf,
@@ -167,7 +182,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             @Nullable LakeCatalog lakeCatalog,
-            LakeTableTieringManager lakeTableTieringManager) {
+            LakeTableTieringManager lakeTableTieringManager,
+            RebalanceManager rebalanceManager) {
         super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
@@ -178,6 +194,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
         this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
+        this.rebalanceManager = rebalanceManager;
         this.metadataCache = metadataCache;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
@@ -615,7 +632,32 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        List<Goal> goalsByPriority = new ArrayList<>();
+        Arrays.stream(request.getGoals())
+                .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
+        boolean isDryRun = request.isDryRun();
+
+        // 1. generate rebalance plan.
+        RebalancePlan rebalancePlan;
+        try {
+            rebalancePlan = rebalanceManager.generateRebalancePlan(goalsByPriority);
+        } catch (Exception e) {
+            throw new RebalanceFailureException("Failed to generate rebalance plan.", e);
+        }
+
+        if (!isDryRun) {
+            CompletableFuture<RebalanceResponse> response = new CompletableFuture<>();
+            // 2. execute rebalance plan.
+            LOG.info("Trigger Executing rebalance task");
+            ExecuteRebalanceTaskEvent executeRebalanceTaskEvent =
+                    new ExecuteRebalanceTaskEvent(rebalancePlan.getExecutePlan(), response);
+            eventManagerSupplier.get().put(executeRebalanceTaskEvent);
+            return response;
+
+            // return rebalanceManager.executeRebalancePlan(rebalancePlan);
+        } else {
+            return CompletableFuture.completedFuture(makeRebalanceRespose(rebalancePlan));
+        }
     }
 
     @Override
@@ -627,7 +669,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        CancalRebalanceEvent cancalRebalanceEvent = new CancalRebalanceEvent();
+        eventManagerSupplier.get().put(cancalRebalanceEvent);
+        return CompletableFuture.completedFuture(new CancelRebalanceResponse());
     }
 
     private void validateHeartbeatRequest(

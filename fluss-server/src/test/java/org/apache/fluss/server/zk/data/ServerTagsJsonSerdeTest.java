@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
-import org.apache.fluss.cluster.maintencance.ServerTag;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.HashMap;

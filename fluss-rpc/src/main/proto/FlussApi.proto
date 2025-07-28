@@ -907,14 +907,14 @@ message PbHeartbeatRespForTable {
 }
 
 message PbRebalancePlanForTable {
-  required PbTablePath table_path = 1;
+  required int64 table_id = 1;
   repeated PbRebalancePlanForPartition partitions_plan = 2; // for none-partition table, this is empty
   repeated PbRebalancePlanForBucket buckets_plan = 3; // for partition table, this is empty
 
 }
 
 message PbRebalancePlanForPartition {
-  required string partition_name = 1;
+  required int64 partition_id = 1;
   repeated PbRebalancePlanForBucket buckets_plan = 2;
 }
 
@@ -927,13 +927,13 @@ message PbRebalancePlanForBucket {
 }
 
 message PbRebalanceProcessForTable {
-  required PbTablePath table_path = 1;
+  required int64 table_id = 1;
   repeated PbRebalanceProcessForPartition partitions_process = 2;
   repeated PbRebalanceProcessForBucket buckets_process = 3;
 }
 
 message PbRebalanceProcessForPartition {
-  required string partition_name = 1;
+  required int64 partition_id = 1;
   repeated PbRebalanceProcessForBucket buckets_process = 2;
 }
 

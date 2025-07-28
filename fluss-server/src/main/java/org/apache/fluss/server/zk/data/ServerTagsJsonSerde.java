@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
-import org.apache.fluss.cluster.maintencance.ServerTag;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;

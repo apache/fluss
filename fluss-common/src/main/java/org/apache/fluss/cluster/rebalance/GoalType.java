@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.maintencance;
+package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
@@ -28,8 +28,20 @@ import java.util.Arrays;
  */
 @PublicEvolving
 public enum GoalType {
+    /**
+     * Goal to generate replica movement tasks to ensure that the number of replicas on each
+     * tabletServer is near balanced.
+     */
     REPLICA_DISTRIBUTION_GOAL(0),
-    PREFERRED_LEADER_GOAL(1);
+
+    /**
+     * Goal to generate leadership movement and leader replica movement tasks to ensure that the
+     * number of leader replicas on each tabletServer is near balanced.
+     */
+    LEADER_REPLICA_DISTRIBUTION_GOAL(1),
+
+    /** Goal to move the leaders to the first replica of each tableBuckets. */
+    PREFERRED_LEADER_GOAL(2);
 
     public final int value;
 
@@ -40,6 +52,8 @@ public enum GoalType {
     public static GoalType valueOf(int value) {
         if (value == REPLICA_DISTRIBUTION_GOAL.value) {
             return REPLICA_DISTRIBUTION_GOAL;
+        } else if (value == LEADER_REPLICA_DISTRIBUTION_GOAL.value) {
+            return LEADER_REPLICA_DISTRIBUTION_GOAL;
         } else if (value == PREFERRED_LEADER_GOAL.value) {
             return PREFERRED_LEADER_GOAL;
         } else {

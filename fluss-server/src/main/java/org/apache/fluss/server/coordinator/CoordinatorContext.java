@@ -18,7 +18,8 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.cluster.maintencance.ServerTag;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -105,6 +106,14 @@ public class CoordinatorContext {
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
 
+    /** A mapping from table bucket to rebalance status of pending and running tasks. */
+    private final Map<TableBucket, RebalanceResultForBucket> ongoingRebalanceTasks =
+            new HashMap<>();
+
+    /** A mapping from table bucket to rebalance status of failed or completed tasks. */
+    private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
+            new HashMap<>();
+
     private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
 
@@ -165,7 +174,7 @@ public class CoordinatorContext {
         return tablePathById;
     }
 
-    public Set<TableBucket> allBuckets() {
+    public Set<TableBucket> getAllBuckets() {
         Set<TableBucket> allBuckets = new HashSet<>();
         for (Map.Entry<Long, Map<Integer, List<Integer>>> tableAssign :
                 tableAssignments.entrySet()) {
@@ -640,6 +649,30 @@ public class CoordinatorContext {
         serverTags.remove(serverId);
     }
 
+    public void putOngoingRebalanceTask(TableBucket tableBucket, RebalanceResultForBucket status) {
+        ongoingRebalanceTasks.put(tableBucket, status);
+    }
+
+    public RebalanceResultForBucket removeOngoingRebalanceTask(TableBucket tableBucket) {
+        return ongoingRebalanceTasks.remove(tableBucket);
+    }
+
+    public void putFinishedRebalanceTask(TableBucket tableBucket, RebalanceResultForBucket status) {
+        finishedRebalanceTasks.put(tableBucket, status);
+    }
+
+    public RebalanceResultForBucket getOngoingRebalanceTask(TableBucket tableBucket) {
+        return ongoingRebalanceTasks.get(tableBucket);
+    }
+
+    public Map<TableBucket, RebalanceResultForBucket> getOngoingRebalanceTasks() {
+        return ongoingRebalanceTasks;
+    }
+
+    public Map<TableBucket, RebalanceResultForBucket> getFinishedRebalanceTasks() {
+        return finishedRebalanceTasks;
+    }
+
     private void clearTablesState() {
         tableAssignments.clear();
         partitionAssignments.clear();
@@ -661,5 +694,7 @@ public class CoordinatorContext {
         // clear the live tablet servers
         liveTabletServers.clear();
         serverTags.clear();
+        ongoingRebalanceTasks.clear();
+        finishedRebalanceTasks.clear();
     }
 }

@@ -22,9 +22,10 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.cluster.maintencance.GoalType;
-import org.apache.fluss.cluster.maintencance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.maintencance.ServerTag;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
@@ -62,7 +63,6 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
-import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.CompleteFuture;
 
 import java.util.Collection;
 import java.util.List;
@@ -523,7 +523,7 @@ public interface Admin extends AutoCloseable {
      *     it.
      * @return the generated rebalance plan for all the tableBuckets which need to do rebalance.
      */
-    CompleteFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+    CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
             List<GoalType> priorityGoals, boolean dryRun);
 
     /**
@@ -537,7 +537,7 @@ public interface Admin extends AutoCloseable {
      *
      * @return the rebalance process for all the tableBuckets doing rebalance.
      */
-    CompleteFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess();
+    CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess();
 
     /**
      * Cannel the rebalance task.

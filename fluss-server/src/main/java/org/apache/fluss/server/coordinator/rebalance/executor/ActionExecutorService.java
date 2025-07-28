@@ -15,37 +15,21 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.maintencance;
+package org.apache.fluss.server.coordinator.rebalance.executor;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 
-/**
- * Rebalance status for the rebalance task.
- *
- * @since 0.8
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    IN_PROGRESS(1),
-    COMPLETED(2),
-    FAILED(3);
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
-    private final int code;
+/** An interface for action executor service. */
+public interface ActionExecutorService {
 
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
+    void start();
 
-    public int code() {
-        return code;
-    }
+    void shutdown();
 
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
-    }
+    CompletableFuture<RebalanceResponse> execute(Map<TableBucket, RebalancePlanForBucket> actions);
 }

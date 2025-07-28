@@ -31,4 +31,8 @@ public class RebalanceFailureException extends ApiException {
     public RebalanceFailureException(String message) {
         super(message);
     }
+
+    public RebalanceFailureException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

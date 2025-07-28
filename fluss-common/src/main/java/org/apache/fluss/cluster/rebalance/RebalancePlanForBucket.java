@@ -15,41 +15,46 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.maintencance;
+package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * a Generated rebalance plan for a tableBucket.
+ * a generated rebalance plan for a tableBucket.
  *
  * @since 0.8
  */
 @PublicEvolving
 public class RebalancePlanForBucket {
-    private final int bucketId;
+    private final TableBucket tableBucket;
     private final int originalLeader;
     private final int newLeader;
     private final List<Integer> originReplicas;
     private final List<Integer> newReplicas;
 
     public RebalancePlanForBucket(
-            int bucketId,
+            TableBucket tableBucket,
             int originalLeader,
             int newLeader,
             List<Integer> originReplicas,
             List<Integer> newReplicas) {
-        this.bucketId = bucketId;
+        this.tableBucket = tableBucket;
         this.originalLeader = originalLeader;
         this.newLeader = newLeader;
         this.originReplicas = originReplicas;
         this.newReplicas = newReplicas;
     }
 
+    public TableBucket getTableBucket() {
+        return tableBucket;
+    }
+
     public int getBucketId() {
-        return bucketId;
+        return tableBucket.getBucket();
     }
 
     public Integer getOriginalLeader() {
@@ -68,11 +73,15 @@ public class RebalancePlanForBucket {
         return newReplicas;
     }
 
+    public boolean isLeaderAction() {
+        return originalLeader != newLeader;
+    }
+
     @Override
     public String toString() {
         return "RebalancePlanForBucket{"
-                + "bucketId="
-                + bucketId
+                + "tableBucket="
+                + tableBucket
                 + ", originalLeader="
                 + originalLeader
                 + ", newLeader="
@@ -93,7 +102,7 @@ public class RebalancePlanForBucket {
             return false;
         }
         RebalancePlanForBucket that = (RebalancePlanForBucket) o;
-        return bucketId == that.bucketId
+        return Objects.equals(tableBucket, that.tableBucket)
                 && originalLeader == that.originalLeader
                 && newLeader == that.newLeader
                 && Objects.equals(originReplicas, that.originReplicas)
@@ -102,6 +111,6 @@ public class RebalancePlanForBucket {
 
     @Override
     public int hashCode() {
-        return Objects.hash(bucketId, originalLeader, newLeader, originReplicas, newReplicas);
+        return Objects.hash(tableBucket, originalLeader, newLeader, originReplicas, newReplicas);
     }
 }

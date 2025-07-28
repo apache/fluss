@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.cluster.maintencance.ServerTag;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 
 import java.util.List;

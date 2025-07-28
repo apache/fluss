@@ -15,38 +15,39 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.maintencance;
+package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-import java.util.Arrays;
-
 /**
- * The tag of tabletServer.
+ * Rebalance status for the rebalance task.
  *
  * @since 0.8
  */
 @PublicEvolving
-public enum ServerTag {
-    PERMANENT_OFFLINE(0),
-    TEMPORARY_OFFLINE(1);
+public enum RebalanceStatus {
+    NO_ONGOING_REBALANCE(0),
+    PLAN_GENERATING(1),
+    TASK_EXECUTING(2),
+    COMPLETED(3),
+    FAILED(4);
 
-    public final int value;
+    private final int code;
 
-    ServerTag(int value) {
-        this.value = value;
+    RebalanceStatus(int code) {
+        this.code = code;
     }
 
-    public static ServerTag valueOf(int value) {
-        if (value == PERMANENT_OFFLINE.value) {
-            return PERMANENT_OFFLINE;
-        } else if (value == TEMPORARY_OFFLINE.value) {
-            return TEMPORARY_OFFLINE;
-        } else {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Value %s must be one of %s",
-                            value, Arrays.asList(ServerTag.values())));
+    public int code() {
+        return code;
+    }
+
+    public static RebalanceStatus of(int code) {
+        for (RebalanceStatus status : RebalanceStatus.values()) {
+            if (status.code == code) {
+                return status;
+            }
         }
+        return null;
     }
 }

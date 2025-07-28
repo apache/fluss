@@ -37,6 +37,7 @@ import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
@@ -140,6 +141,9 @@ public class CoordinatorServer extends ServerBase {
     private Authorizer authorizer;
 
     @GuardedBy("lock")
+    private RebalanceManager rebalanceManager;
+
+    @GuardedBy("lock")
     private CoordinatorContext coordinatorContext;
 
     public CoordinatorServer(Configuration conf) {
@@ -183,6 +187,11 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeTableTieringManager = new LakeTableTieringManager();
 
+            this.rebalanceManager =
+                    new RebalanceManager(
+                            () -> getCoordinatorEventProcessor().getCoordinatorEventManager(),
+                            zkClient);
+
             MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.coordinatorService =
                     new CoordinatorService(
@@ -194,7 +203,8 @@ public class CoordinatorServer extends ServerBase {
                             metadataManager,
                             authorizer,
                             createLakeCatalog(),
-                            lakeTableTieringManager);
+                            lakeTableTieringManager,
+                            rebalanceManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -449,6 +459,14 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
+                if (rebalanceManager != null) {
+                    rebalanceManager.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (rpcClient != null) {
                     rpcClient.close();
                 }
@@ -495,6 +513,11 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public @Nullable Authorizer getAuthorizer() {
         return authorizer;
+    }
+
+    @VisibleForTesting
+    public RebalanceManager getRebalanceManager() {
+        return rebalanceManager;
     }
 
     private static void validateConfigs(Configuration conf) {

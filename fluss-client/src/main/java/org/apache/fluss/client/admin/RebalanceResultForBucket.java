@@ -18,7 +18,7 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.cluster.maintencance.RebalanceStatusForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatusForBucket;
 
 import java.util.List;
 
