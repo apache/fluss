@@ -1,2 +1,0 @@
-# Allow loading YouTube content after ensuring consent.
-SetEnv CSP_PROJECT_DOMAINS "https://www.youtube-nocookie.com https://www.youtube.com https://github.com https://avatars.githubusercontent.com https://calendar.google.com"
