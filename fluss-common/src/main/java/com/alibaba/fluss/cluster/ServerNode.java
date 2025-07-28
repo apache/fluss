@@ -18,6 +18,7 @@
 package com.alibaba.fluss.cluster;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.cluster.maintencance.ServerTag;
 
 import javax.annotation.Nullable;
 
@@ -39,6 +40,9 @@ public class ServerNode {
     /** rack info for ServerNode. Currently, only tabletServer has rack info. */
     private final @Nullable String rack;
 
+    /** Sever tag of tabletServer. */
+    private final @Nullable ServerTag serverTag;
+
     // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
     // RecordAccumulator.ready)
     private Integer hash;
@@ -48,11 +52,22 @@ public class ServerNode {
     }
 
     public ServerNode(int id, String host, int port, ServerType serverType, @Nullable String rack) {
+        this(id, host, port, serverType, rack, null);
+    }
+
+    public ServerNode(
+            int id,
+            String host,
+            int port,
+            ServerType serverType,
+            @Nullable String rack,
+            @Nullable ServerTag serverTag) {
         this.id = id;
         this.host = host;
         this.port = port;
         this.serverType = serverType;
         this.rack = rack;
+        this.serverTag = serverTag;
         if (serverType == ServerType.COORDINATOR) {
             this.uid = "cs-" + id;
         } else {
@@ -96,6 +111,11 @@ public class ServerNode {
         return rack;
     }
 
+    /** The server tag for this node. */
+    public @Nullable ServerTag serverTag() {
+        return serverTag;
+    }
+
     /**
      * Check whether this node is empty, which may be the case if noNode() is used as a placeholder
      * in a response payload with an error.
@@ -115,6 +135,7 @@ public class ServerNode {
             result = 31 * result + port;
             result = 31 * result + serverType.hashCode();
             result = 31 * result + ((rack == null) ? 0 : rack.hashCode());
+            result = 31 * result + ((serverTag == null) ? 0 : serverTag.hashCode());
             this.hash = result;
             return result;
         } else {
@@ -135,11 +156,12 @@ public class ServerNode {
                 && port == other.port
                 && Objects.equals(host, other.host)
                 && serverType == other.serverType
-                && Objects.equals(rack, other.rack);
+                && Objects.equals(rack, other.rack)
+                && Objects.equals(serverTag, other.serverTag);
     }
 
     @Override
     public String toString() {
-        return host + ":" + port + " (id: " + uid + ", rack: " + rack + ")";
+        return host + ":" + port + " (id: " + uid + ", rack: " + rack + ", tag: " + serverTag + ")";
     }
 }

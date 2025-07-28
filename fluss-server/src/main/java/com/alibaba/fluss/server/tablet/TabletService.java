@@ -71,6 +71,7 @@ import com.alibaba.fluss.server.entity.FetchReqInfo;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.log.FetchParams;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
+import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
@@ -479,5 +480,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
+    }
+
+    @Override
+    protected ServerMetadataCache getServerMetadataCache() {
+        return metadataCache;
     }
 }

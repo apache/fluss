@@ -713,4 +713,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 });
         return bucketMetadataList;
     }
+
+    @Override
+    protected ServerMetadataCache getServerMetadataCache() {
+        return metadataCache;
+    }
 }

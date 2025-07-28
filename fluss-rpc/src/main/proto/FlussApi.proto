@@ -178,6 +178,15 @@ message UpdateMetadataRequest {
 message UpdateMetadataResponse {
 }
 
+// describe cluster request and response
+message DescribeClusterRequest {
+}
+
+message DescribeClusterResponse {
+  optional PbServerNode coordinator_server = 1;
+  repeated PbServerNode tablet_servers = 2;
+}
+
 // produce log request and response
 message ProduceLogRequest {
   required int32 acks = 1;
@@ -596,6 +605,7 @@ message PbServerNode {
   required int32 port = 3;
   optional string listeners = 4;
   optional string rack = 5;
+  optional int32 server_tag = 6;
 }
 
 message PbTableMetadata {

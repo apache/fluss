@@ -44,6 +44,8 @@ import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableResponse;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
+import com.alibaba.fluss.rpc.messages.DescribeClusterRequest;
+import com.alibaba.fluss.rpc.messages.DescribeClusterResponse;
 import com.alibaba.fluss.rpc.messages.DropAclsRequest;
 import com.alibaba.fluss.rpc.messages.DropAclsResponse;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
@@ -336,6 +338,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeClusterResponse> describeCluster(
+            DescribeClusterRequest request) {
         throw new UnsupportedOperationException();
     }
 

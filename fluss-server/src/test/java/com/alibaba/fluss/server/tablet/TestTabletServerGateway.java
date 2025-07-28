@@ -26,6 +26,8 @@ import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
+import com.alibaba.fluss.rpc.messages.DescribeClusterRequest;
+import com.alibaba.fluss.rpc.messages.DescribeClusterResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -315,6 +317,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeClusterResponse> describeCluster(
+            DescribeClusterRequest request) {
         throw new UnsupportedOperationException();
     }
 

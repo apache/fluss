@@ -22,7 +22,6 @@ import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
-import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.maintencance.GoalType;
 import com.alibaba.fluss.cluster.maintencance.RebalancePlanForBucket;
@@ -91,7 +90,7 @@ import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePar
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
-import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static com.alibaba.fluss.client.utils.MetadataUtils.sendDescribeClusterRequest;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
@@ -127,17 +126,8 @@ public class FlussAdmin implements Admin {
         CompletableFuture.runAsync(
                 () -> {
                     try {
-                        List<ServerNode> serverNodeList = new ArrayList<>();
-                        Cluster cluster =
-                                sendMetadataRequestAndRebuildCluster(
-                                        readOnlyGateway,
-                                        false,
-                                        metadataUpdater.getCluster(),
-                                        null,
-                                        null,
-                                        null);
-                        serverNodeList.add(cluster.getCoordinatorServer());
-                        serverNodeList.addAll(cluster.getAliveTabletServerList());
+                        List<ServerNode> serverNodeList =
+                                sendDescribeClusterRequest(readOnlyGateway);
                         future.complete(serverNodeList);
                     } catch (Throwable t) {
                         future.completeExceptionally(t);
