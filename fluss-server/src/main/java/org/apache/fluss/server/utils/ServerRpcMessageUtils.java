@@ -20,6 +20,7 @@ package org.apache.fluss.server.utils;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -32,6 +33,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.DefaultKvRecordBatch;
@@ -113,6 +115,8 @@ import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -129,6 +133,7 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -160,6 +165,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 
 import javax.annotation.Nullable;
 
@@ -1690,6 +1696,76 @@ public class ServerRpcMessageUtils {
                             return pbDescribeConfig;
                         })
                 .collect(Collectors.toList());
+    }
+
+    public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
+        RebalanceResponse response = new RebalanceResponse();
+        List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
+
+        // for none-partitioned tables.
+        for (Map.Entry<Long, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBuckets().entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForTable.getKey());
+            List<PbRebalancePlanForBucket> planForBuckets = new ArrayList<>();
+            planForTable
+                    .getValue()
+                    .forEach(
+                            planForBucket ->
+                                    planForBuckets.add(toPbRebalancePlanForBucket(planForBucket)));
+            pbRebalancePlanForTable.addAllBucketsPlans(planForBuckets);
+            planForTables.add(pbRebalancePlanForTable);
+        }
+        response.addAllPlanForTables(planForTables);
+
+        // for partitioned tables.
+        Map<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForBucketsOfPartitionedTable =
+                new HashMap<>();
+        for (Map.Entry<TablePartition, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBucketsOfPartitionedTable().entrySet()) {
+            Map<Long, List<PbRebalancePlanForBucket>> bucketsPlanForPartition =
+                    planForBucketsOfPartitionedTable.computeIfAbsent(
+                            planForTable.getKey().getTableId(), k -> new HashMap<>());
+            bucketsPlanForPartition.put(
+                    planForTable.getKey().getPartitionId(),
+                    planForTable.getValue().stream()
+                            .map(ServerRpcMessageUtils::toPbRebalancePlanForBucket)
+                            .collect(Collectors.toList()));
+        }
+
+        for (Map.Entry<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForPartition :
+                planForBucketsOfPartitionedTable.entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForPartition.getKey());
+            planForPartition
+                    .getValue()
+                    .forEach(
+                            (partitionId, planForBuckets) ->
+                                    pbRebalancePlanForTable
+                                            .addPartitionsPlan()
+                                            .setPartitionId(partitionId)
+                                            .addAllBucketsPlans(planForBuckets));
+        }
+        return response;
+    }
+
+    private static PbRebalancePlanForBucket toPbRebalancePlanForBucket(
+            RebalancePlanForBucket planForBucket) {
+        PbRebalancePlanForBucket pbRebalancePlanForBucket =
+                new PbRebalancePlanForBucket()
+                        .setBucketId(planForBucket.getBucketId())
+                        .setOriginalLeader(planForBucket.getOriginalLeader())
+                        .setNewLeader(planForBucket.getNewLeader());
+        pbRebalancePlanForBucket
+                .setOriginalReplicas(
+                        planForBucket.getOriginReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setNewReplicas(
+                        planForBucket.getNewReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray());
+        return pbRebalancePlanForBucket;
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

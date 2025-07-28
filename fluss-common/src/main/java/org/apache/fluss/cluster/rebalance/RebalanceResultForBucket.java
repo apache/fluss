@@ -32,7 +32,7 @@ public class RebalanceResultForBucket {
     private final RebalancePlanForBucket rebalancePlanForBucket;
     private RebalanceStatusForBucket rebalanceStatusForBucket;
 
-    public RebalanceResultForBucket(
+    private RebalanceResultForBucket(
             RebalancePlanForBucket rebalancePlanForBucket,
             RebalanceStatusForBucket rebalanceStatusForBucket) {
         this.rebalancePlanForBucket = rebalancePlanForBucket;

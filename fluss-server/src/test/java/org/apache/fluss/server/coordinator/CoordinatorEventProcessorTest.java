@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
@@ -41,6 +42,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.ExecuteRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -374,11 +376,11 @@ class CoordinatorEventProcessorTest {
         // should be offline
         verifyReplicaOnlineOrOffline(
                 table1Id, table1Assignment, Collections.singleton(newlyServerId));
-        verifyBucketIsr(table1Id, 0, new int[] {0, 2});
-        verifyBucketIsr(table1Id, 1, new int[] {2, 0});
+        verifyBucketIsr(new TableBucket(table1Id, 0), 0, new int[] {0, 2});
+        verifyBucketIsr(new TableBucket(table1Id, 1), 2, new int[] {2, 0});
         verifyReplicaOnlineOrOffline(
                 table2Id, table2Assignment, Collections.singleton(newlyServerId));
-        verifyBucketIsr(table2Id, 0, new int[] {3});
+        verifyBucketIsr(new TableBucket(table2Id, 0), 3, new int[] {3});
 
         // now, check bucket state
         TableBucket t1Bucket0 = new TableBucket(table1Id, 0);
@@ -833,6 +835,184 @@ class CoordinatorEventProcessorTest {
         assertThat(resultForBucketMap.values()).allMatch(AdjustIsrResultForBucket::succeeded);
     }
 
+    @Test
+    void testDoElectPreferredLeaders() throws Exception {
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "test_preferred_leader_elect_table");
+        final long t1Id =
+                createTable(
+                        t1,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        TableBucket tableBucket = new TableBucket(t1Id, 0);
+        LeaderAndIsr leaderAndIsr =
+                waitValue(
+                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tableBucket)),
+                        Duration.ofMinutes(1),
+                        "leader not elected");
+
+        // change leader, and add back the origin leader to isr set as follower.
+        int originLeader = leaderAndIsr.leader();
+        int bucketLeaderEpoch = leaderAndIsr.leaderEpoch();
+        int coordinatorEpoch = leaderAndIsr.coordinatorEpoch();
+        List<Integer> isr1 = leaderAndIsr.isr();
+
+        Integer follower1 = isr1.stream().filter(i -> i != originLeader).findFirst().get();
+        Integer follower2 =
+                isr1.stream()
+                        .filter(i -> i != originLeader && !i.equals(follower1))
+                        .findFirst()
+                        .get();
+        List<Integer> isr2 = Arrays.asList(follower1, follower2, originLeader);
+        // change isr in coordinator context
+        // leader change from originLeader to follower1.
+        LeaderAndIsr newLeaderAndIsr =
+                new LeaderAndIsr(
+                        follower1,
+                        leaderAndIsr.leaderEpoch() + 1,
+                        isr2,
+                        coordinatorEpoch,
+                        bucketLeaderEpoch + 1);
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
+                    return null;
+                });
+        // Also update zk.
+        zookeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
+
+        // trigger preferred leader election.
+        ExecuteRebalanceTaskEvent rebalanceTaskEvent =
+                new ExecuteRebalanceTaskEvent(
+                        new RebalancePlanForBucket(
+                                tableBucket,
+                                newLeaderAndIsr.leader(),
+                                originLeader,
+                                leaderAndIsr.isr(),
+                                newLeaderAndIsr.isr()));
+        eventProcessor.getCoordinatorEventManager().put(rebalanceTaskEvent);
+
+        // verify preferred leader election
+        LeaderAndIsr newLeaderAndIsr2 =
+                waitValue(
+                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tableBucket)),
+                        Duration.ofMinutes(1),
+                        "leader not elected");
+        LeaderAndIsr newLeaderAndIsr2OfZk = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        assertThat(newLeaderAndIsr2.leader()).isEqualTo(originLeader);
+        assertThat(newLeaderAndIsr2OfZk.leader()).isEqualTo(originLeader);
+        assertThat(newLeaderAndIsr2OfZk.leaderEpoch()).isEqualTo(2);
+        assertThat(newLeaderAndIsr2OfZk.bucketEpoch()).isEqualTo(2);
+    }
+
+    @Test
+    void testDoBucketReassignment() throws Exception {
+        zookeeperClient.registerTabletServer(
+                3,
+                new TabletServerRegistration(
+                        "rack3",
+                        Collections.singletonList(
+                                new Endpoint("host3", 1001, DEFAULT_LISTENER_NAME)),
+                        System.currentTimeMillis()));
+
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "test_bucket_reassignment_table");
+        // Mock un-balanced table assignment.
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(0, 1, 3));
+        bucketAssignments.put(1, BucketAssignment.of(0, 1, 3));
+        bucketAssignments.put(2, BucketAssignment.of(1, 2, 3));
+        // For server-0: 2 leader, 2 replica
+        // For server-1: 1 leader, 3 replica
+        // For server-2: 0 leader, 1 replica
+        // For server-3: 0 leader, 3 replica
+        TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
+        long t1Id =
+                metadataManager.createTable(
+                        t1, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+        TableBucket tb0 = new TableBucket(t1Id, 0);
+        TableBucket tb1 = new TableBucket(t1Id, 1);
+        TableBucket tb2 = new TableBucket(t1Id, 2);
+        verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
+        verifyIsr(tb1, 0, Arrays.asList(0, 1, 3));
+        verifyIsr(tb2, 1, Arrays.asList(1, 2, 3));
+
+        // trigger bucket reassignment for t1:
+        // bucket0 -> (0, 1, 2)
+        // bucket1 -> (1, 2, 3)
+        // bucket2 -> (2, 3, 0)
+        // For Server-0: 1 leader, 2 replica
+        // For Server-1: 1 leader, 2 replica
+        // For Server-2: 1 leader, 2 replica
+        // For Server-3: 0 leader, 2 replica
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new ExecuteRebalanceTaskEvent(
+                                new RebalancePlanForBucket(
+                                        tb0,
+                                        0,
+                                        0,
+                                        Arrays.asList(0, 1, 3),
+                                        Arrays.asList(0, 1, 2))));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new ExecuteRebalanceTaskEvent(
+                                new RebalancePlanForBucket(
+                                        tb1,
+                                        0,
+                                        0,
+                                        Arrays.asList(0, 1, 3),
+                                        Arrays.asList(1, 2, 3))));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new ExecuteRebalanceTaskEvent(
+                                new RebalancePlanForBucket(
+                                        tb2,
+                                        1,
+                                        1,
+                                        Arrays.asList(1, 2, 3),
+                                        Arrays.asList(2, 3, 0))));
+
+        // Mock to finish rebalance tasks, in production case, this need to be trigged by receiving
+        // AdjustIsrRequest.
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrMap = new HashMap<>();
+        CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+        // This isr list equals originReplicas + addingReplicas.
+        leaderAndIsrMap.put(tb0, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2, 3), 0, 0));
+        leaderAndIsrMap.put(tb1, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2, 3), 0, 0));
+        leaderAndIsrMap.put(tb2, new LeaderAndIsr(1, 1, Arrays.asList(1, 2, 3, 0), 0, 0));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));
+        respCallback.get();
+
+        verifyIsr(tb0, 0, Arrays.asList(0, 1, 2));
+        verifyIsr(tb1, 1, Arrays.asList(1, 2, 3));
+        verifyIsr(tb2, 2, Arrays.asList(2, 3, 0));
+    }
+
+    private void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
+            throws Exception {
+        LeaderAndIsr leaderAndIsr =
+                waitValue(
+                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tb)),
+                        Duration.ofMinutes(1),
+                        "leader not elected");
+        LeaderAndIsr newLeaderAndIsrOfZk = zookeeperClient.getLeaderAndIsr(tb).get();
+        assertThat(leaderAndIsr.leader())
+                .isEqualTo(newLeaderAndIsrOfZk.leader())
+                .isEqualTo(expectedLeader);
+        assertThat(leaderAndIsr.isr())
+                .isEqualTo(newLeaderAndIsrOfZk.isr())
+                .hasSameElementsAs(expectedIsr);
+    }
+
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
@@ -1037,13 +1217,13 @@ class CoordinatorEventProcessorTest {
                         });
     }
 
-    private void verifyBucketIsr(long tableId, int bucket, int[] expectedIsr) {
+    private void verifyBucketIsr(TableBucket tableBucket, int leader, int[] expectedIsr) {
         retryVerifyContext(
                 ctx -> {
-                    TableBucket tableBucket = new TableBucket(tableId, bucket);
                     // verify leaderAndIsr from coordinator context
                     LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
                     assertThat(leaderAndIsr.isrArray()).isEqualTo(expectedIsr);
+                    assertThat(leaderAndIsr.leader()).isEqualTo(leader);
                     // verify leaderAndIsr from tablet server
                     try {
                         leaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -1051,6 +1231,7 @@ class CoordinatorEventProcessorTest {
                         throw new RuntimeException("Fail to get leaderAndIsr of " + tableBucket);
                     }
                     assertThat(leaderAndIsr.isrArray()).isEqualTo(expectedIsr);
+                    assertThat(leaderAndIsr.leader()).isEqualTo(leader);
                 });
     }
 
