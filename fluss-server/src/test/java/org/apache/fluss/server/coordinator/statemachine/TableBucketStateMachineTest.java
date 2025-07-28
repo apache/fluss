@@ -35,6 +35,8 @@ import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -66,7 +68,7 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.NewBu
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.CONTROLLED_SHUTDOWN_ELECTION;
+import static org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.initReplicaLeaderElection;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -238,6 +240,9 @@ class TableBucketStateMachineTest {
         coordinatorContext.putBucketState(tableBucket, OfflineBucket);
         coordinatorContext.setLiveTabletServers(createServers(Collections.emptyList()));
         tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.emptyList()));
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
         // the state will still be offline
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
 
@@ -376,10 +381,24 @@ class TableBucketStateMachineTest {
 
         // handle state change for controlled shutdown.
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tb), OnlineBucket, CONTROLLED_SHUTDOWN_ELECTION);
+                Collections.singleton(tb), OnlineBucket, new ControlledShutdownLeaderElection());
         assertThat(coordinatorContext.getBucketState(tb)).isEqualTo(OnlineBucket);
         assertThat(coordinatorContext.getBucketLeaderAndIsr(tb).get().leader())
                 .isNotEqualTo(oldLeader);
+    }
+
+    @Test
+    void testInitReplicaLeaderElection() {
+        List<Integer> assignments = Arrays.asList(2, 4);
+        List<Integer> liveReplicas = Collections.singletonList(4);
+
+        Optional<ElectionResult> leaderElectionResultOpt =
+                initReplicaLeaderElection(assignments, liveReplicas, 0);
+        assertThat(leaderElectionResultOpt.isPresent()).isTrue();
+        ElectionResult leaderElectionResult = leaderElectionResultOpt.get();
+        assertThat(leaderElectionResult.getLiveReplicas()).containsExactlyInAnyOrder(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().leader()).isEqualTo(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(4);
     }
 
     private TableBucketStateMachine createTableBucketStateMachine() {

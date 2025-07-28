@@ -18,6 +18,7 @@
 package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.admin.RebalancePlan;
 import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
@@ -25,6 +26,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -61,11 +63,14 @@ import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -368,6 +373,33 @@ public class ClientRpcMessageUtils {
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
         return request;
+    }
+
+    public static RebalancePlan toRebalancePlan(RebalanceResponse response) {
+        Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
+        for (PbRebalancePlanForTable pbTable : response.getTablePlansList()) {
+            long tableId = pbTable.getTableId();
+            for (PbRebalancePlanForBucket pbBucket : pbTable.getBucketsPlansList()) {
+                TableBucket tableBucket =
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId());
+                rebalancePlan.put(
+                        tableBucket,
+                        new RebalancePlanForBucket(
+                                tableBucket,
+                                pbBucket.getOriginalLeader(),
+                                pbBucket.getNewLeader(),
+                                Arrays.stream(pbBucket.getOriginalReplicas())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                Arrays.stream(pbBucket.getNewReplicas())
+                                        .boxed()
+                                        .collect(Collectors.toList())));
+            }
+        }
+        return new RebalancePlan(rebalancePlan);
     }
 
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
