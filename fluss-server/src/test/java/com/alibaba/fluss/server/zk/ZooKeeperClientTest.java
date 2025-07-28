@@ -19,9 +19,8 @@ package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.cluster.maintencance.RebalancePlanForBucket;
-import com.alibaba.fluss.cluster.maintencance.RebalanceStatus;
-import com.alibaba.fluss.cluster.maintencance.ServerTag;
+import com.alibaba.fluss.cluster.rebalance.RebalancePlanForBucket;
+import com.alibaba.fluss.cluster.rebalance.ServerTag;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.Schema;
@@ -476,33 +475,49 @@ class ZooKeeperClientTest {
         bucketPlan.put(
                 new TableBucket(0L, 0),
                 new RebalancePlanForBucket(
-                        0, 0, 3, Arrays.asList(0, 1, 2), Arrays.asList(3, 4, 5)));
+                        new TableBucket(0L, 0),
+                        0,
+                        3,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(3, 4, 5)));
         bucketPlan.put(
                 new TableBucket(0L, 1),
                 new RebalancePlanForBucket(
-                        1, 1, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 3)));
+                        new TableBucket(0L, 1),
+                        1,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 3)));
         bucketPlan.put(
                 new TableBucket(1L, 1L, 0),
                 new RebalancePlanForBucket(
-                        0, 1, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 3)));
+                        new TableBucket(1L, 1L, 0),
+                        1,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 3)));
         bucketPlan.put(
                 new TableBucket(1L, 1L, 1),
                 new RebalancePlanForBucket(
-                        1, 1, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 3)));
-        zookeeperClient.registerRebalancePlan(
-                new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
+                        new TableBucket(1L, 1L, 1),
+                        1,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 3)));
+        zookeeperClient.registerRebalancePlan(new RebalancePlan(bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan()).hasValue(new RebalancePlan(bucketPlan));
 
         bucketPlan = new HashMap<>();
         bucketPlan.put(
                 new TableBucket(0L, 0),
                 new RebalancePlanForBucket(
-                        0, 0, 3, Arrays.asList(0, 1, 2), Arrays.asList(3, 4, 5)));
-        zookeeperClient.registerRebalancePlan(
-                new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan(RebalanceStatus.IN_PROGRESS, bucketPlan));
+                        new TableBucket(0L, 0),
+                        0,
+                        3,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(3, 4, 5)));
+        zookeeperClient.registerRebalancePlan(new RebalancePlan(bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan()).hasValue(new RebalancePlan(bucketPlan));
 
         zookeeperClient.deleteRebalancePlan();
         assertThat(zookeeperClient.getRebalancePlan()).isEmpty();

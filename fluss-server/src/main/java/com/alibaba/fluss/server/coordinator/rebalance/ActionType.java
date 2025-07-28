@@ -15,34 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.cluster.maintencance;
+package com.alibaba.fluss.server.coordinator.rebalance;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
+/** Flags to indicate the type of action. */
+public enum ActionType {
+    /** Move a replica from a source tabletServer to a destination tabletServer. */
+    REPLICA_MOVEMENT,
 
-/**
- * Rebalance status for single bucket.
- *
- * @since 0.8
- */
-@PublicEvolving
-public enum RebalanceStatusForBucket {
-    PENDING(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4);
-
-    private final int code;
-
-    RebalanceStatusForBucket(int code) {
-        this.code = code;
-    }
-
-    public static RebalanceStatusForBucket of(int code) {
-        for (RebalanceStatusForBucket status : RebalanceStatusForBucket.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
-    }
+    /**
+     * Move leadership of a leader from a source tabletServer to a follower of the same replica
+     * residing in a destination tabletServer.
+     */
+    LEADERSHIP_MOVEMENT;
 }

@@ -15,37 +15,39 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.cluster.maintencance;
+package com.alibaba.fluss.cluster.rebalance;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 
-import java.util.Arrays;
-
 /**
- * The type of goal to optimize.
+ * Rebalance status for the rebalance task.
  *
  * @since 0.8
  */
 @PublicEvolving
-public enum GoalType {
-    REPLICA_DISTRIBUTION_GOAL(0),
-    PREFERRED_LEADER_GOAL(1);
+public enum RebalanceStatus {
+    NO_ONGOING_REBALANCE(0),
+    PLAN_GENERATING(1),
+    TASK_EXECUTING(2),
+    COMPLETED(3),
+    FAILED(4);
 
-    public final int value;
+    private final int code;
 
-    GoalType(int value) {
-        this.value = value;
+    RebalanceStatus(int code) {
+        this.code = code;
     }
 
-    public static GoalType valueOf(int value) {
-        if (value == REPLICA_DISTRIBUTION_GOAL.value) {
-            return REPLICA_DISTRIBUTION_GOAL;
-        } else if (value == PREFERRED_LEADER_GOAL.value) {
-            return PREFERRED_LEADER_GOAL;
-        } else {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Value %s must be one of %s", value, Arrays.asList(GoalType.values())));
+    public int code() {
+        return code;
+    }
+
+    public static RebalanceStatus of(int code) {
+        for (RebalanceStatus status : RebalanceStatus.values()) {
+            if (status.code == code) {
+                return status;
+            }
         }
+        return null;
     }
 }

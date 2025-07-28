@@ -34,4 +34,30 @@ public class ReplicaLeaderElectionAlgorithms {
 
         return Optional.empty();
     }
+
+    public static Optional<Integer> reassignBucketLeaderElection(
+            List<Integer> targetReplicas, List<Integer> liveReplicas, List<Integer> isr) {
+        // currently, we always use the first replica in targetReplicas, which also in liveReplicas
+        // and isr as the leader replica. For bucket reassignment, the first replica is the target
+        // leader replica.
+        for (int assignment : targetReplicas) {
+            if (liveReplicas.contains(assignment) && isr.contains(assignment)) {
+                return Optional.of(assignment);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    public static Optional<Integer> preferredReplicaLeaderElection(
+            List<Integer> assignment, List<Integer> liveReplicas, List<Integer> isr) {
+        if (!assignment.isEmpty()) {
+            // get the first one.
+            int preferredReplica = assignment.get(0);
+            if (liveReplicas.contains(preferredReplica) && isr.contains(preferredReplica)) {
+                return Optional.of(preferredReplica);
+            }
+        }
+        return Optional.empty();
+    }
 }

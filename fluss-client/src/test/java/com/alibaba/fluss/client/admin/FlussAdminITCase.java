@@ -24,7 +24,7 @@ import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.cluster.ServerNode;
-import com.alibaba.fluss.cluster.maintencance.ServerTag;
+import com.alibaba.fluss.cluster.rebalance.ServerTag;
 import com.alibaba.fluss.config.AutoPartitionTimeUnit;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;

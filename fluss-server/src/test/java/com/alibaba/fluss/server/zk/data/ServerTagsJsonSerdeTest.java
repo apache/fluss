@@ -17,7 +17,7 @@
 
 package com.alibaba.fluss.server.zk.data;
 
-import com.alibaba.fluss.cluster.maintencance.ServerTag;
+import com.alibaba.fluss.cluster.rebalance.ServerTag;
 import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.HashMap;

@@ -22,9 +22,10 @@ import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.cluster.ServerNode;
-import com.alibaba.fluss.cluster.maintencance.GoalType;
-import com.alibaba.fluss.cluster.maintencance.RebalancePlanForBucket;
-import com.alibaba.fluss.cluster.maintencance.ServerTag;
+import com.alibaba.fluss.cluster.rebalance.GoalType;
+import com.alibaba.fluss.cluster.rebalance.RebalancePlanForBucket;
+import com.alibaba.fluss.cluster.rebalance.RebalanceResultForBucket;
+import com.alibaba.fluss.cluster.rebalance.ServerTag;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
@@ -61,7 +62,6 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.CompleteFuture;
 
 import java.util.Collection;
 import java.util.List;
@@ -521,7 +521,7 @@ public interface Admin extends AutoCloseable {
      *     it.
      * @return the generated rebalance plan for all the tableBuckets which need to do rebalance.
      */
-    CompleteFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+    CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
             List<GoalType> priorityGoals, boolean dryRun);
 
     /**
@@ -535,7 +535,7 @@ public interface Admin extends AutoCloseable {
      *
      * @return the rebalance process for all the tableBuckets doing rebalance.
      */
-    CompleteFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess();
+    CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess();
 
     /**
      * Cannel the rebalance task.

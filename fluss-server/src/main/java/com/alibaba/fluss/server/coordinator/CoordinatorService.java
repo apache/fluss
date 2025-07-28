@@ -19,12 +19,14 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.cluster.maintencance.ServerTag;
+import com.alibaba.fluss.cluster.rebalance.GoalType;
+import com.alibaba.fluss.cluster.rebalance.ServerTag;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
+import com.alibaba.fluss.exception.RebalanceFailureException;
 import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
@@ -99,6 +101,8 @@ import com.alibaba.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import com.alibaba.fluss.server.coordinator.event.EventManager;
 import com.alibaba.fluss.server.coordinator.event.RemoveServerTagEvent;
+import com.alibaba.fluss.server.coordinator.rebalance.RebalanceManager;
+import com.alibaba.fluss.server.coordinator.rebalance.goal.Goal;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.LakeTieringTableInfo;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -111,6 +115,7 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
+import com.alibaba.fluss.server.zk.data.RebalancePlan;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.utils.IOUtils;
@@ -131,6 +136,7 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static com.alibaba.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
@@ -138,6 +144,7 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemo
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -157,6 +164,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final @Nullable DataLakeFormat dataLakeFormat;
     private final @Nullable LakeCatalog lakeCatalog;
     private final LakeTableTieringManager lakeTableTieringManager;
+    private final RebalanceManager rebalanceManager;
 
     public CoordinatorService(
             Configuration conf,
@@ -167,7 +175,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             @Nullable LakeCatalog lakeCatalog,
-            LakeTableTieringManager lakeTableTieringManager) {
+            LakeTableTieringManager lakeTableTieringManager,
+            RebalanceManager rebalanceManager) {
         super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
@@ -178,6 +187,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
         this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
+        this.rebalanceManager = rebalanceManager;
         this.metadataCache = metadataCache;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
@@ -615,7 +625,31 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        if (rebalanceManager.hasOngoingRebalance()) {
+            throw new RebalanceFailureException(
+                    "There is an ongoing rebalance task. Currently, we only support one active "
+                            + "rebalance task in the cluster.");
+        }
+
+        List<Goal> goalsByPriority = new ArrayList<>();
+        Arrays.stream(request.getGoals())
+                .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
+        boolean isDryRun = request.isDryRun();
+
+        // 1. generate rebalance plan.
+        RebalancePlan rebalancePlan;
+        try {
+            rebalancePlan = rebalanceManager.generateRebalancePlan(goalsByPriority);
+        } catch (Exception e) {
+            throw new RebalanceFailureException("Failed to generate rebalance plan.", e);
+        }
+
+        if (!isDryRun) {
+            // 2. execute rebalance plan.
+            rebalanceManager.executeRebalancePlan(rebalancePlan);
+        }
+
+        return CompletableFuture.completedFuture(makeRebalanceRespose(rebalancePlan));
     }
 
     @Override

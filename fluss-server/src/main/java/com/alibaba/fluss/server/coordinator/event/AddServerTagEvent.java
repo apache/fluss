@@ -17,7 +17,7 @@
 
 package com.alibaba.fluss.server.coordinator.event;
 
-import com.alibaba.fluss.cluster.maintencance.ServerTag;
+import com.alibaba.fluss.cluster.rebalance.ServerTag;
 import com.alibaba.fluss.rpc.messages.AddServerTagResponse;
 
 import java.util.List;
