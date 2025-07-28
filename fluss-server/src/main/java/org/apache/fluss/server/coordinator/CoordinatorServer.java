@@ -37,6 +37,7 @@ import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
@@ -495,6 +496,11 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public @Nullable Authorizer getAuthorizer() {
         return authorizer;
+    }
+
+    @VisibleForTesting
+    public RebalanceManager getRebalanceManager() {
+        return coordinatorEventProcessor.getRebalanceManager();
     }
 
     private static void validateConfigs(Configuration conf) {

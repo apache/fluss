@@ -19,12 +19,14 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -99,6 +101,8 @@ import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -111,6 +115,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.IOUtils;
@@ -121,6 +126,7 @@ import javax.annotation.Nullable;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -131,6 +137,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
@@ -138,6 +145,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -146,7 +154,6 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
-
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
@@ -157,6 +164,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final @Nullable DataLakeFormat dataLakeFormat;
     private final @Nullable LakeCatalog lakeCatalog;
     private final LakeTableTieringManager lakeTableTieringManager;
+    private final Supplier<RebalanceManager> rebalanceManagerSupplier;
+
+    // This parameter is only used for testing.
+    private final boolean generateUnBalanceAssignment;
 
     public CoordinatorService(
             Configuration conf,
@@ -171,6 +182,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
+        this.generateUnBalanceAssignment =
+                conf.getBoolean(ConfigOptions.SERVER_GENERATE_UNBALANCE_ASSIGNMENT_FOR_TEST);
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
@@ -178,6 +191,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
         this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
+        this.rebalanceManagerSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getRebalanceManager();
         this.metadataCache = metadataCache;
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
@@ -273,7 +288,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             // the replication factor must be set now
             int replicaFactor = tableDescriptor.getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
-            tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
+            if (generateUnBalanceAssignment) {
+                // this branch is only used for testing.
+                tableAssignment =
+                        new TableAssignment(
+                                generateUnBalanceAssignment(bucketCount, replicaFactor));
+            } else {
+                tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
+            }
         }
 
         // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
@@ -390,9 +412,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // second, generate the PartitionAssignment.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(table.bucketCount, replicaFactor, servers)
-                        .getBucketAssignments();
+        Map<Integer, BucketAssignment> bucketAssignments;
+        if (generateUnBalanceAssignment) {
+            // This branch is only used for testing.
+            bucketAssignments = generateUnBalanceAssignment(table.bucketCount, replicaFactor);
+        } else {
+            bucketAssignments =
+                    generateAssignment(table.bucketCount, replicaFactor, servers)
+                            .getBucketAssignments();
+        }
+
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(table.tableId, bucketAssignments);
 
@@ -615,7 +644,30 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        List<Goal> goalsByPriority = new ArrayList<>();
+        Arrays.stream(request.getGoals())
+                .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
+        boolean isDryRun = request.isDryRun();
+
+        // 1. generate rebalance plan.
+        RebalanceManager rebalanceManager = rebalanceManagerSupplier.get();
+        RebalancePlan rebalancePlan;
+        try {
+            rebalancePlan = rebalanceManager.generateRebalancePlan(goalsByPriority);
+        } catch (Exception e) {
+            throw new RebalanceFailureException("Failed to generate rebalance plan.", e);
+        }
+
+        if (!isDryRun) {
+            if (rebalanceManager.hasOngoingRebalance()) {
+                throw new RebalanceFailureException(
+                        "Rebalance task already exists. Please wait for it to finish or cancel it first.");
+            }
+
+            // 2. execute rebalance plan.
+            rebalanceManager.registerRebalance(rebalancePlan.getExecutePlan());
+        }
+        return CompletableFuture.completedFuture(makeRebalanceRespose(rebalancePlan));
     }
 
     @Override
@@ -627,7 +679,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        rebalanceManagerSupplier.get().cancelRebalance();
+        return CompletableFuture.completedFuture(new CancelRebalanceResponse());
     }
 
     private void validateHeartbeatRequest(
@@ -712,5 +765,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     bucketMetadataList.add(bucketMetadata);
                 });
         return bucketMetadataList;
+    }
+
+    private Map<Integer, BucketAssignment> generateUnBalanceAssignment(
+            int nBuckets, int replicationFactor) {
+        Map<Integer, BucketAssignment> assignments = new HashMap<>();
+        for (int i = 0; i < nBuckets; i++) {
+            if (replicationFactor == 1) {
+                assignments.put(i, new BucketAssignment(Collections.singletonList(0)));
+            } else if (replicationFactor == 2) {
+                assignments.put(i, new BucketAssignment(Arrays.asList(0, 1)));
+            } else if (replicationFactor == 3) {
+                assignments.put(i, new BucketAssignment(Arrays.asList(0, 1, 2)));
+            } else {
+                throw new IllegalArgumentException(
+                        "replicationFactor must be 1, 2 or 3 for unbalance assignment.");
+            }
+        }
+        return assignments;
     }
 }

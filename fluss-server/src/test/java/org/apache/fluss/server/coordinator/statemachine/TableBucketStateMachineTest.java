@@ -233,6 +233,9 @@ class TableBucketStateMachineTest {
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Collections.emptyList()));
         tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.emptyList()));
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
         // the state will still be offline
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
 
