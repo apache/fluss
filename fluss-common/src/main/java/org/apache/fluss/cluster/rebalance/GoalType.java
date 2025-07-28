@@ -57,4 +57,8 @@ public enum GoalType {
                             "Value %s must be one of %s", value, Arrays.asList(GoalType.values())));
         }
     }
+
+    public static GoalType fromName(String name) {
+        return valueOf(name.toUpperCase());
+    }
 }

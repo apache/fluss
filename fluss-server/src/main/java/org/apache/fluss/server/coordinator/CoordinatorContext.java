@@ -184,7 +184,7 @@ public class CoordinatorContext {
         return tablePathById;
     }
 
-    public Set<TableBucket> allBuckets() {
+    public Set<TableBucket> getAllBuckets() {
         Set<TableBucket> allBuckets = new HashSet<>();
         for (Map.Entry<Long, Map<Integer, List<Integer>>> tableAssign :
                 tableAssignments.entrySet()) {

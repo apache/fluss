@@ -33,6 +33,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
@@ -506,6 +507,11 @@ public class CoordinatorServer extends ServerBase {
 
     public DynamicConfigManager getDynamicConfigManager() {
         return dynamicConfigManager;
+    }
+
+    @VisibleForTesting
+    public RebalanceManager getRebalanceManager() {
+        return coordinatorEventProcessor.getRebalanceManager();
     }
 
     private static void validateConfigs(Configuration conf) {
