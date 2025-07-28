@@ -51,6 +51,7 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -77,6 +78,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -559,7 +561,9 @@ public class FlussAdmin implements Admin {
     @Override
     public CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
             List<GoalType> priorityGoals, boolean dryRun) {
-        throw new UnsupportedOperationException("Support soon");
+        RebalanceRequest request = new RebalanceRequest().setDryRun(dryRun);
+        priorityGoals.forEach(goal -> request.addGoal(goal.value));
+        return gateway.rebalance(request).thenApply(ClientRpcMessageUtils::toRebalancePlan);
     }
 
     @Override
@@ -569,7 +573,8 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Void> cancelRebalance() {
-        throw new UnsupportedOperationException("Support soon");
+        CancelRebalanceRequest request = new CancelRebalanceRequest();
+        return gateway.cancelRebalance(request).thenApply(r -> null);
     }
 
     @Override

@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -30,6 +31,7 @@ import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -113,6 +115,8 @@ import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.entity.TablePropertyChanges;
@@ -123,6 +127,7 @@ import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.IOUtils;
@@ -131,7 +136,9 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -142,6 +149,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
@@ -149,6 +157,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
@@ -157,7 +166,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
-
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
@@ -168,6 +176,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    private final Supplier<RebalanceManager> rebalanceManagerSupplier;
 
     public CoordinatorService(
             Configuration conf,
@@ -196,6 +205,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
         this.lakeTableTieringManager = lakeTableTieringManager;
+        this.rebalanceManagerSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getRebalanceManager();
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
@@ -289,12 +300,29 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;
+        Map<String, String> properties = tableDescriptor.getProperties();
+        boolean generateUnbalanceAssignment;
+        if (properties.containsKey(ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key())) {
+            generateUnbalanceAssignment =
+                    Boolean.parseBoolean(
+                            properties.get(
+                                    ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key()));
+        } else {
+            generateUnbalanceAssignment = false;
+        }
         // only when it's no partitioned table do we generate the assignment for it
         if (!tableDescriptor.isPartitioned()) {
             // the replication factor must be set now
             int replicaFactor = tableDescriptor.getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
-            tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
+            if (generateUnbalanceAssignment) {
+                // this branch is only used for testing.
+                tableAssignment =
+                        new TableAssignment(
+                                generateUnBalanceAssignment(bucketCount, replicaFactor));
+            } else {
+                tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
+            }
         }
 
         // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
@@ -491,9 +519,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // second, generate the PartitionAssignment.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(table.bucketCount, replicaFactor, servers)
-                        .getBucketAssignments();
+        Map<Integer, BucketAssignment> bucketAssignments;
+
+        boolean generateUnbalanceAssignment = table.getTableConfig().generateUnbalanceAssignment();
+        if (generateUnbalanceAssignment) {
+            // This branch is only used for testing.
+            bucketAssignments = generateUnBalanceAssignment(table.bucketCount, replicaFactor);
+        } else {
+            bucketAssignments =
+                    generateAssignment(table.bucketCount, replicaFactor, servers)
+                            .getBucketAssignments();
+        }
+
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(table.tableId, bucketAssignments);
 
@@ -540,16 +577,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
                 new AccessContextEvent<>(
-                        ctx -> {
-                            return processMetadataRequest(
-                                    request,
-                                    listenerName,
-                                    session,
-                                    authorizer,
-                                    metadataCache,
-                                    new CoordinatorMetadataProvider(
-                                            zkClient, metadataManager, ctx));
-                        });
+                        ctx ->
+                                processMetadataRequest(
+                                        request,
+                                        listenerName,
+                                        session,
+                                        authorizer,
+                                        metadataCache,
+                                        new CoordinatorMetadataProvider(
+                                                zkClient, metadataManager, ctx)));
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
     }
@@ -768,7 +804,30 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        List<Goal> goalsByPriority = new ArrayList<>();
+        Arrays.stream(request.getGoals())
+                .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
+        boolean isDryRun = request.isDryRun();
+
+        // 1. generate rebalance plan.
+        RebalanceManager rebalanceManager = rebalanceManagerSupplier.get();
+        RebalancePlan rebalancePlan;
+        try {
+            rebalancePlan = rebalanceManager.generateRebalancePlan(goalsByPriority);
+        } catch (Exception e) {
+            throw new RebalanceFailureException("Failed to generate rebalance plan.", e);
+        }
+
+        if (!isDryRun) {
+            if (rebalanceManager.hasOngoingRebalance()) {
+                throw new RebalanceFailureException(
+                        "Rebalance task already exists. Please wait for it to finish or cancel it first.");
+            }
+
+            // 2. execute rebalance plan.
+            rebalanceManager.registerRebalance(rebalancePlan.getExecutePlan());
+        }
+        return CompletableFuture.completedFuture(makeRebalanceRespose(rebalancePlan));
     }
 
     @Override
@@ -780,7 +839,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        rebalanceManagerSupplier.get().cancelRebalance();
+        return CompletableFuture.completedFuture(new CancelRebalanceResponse());
     }
 
     @VisibleForTesting
@@ -824,6 +884,24 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         "Creation of Log Tables is disallowed in the cluster.");
             }
         }
+    }
+
+    private Map<Integer, BucketAssignment> generateUnBalanceAssignment(
+            int nBuckets, int replicationFactor) {
+        Map<Integer, BucketAssignment> assignments = new HashMap<>();
+        for (int i = 0; i < nBuckets; i++) {
+            if (replicationFactor == 1) {
+                assignments.put(i, new BucketAssignment(Collections.singletonList(0)));
+            } else if (replicationFactor == 2) {
+                assignments.put(i, new BucketAssignment(Arrays.asList(0, 1)));
+            } else if (replicationFactor == 3) {
+                assignments.put(i, new BucketAssignment(Arrays.asList(0, 1, 2)));
+            } else {
+                throw new IllegalArgumentException(
+                        "replicationFactor must be 1, 2 or 3 for unbalance assignment.");
+            }
+        }
+        return assignments;
     }
 
     static class DefaultLakeCatalogContext implements LakeCatalog.Context {
