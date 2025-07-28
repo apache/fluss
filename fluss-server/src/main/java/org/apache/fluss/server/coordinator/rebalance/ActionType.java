@@ -15,39 +15,16 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.server.coordinator.rebalance;
 
-import org.apache.fluss.annotation.PublicEvolving;
+/** Flags to indicate the type of action. */
+public enum ActionType {
+    /** Move a replica from a source tabletServer to a destination tabletServer. */
+    REPLICA_MOVEMENT,
 
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
-
-    private final int code;
-
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
-    }
+    /**
+     * Move leadership of a leader from a source tabletServer to a follower of the same replica
+     * residing in a destination tabletServer.
+     */
+    LEADERSHIP_MOVEMENT;
 }

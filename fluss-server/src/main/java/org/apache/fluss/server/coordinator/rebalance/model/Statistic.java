@@ -15,39 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.server.coordinator.rebalance.model;
 
-import org.apache.fluss.annotation.PublicEvolving;
-
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
-
-    private final int code;
-
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
-    }
+/** An enum for the statistic. */
+public enum Statistic {
+    AVG,
+    MAX,
+    MIN,
+    ST_DEV
 }

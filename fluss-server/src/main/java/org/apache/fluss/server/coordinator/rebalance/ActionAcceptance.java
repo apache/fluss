@@ -15,39 +15,23 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.server.coordinator.rebalance;
 
-import org.apache.fluss.annotation.PublicEvolving;
+/** Flags to indicate if an action is acceptable by the goal(s). */
+public enum ActionAcceptance {
+    /** Action is acceptable -- i.e. it does not violate goal constraints. */
+    ACCEPT,
+    /**
+     * Action is rejected in replica-level. But, the destination tabletServer may potentially accept
+     * actions of the same {@link ActionType} from the source tabletServer specified in the given
+     * action.
+     */
+    REPLICA_REJECT,
 
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
-
-    private final int code;
-
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
-    }
+    /**
+     * Action is rejected in server-level. hence, the destination tabletServer does not accept
+     * actions of the same {@link ActionType} from the source tabletServer specified in the given
+     * action.
+     */
+    SERVER_REJECT
 }
