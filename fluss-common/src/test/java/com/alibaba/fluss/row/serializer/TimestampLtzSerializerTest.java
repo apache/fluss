@@ -28,7 +28,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link TimestampLtzSerializer} with precision 0. */
+/** Test for {@link TimestampLtzSerializer} with precision 0 and precision 6. */
 public class TimestampLtzSerializerTest extends SerializerTestBase<TimestampLtz> {
 
     @Override
@@ -96,5 +96,81 @@ public class TimestampLtzSerializerTest extends SerializerTestBase<TimestampLtz>
         TimestampLtzSerializer serializer = createSerializer();
         // Precision 0 is compact mode
         assertThat(TimestampLtz.isCompact(0)).isTrue();
+    }
+
+    // Tests for precision 6 (non-compact mode)
+
+    @Test
+    void testEqualsAndHashCodePrecision6() {
+        TimestampLtzSerializer serializer1 = new TimestampLtzSerializer(6);
+        TimestampLtzSerializer serializer2 = new TimestampLtzSerializer(6);
+        TimestampLtzSerializer serializer3 = new TimestampLtzSerializer(0);
+
+        assertThat(serializer1).isEqualTo(serializer2);
+        assertThat(serializer1).isNotEqualTo(serializer3);
+        assertThat(serializer1).isNotEqualTo(null);
+        assertThat(serializer1).isNotEqualTo("string");
+
+        assertThat(serializer1.hashCode()).isEqualTo(serializer2.hashCode());
+        assertThat(serializer1.hashCode()).isNotEqualTo(serializer3.hashCode());
+    }
+
+    @Test
+    void testNonCompactMode() {
+        TimestampLtzSerializer serializer = new TimestampLtzSerializer(6);
+        // Precision 6 is not compact mode
+        assertThat(TimestampLtz.isCompact(6)).isFalse();
+    }
+
+    @Test
+    void testPrecision6Data() {
+        TimestampLtzSerializer serializer = new TimestampLtzSerializer(6);
+
+        // For precision 6 (non-compact mode), include timestamps with non-zero nanoOfMillisecond
+        TimestampLtz[] testData =
+                new TimestampLtz[] {
+                    TimestampLtz.fromEpochMillis(1, 100000),
+                    TimestampLtz.fromEpochMillis(2, 200000),
+                    TimestampLtz.fromEpochMillis(3, 300000),
+                    TimestampLtz.fromEpochMillis(4, 400000),
+                    TimestampLtz.fromEpochMillis(0, 0),
+                    TimestampLtz.fromEpochMillis(1234567890L, 500000),
+                    TimestampLtz.fromEpochMillis(1000000000L, 750000),
+                    TimestampLtz.fromEpochMillis(2000000000L, 999999),
+                    TimestampLtz.fromEpochMillis(-1, 100000),
+                    TimestampLtz.fromEpochMillis(-2, 200000),
+                    TimestampLtz.fromEpochMillis(-3, 300000),
+                    TimestampLtz.fromEpochMillis(-4, 400000),
+                    TimestampLtz.fromEpochMillis(-1234567890L, 500000),
+                    TimestampLtz.fromEpochMillis(-1000000000L, 750000),
+                    TimestampLtz.fromEpochMillis(-2000000000L, 999999)
+                };
+
+        // Test serialization and deserialization
+        for (TimestampLtz timestamp : testData) {
+            TimestampLtz copied = serializer.copy(timestamp);
+            assertThat(deepEquals(timestamp, copied)).isTrue();
+        }
+    }
+
+    @Test
+    void testPrecision6SerializableToString() {
+        TimestampLtzSerializer serializer = new TimestampLtzSerializer(6);
+
+        List<Pair<TimestampLtz, String>> testData =
+                Arrays.asList(
+                        Pair.of(
+                                DateTimeUtils.parseTimestampLtzData(
+                                        "2019-01-01 00:00:00.000000", 6),
+                                "2019-01-01 00:00:00.000000"),
+                        Pair.of(
+                                DateTimeUtils.parseTimestampLtzData(
+                                        "2019-01-01 00:00:00.000001", 6),
+                                "2019-01-01 00:00:00.000001"));
+
+        for (Pair<TimestampLtz, String> pair : testData) {
+            String result = serializer.serializeToString(pair.getLeft());
+            assertThat(result).isEqualTo(pair.getRight());
+        }
     }
 }
