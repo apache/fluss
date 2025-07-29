@@ -34,7 +34,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CoordinatorServerElectionTest {
@@ -109,7 +109,7 @@ class CoordinatorServerElectionTest {
     }
 
     public void waitUntilCoordinatorServerElected() {
-        waitUtil(
+        waitUntil(
                 () -> {
                     return zookeeperClient.getCoordinatorLeaderAddress().isPresent();
                 },
@@ -118,7 +118,7 @@ class CoordinatorServerElectionTest {
     }
 
     public void waitUntilCoordinatorServerReelected(CoordinatorAddress address) {
-        waitUtil(
+        waitUntil(
                 () -> {
                     return zookeeperClient.getCoordinatorLeaderAddress().isPresent()
                             && !zookeeperClient.getCoordinatorLeaderAddress().get().equals(address);
