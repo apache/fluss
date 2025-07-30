@@ -237,8 +237,9 @@ public class RemoteLogManager implements Closeable {
      * whose remote log start offset higher that or equal to this offset, and including another one
      * segment whose remote log start offset smaller than this offset (floor key).
      */
-    public List<RemoteLogSegment> relevantRemoteLogSegments(TableBucket tableBucket, long offset) {
-        return remoteLogTablet(tableBucket).relevantRemoteLogSegments(offset);
+    public List<RemoteLogSegment> relevantRemoteLogSegments(
+            TableBucket tableBucket, long offset, long maxRemoteBytes) {
+        return remoteLogTablet(tableBucket).relevantRemoteLogSegments(offset, maxRemoteBytes);
     }
 
     private boolean remoteDisabled() {

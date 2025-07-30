@@ -1046,7 +1046,9 @@ public class ReplicaManager {
 
                 FetchLogResultForBucket result;
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
-                    result = handleFetchOutOfRangeException(replica, fetchOffset, e);
+                    result =
+                            handleFetchOutOfRangeException(
+                                    replica, fetchOffset, fetchReqInfo.getMaxRemoteBytes(), e);
                 } else {
                     result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
                 }
@@ -1058,7 +1060,7 @@ public class ReplicaManager {
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(
-            Replica replica, long fetchOffset, Exception e) {
+            Replica replica, long fetchOffset, long maxRemoteBytes, Exception e) {
         TableBucket tb = replica.getTableBucket();
         if (fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET) {
             fetchOffset = replica.getLogStartOffset();
@@ -1076,7 +1078,8 @@ public class ReplicaManager {
         // of RemoteLogSegment. For client fetcher, it will fetch the log from remote in client.
         // For follower, it can update its local metadata to adjust the next fetch offset.
         else if (canFetchFromRemoteLog(replica, fetchOffset)) {
-            RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
+            RemoteLogFetchInfo remoteLogFetchInfo =
+                    fetchLogFromRemote(replica, fetchOffset, maxRemoteBytes);
             if (remoteLogFetchInfo != null) {
                 return new FetchLogResultForBucket(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
@@ -1102,9 +1105,11 @@ public class ReplicaManager {
         return replica.getLogTablet().canFetchFromRemoteLog(fetchOffset);
     }
 
-    private @Nullable RemoteLogFetchInfo fetchLogFromRemote(Replica replica, long fetchOffset) {
+    private @Nullable RemoteLogFetchInfo fetchLogFromRemote(
+            Replica replica, long fetchOffset, long maxRemoteBytes) {
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(replica.getTableBucket(), fetchOffset);
+                remoteLogManager.relevantRemoteLogSegments(
+                        replica.getTableBucket(), fetchOffset, maxRemoteBytes);
         if (!remoteLogSegmentList.isEmpty()) {
             int firstStartPos =
                     remoteLogManager.lookupPositionForOffset(

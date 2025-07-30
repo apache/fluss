@@ -60,7 +60,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         // run RLMTask to copy local log segment to remote and commit snapshot.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
-        assertThat(remoteLog.relevantRemoteLogSegments(0L).size()).isEqualTo(4);
+        assertThat(remoteLog.relevantRemoteLogSegments(0L, Integer.MAX_VALUE).size()).isEqualTo(4);
         assertThat(remoteLog.allRemoteLogSegments().size()).isEqualTo(4);
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(0L);
 
@@ -68,7 +68,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         // default 7 days TTL, this should expire all remote segments.
         manualClock.advanceTime(Duration.ofDays(7).plusHours(1));
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        assertThat(remoteLog.relevantRemoteLogSegments(0L).size()).isEqualTo(0);
+        assertThat(remoteLog.relevantRemoteLogSegments(0L, Integer.MAX_VALUE).size()).isEqualTo(0);
         assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
 

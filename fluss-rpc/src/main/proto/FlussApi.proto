@@ -618,6 +618,7 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  optional int64 max_remote_bytes = 5;
 }
 
 message PbFetchLogRespForTable {

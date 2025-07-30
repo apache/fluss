@@ -203,7 +203,7 @@ public class RemoteLogTablet {
      * whose remote log start offset higher that or equal to this offset, and including another one
      * segment whose remote log start offset smaller than this offset (floor key).
      */
-    public List<RemoteLogSegment> relevantRemoteLogSegments(long offset) {
+    public List<RemoteLogSegment> relevantRemoteLogSegments(long offset, long maxRemoteBytes) {
         return inReadLock(
                 lock,
                 () -> {
@@ -213,10 +213,15 @@ public class RemoteLogTablet {
                                     .tailMap(floorKey == null ? 0L : floorKey, true)
                                     .values();
                     List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
+                    int sizeInBytes = 0;
                     for (UUID id : segmentIds) {
                         RemoteLogSegment remoteLogSegment = idToRemoteLogSegment.get(id);
-                        if (offset < remoteLogSegment.remoteLogEndOffset()) {
+                        if (offset < remoteLogSegment.remoteLogEndOffset()
+                                && sizeInBytes < maxRemoteBytes) {
                             remoteLogSegmentList.add(remoteLogSegment);
+                            sizeInBytes += remoteLogSegment.segmentSizeInBytes();
+                        } else {
+                            break;
                         }
                     }
                     return remoteLogSegmentList;
