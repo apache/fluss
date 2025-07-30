@@ -43,11 +43,6 @@ public final class LookupResult {
         this.rowList = rowList;
     }
 
-    public static LookupResult fromSingleRow(@Nullable InternalRow row) {
-        return new LookupResult(
-                row == null ? Collections.emptyList() : Collections.singletonList(row));
-    }
-
     public List<InternalRow> getRowList() {
         return rowList;
     }

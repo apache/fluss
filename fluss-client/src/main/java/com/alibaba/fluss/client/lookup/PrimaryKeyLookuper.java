@@ -33,6 +33,7 @@ import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.client.utils.ClientUtils.getPartitionId;
@@ -118,9 +119,7 @@ class PrimaryKeyLookuper implements Lookuper {
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
             } catch (PartitionNotExistException e) {
-                CompletableFuture<LookupResult> future = new CompletableFuture<>();
-                future.complete(LookupResult.fromSingleRow(null));
-                return future;
+                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
             }
         }
 

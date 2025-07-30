@@ -34,6 +34,7 @@ import com.alibaba.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -159,9 +160,7 @@ class PrefixKeyLookuper implements Lookuper {
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
             } catch (PartitionNotExistException e) {
-                CompletableFuture<LookupResult> future = new CompletableFuture<>();
-                future.complete(LookupResult.fromSingleRow(null));
-                return future;
+                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
             }
         }
 
