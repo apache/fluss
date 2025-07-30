@@ -24,7 +24,6 @@ import com.alibaba.fluss.client.lookup.LookupType;
 import com.alibaba.fluss.client.lookup.Lookuper;
 import com.alibaba.fluss.client.table.Table;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.flink.row.FlinkAsFlussRow;
 import com.alibaba.fluss.flink.source.lookup.LookupNormalizer.RemainingFilter;
@@ -164,10 +163,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             int currentRetry,
             InternalRow keyRow,
             @Nullable RemainingFilter remainingFilter) {
-        if (throwable instanceof PartitionNotExistException) {
-            LOG.debug("Partition is not exist. Ignore and return null. ", throwable);
-            resultFuture.complete(Collections.emptyList());
-        } else if (throwable instanceof TableNotExistException) {
+        if (throwable instanceof TableNotExistException) {
             LOG.error("Table '{}' not found ", tablePath, throwable);
             resultFuture.completeExceptionally(
                     new RuntimeException("Fluss table '" + tablePath + "' not found.", throwable));

@@ -160,7 +160,7 @@ class PrefixKeyLookuper implements Lookuper {
                                 metadataUpdater);
             } catch (PartitionNotExistException e) {
                 CompletableFuture<LookupResult> future = new CompletableFuture<>();
-                future.completeExceptionally(e);
+                future.complete(LookupResult.fromSingleRow(null));
                 return future;
             }
         }
