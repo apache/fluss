@@ -27,7 +27,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 
 /** The status of a {@link LogScanner}. */
 @ThreadSafe
@@ -61,8 +61,9 @@ public class LogScannerStatus {
         bucketStatus(tableBucket).setHighWatermark(highWatermark);
     }
 
-    synchronized void updateOffset(TableBucket tableBucket, long offset) {
+    synchronized void updateOffset(TableBucket tableBucket, long offset, long timestamp) {
         bucketStatus(tableBucket).setOffset(offset);
+        bucketStatus(tableBucket).setTimestamp(timestamp);
     }
 
     synchronized void assignScanBuckets(Map<TableBucket, Long> scanBucketAndOffsets) {
@@ -85,17 +86,34 @@ public class LogScannerStatus {
         }
     }
 
-    synchronized List<TableBucket> fetchableBuckets(Predicate<TableBucket> isAvailable) {
+    synchronized List<TableBucket> fetchableBuckets(
+            BiPredicate<TableBucket, BucketScanStatus> isAvailable) {
         // Since this is in the hot-path for fetching, we do this instead of using java.util.stream
         // API
         List<TableBucket> result = new ArrayList<>();
         bucketStatusMap.forEach(
                 ((tableBucket, bucketScanStatus) -> {
-                    if (isAvailable.test(tableBucket)) {
+                    if (isAvailable.test(tableBucket, bucketScanStatus)) {
                         result.add(tableBucket);
                     }
                 }));
         return result;
+    }
+
+    synchronized long getMinTimestamp() {
+        long minTimestamp = Long.MAX_VALUE;
+        for (BucketScanStatus bucketScanStatus : bucketStatusMap.bucketStatusValues()) {
+            // We will pause the faster bucket read until the slowest table bucket catches up,
+            // achieving time alignment. If the high watermark is smaller than the offset, the table
+            // bucket may have no data for a long time. This would block the entire reading process,
+            // so we skip it.
+            if (bucketScanStatus.getTimestamp() > 0
+                    && bucketScanStatus.getTimestamp() < minTimestamp
+                    && bucketScanStatus.getHighWatermark() > bucketScanStatus.getOffset()) {
+                minTimestamp = bucketScanStatus.getTimestamp();
+            }
+        }
+        return minTimestamp;
     }
 
     private BucketScanStatus bucketStatus(TableBucket tableBucket) {
