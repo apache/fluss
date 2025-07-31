@@ -79,7 +79,7 @@ public class DataTypeVisitorTest {
     // ----------------------------------------------------------------------------------------
 
     /** A toString() visitor for DataType. */
-    static class ToStringVisitor extends DataTypeDefaultVisitor<String> {
+    public static class ToStringVisitor extends DataTypeDefaultVisitor<String> {
         @Override
         protected String defaultMethod(DataType dataType) {
             return dataType.toString();

@@ -61,6 +61,11 @@ public class MemorySegmentInputView implements InputView {
     }
 
     @Override
+    public int readUnsignedByte() throws IOException {
+        return 0;
+    }
+
+    @Override
     public short readShort() throws IOException {
         if (position >= 0 && position < end - 1) {
             short v = segment.getShort(position);
@@ -69,6 +74,16 @@ public class MemorySegmentInputView implements InputView {
         } else {
             throw new EOFException();
         }
+    }
+
+    @Override
+    public int readUnsignedShort() throws IOException {
+        return 0;
+    }
+
+    @Override
+    public char readChar() throws IOException {
+        return 0;
     }
 
     @Override
@@ -104,6 +119,16 @@ public class MemorySegmentInputView implements InputView {
     }
 
     @Override
+    public String readLine() throws IOException {
+        return "";
+    }
+
+    @Override
+    public String readUTF() throws IOException {
+        return "";
+    }
+
+    @Override
     public void readFully(byte[] b) throws IOException {
         readFully(b, 0, b.length);
     }
@@ -124,5 +149,10 @@ public class MemorySegmentInputView implements InputView {
         } else {
             throw new IllegalArgumentException("Length may not be negative.");
         }
+    }
+
+    @Override
+    public int skipBytes(int n) throws IOException {
+        return 0;
     }
 }

@@ -19,6 +19,7 @@ package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 
+import java.io.DataInput;
 import java.io.EOFException;
 import java.io.IOException;
 
@@ -29,7 +30,7 @@ import java.io.IOException;
  * @since 0.2
  */
 @PublicEvolving
-public interface InputView {
+public interface InputView extends DataInput {
 
     /**
      * Reads one input byte and returns {@code true} if that byte is nonzero, {@code false} if that
