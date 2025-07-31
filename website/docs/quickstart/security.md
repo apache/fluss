@@ -226,7 +226,7 @@ CALL admin_catalog.sys.add_acl(
 Allow `consumer` user to read data:
 ```sql
 CALL admin_catalog.sys.add_acl(
-   resource => 'cluster', 
+    resource => 'cluster', 
     permission => 'ALLOW',
     principal => 'User:consumer', 
     operation => 'READ'
@@ -242,13 +242,13 @@ CALL admin_catalog.sys.list_acl(
 Output will show like:
 
 ```text
-+-------------------------------------------------------------------------------------------------------+
-|                                                                                                result |
-+-------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------+
+|                                                                                      result |
++---------------------------------------------------------------------------------------------+
 |  resource="cluster";permission="ALLOW";principal="User:developer";operation="READ";host="*" |
 | resource="cluster";permission="ALLOW";principal="User:developer";operation="WRITE";host="*" |
 |   resource="cluster";permission="ALLOW";principal="User:consumer";operation="READ";host="*" |
-+-------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------+
 3 rows in set
 ```
 
@@ -260,7 +260,7 @@ USE CATALOG admin_catalog;
 
 -- create table using admin credentials
 CREATE TABLE fluss_order (
-     `order_key`  INT NOT NULL,
+    `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
@@ -540,12 +540,12 @@ CALL admin_catalog.sys.list_acl(
 ```
 Output will show like:
 ```text
-+----------------------------------------------------------------------------------------------------+
-|                                                                                             result |
-+----------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------+
+|                                                                                                 result |
++--------------------------------------------------------------------------------------------------------+
 | resource="cluster.marketing_db";permission="ALLOW";principal="User:marketing";operation="ALL";host="*" |
 |     resource="cluster.finance_db";permission="ALLOW";principal="User:finance";operation="ALL";host="*" |
-+----------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------+
 2 rows in set
 ```
 
@@ -594,7 +594,7 @@ The `marketing` user can operate on their own database:
 USE CATALOG marketing_catalog;
 -- create table using marketing user credentials
 CREATE TABLE `marketing_db`.`order` (
-     `order_key`  INT NOT NULL,
+    `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
@@ -612,7 +612,7 @@ The `finance` user cannot access the `marketing` database:
 USE CATALOG finance_catalog;
 -- create table using finance user credentials
 CREATE TABLE `marketing_db`.`order` (
-     `order_key`  INT NOT NULL,
+    `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
