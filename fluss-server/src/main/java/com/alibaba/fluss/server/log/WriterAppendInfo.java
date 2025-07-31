@@ -21,6 +21,8 @@ import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordBatch;
 
+import static com.alibaba.fluss.server.log.WriterStateEntry.BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE;
+
 /**
  * This class is used to validate the records appended by a given writer before they are written to
  * log. It's initialized with writer's state after the last successful append.
@@ -84,7 +86,8 @@ public class WriterAppendInfo {
     }
 
     private boolean inSequence(int lastBatchSeq, int nextBatchSeq) {
-        return nextBatchSeq == lastBatchSeq + 1L
+        return lastBatchSeq == BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE
+                || nextBatchSeq == lastBatchSeq + 1L
                 || (nextBatchSeq == 0 && lastBatchSeq == Integer.MAX_VALUE);
     }
 }

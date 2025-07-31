@@ -36,6 +36,8 @@ import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
  */
 public class WriterStateEntry {
     private static final int NUM_BATCHES_TO_RETAIN = 5;
+    public static final int BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE = -2;
+
     private final long writerId;
     private final Deque<BatchMetadata> batchMetadata = new ArrayDeque<>();
 
@@ -103,7 +105,22 @@ public class WriterStateEntry {
         this.lastTimestamp = lastTimestamp;
     }
 
+    public boolean isTemporaryExpiredBatch() {
+        return batchMetadata.size() == 1
+                && batchMetadata.getFirst().batchSequence == BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE;
+    }
+
+    public void removeAllBatches() {
+        batchMetadata.clear();
+    }
+
     private void addBatchMetadata(BatchMetadata batch) {
+        // If batchMetadata size is 1 and the first batch is BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE,
+        // we need to remove it as it was an expired mark.
+        if (isTemporaryExpiredBatch()) {
+            batchMetadata.removeFirst();
+        }
+
         if (batchMetadata.size() == NUM_BATCHES_TO_RETAIN) {
             batchMetadata.removeFirst();
         }
