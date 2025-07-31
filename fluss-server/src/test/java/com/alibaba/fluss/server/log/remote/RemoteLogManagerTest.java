@@ -64,7 +64,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ValueSource(booleans = {true, false})
     void testBecomeLeaderWithoutRemoteLogManifest(boolean partitionTable) throws Exception {
         TableBucket tb = makeTableBucket(partitionTable);
-        assertThatThrownBy(() -> remoteLogManager.relevantRemoteLogSegments(tb, 0L))
+        assertThatThrownBy(
+                        () -> remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RemoteLogTablet can't be found for table-bucket " + tb);
 
@@ -82,11 +83,18 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
 
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         // should upload 4 segments to remote, only 1 active segment left
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
+
+        // read with max remote bytes
+        int bytesOfTheFirstTwoSegments =
+                remoteLogTablet.allRemoteLogSegments().get(0).segmentSizeInBytes() + 1;
+        remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, bytesOfTheFirstTwoSegments);
+        assertThat(remoteLogSegmentList.size()).isEqualTo(2);
     }
 
     @ParameterizedTest
@@ -99,7 +107,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
@@ -116,7 +124,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         makeLogTableAsLeader(tb, partitionTable);
         // trigger reload remote log metadata from remote snapshot.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
@@ -187,7 +196,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         // no remote log segment should be committed.
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         assertThat(remoteLogSegmentList).isEmpty();
         // log storage should clean up the temporary data
         assertThat(listRemoteLogFiles(tb)).isEmpty();
@@ -206,7 +215,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         // no remote log segment should be committed.
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         assertThat(remoteLogSegmentList).isEmpty();
         // log storage should clean up the temporary data
         assertThat(listRemoteLogFiles(tb)).isEmpty();
@@ -309,7 +318,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
@@ -437,7 +446,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         // should upload 9 segments except for one active segment to remote
         assertThat(remoteLogSegmentList).hasSize(9);
         //  should still retain 8 segments since 8 segments is configured to retain in local
@@ -476,7 +485,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
@@ -488,7 +497,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         // test stop replica and delete.
         remoteLogManager.stopReplica(replica, true);
-        assertThatThrownBy(() -> remoteLogManager.relevantRemoteLogSegments(tb, 0L))
+        assertThatThrownBy(
+                        () -> remoteLogManager.relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RemoteLogTablet can't be found for table-bucket " + tb);
         FsPath logTabletDir = remoteLogTabletDir(remoteLogDir(conf), DATA1_PHYSICAL_TABLE_PATH, tb);
@@ -511,7 +521,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         assertThat(remoteLogManager.lookupOffsetForTimestamp(tb, startTimestamp)).isEqualTo(0L);
         remoteLogManager
-                .relevantRemoteLogSegments(tb, 0L)
+                .relevantRemoteLogSegments(tb, 0L, Integer.MAX_VALUE)
                 .forEach(
                         remoteLogSegment ->
                                 assertThat(

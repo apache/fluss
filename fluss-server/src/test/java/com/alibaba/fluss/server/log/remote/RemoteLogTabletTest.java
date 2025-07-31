@@ -51,8 +51,10 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
                 .hasSize(remoteLogSegmentList.size());
         assertThat(remoteLogTablet.allRemoteLogSegments())
                 .containsExactlyInAnyOrderElementsOf(remoteLogSegmentList);
-        assertThat(remoteLogTablet.relevantRemoteLogSegments(0L))
+        assertThat(remoteLogTablet.relevantRemoteLogSegments(0L, Integer.MAX_VALUE))
                 .containsExactlyInAnyOrderElementsOf(remoteLogSegmentList);
+        assertThat(remoteLogTablet.relevantRemoteLogSegments(0L, 1))
+                .containsExactlyInAnyOrder(remoteLogSegmentList.get(0));
     }
 
     @ParameterizedTest
@@ -135,24 +137,25 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
 
         // Get offset from 0.
-        List<RemoteLogSegment> result = remoteLogTablet.relevantRemoteLogSegments(0L);
+        List<RemoteLogSegment> result =
+                remoteLogTablet.relevantRemoteLogSegments(0L, Integer.MAX_VALUE);
         assertThat(result.size()).isEqualTo(5);
         assertThat(result).containsExactlyInAnyOrderElementsOf(remoteLogSegmentList);
 
         // Get offset from 10, the remote log start offset of the second segment is 10, so the first
         // segment will not be included.
-        result = remoteLogTablet.relevantRemoteLogSegments(10L);
+        result = remoteLogTablet.relevantRemoteLogSegments(10L, Integer.MAX_VALUE);
         assertThat(result.size()).isEqualTo(4);
 
-        result = remoteLogTablet.relevantRemoteLogSegments(11L);
+        result = remoteLogTablet.relevantRemoteLogSegments(11L, Integer.MAX_VALUE);
         assertThat(result.size()).isEqualTo(4);
 
-        result = remoteLogTablet.relevantRemoteLogSegments(49L);
+        result = remoteLogTablet.relevantRemoteLogSegments(49L, Integer.MAX_VALUE);
         assertThat(result.size()).isEqualTo(1);
 
         // Get offset from 50, the remote start offset of the last segment is 40, the remote log end
         // offset is 50, no segment will be included.
-        result = remoteLogTablet.relevantRemoteLogSegments(50L);
+        result = remoteLogTablet.relevantRemoteLogSegments(50L, Integer.MAX_VALUE);
         assertThat(result.size()).isEqualTo(0);
     }
 
