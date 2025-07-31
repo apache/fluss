@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.server.log.WriterStateEntry.BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE;
 import static com.alibaba.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
 import static com.alibaba.fluss.utils.FlussPaths.writerSnapshotFile;
 
@@ -79,7 +80,8 @@ public class WriterStateManager {
     private static final Logger LOG = LoggerFactory.getLogger(WriterStateManager.class);
 
     private final TableBucket tableBucket;
-    private final int writerExpirationMs;
+    private final int temporaryWriterExpirationMs;
+    private final int permanentWriterExpirationMs;
     private final Map<Long, WriterStateEntry> writers = new HashMap<>();
 
     private final File logTabletDir;
@@ -90,10 +92,15 @@ public class WriterStateManager {
     private long lastMapOffset = 0L;
     private long lastSnapOffset = 0L;
 
-    public WriterStateManager(TableBucket tableBucket, File logTabletDir, int writerExpirationMs)
+    public WriterStateManager(
+            TableBucket tableBucket,
+            File logTabletDir,
+            int temporaryWriterExpirationMs,
+            int permanentWriterExpirationMs)
             throws IOException {
         this.tableBucket = tableBucket;
-        this.writerExpirationMs = writerExpirationMs;
+        this.temporaryWriterExpirationMs = temporaryWriterExpirationMs;
+        this.permanentWriterExpirationMs = permanentWriterExpirationMs;
         this.logTabletDir = logTabletDir;
         this.snapshots = loadSnapshots();
     }
@@ -126,12 +133,25 @@ public class WriterStateManager {
     }
 
     public void removeExpiredWriters(long currentTimeMs) {
+        // First to trigger temporary expiration.
         List<Long> keys =
                 writers.entrySet().stream()
-                        .filter(entry -> isWriterExpired(currentTimeMs, entry.getValue()))
+                        .filter(
+                                entry ->
+                                        writerNeedTemporaryExpired(currentTimeMs, entry.getValue()))
                         .map(Map.Entry::getKey)
                         .collect(Collectors.toList());
-        removeWriterIds(keys);
+        temporaryRemoveWriterIds(keys);
+
+        // First to trigger permanent expiration.
+        keys =
+                writers.entrySet().stream()
+                        .filter(
+                                entry ->
+                                        writerNeedPermanentExpired(currentTimeMs, entry.getValue()))
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+        permanentRemoveWriterIds(keys);
     }
 
     /**
@@ -143,8 +163,7 @@ public class WriterStateManager {
      * UnknownWriterIdException} errors. Note that the log end offset is assumed to be less than or
      * equal to the high watermark.
      */
-    public void truncateAndReload(long logStartOffset, long logEndOffset, long currentTimeMs)
-            throws IOException {
+    public void truncateAndReload(long logStartOffset, long logEndOffset) throws IOException {
         // remove all out of range snapshots.
         for (SnapshotFile snapshot : snapshots.values()) {
             if (snapshot.offset > logEndOffset || snapshot.offset <= logStartOffset) {
@@ -154,7 +173,7 @@ public class WriterStateManager {
 
         if (logEndOffset != mapEndOffset()) {
             clearWriterIds();
-            loadFromSnapshot(logStartOffset, currentTimeMs);
+            loadFromSnapshot(logStartOffset);
         } else {
             if (lastMapOffset < logStartOffset) {
                 lastMapOffset = logStartOffset;
@@ -304,19 +323,14 @@ public class WriterStateManager {
         this.snapshots = snapshots;
     }
 
-    private void loadFromSnapshot(long logStartOffset, long currentTime) throws IOException {
+    private void loadFromSnapshot(long logStartOffset) throws IOException {
         while (true) {
             Optional<SnapshotFile> latestSnapshotFileOptional = latestSnapshotFile();
             if (latestSnapshotFileOptional.isPresent()) {
                 SnapshotFile snapshot = latestSnapshotFileOptional.get();
                 try {
                     LOG.info("Loading writer state from snapshot file '{}'", snapshot);
-                    Stream<WriterStateEntry> loadedWriters =
-                            readSnapshot(snapshot.file()).stream()
-                                    .filter(
-                                            writerStateEntry ->
-                                                    !isWriterExpired(
-                                                            currentTime, writerStateEntry));
+                    Stream<WriterStateEntry> loadedWriters = readSnapshot(snapshot.file()).stream();
                     loadedWriters.forEach(this::loadWriterEntry);
                     lastSnapOffset = snapshot.offset;
                     lastMapOffset = lastSnapOffset;
@@ -351,9 +365,22 @@ public class WriterStateManager {
         writerIdCount = writers.size();
     }
 
-    private void removeWriterIds(List<Long> keys) {
+    /** Remove the writer ids from the map permanently. */
+    private void permanentRemoveWriterIds(List<Long> keys) {
         keys.forEach(writers::remove);
         writerIdCount = writers.size();
+    }
+
+    /** Remove the writer ids from the map temporarily, . */
+    private void temporaryRemoveWriterIds(List<Long> keys) {
+        for (long writerId : keys) {
+            WriterStateEntry writerStateEntry = writers.get(writerId);
+            writerStateEntry.removeAllBatches();
+            // For writer id expiration, we add a batch with sequence BATCH_SEQUENCE_AFTER_EXPIRE to
+            // identify.
+            writerStateEntry.addBath(
+                    BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE, -1L, 0, System.currentTimeMillis());
+        }
     }
 
     private void clearWriterIds() {
@@ -415,8 +442,16 @@ public class WriterStateManager {
         addWriterId(writerId, entry);
     }
 
-    private boolean isWriterExpired(long currentTimeMs, WriterStateEntry writerStateEntry) {
-        return currentTimeMs - writerStateEntry.lastBatchTimestamp() > writerExpirationMs;
+    private boolean writerNeedTemporaryExpired(
+            long currentTimeMs, WriterStateEntry writerStateEntry) {
+        return !writerStateEntry.isTemporaryExpiredBatch()
+                && currentTimeMs - writerStateEntry.lastBatchTimestamp()
+                        > temporaryWriterExpirationMs;
+    }
+
+    private boolean writerNeedPermanentExpired(
+            long currentTimeMs, WriterStateEntry writerStateEntry) {
+        return currentTimeMs - writerStateEntry.lastBatchTimestamp() > permanentWriterExpirationMs;
     }
 
     private static List<WriterStateEntry> readSnapshot(File file) {

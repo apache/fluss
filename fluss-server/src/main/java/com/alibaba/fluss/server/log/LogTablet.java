@@ -296,7 +296,12 @@ public final class LogTablet {
                 new WriterStateManager(
                         tableBucket,
                         tabletDir,
-                        (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis());
+                        (int)
+                                conf.get(ConfigOptions.WRITER_ID_TEMPORARY_EXPIRATION_TIME)
+                                        .toMillis(),
+                        (int)
+                                conf.get(ConfigOptions.WRITER_ID_PERMANENT_EXPIRATION_TIME)
+                                        .toMillis());
 
         LoadedLogOffsets offsets =
                 new LogLoader(
@@ -1167,8 +1172,7 @@ public final class LogTablet {
             boolean isEmptyBeforeTruncation =
                     writerStateManager.isEmpty() && writerStateManager.mapEndOffset() >= lastOffset;
             long writerStateLoadStart = System.currentTimeMillis();
-            writerStateManager.truncateAndReload(
-                    logStartOffset, lastOffset, System.currentTimeMillis());
+            writerStateManager.truncateAndReload(logStartOffset, lastOffset);
             long segmentRecoveryStart = System.currentTimeMillis();
 
             // Only do the potentially expensive reloading if the last snapshot offset is lower than
