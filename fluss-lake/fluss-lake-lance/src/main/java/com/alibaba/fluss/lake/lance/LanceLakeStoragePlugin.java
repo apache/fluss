@@ -15,22 +15,24 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metadata;
+package com.alibaba.fluss.lake.lance;
 
-/** An enum for datalake format. */
-public enum DataLakeFormat {
-    PAIMON("paimon"),
-    LANCE("lance"),
-    ICEBERG("iceberg");
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
 
-    private final String value;
+/** Lance implementation of {@link LakeStoragePlugin}. */
+public class LanceLakeStoragePlugin implements LakeStoragePlugin {
 
-    DataLakeFormat(String value) {
-        this.value = value;
+    private static final String IDENTIFIER = "lance";
+
+    @Override
+    public String identifier() {
+        return IDENTIFIER;
     }
 
     @Override
-    public String toString() {
-        return value;
+    public LakeStorage createLakeStorage(Configuration configuration) {
+        return new LanceLakeStorage(configuration);
     }
 }

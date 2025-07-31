@@ -15,22 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metadata;
+package com.alibaba.fluss.lake.lance.tiering;
 
-/** An enum for datalake format. */
-public enum DataLakeFormat {
-    PAIMON("paimon"),
-    LANCE("lance"),
-    ICEBERG("iceberg");
+import com.lancedb.lance.FragmentMetadata;
 
-    private final String value;
+import java.util.List;
 
-    DataLakeFormat(String value) {
-        this.value = value;
+/** The committable that derived from {@link LanceWriteResult} to commit to Lance. */
+public class LanceCommittable {
+    private final List<FragmentMetadata> committable;
+
+    public LanceCommittable(List<FragmentMetadata> committable) {
+        this.committable = committable;
     }
 
-    @Override
-    public String toString() {
-        return value;
+    public List<FragmentMetadata> committable() {
+        return committable;
     }
 }

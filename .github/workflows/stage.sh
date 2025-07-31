@@ -28,7 +28,8 @@ fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18,\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon,\
-fluss-lake/fluss-lake-iceberg
+fluss-lake/fluss-lake-iceberg,\
+fluss-lake/fluss-lake-lance
 "
 
 function get_test_modules_for_stage() {
