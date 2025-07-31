@@ -270,7 +270,7 @@ public class MetadataUpdater {
             if (t instanceof RetriableException || t instanceof TimeoutException) {
                 LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
             } else if (t instanceof PartitionNotExistException) {
-                LOG.warn("Failed to update metadata because partition is not exist", t);
+                LOG.warn("Failed to update metadata because the partition does not exist", t);
                 throw (PartitionNotExistException) t;
             } else {
                 throw new FlussRuntimeException("Failed to update metadata", t);
