@@ -571,6 +571,7 @@
                         <exclude>**/*.log</exclude>
                         <!-- Documentation files in the main trunk. -->
                         <exclude>**/*.md</exclude>
+                        <exclude>**/*.mdx</exclude>
                         <!-- IDE files. -->
                         <exclude>**/*.iml</exclude>
                         <exclude>**/.idea/**</exclude>
