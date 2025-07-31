@@ -47,7 +47,7 @@ datalake.format: paimon
 
 # the catalog config about Paimon, assuming using Filesystem catalog
 datalake.paimon.metastore: filesystem
-datalake.paimon.warehouse: /tmp/paimon_data_warehouse
+datalake.paimon.warehouse: /tmp/paimon
 ```
 
 Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog. Checkout the [Paimon documentation](https://paimon.apache.org/docs/1.1/maintenance/configurations/) for more details on the available configurations.
