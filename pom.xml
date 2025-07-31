@@ -73,7 +73,7 @@
         <module>fluss-server</module>
         <module>fluss-flink</module>
         <module>fluss-protogen</module>
-        <module>fluss-benchmark</module>
+        <module>fluss-jmh</module>
         <module>fluss-lake</module>
         <module>fluss-kafka</module>
         <module>fluss-spark</module>

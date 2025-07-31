@@ -26,8 +26,8 @@
         <version>0.8-SNAPSHOT</version>
     </parent>
 
-    <artifactId>fluss-benchmark</artifactId>
-    <name>Fluss : Benchmark</name>
+    <artifactId>fluss-jmh</artifactId>
+    <name>Fluss : JMH</name>
     <packaging>jar</packaging>
 
     <dependencies>
