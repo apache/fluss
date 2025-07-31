@@ -22,6 +22,7 @@ import com.alibaba.fluss.testutils.LogRecordsAssert;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.function.Function;
 
@@ -42,7 +43,7 @@ class MemoryLogRecordsTest {
                 size -> {
                     ByteBuffer buffer = ByteBuffer.allocateDirect(size + 3);
                     buffer.put(new byte[] {1, 2, 3});
-                    buffer.position(3);
+                    ((Buffer) buffer).position(3);
                     return buffer;
                 });
     }
@@ -58,7 +59,7 @@ class MemoryLogRecordsTest {
                 size -> {
                     ByteBuffer buffer = ByteBuffer.allocate(size + 3);
                     buffer.put(new byte[] {1, 2, 3});
-                    buffer.position(3);
+                    ((Buffer) buffer).position(3);
                     return buffer;
                 });
     }
@@ -73,7 +74,7 @@ class MemoryLogRecordsTest {
 
         int originPos = buffer.position();
         records.getMemorySegment().get(records.getPosition(), buffer, records.sizeInBytes());
-        buffer.position(originPos);
+        ((Buffer) buffer).position(originPos);
 
         MemoryLogRecords newRecords = MemoryLogRecords.pointToByteBuffer(buffer);
         LogRecordsAssert.assertThatLogRecords(newRecords)

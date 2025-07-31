@@ -21,6 +21,7 @@ import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.memory.MemorySegment;
 
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
 
@@ -42,11 +43,11 @@ public class PagedMemorySegmentWritableChannel implements WritableByteChannel {
             // use bulk copy
             MemorySegment segment = MemorySegment.wrapOffHeapMemory(src);
             output.write(segment, src.position(), length);
-            src.position(src.position() + length);
+            ((Buffer) src).position(src.position() + length);
         } else if (src.hasArray()) {
             // use bulk copy
             output.write(src.array(), src.position() + src.arrayOffset(), length);
-            src.position(src.position() + src.arrayOffset() + length);
+            ((Buffer) src).position(src.position() + src.arrayOffset() + length);
         } else {
             // should never go this path.
             for (int i = 0; i < length; i++) {

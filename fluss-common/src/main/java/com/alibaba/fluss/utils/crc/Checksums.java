@@ -20,6 +20,7 @@ package com.alibaba.fluss.utils.crc;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.zip.Checksum;
 
@@ -84,15 +85,15 @@ public final class Checksums {
             try {
                 // save a slice to be used to save an allocation in the hot-path
                 final int start = oldPosition + offset;
-                buffer.limit(start + length);
-                buffer.position(start);
+                ((Buffer) buffer).limit(start + length);
+                ((Buffer) buffer).position(start);
                 BYTE_BUFFER_UPDATE.invokeExact(checksum, buffer);
             } catch (Throwable t) {
                 handleUpdateThrowable(t);
             } finally {
                 // reset buffer's offsets
-                buffer.limit(oldLimit);
-                buffer.position(oldPosition);
+                ((Buffer) buffer).limit(oldLimit);
+                ((Buffer) buffer).position(oldPosition);
             }
         } else {
             // slow-path

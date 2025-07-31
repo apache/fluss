@@ -55,6 +55,7 @@ import org.openjdk.jmh.runner.options.VerboseMode;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
@@ -137,7 +138,7 @@ public class ArrowReadableChannelBenchmark {
     @Benchmark
     public void testByteBufferChannel() throws IOException {
         for (ByteBuffer buffer : buffers) {
-            buffer.rewind();
+            ((Buffer) buffer).rewind();
             ByteBufferReadableChannel channel = new ByteBufferReadableChannel(buffer);
             try (ArrowRecordBatch batch =
                     MessageSerializer.deserializeRecordBatch(
@@ -151,7 +152,7 @@ public class ArrowReadableChannelBenchmark {
     @Benchmark
     public void testInputStreamChannel() throws IOException {
         for (ByteBuffer buffer : buffers) {
-            buffer.rewind();
+            ((Buffer) buffer).rewind();
             ByteBufferInputStream inputStream = new ByteBufferInputStream(buffer);
             ReadableByteChannel channel = Channels.newChannel(inputStream);
             try (ArrowRecordBatch batch =

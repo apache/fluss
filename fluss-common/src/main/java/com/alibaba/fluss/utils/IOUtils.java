@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -219,7 +220,7 @@ public class IOUtils {
             }
             totalBytesRead += bytesRead;
         } while (length > totalBytesRead);
-        destinationBuffer.position(destinationBuffer.position() + totalBytesRead);
+        ((Buffer) destinationBuffer).position(destinationBuffer.position() + totalBytesRead);
         return totalBytesRead;
     }
 }

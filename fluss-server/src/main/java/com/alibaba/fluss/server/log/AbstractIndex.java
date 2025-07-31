@@ -31,6 +31,7 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
@@ -213,7 +214,7 @@ public abstract class AbstractIndex implements Closeable {
                                     raf.getChannel()
                                             .map(FileChannel.MapMode.READ_WRITE, 0, roundedNewSize);
                             this.maxEntries = mmap.limit() / entrySize();
-                            mmap.position(position);
+                            ((Buffer) mmap).position(position);
                             LOG.debug(
                                     "Resized {} to {}, position is {} and limit is {}",
                                     file.getAbsolutePath(),
@@ -408,7 +409,7 @@ public abstract class AbstractIndex implements Closeable {
 
     protected void truncateToEntries0(int entries) {
         this.entries = entries;
-        mmap.position(entries * entrySize());
+        ((Buffer) mmap).position(entries * entrySize());
     }
 
     /**
@@ -477,10 +478,10 @@ public abstract class AbstractIndex implements Closeable {
 
         /* set the position in the index for the next entry */
         if (newlyCreated) {
-            idx.position(0);
+            ((Buffer) idx).position(0);
         } else {
             // if this is a pre-existing index, assume it is valid and set position to last entry
-            idx.position(roundDownToExactMultiple(idx.limit(), entrySize));
+            ((Buffer) idx).position(roundDownToExactMultiple(idx.limit(), entrySize));
         }
 
         return idx;

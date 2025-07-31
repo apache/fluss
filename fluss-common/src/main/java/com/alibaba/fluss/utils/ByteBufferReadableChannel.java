@@ -18,6 +18,7 @@
 package com.alibaba.fluss.utils;
 
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
 
@@ -54,9 +55,9 @@ public class ByteBufferReadableChannel implements ReadableByteChannel {
         } else {
             cnt = dst.remaining();
             ByteBuffer from = buffer.duplicate();
-            from.limit(from.position() + dst.remaining());
+            ((Buffer) from).limit(from.position() + dst.remaining());
             dst.put(from);
-            buffer.position(from.limit());
+            ((Buffer) buffer).position(from.limit());
         }
         return cnt;
     }

@@ -29,6 +29,7 @@ import net.jpountz.xxhash.XXHashFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
@@ -105,7 +106,7 @@ public class FlussLZ4BlockInputStream extends InputStream {
             throw new IOException(NOT_SUPPORTED);
         }
         // mark start of data to checksum
-        in.mark();
+        ((Buffer) in).mark();
 
         flg = FlussLZ4BlockOutputStream.FLG.fromByte(in.get());
         maxBlockSize = BD.fromByte(in.get()).getBlockMaximumSize();
@@ -114,13 +115,13 @@ public class FlussLZ4BlockInputStream extends InputStream {
             if (in.remaining() < 8) {
                 throw new IOException(PREMATURE_EOS);
             }
-            in.position(in.position() + 8);
+            ((Buffer) in).position(in.position() + 8);
         }
 
-        int len = in.position() - in.reset().position();
+        int len = in.position() - ((Buffer) in).reset().position();
 
         int hash = CHECKSUM.hash(in, in.position(), len, 0);
-        in.position(in.position() + len);
+        ((Buffer) in).position(in.position() + len);
         if (in.get() != (byte) ((hash >> 8) & 0xFF)) {
             throw new IOException(DESCRIPTOR_HASH_MISMATCH);
         }
@@ -160,26 +161,26 @@ public class FlussLZ4BlockInputStream extends InputStream {
                 final int bufferSize =
                         DECOMPRESSOR.decompress(
                                 in, in.position(), blockSize, decompressionBuffer, 0, maxBlockSize);
-                decompressionBuffer.position(0);
-                decompressionBuffer.limit(bufferSize);
+                ((Buffer) decompressionBuffer).position(0);
+                ((Buffer) decompressionBuffer).limit(bufferSize);
                 decompressedBuffer = decompressionBuffer;
             } catch (LZ4Exception e) {
                 throw new IOException(e);
             }
         } else {
             decompressedBuffer = in.slice();
-            decompressedBuffer.limit(blockSize);
+            ((Buffer) decompressionBuffer).limit(blockSize);
         }
 
         // verify checksum
         if (flg.isBlockChecksumSet()) {
             int hash = CHECKSUM.hash(in, in.position(), blockSize, 0);
-            in.position(in.position() + blockSize);
+            ((Buffer) in).position(in.position() + blockSize);
             if (hash != in.getInt()) {
                 throw new IOException(BLOCK_HASH_MISMATCH);
             }
         } else {
-            in.position(in.position() + blockSize);
+            ((Buffer) in).position(in.position() + blockSize);
         }
     }
 
@@ -228,7 +229,7 @@ public class FlussLZ4BlockInputStream extends InputStream {
             return 0;
         }
         int skipped = (int) Math.min(n, available());
-        decompressedBuffer.position(decompressedBuffer.position() + skipped);
+        ((Buffer) decompressedBuffer).position(decompressedBuffer.position() + skipped);
         return skipped;
     }
 
@@ -240,7 +241,7 @@ public class FlussLZ4BlockInputStream extends InputStream {
     @Override
     public void close() {
         if (decompressionBuffer != null) {
-            decompressionBuffer.clear();
+            ((Buffer) decompressedBuffer).clear();
         }
     }
 

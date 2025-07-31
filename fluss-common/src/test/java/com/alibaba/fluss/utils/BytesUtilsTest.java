@@ -19,6 +19,7 @@ package com.alibaba.fluss.utils;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,7 +35,7 @@ class BytesUtilsTest {
         assertThat(buffer.position()).isEqualTo(0);
         assertThat(BytesUtils.toArray(buffer, 1, 2)).isEqualTo(new byte[] {1, 2});
         assertThat(buffer.position()).isEqualTo(0);
-        buffer.position(2);
+        ((Buffer) buffer).position(2);
         assertThat(BytesUtils.toArray(buffer)).isEqualTo(new byte[] {2, 3, 4});
         assertThat(buffer.position()).isEqualTo(2);
     }
@@ -44,12 +45,12 @@ class BytesUtilsTest {
         byte[] input = {0, 1, 2, 3, 4};
         ByteBuffer buffer = ByteBuffer.allocateDirect(5);
         buffer.put(input);
-        buffer.rewind();
+        ((Buffer) buffer).rewind();
         assertThat(BytesUtils.toArray(buffer)).isEqualTo(input);
         assertThat(buffer.position()).isEqualTo(0);
         assertThat(BytesUtils.toArray(buffer, 1, 2)).isEqualTo(new byte[] {1, 2});
         assertThat(buffer.position()).isEqualTo(0);
-        buffer.position(2);
+        ((Buffer) buffer).position(2);
         assertThat(BytesUtils.toArray(buffer)).isEqualTo(new byte[] {2, 3, 4});
         assertThat(buffer.position()).isEqualTo(2);
     }

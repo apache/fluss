@@ -22,6 +22,7 @@ import com.alibaba.fluss.testutils.junit.parameterized.ParameterizedTestExtensio
 import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,7 +68,7 @@ public class OnHeapMemorySegmentTest extends MemorySegmentTestBase {
         String content = "hello world";
         ByteBuffer bb = ByteBuffer.allocate(20);
         bb.put(content.getBytes());
-        bb.rewind();
+        ((Buffer) bb).rewind();
 
         int offset = 10;
         int numBytes = 5;

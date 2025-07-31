@@ -26,6 +26,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Arrays;
@@ -434,7 +435,7 @@ public class FileLogRecordsTest extends LogTestBase {
         for (int i = 0; i < size; i++) {
             buffer.put((byte) 0);
         }
-        buffer.rewind();
+        ((Buffer) buffer).rewind();
         fileRecords.channel().write(buffer);
 
         // appending those bytes should not change the contents]

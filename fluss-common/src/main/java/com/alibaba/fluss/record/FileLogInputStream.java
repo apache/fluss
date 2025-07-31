@@ -23,6 +23,7 @@ import com.alibaba.fluss.utils.CloseableIterator;
 import com.alibaba.fluss.utils.FileUtils;
 
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
@@ -65,10 +66,10 @@ public class FileLogInputStream
             return null;
         }
 
-        logHeaderBuffer.rewind();
+        ((Buffer) logHeaderBuffer).rewind();
         FileUtils.readFullyOrFail(channel, logHeaderBuffer, position, "log header");
 
-        logHeaderBuffer.rewind();
+        ((Buffer) logHeaderBuffer).rewind();
         long offset = logHeaderBuffer.getLong(BASE_OFFSET_OFFSET);
         int length = logHeaderBuffer.getInt(LENGTH_OFFSET);
 

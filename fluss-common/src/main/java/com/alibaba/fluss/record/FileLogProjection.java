@@ -170,10 +170,10 @@ public class FileLogProjection {
             }
 
             // read log header
-            logHeaderBuffer.rewind();
+            ((java.nio.Buffer) logHeaderBuffer).rewind();
             readFullyOrFail(channel, logHeaderBuffer, position, "log header");
 
-            logHeaderBuffer.rewind();
+            ((java.nio.Buffer) logHeaderBuffer).rewind();
             int batchSizeInBytes = LOG_OVERHEAD + logHeaderBuffer.getInt(LENGTH_OFFSET);
             if (position > end - batchSizeInBytes) {
                 // the remaining bytes in the file are not enough to read a full batch
@@ -202,20 +202,20 @@ public class FileLogProjection {
             }
 
             // read arrow header
-            arrowHeaderBuffer.rewind();
+            ((java.nio.Buffer) arrowHeaderBuffer).rewind();
             readFullyOrFail(channel, arrowHeaderBuffer, arrowHeaderOffset, "arrow header");
-            arrowHeaderBuffer.position(ARROW_IPC_METADATA_SIZE_OFFSET);
+            ((java.nio.Buffer) arrowHeaderBuffer).position(ARROW_IPC_METADATA_SIZE_OFFSET);
             int arrowMetadataSize = arrowHeaderBuffer.getInt();
 
             resizeArrowMetadataBuffer(arrowMetadataSize);
-            arrowMetadataBuffer.rewind();
+            ((java.nio.Buffer) arrowMetadataBuffer).rewind();
             readFullyOrFail(
                     channel,
                     arrowMetadataBuffer,
                     arrowHeaderOffset + ARROW_HEADER_SIZE,
                     "arrow metadata");
 
-            arrowMetadataBuffer.rewind();
+            ((java.nio.Buffer) arrowMetadataBuffer).rewind();
             Message metadata = Message.getRootAsMessage(arrowMetadataBuffer);
             ProjectedArrowBatch projectedArrowBatch =
                     projectArrowBatch(
@@ -246,9 +246,9 @@ public class FileLogProjection {
                     "Invalid metadata length");
 
             // 4. update and copy log batch header
-            logHeaderBuffer.position(LENGTH_OFFSET);
+            ((java.nio.Buffer) logHeaderBuffer).position(LENGTH_OFFSET);
             logHeaderBuffer.putInt(newBatchSizeInBytes - LOG_OVERHEAD);
-            logHeaderBuffer.rewind();
+            ((java.nio.Buffer) logHeaderBuffer).rewind();
             // the logHeader can't be reused, as it will be sent to network
             byte[] logHeader = new byte[RECORD_BATCH_HEADER_SIZE];
             logHeaderBuffer.get(logHeader);
@@ -326,7 +326,7 @@ public class FileLogProjection {
             arrowMetadataBuffer = ByteBuffer.allocate(metadataSize);
             arrowMetadataBuffer.order(ByteOrder.LITTLE_ENDIAN);
         } else {
-            arrowMetadataBuffer.limit(metadataSize);
+            ((java.nio.Buffer) arrowMetadataBuffer).limit(metadataSize);
         }
     }
 

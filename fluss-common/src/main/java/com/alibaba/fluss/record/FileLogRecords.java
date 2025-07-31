@@ -30,6 +30,7 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -120,7 +121,7 @@ public class FileLogRecords implements LogRecords, Closeable {
      */
     public void readInto(ByteBuffer buffer, int position) throws IOException {
         FileUtils.readFully(channel, buffer, position + this.start);
-        buffer.flip();
+        ((Buffer) buffer).flip();
     }
 
     /**

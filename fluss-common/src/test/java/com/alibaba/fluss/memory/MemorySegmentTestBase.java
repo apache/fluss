@@ -30,6 +30,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.Buffer;
 import java.nio.BufferOverflowException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
@@ -1058,8 +1059,8 @@ public abstract class MemorySegmentTestBase {
 
         int pos = bb.capacity() / 3;
         int limit = 2 * bb.capacity() / 3;
-        bb.limit(limit);
-        bb.position(pos);
+        ((Buffer) bb).limit(limit);
+        ((Buffer) bb).position(pos);
 
         assertThatThrownBy(() -> segment.get(20, bb, bb.capacity() / 3 + 3))
                 .isInstanceOf(BufferOverflowException.class);
@@ -1259,7 +1260,7 @@ public abstract class MemorySegmentTestBase {
                 directBuffer
                         ? ByteBuffer.allocateDirect(3 * pageSize)
                         : ByteBuffer.allocate(3 * pageSize);
-        target.position(2 * pageSize);
+        ((Buffer) target).position(2 * pageSize);
 
         // transfer the segment in chunks into the byte buffer.
         int pos = 0;
@@ -1272,7 +1273,7 @@ public abstract class MemorySegmentTestBase {
 
         // verify that we wrote the same bytes.
         byte[] result = new byte[pageSize];
-        target.position(2 * pageSize);
+        ((Buffer) target).position(2 * pageSize);
         target.get(result);
         assertThat(result).isEqualTo(bytes);
     }
@@ -1293,7 +1294,7 @@ public abstract class MemorySegmentTestBase {
                 directBuffer ? ByteBuffer.allocateDirect(pageSize) : ByteBuffer.allocate(pageSize);
 
         source.put(bytes);
-        source.clear();
+        ((Buffer) source).clear();
 
         MemorySegment seg = createSegment(3 * pageSize);
 
@@ -1325,7 +1326,7 @@ public abstract class MemorySegmentTestBase {
                         ? ByteBuffer.allocateDirect(pageSize + 49)
                         : ByteBuffer.allocate(pageSize + 49);
 
-        target.position(19).limit(19 + pageSize);
+        ((Buffer) target).position(19).limit(19 + pageSize);
 
         ByteBuffer slicedTarget = target.slice();
 
@@ -1340,7 +1341,7 @@ public abstract class MemorySegmentTestBase {
 
         // verify that we wrote the same bytes.
         byte[] result = new byte[pageSize];
-        target.position(19);
+        ((Buffer) target).position(19);
         target.get(result);
         assertThat(result).isEqualTo(bytes);
     }
@@ -1355,7 +1356,7 @@ public abstract class MemorySegmentTestBase {
                         : ByteBuffer.allocate(pageSize + 49);
 
         source.put(bytes);
-        source.position(19).limit(19 + pageSize);
+        ((Buffer) source).position(19).limit(19 + pageSize);
         ByteBuffer slicedSource = source.slice();
 
         MemorySegment seg = createSegment(3 * pageSize);

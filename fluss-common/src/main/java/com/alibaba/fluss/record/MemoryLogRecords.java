@@ -24,6 +24,7 @@ import com.alibaba.fluss.record.bytesview.BytesView;
 import com.alibaba.fluss.utils.AbstractIterator;
 
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.GatheringByteChannel;
 
@@ -60,7 +61,7 @@ public class MemoryLogRecords implements LogRecords {
      */
     public int writeFullyTo(GatheringByteChannel channel) throws IOException {
         ByteBuffer buffer = memorySegment.wrap(position, sizeInBytes);
-        buffer.mark();
+        ((Buffer) buffer).mark();
         int written = 0;
         while (written < sizeInBytes) {
             written += channel.write(buffer);

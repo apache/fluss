@@ -136,7 +136,7 @@ public class FileUtils {
             FileChannel channel, int size, int position, String description) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(size);
         FileUtils.readFullyOrFail(channel, buffer, position, description);
-        buffer.rewind();
+        ((java.nio.Buffer) buffer).rewind();
         return buffer;
     }
 

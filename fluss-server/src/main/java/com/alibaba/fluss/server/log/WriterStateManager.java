@@ -36,6 +36,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -459,7 +460,7 @@ public class WriterStateManager {
 
         ByteBuffer buffer = ByteBuffer.allocate(jsonBytes.length);
         buffer.put(jsonBytes);
-        buffer.flip();
+        ((Buffer) buffer).flip();
 
         try (FileChannel fileChannel =
                 FileChannel.open(

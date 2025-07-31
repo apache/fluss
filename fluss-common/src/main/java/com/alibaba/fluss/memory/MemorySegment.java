@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.nio.Buffer;
 import java.nio.BufferOverflowException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
@@ -259,8 +260,8 @@ public final class MemorySegment {
             } else {
                 try {
                     ByteBuffer wrapper = checkNotNull(offHeapBuffer).duplicate();
-                    wrapper.limit(offset + length);
-                    wrapper.position(offset);
+                    ((Buffer) wrapper).limit(offset + length);
+                    ((Buffer) wrapper).position(offset);
                     return wrapper;
                 } catch (IllegalArgumentException e) {
                     throw new IndexOutOfBoundsException();
@@ -1279,7 +1280,7 @@ public final class MemorySegment {
 
             if (sourcePointer <= addressLimit - numBytes) {
                 UNSAFE.copyMemory(heapMemory, sourcePointer, null, targetPointer, numBytes);
-                target.position(targetOffset + numBytes);
+                ((Buffer) target).position(targetOffset + numBytes);
             } else if (address > addressLimit) {
                 throw new IllegalStateException("segment has been freed");
             } else {
@@ -1291,7 +1292,7 @@ public final class MemorySegment {
 
             // this must be after the get() call to ensue that the byte buffer is not
             // modified in case the call fails
-            target.position(targetOffset + numBytes);
+            ((Buffer) target).position(targetOffset + numBytes);
         } else {
             // other types of byte buffers
             throw new IllegalArgumentException(
@@ -1335,7 +1336,7 @@ public final class MemorySegment {
 
             if (targetPointer <= addressLimit - numBytes) {
                 UNSAFE.copyMemory(null, sourcePointer, heapMemory, targetPointer, numBytes);
-                source.position(sourceOffset + numBytes);
+                ((Buffer) source).position(sourceOffset + numBytes);
             } else if (address > addressLimit) {
                 throw new IllegalStateException("segment has been freed");
             } else {
@@ -1347,7 +1348,7 @@ public final class MemorySegment {
 
             // this must be after the get() call to ensue that the byte buffer is not
             // modified in case the call fails
-            source.position(sourceOffset + numBytes);
+            ((Buffer) source).position(sourceOffset + numBytes);
         } else {
             // other types of byte buffers
             for (int i = 0; i < numBytes; i++) {

@@ -21,6 +21,7 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.utils.crc.Java;
 
 import java.lang.reflect.Method;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
@@ -56,9 +57,9 @@ public final class BytesUtils {
                     size);
         } else {
             int pos = buffer.position();
-            buffer.position(pos + offset);
+            ((Buffer) buffer).position(pos + offset);
             buffer.get(dest);
-            buffer.position(pos);
+            ((Buffer) buffer).position(pos);
         }
         return dest;
     }
