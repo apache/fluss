@@ -1256,7 +1256,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 Row.of(1, "name1", 11, partition1),
                                 Row.of(2, "name2", 2, partition1),
                                 Row.of(3, "name33", 33, partition2),
-                                Row.of(10, "name0", 44, partition2));
+                                Row.of(10, "name0", 44, partition2),
+                                Row.of(1, "name1", 11, "empty-partition"));
         Schema.Builder builder =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
