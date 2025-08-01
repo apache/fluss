@@ -36,8 +36,8 @@ Join our monthly community gatherings to get involved:
 **Fluss Community Call**
 
 :::info Community Sync Docs
-📝 **Meeting Summaries** - Find notes and key decisions from previous calls  
-🎥 **Meeting Recordings** - Watch recorded sessions to catch up on missed discussions  
+📝 **Meeting Summaries** - Find notes and key decisions from previous calls
+🎥 **Meeting Recordings** - Watch recorded sessions to catch up on missed discussions
 📅 **Upcoming Agenda** - View and add topics for the next community call
 :::
 
@@ -46,10 +46,3 @@ Access Resources: [Community Sync Docs](https://docs.google.com/document/d/18b7G
 Google Calendar invite: [Community Events](https://calendar.google.com/calendar/u/0?cid=MjUzMjY2OTFkY2FmNmRiYjk5MzllZmUxNDliYjg1ZjI4ODhhNjU0YzY5Mzc2M2IyZDQ1NzIwNTAyZGU1MjZmOEBncm91cC5jYWxlbmRhci5nb29nbGUuY29t)
 
 Community calls are a great opportunity to discuss the project roadmap, implementation details, and connect with other contributors.
-
-:::info
-The **Google Calendar** below uses **Greenwich Mean Time (GMT+0)**!
-:::
-
-<iframe src="https://calendar.google.com/calendar/embed?src=25326691dcaf6dbb9939efe149bb85f2888a654c693763b2d45720502de526f8%40group.calendar.google.com&ctz=Greenwich" width="800" height="600" frameborder="0" scrolling="no"></iframe>
-
