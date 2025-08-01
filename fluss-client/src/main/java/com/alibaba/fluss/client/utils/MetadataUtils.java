@@ -21,6 +21,7 @@ import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.cluster.maintencance.ServerTag;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.StaleMetadataException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
@@ -31,6 +32,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
 import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
+import com.alibaba.fluss.rpc.messages.DescribeClusterRequest;
+import com.alibaba.fluss.rpc.messages.DescribeClusterResponse;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
 import com.alibaba.fluss.rpc.messages.PbBucketMetadata;
@@ -160,6 +163,22 @@ public class MetadataUtils {
                                     newTablePathToTableId,
                                     newPartitionIdByPath,
                                     newTablePathToTableInfo);
+                        })
+                .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
+        // RpcClient, it will let the get() block forever. So we
+        // time out here
+    }
+
+    public static List<ServerNode> sendDescribeClusterRequest(AdminReadOnlyGateway gateway)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        DescribeClusterRequest describeClusterRequest = new DescribeClusterRequest();
+        return gateway.describeCluster(describeClusterRequest)
+                .thenApply(
+                        response -> {
+                            List<ServerNode> serverNodes = new ArrayList<>();
+                            serverNodes.add(getCoordinatorServer(response));
+                            serverNodes.addAll(getAliveTabletServers(response));
+                            return serverNodes;
                         })
                 .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
         // RpcClient, it will let the get() block forever. So we
@@ -300,6 +319,38 @@ public class MetadataUtils {
                                             serverNode.getPort(),
                                             ServerType.TABLET_SERVER,
                                             serverNode.hasRack() ? serverNode.getRack() : null));
+                        });
+        return aliveTabletServers;
+    }
+
+    private static ServerNode getCoordinatorServer(DescribeClusterResponse response) {
+        if (!response.hasCoordinatorServer()) {
+            return null;
+        } else {
+            PbServerNode protoServerNode = response.getCoordinatorServer();
+            return new ServerNode(
+                    protoServerNode.getNodeId(),
+                    protoServerNode.getHost(),
+                    protoServerNode.getPort(),
+                    ServerType.COORDINATOR);
+        }
+    }
+
+    public static List<ServerNode> getAliveTabletServers(DescribeClusterResponse response) {
+        List<ServerNode> aliveTabletServers = new ArrayList<>();
+        response.getTabletServersList()
+                .forEach(
+                        serverNode -> {
+                            aliveTabletServers.add(
+                                    new ServerNode(
+                                            serverNode.getNodeId(),
+                                            serverNode.getHost(),
+                                            serverNode.getPort(),
+                                            ServerType.TABLET_SERVER,
+                                            serverNode.hasRack() ? serverNode.getRack() : null,
+                                            serverNode.hasServerTag()
+                                                    ? ServerTag.valueOf(serverNode.getServerTag())
+                                                    : null));
                         });
         return aliveTabletServers;
     }

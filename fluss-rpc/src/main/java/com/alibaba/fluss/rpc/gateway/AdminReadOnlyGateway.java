@@ -20,6 +20,8 @@ package com.alibaba.fluss.rpc.gateway;
 import com.alibaba.fluss.rpc.RpcGateway;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
+import com.alibaba.fluss.rpc.messages.DescribeClusterRequest;
+import com.alibaba.fluss.rpc.messages.DescribeClusterResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoResponse;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -187,4 +189,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.LIST_ACLS)
     CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request);
+
+    /**
+     * Get the server node information of the current cluster.
+     *
+     * @param request Describe cluster request
+     * @return a future returns server node
+     */
+    @RPC(api = ApiKeys.DESCRIBE_CLUSTER)
+    CompletableFuture<DescribeClusterResponse> describeCluster(DescribeClusterRequest request);
 }
