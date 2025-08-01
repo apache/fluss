@@ -32,10 +32,6 @@
 
     <packaging>jar</packaging>
 
-    <properties>
-        <iceberg.version>1.4.3</iceberg.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>org.apache.iceberg</groupId>

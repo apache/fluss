@@ -23,14 +23,16 @@ import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.DataType;
+import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.utils.IOUtils;
-
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
@@ -39,11 +41,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.iceberg.CatalogUtil.loadCatalog;
 
 /** A Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
@@ -64,85 +66,65 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private static final String FLUSS_CONF_PREFIX = "fluss.";
     // for iceberg config
     private static final String ICEBERG_CONF_PREFIX = "iceberg.";
-    private static final String ICEBERG_CATALOG_PREFIX = "iceberg.catalog.";
 
     public IcebergLakeCatalog(Configuration configuration) {
         // Extract Iceberg catalog properties from Fluss configuration
-        Map<String, String> icebergProps =
-                configuration.toMap().entrySet().stream()
-                        .filter(e -> e.getKey().startsWith(ICEBERG_CATALOG_PREFIX))
-                        .collect(
-                                Collectors.toMap(
-                                        e -> e.getKey().substring(ICEBERG_CATALOG_PREFIX.length()),
-                                        Map.Entry::getValue));
+
+        this.icebergCatalog = createIcebergCatalog(configuration);
+    }
+
+    private Catalog createIcebergCatalog(Configuration configuration) {
+        // Configuration has already been filtered by extractLakeProperties()
+        Map<String, String> icebergProps = configuration.toMap();
 
         String catalogType = icebergProps.get("type");
         if (catalogType == null) {
             throw new IllegalArgumentException(
                     "Missing required Iceberg catalog type. Set 'iceberg.catalog.type' in your configuration (e.g., 'hive', 'hadoop', or 'rest').");
         }
+
         String catalogName = icebergProps.getOrDefault("name", "fluss-iceberg-catalog");
 
-        this.icebergCatalog =
-                org.apache.iceberg.CatalogUtil.loadCatalog(
-                        catalogType,
-                        catalogName,
-                        icebergProps,
-                        null // Optional: pass Hadoop configuration if available
-                        );
+        return loadCatalog(
+                catalogType,
+                catalogName,
+                icebergProps,
+                null // Optional: pass Hadoop configuration if available
+                );
     }
 
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException {
-        if (!tableDescriptor.hasPrimaryKey()) {
-            throw new UnsupportedOperationException(
-                    "Only primary key tables are supported currently.");
-        }
-
-        TableIdentifier icebergId = toIcebergIdentifier(tablePath);
-        Schema icebergSchema = toIcebergSchema(tableDescriptor);
-        PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
-
-        Map<String, String> icebergProperties = new HashMap<>();
-
-        // MOR table properties
-        icebergProperties.put("write.delete.mode", "merge-on-read");
-        icebergProperties.put("write.update.mode", "merge-on-read");
-        icebergProperties.put("write.merge.mode", "merge-on-read");
-
-        tableDescriptor
-                .getProperties()
-                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
-        tableDescriptor
-                .getCustomProperties()
-                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
-
-        createDatabase(tablePath.getDatabaseName());
-
         try {
-            createTable(icebergId, icebergSchema, partitionSpec, icebergProperties);
-        } catch (org.apache.iceberg.exceptions.AlreadyExistsException e) {
-            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+            TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
+
+            // Ensure namespace exists
+            createDatabase(tablePath.getDatabaseName());
+
+            Schema icebergSchema = convertToIcebergSchema(tableDescriptor);
+            PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
+            SortOrder sortOrder = createSortOrder(icebergSchema);
+
+            // table builder for complete configuration
+            Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
+            tableBuilder.withProperties(buildTableProperties(tableDescriptor));
+            tableBuilder.withPartitionSpec(partitionSpec);
+            tableBuilder.withSortOrder(sortOrder);
+            tableBuilder.create();
+
+        } catch (AlreadyExistsException e) {
+            throw new TableAlreadyExistException(tablePath.getTableName(), e);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create Iceberg table: " + tablePath, e);
         }
     }
 
-    private void createTable(
-            TableIdentifier icebergId,
-            Schema icebergSchema,
-            PartitionSpec partitionSpec,
-            Map<String, String> icebergTableProperties)
-            throws org.apache.iceberg.exceptions.NoSuchNamespaceException,
-                    org.apache.iceberg.exceptions.AlreadyExistsException {
-
-        icebergCatalog.createTable(icebergId, icebergSchema, partitionSpec, icebergTableProperties);
-    }
-
-    private TableIdentifier toIcebergIdentifier(TablePath tablePath) {
+    private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    private Schema toIcebergSchema(TableDescriptor tableDescriptor) {
+    private Schema convertToIcebergSchema(TableDescriptor tableDescriptor) {
         List<Types.NestedField> fields = new ArrayList<>();
         int fieldId = 1;
 
@@ -158,44 +140,37 @@ public class IcebergLakeCatalog implements LakeCatalog {
                             fieldId++, colName, convertFlussToIcebergType(column.getDataType())));
         }
 
-        fields.add(
-                Types.NestedField.optional(fieldId, BUCKET_COLUMN_NAME, Types.IntegerType.get()));
-        fields.add(
-                Types.NestedField.optional(fieldId + 1, OFFSET_COLUMN_NAME, Types.LongType.get()));
-        fields.add(
-                Types.NestedField.optional(
-                        fieldId + 2, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone()));
+        for (Map.Entry<String, Type> systemColumn : SYSTEM_COLUMNS.entrySet()) {
+            fields.add(
+                    Types.NestedField.optional(
+                            fieldId++, systemColumn.getKey(), systemColumn.getValue()));
+        }
 
         return new Schema(fields);
     }
 
     private Type convertFlussToIcebergType(DataType dataType) {
-        String typeRoot = dataType.getTypeRoot().name();
+        DataTypeRoot typeRoot = dataType.getTypeRoot();
 
         switch (typeRoot) {
-            case "INT":
+            case INTEGER:
                 return Types.IntegerType.get();
-            case "BIGINT":
+            case BIGINT:
                 return Types.LongType.get();
-            case "STRING":
+            case STRING:
                 return Types.StringType.get();
-            case "BOOLEAN":
+            case BOOLEAN:
                 return Types.BooleanType.get();
-            case "DOUBLE":
+            case DOUBLE:
                 return Types.DoubleType.get();
-            case "FLOAT":
+            case FLOAT:
                 return Types.FloatType.get();
-            case "DATE":
+            case DATE:
                 return Types.DateType.get();
-            case "TIMESTAMP_WITH_LOCAL_TIME_ZONE":
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return Types.TimestampType.withZone();
-            case "TIMESTAMP_WITHOUT_TIME_ZONE":
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return Types.TimestampType.withoutZone();
-            case "UUID":
-                throw new UnsupportedOperationException("Fluss does not support UUID yet.");
-            case "TIMESTAMP_NANO":
-                throw new UnsupportedOperationException(
-                        "Iceberg does not support nanosecond precision timestamps in 1.4.3");
             default:
                 throw new UnsupportedOperationException("Unsupported Fluss data type: " + typeRoot);
         }
@@ -203,12 +178,13 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
     private PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema) {
+
         // Only PK tables supported for now
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         int bucketCount =
                 tableDescriptor
                         .getTableDistribution()
-                        .flatMap(td -> td.getBucketCount())
+                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
                         .orElseThrow(
                                 () ->
                                         new IllegalArgumentException(
@@ -225,6 +201,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
         builder.bucket(bucketKeys.get(0), bucketCount);
+        List<String> partitionKeys = tableDescriptor.getPartitionKeys();
+        for (String partitionKey : partitionKeys) {
+            builder.identity(partitionKey);
+        }
+
         return builder.build();
     }
 
@@ -241,15 +222,39 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private void createDatabase(String databaseName) {
         if (icebergCatalog instanceof SupportsNamespaces) {
             SupportsNamespaces supportsNamespaces = (SupportsNamespaces) icebergCatalog;
-            try {
+            if (!supportsNamespaces.namespaceExists(Namespace.of(databaseName))) {
                 supportsNamespaces.createNamespace(Namespace.of(databaseName));
-            } catch (org.apache.iceberg.exceptions.AlreadyExistsException e) {
-                // Namespace/database already exists, nothing to do
             }
         } else {
             throw new UnsupportedOperationException(
                     "The underlying Iceberg catalog does not support namespace operations.");
         }
+    }
+
+    private SortOrder createSortOrder(Schema icebergSchema) {
+        // Sort by __offset system column for deterministic ordering
+        SortOrder.Builder builder = SortOrder.builderFor(icebergSchema);
+        builder.asc(OFFSET_COLUMN_NAME);
+        return builder.build();
+    }
+
+    private Map<String, String> buildTableProperties(TableDescriptor tableDescriptor) {
+        Map<String, String> icebergProperties = new HashMap<>();
+
+        // MOR table properties for streaming workloads
+        icebergProperties.put("write.delete.mode", "merge-on-read");
+        icebergProperties.put("write.update.mode", "merge-on-read");
+        icebergProperties.put("write.merge.mode", "merge-on-read");
+
+        // Add Fluss-specific properties with prefix
+        tableDescriptor
+                .getProperties()
+                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
+        tableDescriptor
+                .getCustomProperties()
+                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
+
+        return icebergProperties;
     }
 
     @Override
