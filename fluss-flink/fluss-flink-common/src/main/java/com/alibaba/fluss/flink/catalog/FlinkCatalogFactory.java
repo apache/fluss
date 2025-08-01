@@ -24,6 +24,7 @@ import org.apache.flink.table.factories.CatalogFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,7 +48,10 @@ public class FlinkCatalogFactory implements CatalogFactory {
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
-        return Collections.singleton(FlinkCatalogOptions.DEFAULT_DATABASE);
+        HashSet<ConfigOption<?>> options =
+                new HashSet<>(Collections.singletonList(FlinkCatalogOptions.DEFAULT_DATABASE));
+        options.addAll(FlinkConnectorOptions.CLIENT_SECURITY_OPTIONS);
+        return options;
     }
 
     @Override
