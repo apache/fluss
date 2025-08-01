@@ -569,10 +569,9 @@
                         <exclude>**/.*/**</exclude>
                         <exclude>**/*.prefs</exclude>
                         <exclude>**/*.log</exclude>
-                        <!-- Administrative files in the main trunk. -->
-                        <exclude>**/README.md</exclude>
-                        <exclude>**/CODE_OF_CONDUCT.md</exclude>
-                        <exclude>.github/**</exclude>
+                        <!-- Documentation files in the main trunk. -->
+                        <exclude>**/*.md</exclude>
+                        <exclude>**/*.mdx</exclude>
                         <!-- IDE files. -->
                         <exclude>**/*.iml</exclude>
                         <exclude>**/.idea/**</exclude>
