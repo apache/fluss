@@ -45,6 +45,7 @@ import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import com.alibaba.fluss.server.kv.rocksdb.RocksDBMetricsCollector;
 import com.alibaba.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
 import com.alibaba.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
@@ -118,6 +119,9 @@ public final class KvTablet {
 
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
+
+    @GuardedBy("kvLock")
+    private volatile RocksDBMetricsCollector rocksDBMetricsCollector;
 
     private KvTablet(
             PhysicalTablePath physicalPath,
@@ -259,6 +263,36 @@ public final class KvTablet {
         metricGroup.meter(
                 MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE,
                 new MeterView(kvPreWriteBuffer.getTruncateAsErrorCount()));
+
+        // Initialize RocksDB metrics reporter
+        inWriteLock(
+                kvLock,
+                () -> {
+                    if (rocksDBMetricsCollector == null && !isClosed) {
+                        try {
+                            // Get RocksDB Statistics from options container
+                            org.rocksdb.Statistics statistics =
+                                    rocksDBKv.getOptionsContainer().getStatistics();
+                            if (statistics != null) {
+                                rocksDBMetricsCollector =
+                                        new RocksDBMetricsCollector(
+                                                rocksDBKv.getDb(),
+                                                statistics,
+                                                bucketMetricGroup,
+                                                tableBucket,
+                                                physicalPath.getTablePath(),
+                                                physicalPath.getPartitionName(),
+                                                rocksDBKv.getOptionsContainer());
+                            }
+                        } catch (Exception e) {
+                            LOG.warn(
+                                    "Failed to initialize RocksDB metrics reporter for table {} bucket {}",
+                                    physicalPath,
+                                    tableBucket.getBucket(),
+                                    e);
+                        }
+                    }
+                });
     }
 
     /**
@@ -519,6 +553,19 @@ public final class KvTablet {
                 () -> {
                     if (isClosed) {
                         return;
+                    }
+                    // Close RocksDB metrics reporter first
+                    if (rocksDBMetricsCollector != null) {
+                        try {
+                            rocksDBMetricsCollector.close();
+                        } catch (Exception e) {
+                            LOG.warn(
+                                    "Failed to close RocksDB metrics reporter for table {} bucket {}",
+                                    physicalPath,
+                                    tableBucket.getBucket(),
+                                    e);
+                        }
+                        rocksDBMetricsCollector = null;
                     }
                     if (rocksDBKv != null) {
                         rocksDBKv.close();

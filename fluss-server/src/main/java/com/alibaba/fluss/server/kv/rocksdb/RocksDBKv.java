@@ -166,6 +166,14 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
+    public RocksDBResourceContainer getOptionsContainer() {
+        return optionsContainer;
+    }
+
+    public RocksDB getDb() {
+        return db;
+    }
+
     @Override
     public void close() throws Exception {
         if (this.closed) {
@@ -201,9 +209,5 @@ public class RocksDBKv implements AutoCloseable {
             IOUtils.closeQuietly(optionsContainer);
         }
         this.closed = true;
-    }
-
-    public RocksDB getDb() {
-        return db;
     }
 }

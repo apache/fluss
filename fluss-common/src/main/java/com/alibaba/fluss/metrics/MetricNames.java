@@ -124,6 +124,61 @@ public class MetricNames {
     public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS =
             "preWriteBufferFlushLatencyMs";
 
+    // for rocksdb metrics
+    // cache metrics
+    public static final String ROCKSDB_BLOCK_CACHE_MISS_COUNT = "blockCacheMissCount";
+    public static final String ROCKSDB_BLOCK_CACHE_HIT_COUNT = "blockCacheHitCount";
+    public static final String ROCKSDB_BLOCK_CACHE_ADD_COUNT = "blockCacheAddCount";
+    public static final String ROCKSDB_BLOCK_CACHE_USAGE = "blockCacheUsage";
+    public static final String ROCKSDB_BLOCK_CACHE_PINNED_USAGE = "blockCachePinnedUsage";
+    public static final String ROCKSDB_INDEX_BLOCK_CACHE_MISS_COUNT = "indexBlockCacheMissCount";
+    public static final String ROCKSDB_INDEX_BLOCK_CACHE_HIT_COUNT = "indexBlockCacheHitCount";
+    public static final String ROCKSDB_FILTER_BLOCK_CACHE_MISS_COUNT = "filterBlockCacheMissCount";
+    public static final String ROCKSDB_FILTER_BLOCK_CACHE_HIT_COUNT = "filterBlockCacheHitCount";
+    public static final String ROCKSDB_DATA_BLOCK_CACHE_MISS_COUNT = "dataBlockCacheMissCount";
+    public static final String ROCKSDB_DATA_BLOCK_CACHE_HIT_COUNT = "dataBlockCacheHitCount";
+
+    // compaction metrics
+    public static final String ROCKSDB_COMPACTION_COUNT = "compactionCount";
+    public static final String ROCKSDB_COMPACTION_BYTES_READ = "compactionBytesRead";
+    public static final String ROCKSDB_COMPACTION_BYTES_WRITTEN = "compactionBytesWritten";
+    public static final String ROCKSDB_COMPACTION_CPU_TIME_MICROS = "compactionCpuTimeMicros";
+    public static final String ROCKSDB_FLUSH_COUNT = "flushCount";
+    public static final String ROCKSDB_FLUSH_BYTES_WRITTEN = "flushBytesWritten";
+    public static final String ROCKSDB_STALL_TIME_MICROS = "stallTimeMicros";
+
+    // memory metrics
+    public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE = "memtableMemoryUsage";
+    public static final String ROCKSDB_BLOCK_CACHE_MEMORY_USAGE = "blockCacheMemoryUsage";
+    public static final String ROCKSDB_TABLE_READERS_MEMORY_USAGE = "tableReadersMemoryUsage";
+    public static final String ROCKSDB_TOTAL_MEMORY_USAGE = "totalMemoryUsage";
+    public static final String ROCKSDB_ACTIVE_MEMTABLE_SIZE = "activeMemtableSize";
+    public static final String ROCKSDB_UNFLUSHED_MEMTABLE_SIZE = "unflushedMemtableSize";
+
+    // I/O metrics
+    public static final String ROCKSDB_BYTES_READ = "bytesRead";
+    public static final String ROCKSDB_BYTES_WRITTEN = "bytesWritten";
+    public static final String ROCKSDB_NUMBER_DB_NEXT = "numberDbNext";
+    public static final String ROCKSDB_NUMBER_DB_PREV = "numberDbPrev";
+    public static final String ROCKSDB_NUMBER_DB_SEEK = "numberDbSeek";
+    public static final String ROCKSDB_NUMBER_DB_SEEK_FOUND = "numberDbSeekFound";
+    public static final String ROCKSDB_NUMBER_KEYS_READ = "numberKeysRead";
+    public static final String ROCKSDB_NUMBER_KEYS_WRITTEN = "numberKeysWritten";
+    public static final String ROCKSDB_NUMBER_KEYS_UPDATED = "numberKeysUpdated";
+
+    // SST files metrics
+    public static final String ROCKSDB_NUM_LIVE_VERSIONS = "numLiveVersions";
+    public static final String ROCKSDB_NUM_IMMUTABLE_MEMTABLES = "numImmutableMemtables";
+    public static final String ROCKSDB_NUM_DELETES_ACTIVE_MEMTABLE = "numDeletesActiveMemtable";
+    public static final String ROCKSDB_NUM_DELETES_IMMUTABLE_MEMTABLE =
+            "numDeletesImmutableMemtable";
+    public static final String ROCKSDB_NUM_ENTRIES_ACTIVE_MEMTABLE = "numEntriesActiveMemtable";
+    public static final String ROCKSDB_NUM_ENTRIES_IMMUTABLE_MEMTABLE =
+            "numEntriesImmutableMemtable";
+    public static final String ROCKSDB_TOTAL_SST_FILES_SIZE = "totalSstFilesSize";
+    public static final String ROCKSDB_LIVE_SST_FILES_SIZE = "liveSstFilesSize";
+    public static final String ROCKSDB_SIZE_ALL_MEMTABLES = "sizeAllMemtables";
+
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
     // --------------------------------------------------------------------------------------------
