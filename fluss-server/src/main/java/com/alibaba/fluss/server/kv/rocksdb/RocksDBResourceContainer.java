@@ -26,6 +26,7 @@ import com.alibaba.fluss.utils.IOUtils;
 
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
@@ -74,6 +75,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
     /** The handles to be closed when the container is closed. */
     private final ArrayList<AutoCloseable> handlesToClose;
 
+    /** Global shared RocksDB resource. */
+    private final RocksDBSharedResource sharedResource;
+
     @VisibleForTesting
     RocksDBResourceContainer() {
         this(new Configuration(), null, false);
@@ -96,6 +100,24 @@ public class RocksDBResourceContainer implements AutoCloseable {
         this.enableStatistics = enableStatistics;
 
         this.handlesToClose = new ArrayList<>();
+
+        // Get global shared resource and increase reference count
+        this.sharedResource = RocksDBSharedResource.getInstance();
+        this.sharedResource.acquire();
+
+        // Enable shared block cache if configured
+        if (configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED)) {
+            long cacheSize = configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes();
+            int cacheNumShardBits =
+                    configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_NUM_SHARD_BITS);
+            boolean strictCapacityLimit =
+                    configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_STRICT_CAPACITY_LIMIT);
+            double highPriPoolRatio =
+                    configuration.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_HIGH_PRI_POOL_RATIO);
+
+            this.sharedResource.enableSharedBlockCache(
+                    cacheSize, cacheNumShardBits, strictCapacityLimit, highPriPoolRatio);
+        }
     }
 
     /** Gets the RocksDB {@link DBOptions} to be used for RocksDB instances. */
@@ -153,10 +175,21 @@ public class RocksDBResourceContainer implements AutoCloseable {
         return opt;
     }
 
+    @VisibleForTesting
+    @Nullable
+    Cache getSharedBlockCache() {
+        return sharedResource.getSharedBlockCache();
+    }
+
     @Override
     public void close() throws Exception {
         handlesToClose.forEach(IOUtils::closeQuietly);
         handlesToClose.clear();
+
+        // Release reference to shared resource
+        if (sharedResource != null) {
+            sharedResource.release();
+        }
     }
 
     /** Create a {@link DBOptions} for RocksDB, including some common settings. */
@@ -253,14 +286,22 @@ public class RocksDBResourceContainer implements AutoCloseable {
             }
         }
 
+        Cache sharedCache = getSharedBlockCache();
+        if (sharedCache != null) {
+            blockBasedTableConfig.setBlockCache(sharedCache);
+        } else {
+            // Original per-CF block cache settings
+            blockBasedTableConfig.setBlockCacheSize(
+                    internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes());
+        }
+
         blockBasedTableConfig.setBlockSize(
                 internalGetOption(ConfigOptions.KV_BLOCK_SIZE).getBytes());
 
         blockBasedTableConfig.setMetadataBlockSize(
                 internalGetOption(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes());
 
-        blockBasedTableConfig.setBlockCacheSize(
-                internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes());
+        blockBasedTableConfig.setPinL0FilterAndIndexBlocksInCache(true);
 
         if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
