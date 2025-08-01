@@ -249,7 +249,17 @@ while (true) {
 ```
 
 ### Lookup
-You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key.
+You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key or prefix key.
 ```java
-LookupResult lookup = table.newLookup().createLookuper().lookup(rowKey).get();
+// Lookup by primary key
+LookupResult lookup = table.newLookup()
+                .createLookuper()
+                .lookup(rowKey)
+                .get();
+// Lookup by prefix key
+LookupResult prefixLookup = table.newLookup()
+        .lookupBy(prefixKeys)
+        .createLookuper()
+        .lookup(rowKey)
+        .get();
 ```
