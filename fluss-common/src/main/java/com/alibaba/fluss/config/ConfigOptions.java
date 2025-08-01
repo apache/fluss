@@ -228,6 +228,15 @@ public class ConfigOptions {
     public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
             key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
+    public static final ConfigOption<Boolean> AUTO_BALANCER_ENABLED =
+            key("auto-balancer.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Specifies whether to enable the auto balancer feature. "
+                                    + "If enabled, the auto balancer will automatically balance the load of "
+                                    + "the tabletServers.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------
