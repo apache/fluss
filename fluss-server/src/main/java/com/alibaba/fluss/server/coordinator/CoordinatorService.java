@@ -266,7 +266,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
-                checkNotNull(lakeCatalog).createTable(tablePath, tableDescriptor);
+                checkNotNull(lakeCatalog)
+                        .createTable(tablePath, tableDescriptor, request.isIgnoreIfExists());
             } catch (TableAlreadyExistException e) {
                 throw new TableAlreadyExistException(
                         String.format(
