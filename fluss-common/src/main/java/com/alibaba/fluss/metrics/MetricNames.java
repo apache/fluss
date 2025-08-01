@@ -36,6 +36,7 @@ public class MetricNames {
     // metrics for coordinator server
     // --------------------------------------------------------------------------------------------
     public static final String ACTIVE_COORDINATOR_COUNT = "activeCoordinatorCount";
+    public static final String ALIVE_COORDINATOR_COUNT = "aliveCoordinatorCount";
     public static final String ACTIVE_TABLET_SERVER_COUNT = "activeTabletServerCount";
     public static final String OFFLINE_BUCKET_COUNT = "offlineBucketCount";
     public static final String TABLE_COUNT = "tableCount";
