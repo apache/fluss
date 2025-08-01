@@ -188,8 +188,8 @@ List<User> users = List.of(
 );
 ```
 
-**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`, while the Fluss community is working to provide
-a more user-friendly API for writing data.
+**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`. You can use the `ConverterUtils` helper class (see below) or manually convert your objects as shown here:
+
 ```java
 Table table = connection.getTable(tablePath);
 
@@ -253,3 +253,67 @@ You can also use the Fluss API to perform lookups on a table. This is useful for
 ```java
 LookupResult lookup = table.newLookup().createLookuper().lookup(rowKey).get();
 ```
+
+## Converter Utilities
+The `ConverterUtils` class is a helper utility for converting Java POJOs to Fluss's `InternalRow` format and vice versa. This utility simplifies the process of working with Fluss tables by handling the conversion between your domain objects and Fluss's internal row representation.
+
+#### Usage Example
+Here's an example of how to use `ConverterUtils` to convert between POJOs and Fluss rows:
+
+```java
+// Define your POJO class with a Default Constructor
+public class Order {
+ public Order() {}
+ 
+ ......
+}
+
+// Create a schema that matches your POJO
+Schema schema = Schema.newBuilder()
+        .column("orderId", DataTypes.BIGINT())
+        .column("customerId", DataTypes.BIGINT())
+        .column("quantity", DataTypes.INT())
+        .column("address", DataTypes.STRING())
+        .column("orderTime", DataTypes.TIMESTAMP())
+        .build();
+
+// Create a RowType from the schema
+RowType rowType = RowType.of(
+        new DataType[] {
+                DataTypes.BIGINT(),
+                DataTypes.BIGINT(),
+                DataTypes.INT(),
+                DataTypes.STRING(),
+                DataTypes.TIMESTAMP()
+        },
+        new String[] {"orderId", "customerId", "quantity", "address", "orderTime"});
+
+// Create a converter for your POJO class using the static factory method
+ConverterUtils<Order> converter = ConverterUtils.getConverter(Order.class, rowType);
+
+// Convert a POJO to a GenericRow
+Order order = new Order(1001L, 5001L, 10, "123 Athens", LocalDateTime.now());
+GenericRow row = converter.toRow(order);
+
+// Write the row to a table
+Table table = connection.getTable(tablePath);
+UpsertWriter writer = table.newUpsert().createWriter();
+writer.upsert(row);
+writer.flush();
+
+// Read a row from a table and convert it back to a POJO
+LogScanner logScanner = table.newScan().createLogScanner();
+logScanner.subscribeFromBeginning(0);
+ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+for (ScanRecord scanRecord : scanRecords) {
+    InternalRow readRow = scanRecord.getRow();
+    // Convert row back to POJO
+    Order readOrder = converter.fromRow(readRow);
+    System.out.println("Read order: " + readOrder.orderId);
+}
+```
+
+#### Limitations
+- Nested POJO fields are not currently supported
+- All POJO classes must have a default (no-argument) constructor
+- Field names in the POJO must match column names in the schema (case-sensitive)
