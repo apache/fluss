@@ -18,8 +18,12 @@
 package com.alibaba.fluss.server.log;
 
 import com.alibaba.fluss.exception.OutOfOrderSequenceException;
+import com.alibaba.fluss.exception.WriterIdExpiredException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogRecordBatch;
+
+import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
+import static com.alibaba.fluss.server.log.WriterStateEntry.NUM_BATCHES_TO_RETAIN;
 
 /**
  * This class is used to validate the records appended by a given writer before they are written to
@@ -69,6 +73,16 @@ public class WriterAppendInfo {
                 !updatedEntry.isEmpty()
                         ? updatedEntry.lastBatchSequence()
                         : currentEntry.lastBatchSequence();
+
+        if (currentLastSeq == NO_BATCH_SEQUENCE && appendFirstSeq >= NUM_BATCHES_TO_RETAIN) {
+            // no batch sequence && the batch sequence >= NUM_BATCHES_TO_RETAIN,
+            // should be writer id expiration. It means already some batches has been
+            // written for this writer id, so it's considered as expired
+            // we don't use batch sequence > 0 to avoid a batch with higher batch sequence
+            // come first. Use batch sequence >= NUM_BATCHES_TO_RETAIN should cover most of cases
+            throw new WriterIdExpiredException("Writer id " + writerId + " has expired in server.");
+        }
+
         // must be in sequence, even for the first batch should start from 0
         if (!inSequence(currentLastSeq, appendFirstSeq)) {
             throw new OutOfOrderSequenceException(
