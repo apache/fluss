@@ -18,7 +18,7 @@
 #
 
 
-USAGE="Usage: $0 start|stop"
+USAGE="Usage: $0 start|stop [--zk-opts \"opts\"] [--coordinator-opts \"opts\"] [--tablet-opts \"opts\"]"
 
 STARTSTOP=$1
 
@@ -26,6 +26,35 @@ if [[ $STARTSTOP != "start" ]] && [[ $STARTSTOP != "stop" ]]; then
   echo $USAGE
   exit 1
 fi
+
+# Define default configurations
+ZK_OPTS="${ZK_OPTS:-}"
+COORDINATOR_OPTS="${COORDINATOR_OPTS:-}"
+TABLET_OPTS="${TABLET_OPTS:--Dbind.listeners=FLUSS://localhost:0}"
+
+# Process command line arguments
+shift  # Remove the first argument (start/stop)
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --zk-opts)
+            ZK_OPTS="$2"
+            shift 2
+            ;;
+        --coordinator-opts)
+            COORDINATOR_OPTS="$2"
+            shift 2
+            ;;
+        --tablet-opts)
+            TABLET_OPTS="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown parameter: $1"
+            echo "$USAGE"
+            exit 1
+            ;;
+    esac
+done
 
 bin=`dirname "$0"`
 bin=`cd "$bin"; pwd`
@@ -37,14 +66,14 @@ case $STARTSTOP in
         echo "Starting cluster."
 
         # Start zookeeper
-        "$FLUSS_BIN_DIR"/fluss-daemon.sh start zookeeper "${FLUSS_CONF_DIR}"/zookeeper.properties
+        "$FLUSS_BIN_DIR"/fluss-daemon.sh start zookeeper "${FLUSS_CONF_DIR}"/zookeeper.properties $ZK_OPTS
 
         # Start single Coordinator Server on this machine
-        "$FLUSS_BIN_DIR"/coordinator-server.sh start
+        "$FLUSS_BIN_DIR"/coordinator-server.sh start $COORDINATOR_OPTS
 
         # Start single Tablet Server on this machine.
         # Set bind.listeners as config option to avoid port binding conflict with coordinator server
-        "${FLUSS_BIN_DIR}"/tablet-server.sh start -Dbind.listeners=FLUSS://localhost:0
+        "${FLUSS_BIN_DIR}"/tablet-server.sh start $TABLET_OPTS
     ;;
 
     (stop)
