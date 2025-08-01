@@ -57,7 +57,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * AutoPartitionedTableITCase}.
  */
 class PartitionedTableITCase extends ClientToServerITCaseBase {
-
     @Test
     void testPartitionedPrimaryKeyTable() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_static_partitioned_pk_table_1");
