@@ -221,6 +221,31 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testBatchUpdateLeaderAndIsr() throws Exception {
+        int totalCount = 100;
+
+        // try to register bucket leaderAndIsr
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrList = new HashMap<>();
+        for (int i = 0; i < totalCount; i++) {
+            TableBucket tableBucket = new TableBucket(1, i);
+            LeaderAndIsr leaderAndIsr =
+                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+            leaderAndIsrList.put(tableBucket, leaderAndIsr);
+            zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        }
+
+        // try to batch update
+        zookeeperClient.batchUpdateLeaderAndIsr(leaderAndIsrList);
+        for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
+            TableBucket tableBucket = entry.getKey();
+            LeaderAndIsr leaderAndIsr = entry.getValue();
+            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
+            zookeeperClient.deleteLeaderAndIsr(tableBucket);
+            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
+        }
+    }
+
+    @Test
     void testTable() throws Exception {
         TablePath tablePath = TablePath.of("db", "tb");
         assertThat(zookeeperClient.getTable(tablePath)).isEmpty();
