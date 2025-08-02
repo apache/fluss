@@ -41,6 +41,8 @@ public interface BucketingFunction {
             return new PaimonBucketingFunction();
         } else if (lakeFormat == DataLakeFormat.LANCE) {
             return new FlussBucketingFunction();
+        } else if (lakeFormat == DataLakeFormat.ICEBERG) {
+            return new IcebergBucketingFunction();
         } else {
             throw new UnsupportedOperationException("Unsupported lake format: " + lakeFormat);
         }

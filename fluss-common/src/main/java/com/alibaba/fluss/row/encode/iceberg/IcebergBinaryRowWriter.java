@@ -127,26 +127,46 @@ class IcebergBinaryRowWriter {
     }
 
     public void writeString(BinaryString value) {
+        writeString(value, false);
+    }
+
+    public void writeString(BinaryString value, boolean skipPrefix) {
         // Convert to UTF-8 byte array
         byte[] bytes = BinaryString.encodeUTF8(value.toString());
-        // Write length prefix followed by UTF-8 bytes
-        writeInt(bytes.length); // 4-byte length prefix
+        if (!skipPrefix) {
+            // Write length prefix followed by UTF-8 bytes
+            writeInt(bytes.length); // 4-byte length prefix
+        }
         ensureCapacity(bytes.length); // Ensure space for actual string bytes
         segment.put(cursor, bytes, 0, bytes.length);
         cursor += bytes.length;
     }
 
     public void writeBytes(byte[] bytes) {
-        // Write length prefix followed by binary data
-        writeInt(bytes.length); // 4-byte length prefix
+        writeBytes(bytes, false);
+    }
+
+    public void writeBytes(byte[] bytes, boolean skipPrefix) {
+        if (!skipPrefix) {
+            // Write length prefix followed by binary data
+            writeInt(bytes.length); // 4-byte length prefix
+        }
         ensureCapacity(bytes.length); // Ensure space for actual binary bytes
         segment.put(cursor, bytes, 0, bytes.length);
         cursor += bytes.length;
     }
 
     public void writeDecimal(Decimal value, int precision) {
+        writeDecimal(value, precision, false);
+    }
+
+    public void writeDecimal(Decimal value, int precision, boolean skipPrefix) {
         byte[] unscaled = value.toUnscaledBytes();
-        writeBytes(unscaled); // Adds 4-byte length prefix before the actual bytes
+        writeBytes(unscaled, skipPrefix); // Adds 4-byte length prefix before the actual bytes
+    }
+
+    public void writeIntAsLong(int value) {
+        writeLong(value);
     }
 
     private void ensureCapacity(int neededSize) {
@@ -178,7 +198,7 @@ class IcebergBinaryRowWriter {
         switch (fieldType.getTypeRoot()) {
             case INTEGER:
             case DATE:
-                return (writer, value) -> writer.writeInt((int) value);
+                return (writer, value) -> writer.writeIntAsLong((int) value);
 
             case TIME_WITHOUT_TIME_ZONE:
                 // Write time as microseconds long (milliseconds * 1000)
@@ -200,15 +220,16 @@ class IcebergBinaryRowWriter {
 
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
-                return (writer, value) -> writer.writeDecimal((Decimal) value, decimalPrecision);
+                return (writer, value) ->
+                        writer.writeDecimal((Decimal) value, decimalPrecision, true);
 
             case STRING:
             case CHAR:
-                return (writer, value) -> writer.writeString((BinaryString) value);
+                return (writer, value) -> writer.writeString((BinaryString) value, true);
 
             case BINARY:
             case BYTES:
-                return (writer, value) -> writer.writeBytes((byte[]) value);
+                return (writer, value) -> writer.writeBytes((byte[]) value, true);
 
             default:
                 throw new IllegalArgumentException(
