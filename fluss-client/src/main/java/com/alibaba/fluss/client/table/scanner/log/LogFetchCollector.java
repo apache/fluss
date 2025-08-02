@@ -171,7 +171,8 @@ public class LogFetchCollector {
                             nextInLineFetch.nextFetchOffset(),
                             tb,
                             records.size());
-                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
+                    logScannerStatus.updateOffset(
+                            tb, nextInLineFetch.nextFetchOffset(), nextInLineFetch.lastTimeStamp());
                 }
                 return records;
             } else {

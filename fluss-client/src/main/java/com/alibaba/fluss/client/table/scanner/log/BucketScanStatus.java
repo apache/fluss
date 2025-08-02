@@ -24,14 +24,12 @@ import com.alibaba.fluss.annotation.Internal;
 class BucketScanStatus {
     private long offset; // last consumed position
     private long highWatermark; // the high watermark from last fetch
+    private long timestamp;
     // TODO add resetStrategy and nextAllowedRetryTimeMs.
-
-    public BucketScanStatus() {
-        this.offset = 0L;
-    }
 
     public BucketScanStatus(Long position) {
         this.offset = position;
+        this.timestamp = -1;
     }
 
     public long getOffset() {
@@ -42,11 +40,19 @@ class BucketScanStatus {
         return highWatermark;
     }
 
+    public long getTimestamp() {
+        return timestamp;
+    }
+
     public void setOffset(Long offset) {
         this.offset = offset;
     }
 
     public void setHighWatermark(Long highWatermark) {
         this.highWatermark = highWatermark;
+    }
+
+    public void setTimestamp(Long timestamp) {
+        this.timestamp = timestamp;
     }
 }
