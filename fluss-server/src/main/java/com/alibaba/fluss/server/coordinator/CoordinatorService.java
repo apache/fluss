@@ -309,6 +309,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
+        // currently, we don't support primary key table for lance
+        if (dataLakeFormat != null && dataLakeFormat.equals(DataLakeFormat.LANCE)) {
+            if (newDescriptor.hasPrimaryKey()) {
+                throw new InvalidTableException(
+                        "Currently, we don't support tiering a primary key table to Lance");
+            }
+        }
+
         // override the datalake format if the table hasn't set it and the cluster configured
         if (dataLakeFormat != null
                 && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
