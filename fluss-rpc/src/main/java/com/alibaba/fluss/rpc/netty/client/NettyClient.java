@@ -59,6 +59,8 @@ public final class NettyClient implements RpcClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(NettyClient.class);
 
+    private final Configuration conf;
+
     /** Netty's Bootstrap. */
     private final Bootstrap bootstrap;
 
@@ -86,6 +88,7 @@ public final class NettyClient implements RpcClient {
 
     public NettyClient(
             Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
+        this.conf = conf;
         this.connections = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
@@ -194,6 +197,7 @@ public final class NettyClient implements RpcClient {
                     LOG.debug("Creating connection to server {}.", node);
                     ServerConnection connection =
                             new ServerConnection(
+                                    conf,
                                     bootstrap,
                                     node,
                                     clientMetricGroup,
