@@ -107,8 +107,6 @@ import static com.alibaba.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static com.alibaba.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static com.alibaba.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
-import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static com.alibaba.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static com.alibaba.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -1584,12 +1582,13 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 new TableMetadata(
                                         TableInfo.of(
                                                 nonePartitionTablePath,
-                                                DELETED_TABLE_ID, // mark as deleted.
+                                                nonePartitionTableId,
                                                 1,
                                                 DATA1_TABLE_DESCRIPTOR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
-                                        Collections.emptyList())),
+                                        Collections.emptyList(),
+                                        true)),
                         Collections.emptyList()));
         zkClient.deleteTable(nonePartitionTablePath);
 
@@ -1614,8 +1613,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 new PartitionMetadata(
                                         partitionTableId,
                                         partitionName1,
-                                        DELETED_PARTITION_ID, // mark as deleted.
-                                        Collections.emptyList()))));
+                                        partitionId1,
+                                        Collections.emptyList(),
+                                        true))));
         expectedPartitionNameById.put(partitionId1, null);
         expectedPartitionMetadataById.put(physicalTablePath1, null);
         assertUpdateMetadataEquals(
