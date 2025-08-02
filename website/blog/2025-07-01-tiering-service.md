@@ -133,7 +133,7 @@ The **TieringSourceReader** pulls assigned splits from the enumerator, uses a `T
   - **LogScanner** for `TieringLogSplit` (append-only tables)
   - **BoundedSplitReader** for `TieringSnapshotSplit` (primary-keyed tables)
 - **Data Fetch:** The chosen reader fetches the records defined by the split’s offset or snapshot boundaries from the Fluss server.
-- **Lake Writing"** Retrieved records are handed off to the lake writer, which persists them into the data lake.
+- **Lake Writing:** Retrieved records are handed off to the lake writer, which persists them into the data lake.
 
 By cleanly separating split assignment, reader selection, data fetching, and lake writing, the TieringSourceReader ensures scalable, parallel ingestion of streaming and snapshot data into your lakehouse.
 
@@ -157,7 +157,7 @@ public interface LakeTieringFactory {
 - **createLakeWriter(WriterInitContext)**: builds a `LakeWriter` to convert Fluss rows into the target table format.
 - **getWriteResultSerializer()**: supplies a serializer for the writer’s output.
 - **createLakeCommitter(CommitterInitContext)**: constructs a `LakeCommitter` to finalize and atomically commit data files.
-- **getCommittableSerializer()**: provides a serializer for committable tokens.```
+- **getCommittableSerializer()**: provides a serializer for committable tokens.
 
 By default, Fluss includes a Paimon-backed tiering factory; Iceberg support is coming soon. Once the `TieringSourceReader` writes a batch of records through the `LakeWriter`, it emits the resulting write metadata downstream to the **TieringCommitOperator**, which then commits those changes both in the lakehouse and back to the Fluss cluster.
 
