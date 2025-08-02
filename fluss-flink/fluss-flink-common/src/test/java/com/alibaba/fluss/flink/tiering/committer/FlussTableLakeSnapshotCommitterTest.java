@@ -71,14 +71,14 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
                                 ? DATA1_PARTITIONED_TABLE_DESCRIPTOR
                                 : DATA1_TABLE_DESCRIPTOR);
 
-        List<String> partitions;
+        List<Long> partitions;
         Map<String, Long> partitionNameAndIds = Collections.emptyMap();
         if (!isPartitioned) {
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
             partitions = Collections.singletonList(null);
         } else {
             partitionNameAndIds = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
-            partitions = new ArrayList<>(partitionNameAndIds.keySet());
+            partitions = new ArrayList<>(partitionNameAndIds.values());
         }
 
         CommittedLakeSnapshot committedLakeSnapshot = new CommittedLakeSnapshot(3);
@@ -86,15 +86,13 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         Map<TableBucket, Long> expectedOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
             long bucketOffset = bucket * bucket;
-            for (String partition : partitions) {
+            for (Long partition : partitions) {
                 if (partition == null) {
                     committedLakeSnapshot.addBucket(bucket, bucketOffset);
                     expectedOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
                 } else {
                     committedLakeSnapshot.addPartitionBucket(partition, bucket, bucketOffset);
-                    expectedOffsets.put(
-                            new TableBucket(tableId, partitionNameAndIds.get(partition), bucket),
-                            bucketOffset);
+                    expectedOffsets.put(new TableBucket(tableId, partition, bucket), bucketOffset);
                 }
             }
         }

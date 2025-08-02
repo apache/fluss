@@ -42,10 +42,12 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -84,6 +86,16 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         assertReplicaStatus(t1Bucket, 3);
         // check data in paimon
         checkDataInPaimonPrimayKeyTable(t1, rows);
+        // check snapshot property in paimon
+        Map<String, String> properties =
+                new HashMap<String, String>() {
+                    {
+                        put(
+                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                "[{\"bucket_id\":0,\"log_offset\":3}]");
+                    }
+                };
+        checkSnapshotPropertyInPaimon(t1, properties);
 
         // then, create another log table
         TablePath t2 = TablePath.of(DEFAULT_DB, "logTable");
@@ -146,6 +158,20 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                     writtenRowsByPartition.get(partitionName),
                     0);
         }
+
+        properties =
+                new HashMap<String, String>() {
+                    {
+                        put(
+                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                "["
+                                        + "{\"partition_id\":0,\"bucket_id\":0,\"log_offset\":3},"
+                                        + "{\"partition_id\":1,\"bucket_id\":0,\"log_offset\":3}"
+                                        + "]");
+                    }
+                };
+        checkSnapshotPropertyInPaimon(partitionedTablePath, properties);
+
         jobClient.cancel().get();
     }
 

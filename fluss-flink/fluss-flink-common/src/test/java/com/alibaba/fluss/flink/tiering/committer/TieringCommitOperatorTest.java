@@ -327,10 +327,9 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         mockCommitedSnapshot));
     }
 
-    private CommittedLakeSnapshot mockCommittedLakeSnapshot(
-            List<String> partitions, int snapshotId) {
+    private CommittedLakeSnapshot mockCommittedLakeSnapshot(List<Long> partitions, int snapshotId) {
         CommittedLakeSnapshot mockCommittedSnapshot = new CommittedLakeSnapshot(snapshotId);
-        for (String partition : partitions) {
+        for (Long partition : partitions) {
             for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
                 if (partition == null) {
                     mockCommittedSnapshot.addBucket(bucket, bucket + 1);
@@ -347,18 +346,15 @@ class TieringCommitOperatorTest extends FlinkTestBase {
             CommittedLakeSnapshot committedLakeSnapshot,
             Map<String, Long> partitionIdByName) {
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
-        for (Map.Entry<Tuple2<String, Integer>, Long> entry :
+        for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
                 committedLakeSnapshot.getLogEndOffsets().entrySet()) {
-            Tuple2<String, Integer> partitionBucket = entry.getKey();
+            Tuple2<Long, Integer> partitionBucket = entry.getKey();
             if (partitionBucket.f0 == null) {
                 expectedLogEndOffsets.put(
                         new TableBucket(tableId, partitionBucket.f1), entry.getValue());
             } else {
                 expectedLogEndOffsets.put(
-                        new TableBucket(
-                                tableId,
-                                partitionIdByName.get(partitionBucket.f0),
-                                partitionBucket.f1),
+                        new TableBucket(tableId, partitionBucket.f0, partitionBucket.f1),
                         entry.getValue());
             }
         }

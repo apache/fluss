@@ -33,6 +33,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
@@ -118,7 +119,8 @@ public class TestingLakeTieringFactory
         }
 
         @Override
-        public long commit(TestingCommittable committable) throws IOException {
+        public long commit(TestingCommittable committable, Map<String, String> snapshotProperties)
+                throws IOException {
             return ++currentSnapshot;
         }
 

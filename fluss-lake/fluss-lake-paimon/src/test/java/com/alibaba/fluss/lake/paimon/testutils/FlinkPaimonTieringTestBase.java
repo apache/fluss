@@ -43,6 +43,7 @@ import com.alibaba.fluss.types.DataTypes;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -459,5 +460,19 @@ public class FlinkPaimonTieringTestBase {
         RecordReader<org.apache.paimon.data.InternalRow> reader =
                 table.newRead().createReader(table.newReadBuilder().newScan().plan());
         return reader.toCloseableIterator();
+    }
+
+    protected void checkSnapshotPropertyInPaimon(
+            TablePath tablePath, Map<String, String> expectedProperties) throws Exception {
+        FileStoreTable table =
+                (FileStoreTable)
+                        getPaimonCatalog()
+                                .getTable(
+                                        Identifier.create(
+                                                tablePath.getDatabaseName(),
+                                                tablePath.getTableName()));
+        Snapshot snapshot = table.snapshotManager().latestSnapshot();
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.properties()).isEqualTo(expectedProperties);
     }
 }
