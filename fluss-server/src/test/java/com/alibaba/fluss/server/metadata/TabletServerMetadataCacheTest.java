@@ -43,8 +43,6 @@ import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
-import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static com.alibaba.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -212,13 +210,13 @@ public class TabletServerMetadataCacheTest {
                                 new TableMetadata(
                                         TableInfo.of(
                                                 DATA1_TABLE_PATH,
-                                                DELETED_TABLE_ID, // mark this table as
-                                                // deletion.
+                                                DATA1_TABLE_ID,
                                                 1,
                                                 DATA1_TABLE_DESCRIPTOR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
-                                        changedBucket1BucketMetadata)),
+                                        changedBucket1BucketMetadata,
+                                        true)),
                         Collections.emptyList()));
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
 
@@ -232,9 +230,9 @@ public class TabletServerMetadataCacheTest {
                                 new PartitionMetadata(
                                         partitionTableId,
                                         partitionName1,
-                                        DELETED_PARTITION_ID, // mark this partition as
-                                        // deletion.
-                                        Collections.emptyList()))));
+                                        partitionId1,
+                                        Collections.emptyList(),
+                                        true))));
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId1)).isEmpty();
         assertPartitionMetadataEquals(
                 partitionId2,
