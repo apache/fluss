@@ -167,7 +167,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     @Nullable
     private Snapshot getCommittedLatestSnapshotOfLake(String commitUser) throws IOException {
-        // get the latest snapshot commited by fluss or latest commited id
+        // get the latest snapshot committed by fluss or latest committed id
         SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
         Long userCommittedSnapshotIdOrLatestCommitId =
                 fileStoreTable
@@ -182,7 +182,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         Snapshot snapshot = snapshotManager.tryGetSnapshot(userCommittedSnapshotIdOrLatestCommitId);
 
         if (!snapshot.commitUser().equals(commitUser)) {
-            // the snapshot is still not commited by Fluss, return directly
+            // the snapshot is still not committed by Fluss, return directly
             return null;
         }
         return snapshot;
