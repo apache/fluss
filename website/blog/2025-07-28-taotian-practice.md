@@ -11,13 +11,12 @@ authors: [Zhang Xinyu, Wang Lilei]
 1. # Business Background
 
 
-// TODO Image Placeholder
-
+![](assets/taotian_practice/ab_experiment_platform_arch.png)
 
 Taotian AB Test Analysis Platform (hereinafter collectively referred to as the Babel Tower) mainly focuses on AB data of Taotian's C-end algorithms, aiming to promote scientific decision-making activities through the construction of generalized AB data capabilities. Since its inception in **2015** , it has continuously and effectively supported the analysis of Taotian's algorithm AB data for **10 years** . Currently, it is applied to **over 100** A/B testing scenarios across various business areas, including **search, recommendation, content,** **user growth****, and marketing**.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/realtime_data_warehouse_arch.png)
 
 
 The Babel Tower provides the following capabilities:
@@ -34,7 +33,7 @@ The Babel Tower provides the following capabilities:
 Currently, the real-time data warehouse of the Babel Tower is based on technology stacks such as Flink, message queue, OLAP engine, etc., where the message queue is TT (Kafka-like architecture MQ) within the Taotian group, and the OLAP engine is Alibaba Cloud Hologres.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/origin_data_pipeline.png)
 
 
 After consuming the message queue data collected from access logs, we perform business logic processing in Flink. However, when SQL is complex, especially when there are OrderBy and Join operations, it will cause the retraction stream processed by Flink to double, resulting in a very large Flink state and consuming a large amount of computing resources. This scenario may pose significant challenges in terms of job development and maintenance. The development cycle of jobs is also much longer compared to offline solutions. Currently, the message queue still has some limitations, and the main problems encountered are as follows:
@@ -45,7 +44,7 @@ In a data warehouse, write-once, read-many is a common operation mode, and each 
 
 In Flink, we attempted to explicitly specify the consumption column schema in the Source and introduce a column pruning UDF operator to reduce the consumption cost of the data source, but in practice, the results were minimal and the data pipeline complexity was relatively high.
 
-// TODO Image Placeholder
+![](assets/taotian_practice/column_pruning_operator.png)
 
 ## 2.2 Data Profiling Difficulties
 
@@ -55,7 +54,7 @@ In data warehouse construction, data profiling is a basic business requirement, 
 
 // TODO Image Placeholder
 
-// TODO Image Placeholder
+![](assets/taotian_practice/mq_profiling.png)
 
 
 ### 2.2.2 Flink State data is not visible
@@ -63,7 +62,7 @@ In data warehouse construction, data profiling is a basic business requirement, 
 In e-commerce scenarios, counting the user's first and last channels on the same day is a key indicator for measuring user acquisition effectiveness and channel quality. To ensure the accuracy of the calculation results, the computing engine must perform sorting and deduplication operations, materializing all upstream data through Flink State. However, State is an internal Black box that we cannot see or touch, making it extremely difficult to modify jobs or troubleshoot issues.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/flink_sorting_job.png)
 
 
 ## 2.3 Difficulties in Maintenance of Large State Jobs
@@ -71,14 +70,13 @@ In e-commerce scenarios, counting the user's first and last channels on the same
 In e-commerce scenarios, order attribution is the core business logic. In the real-time data warehouse, it often requires the use of Dual Stream Join (click stream, transaction stream) + Flink State (24H) to implement the business logic of same-day transaction attribution. The resulting problem is the extremely large Flink State (for a single job **up to 100TB),** which includes operations such as sorting and Dual Stream Join.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/transaction_attribution_state.png)
 
 
 During a Flink job, requires State to maintain intermediate result sets. When the execution plan verification succeeds after modifying the job, it starts from the latest state. As long as the execution plan verification fails, it has to **reinitialize State from 0 clock** , which is time-consuming and labor-intensive. Moreover, each time data is consumed, both Sort State and Join State are updated. Among them, the Sort State of the sorting operator can reach **90TB** , and the Join State can be as high as **10TB** . The huge state brings many problems, including high cost, poor job stability, Checkpoint timeout, slow restart and recovery, etc.
 
 
-// TODO Image Placeholder
-
+![](assets/taotian_practice/transaction_attribution_flink_job.png)
 
 # 3. Fluss Core Competencies
 
@@ -90,7 +88,7 @@ During a Flink job, requires State to maintain intermediate result sets. When th
 
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fulss_arch.png)
 
 
 Fluss, developed by the Flink team, is the next-generation stream storage for stream analysis, a stream storage built for real-time analysis. Fluss innovatively integrates columnar storage format and real-time update capabilities into stream storage, and is deeply integrated with Flink to help users build a streaming data warehouse with high throughput, low latency, and low cost. It has the following core features:
@@ -112,7 +110,7 @@ Fluss, developed by the Flink team, is the next-generation stream storage for st
 
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fulss_underlying_arch.png)
 
 
 **Type:** Divided into log tables and primary key tables. Log tables are columnar MQs that only support insert operations, while primary key tables can be updated according to the primary key and specified merge engine.
@@ -171,11 +169,11 @@ WITH (
   ,'bucket.key' = 'user_name,item_id'
   ,'table.auto-partition.enabled' = 'true'
   ,'table.auto-partition.time-unit' = 'day'
-  ,'table.log.ttl' = '1d' -- binlog保留1天
-  ,'table.merge-engine'='versioned' -- 拿最后一条数据
-  ,'table.merge-engine.versioned.ver-column' = 'event_time' -- 排序字段
-  ,'table.auto-partition.num-precreate' = '2' -- 提前创建2个分区
-  ,'table.auto-partition.num-retention' = '2' -- 保留前2个分区
+  ,'table.log.ttl' = '1d' -- Binlog retain 1 day.
+  ,'table.merge-engine'='versioned' -- Take the last piece of data
+  ,'table.merge-engine.versioned.ver-column' = 'event_time' -- Sort field
+  ,'table.auto-partition.num-precreate' = '2' -- Create 2 partitions in advance
+  ,'table.auto-partition.num-retention' = '2' -- Keep the first 2 partitions
   ,'table.log.arrow.compression.type' = 'ZSTD'
 )
 ;
@@ -192,7 +190,7 @@ Fluss is a column-based streaming storage, with its underlying file storage adop
 A key advantage of Fluss is that column pruning is performed at the server level, and only the necessary columns are transferred to the Client. This architecture not only improves performance but also reduces network costs and resource consumption.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/comparison_of_row_and_column_storage_consumption.png)
 
 
 ### 3.3.2 Message Queue of KV Storage
@@ -202,7 +200,8 @@ The core of Fluss's KV storage is built on top of the log Table, and a Key-Value
 Fluss's built-in KV index supports high-performance primary key lookups. Users can also use Fluss for direct data exploration, including queries with operations such as LIMIT and COUNT, thus easily debugging data in Fluss.
 
 
-// TODO Image Placeholder
+
+![](assets/taotian_practice/fluss_kv_store_point_query.png)
 
 
 ### 3.3.3 Dual-Stream Join → Delta Join
@@ -212,7 +211,7 @@ In Flink, Dual-Stream Join is a very fundamental function, often used to build w
 Fluss has developed a brand-new Flink join operator implementation called Delta Join, which fully leverages Fluss's streaming read and Prefix Lookup capabilities. Delta Join can be simply understood as "**dual-sided driven dimension table join**". When data arrives on the left side, it performs a point query on the right table based on the Join Key; when data arrives on the right side, it performs a point query on the left table based on the Join Key. Throughout the process, it does not require state like a dimension table join, but implements semantics similar to a Dual-Stream Join, meaning that any data update on either side will trigger an update to the associated results.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/dual_stream_join2delta_join.png)
 
 
 ### 3.3.4 Lake-Stream Integration
@@ -220,7 +219,7 @@ Fluss has developed a brand-new Flink join operator implementation called Delta 
 In the Kappa architecture, due to differences in production pipelines, data is stored separately in streams and lakes, resulting in cost waste. At the same time, additional data services need to be defined to unify data consumption. The goal of lake-stream integration is to enable "lake data" and "stream data" to be stored, managed, and consumed as a unified whole, thereby avoiding data redundancy and metadata inconsistency issues.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/lake_stream_integration.png)
 
 
 Additionally, Fluss provides Union Read to **fully manage** the unified data service required by the Kappa architecture. Fluss maintains a Compaction Service, which automatically converts Fluss data into lake storage format and ensures the consistency of lake-stream metadata. In addition, Fluss also provides partition alignment and bucket alignment mechanisms to ensure consistent distribution of lake-stream data. This allows for the direct conversion of Arrow files to Parquet files without the need to introduce network shuffling during the process of transferring to the lake.
@@ -233,15 +232,15 @@ Fluss innovatively integrates columnar storage format and real-time update capab
 
 ### 4.1.1 Evolution of Regular Jobs
 
-// TODO Image Placeholder
+
+![](assets/taotian_practice/regular_jobs_evolution.png)
 
 The above is the architecture before and after the job upgrade. For routine jobs such as `Source -> ETL cleaning -> Sink`, since the message queue is row-based storage, when consuming, Flink first loads the entire row of data into memory and then filters the required columns, resulting in a significant waste of Source IO. After upgrading to Fluss, due to the columnar storage at the bottom of Fluss, column pruning in Fluss is performed at the server level, which means that the data sent to the Client has already been pruned, thus saving a large amount of network costs.
 
 ### 4.1.2 Evolution of Sorting Jobs
 
 
-
-// TODO Image Placeholder
+![](assets/taotian_practice/sorting_jobs_evolution.png)
 
 
 In Flink, the implementation of sorting relies on Flink explicitly computing and using State to store the intermediate state of data. This model incurs significant business overhead and extremely low business reusability. The introduction of Fluss pushes this computation and storage down to the Sink side, and in conjunction with the Fluss Merge Engine, implements different deduplication methods for KV tables. Currently, it supports **FirstRow Merge Engine** (the first row) and **Versioned Merge Engine** (the latest row). The Changelog generated during deduplication can be directly read by Flink streams, saving a large amount of computing resources and enabling the rapid reuse and implementation of data services.
@@ -249,8 +248,7 @@ In Flink, the implementation of sorting relies on Flink explicitly computing and
 ### 4.1.3 Evolution of Dual-Stream Join Jobs
 
 
-
-// TODO Image Placeholder
+![](assets/taotian_practice/dual_stream_jobs_evolution.png)
 
 
 After the Fluss remodeling, the Dual-Stream Join of the Babel Tower transaction attributed job has been enhanced with the following upgrade points:
@@ -273,7 +271,7 @@ After the Fluss remodeling, the Dual-Stream Join of the Babel Tower transaction 
 
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/lake_jobs_evolution.png)
 
 
 Under the Fluss lake-stream integrated architecture, Fluss provides a **fully managed** unified data service. Fluss and Paimon store stream and lake data respectively, output a Catalog to the computing engine (such as Flink), and the data is output externally in the form of a unified table. Consumers can directly access the data in Fluss and lake storage in the form of Union Read.
@@ -285,10 +283,12 @@ Under the Fluss lake-stream integrated architecture, Fluss provides a **fully ma
 In the job of consuming message queues, consumers typically only consume a portion of the data, but Flink jobs still need to read data from all columns, resulting in significant waste in Flink Source IO. Fundamentally, existing message queues are all row-based storage, and for scenarios that need to process large-scale data, the efficiency of row-based storage format appears insufficient. The underlying storage needs to have powerful Data Skipping capabilities and support features such as column pruning. In this case, Fluss with columnar storage is clearly more suitable.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fluss_column_pruning_evolution.png)
 
 
 In our real-time data warehouse, 70% of jobs only consume partial columns of Source. Taking the Babel Tower recommendation clicks job as an example, out of the 43 fields in Source, we only need 13. Additional operator resources are required to trim the entire row of data, wasting more than 20% of IO resources. After using Fluss, it directly consumes the required columns, avoiding additional IO waste and reducing the additional resources brought by Flink column pruning operators. To date, multiple core jobs in the Taotian Search and Recommendation domain have already launched Fluss and have been verified during the Taotian 618 promotion.
+
+![](assets/taotian_practice/comparison_of_fluss_and_mq_column_pruning.png)
 
 
 ### 4.2.2 Real-time Data Profiling
@@ -298,13 +298,13 @@ In our real-time data warehouse, 70% of jobs only consume partial columns of Sou
 Whether troubleshooting issues or conducting data exploration, data queries are necessary. However, the message queue only supports sampling queries in the interface and queries of synchronized data in additional storage. In sampling queries, it is not possible to query specified data; only a batch of output can be retrieved for display and inspection. Using the method of synchronizing additional storage, on the other hand, incurs minute-level latency as well as additional storage and computational costs.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/comparison_of_fulss_and_mq_data_profiling.png)
 
 
 In Fluss KV Table, a KV index is built, so it can support high-performance primary key point queries, directly probe Fluss data through point query statements, and also support query functions such as LIMIT and COUNT to meet daily Data Profiling requirements. An example is as follows:
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fluss_query_example1.png)
 
 
 **Flink State Query**
@@ -312,13 +312,13 @@ In Fluss KV Table, a KV index is built, so it can support high-performance prima
 Flink's State mechanism (such as KeyedState or OperatorState) provides efficient state management capabilities, but its internal implementation is a "Black box" to developers. Developers cannot directly query, analyze, or debug the data in State, resulting in a strong coupling between business logic and state management, making it difficult to dynamically adjust or expand. When data anomalies occur, developers can only infer the content in State from the result data, unable to directly access the specific data in State, leading to high costs for troubleshooting.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/flink_state_evolution.png)
 
 
 We externalize Flink State into Fluss, such as states for duak-stream join, data deduplication, etc. Based on Fluss's KV index, we provide State exploration capabilities, white-box the internal data of State, and efficiently locate issues.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fluss_query_example2.png)
 
 
 ### 4.2.3 Merge Engine + Delta Join
@@ -326,7 +326,7 @@ We externalize Flink State into Fluss, such as states for duak-stream join, data
 In the current real-time data warehouse, the transaction attribution task is a job that heavily relies on State, with State **reaching up to 100TB** , which includes operations such as sorting and Dual-Stream Join. After consuming TT data, we first perform data sorting and then conduct a Dual-Stream Join to attribute order data.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/transaction_attribution_state_size.png)
 
 
 As shown in the figure, in the first attribution logic implementation of the attribution job, the State of the sorting operator is as high as **90TB** , and that of the Dual-Stream Join operator is **10TB** . Large State jobs bring many problems, including high costs, job instability, long CP time, etc.
@@ -335,7 +335,7 @@ As shown in the figure, in the first attribution logic implementation of the att
 **Sorting optimization, Merge Engine**
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fluss_sort_tunning.png)
 
 
 In the implementation of the Merge Engine, it mainly relies on Fluss's KV table. The Changelog generated by KV can be read by Flink streams without additional deduplication operations, saving Flink's computing resources and achieving business reuse of data. Through Fluss's KV table, the sorting logic in our jobs is implemented, and there is no longer a need to maintain the state of the sorting operator in the jobs.
@@ -344,7 +344,7 @@ In the implementation of the Merge Engine, it mainly relies on Fluss's KV table.
 **Join Optimization, Dual Sides Driving**
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/comparison_of_dual_stream_join_and_delta_join.png)
 
 
 The jobs of Delta Join are as described above. The original job, after consuming data, sorts it according to business requirements, performs Dual-Stream Join after sorting, and saves the state for 24 hours. This results in issues such as long CP time, poor job maintainability, and the need to rerun when modifying the job state. In Fluss, data sorting is completed through the Merge Engine of the KV table, and through Delta Join, the job and state are decoupled, eliminating the need to rerun the state when modifying the job, making the state data queryable, and improving flexibility.
@@ -409,13 +409,13 @@ Some operations are shown in the above code. After migrating from the Dual-Strea
 In addition to resource reduction and performance improvement, there is also an enhancement in flexibility for our benefits. The state of traditional stream-to-stream connections is tightly coupled with Flink jobs, like an opaque "black box". When the job is modified, it is found that the historical resource plan is incompatible with the current job, and the State can only be rerun from scratch, which is time-consuming and labor-intensive. After using Delta Join, it is equivalent to decoupling the state from the job, so modifying the job does not require rerunning the State. Moreover, all data is stored in Fluss, making it queryable and analyzable, thus improving business flexibility and development efficiency.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/fluss_historical_data_consumption.png)
 
 
 Meanwhile, Fluss maintains a Compaction Service to synchronize Fluss data to Paimon, with the latest data stored in Fluss and historical data in Paimon. Flink can support Union Read, which combines the data in Fluss and Paimon to achieve second-level freshness analysis.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/join_jobs_evolution.png)
 
 
 In addition, Data Join also addresses the scenario of backtracking data. In the case of Dual-Stream Join, if a job modification causes the Operating Plan verification to fail, only data backfilling can be performed. During the Fluss backtracking process, the Paimon table archived by the unified lake-stream architecture combined with Flink Batch Join can be used to accelerate data backfilling.
@@ -425,7 +425,7 @@ In addition, Data Join also addresses the scenario of backtracking data. In the 
 Fluss provides high compatibility with Data lake warehouses. Through the underlying Service, it automatically converts Fluss data into Paimon format data, enabling real-time data to be ingested into the lake with a single click, while ensuring consistent data partitioning and bucketing on both the lake and stream sides.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/lake_stream_evolution.png)
 
 
 After having **lake** and **stream** two levels of data, Fluss has the key characteristic of sharing data. Paimon stores long-period, minute-level latency data; Fluss stores short-period, millisecond-level latency data, and the data of both can be shared with each other.
@@ -493,8 +493,7 @@ After nearly three months of exploration, Fluss has been implemented in **Taotia
 
 # 6. Planning
 
-
-// TODO Image Placeholder
+![](assets/taotian_practice/future_plans.png)
 
 
 In the upcoming work, we will develop a new generation of lakehouse data architecture and continue to explore in Data + AI scenarios.
