@@ -1,1 +1,4 @@
 # CSP permissions for fluss.apache.org - Additional allowances to be coordinated with privacy team
+# See the CSP request mail for allowing Fluss project to use Algolia, YouTube and Google Calendar:
+# https://lists.apache.org/thread/xt0ggzc7f4dj8g91b92w4tk5g8cdslwd
+SetEnv CSP_PROJECT_DOMAINS "https://www.youtube-nocookie.com https://www.youtube.com https://*.algolia.net/ https://*.algolianet.com/ https://*.algolia.io/ https://calendar.google.com"
