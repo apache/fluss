@@ -197,9 +197,9 @@ const config: Config = {
       additionalLanguages: ['java', 'bash']
     },
     algolia: {
-      appId: "D8RXQUTC99",
-      apiKey: "8039cbe25ae878764cbace303aa800e0",
-      indexName: "alibabaio",
+      appId: "X8KSGGLJW1",
+      apiKey: "5d0685995a3cb0052f32a59216ad3d35",
+      indexName: "fluss",
       contextualSearch: true,
     },
   } satisfies Preset.ThemeConfig,
