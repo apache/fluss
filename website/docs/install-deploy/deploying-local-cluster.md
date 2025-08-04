@@ -3,24 +3,6 @@ title: "Deploying Local Cluster"
 sidebar_position: 2
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Deploying Local Cluster
 
 This page provides instructions on how to deploy a *local cluster* (on one machine, but in separate processes) for Fluss.
@@ -28,7 +10,7 @@ This page provides instructions on how to deploy a *local cluster* (on one machi
 ## Requirements
 
 Fluss runs on all *UNIX-like environments*, e.g. **Linux**, **Mac OS X**.
-Before you start to setup the system, make sure you have the following software installed on your test machine:
+Before you start to set up the system, make sure you have the following software installed on your test machine:
 
 - **Java 17** or higher (Java 8 and Java 11 are not recommended)
 
@@ -60,8 +42,8 @@ After that, the Fluss local cluster is started.
 
 ## Interacting with Fluss
 
-After Fluss local cluster is started, you can use **Fluss Client** (Currently, only support Flink Sql Client) to interact with Fluss.
-The following subsections will show you how to use Flink Sql Client to interact with Fluss.
+After Fluss local cluster is started, you can use **Fluss Client** (Currently, only support Flink SQL Client) to interact with Fluss.
+The following subsections will show you how to use Flink SQL Client to interact with Fluss.
 
 ### Flink SQL Client
 
@@ -86,4 +68,4 @@ CREATE CATALOG fluss_catalog WITH (
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](engine-flink/getting-started.md)
+More details please refer to [Flink Getting Started](engine-flink/getting-started.md)

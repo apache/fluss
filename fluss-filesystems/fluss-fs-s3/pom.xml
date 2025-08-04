@@ -379,6 +379,12 @@
                                         <exclude>com/amazonaws/services/s3/model/transform/XmlResponsesSaxParser**</exclude>
                                     </excludes>
                                 </filter>
+                                <filter>
+                                    <artifact>com.alibaba.fluss:fluss-fs-hadoop</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/**</exclude>
+                                    </excludes>
+                                </filter>
                             </filters>
                         </configuration>
                     </execution>

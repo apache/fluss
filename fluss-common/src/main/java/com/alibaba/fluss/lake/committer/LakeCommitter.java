@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The LakeCommitter interface for committing write results. It extends the AutoCloseable interface
@@ -42,16 +43,18 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
      * @return the committable object
      * @throws IOException if an I/O error occurs
      */
-    CommittableT toCommitable(List<WriteResult> writeResults) throws IOException;
+    CommittableT toCommittable(List<WriteResult> writeResults) throws IOException;
 
     /**
      * Commits the given committable object.
      *
      * @param committable the committable object
+     * @param snapshotProperties the properties that lake supported to store in snapshot
      * @return the committed snapshot ID
      * @throws IOException if an I/O error occurs
      */
-    long commit(CommittableT committable) throws IOException;
+    long commit(CommittableT committable, Map<String, String> snapshotProperties)
+            throws IOException;
 
     /**
      * Aborts the given committable object.

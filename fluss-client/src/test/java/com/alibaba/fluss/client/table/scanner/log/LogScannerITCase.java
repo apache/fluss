@@ -288,7 +288,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         String partitionName = null;
         Long partitionId = null;
         if (!isPartitioned) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         } else {
             Map<String, Long> partitionNameAndIds =
                     FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
@@ -297,7 +297,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                     partitionNameAndIds.entrySet().iterator().next();
             partitionName = partitionNameAndIdEntry.getKey();
             partitionId = partitionNameAndIds.get(partitionName);
-            FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, partitionId);
         }
 
         long firstStartTimestamp = System.currentTimeMillis();
@@ -390,14 +390,14 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         String partitionName = null;
         Long partitionId = null;
         if (!isPartitioned) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilTableReady(tableId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         } else {
             Map<String, Long> partitionNameAndIds =
                     FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
             // just pick one partition
             partitionName = partitionNameAndIds.keySet().iterator().next();
             partitionId = partitionNameAndIds.get(partitionName);
-            FLUSS_CLUSTER_EXTENSION.waitUtilTablePartitionReady(tableId, partitionId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, partitionId);
         }
 
         int batchRecordSize = 10;

@@ -31,11 +31,11 @@ import java.io.Serializable;
  * serializers for write results and committable objects.
  *
  * @param <WriteResult> the type of the write result
- * @param <CommitableT> the type of the committable object
+ * @param <CommittableT> the type of the committable object
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeTieringFactory<WriteResult, CommitableT> extends Serializable {
+public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializable {
 
     /**
      * Creates a lake writer to write Fluss's rows to Paimon/Iceberg rows.
@@ -60,7 +60,7 @@ public interface LakeTieringFactory<WriteResult, CommitableT> extends Serializab
      * @return the lake committer
      * @throws IOException if an I/O error occurs
      */
-    LakeCommitter<WriteResult, CommitableT> createLakeCommitter(
+    LakeCommitter<WriteResult, CommittableT> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException;
 
     /**
@@ -68,5 +68,5 @@ public interface LakeTieringFactory<WriteResult, CommitableT> extends Serializab
      *
      * @return the serializer for committable objects
      */
-    SimpleVersionedSerializer<CommitableT> getCommitableSerializer();
+    SimpleVersionedSerializer<CommittableT> getCommittableSerializer();
 }

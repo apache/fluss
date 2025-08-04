@@ -96,7 +96,7 @@ public class RemoteLogScannerITCase {
             appendWriter.append(row).get();
         }
 
-        FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
 
         // test fetch.
         LogScanner logScanner = table.newScan().createLogScanner();
@@ -147,7 +147,7 @@ public class RemoteLogScannerITCase {
             }
         }
 
-        FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
 
         // test fetch.
         LogScanner logScanner = createLogScanner(table, new int[] {0, 2});
@@ -237,7 +237,7 @@ public class RemoteLogScannerITCase {
         }
 
         for (long id : partitionIdByNames.values()) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(
+            FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
                     new TableBucket(tableId, id, 0));
         }
 

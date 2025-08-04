@@ -50,7 +50,7 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
     void beforeEach() throws Exception {
         // since we kill and start one tablet server in each test,
         // we need to wait for metadata to be updated to servers
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
         super.setup();
     }
 

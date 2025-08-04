@@ -130,12 +130,13 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     void testGetDatabaseInfo() throws Exception {
         long timestampBeforeCreate = System.currentTimeMillis();
         admin.createDatabase(
-                "test_db_2",
-                DatabaseDescriptor.builder()
-                        .comment("test comment")
-                        .customProperty("key1", "value1")
-                        .build(),
-                false);
+                        "test_db_2",
+                        DatabaseDescriptor.builder()
+                                .comment("test comment")
+                                .customProperty("key1", "value1")
+                                .build(),
+                        false)
+                .get();
         DatabaseInfo databaseInfo = admin.getDatabaseInfo("test_db_2").get();
         long timestampAfterCreate = System.currentTimeMillis();
         assertThat(databaseInfo.getCreatedTime()).isEqualTo(databaseInfo.getModifiedTime());
@@ -181,7 +182,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // create and get a new table
         long timestampBeforeCreate = System.currentTimeMillis();
         TablePath tablePath = TablePath.of("test_db", "table_2");
-        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false);
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
         tableInfo = admin.getTableInfo(tablePath).get();
         timestampAfterCreate = System.currentTimeMillis();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
@@ -378,16 +379,19 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // assert the cluster should have tablet server number to be 3
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
 
         // we can create the table now
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
-        TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
-        assertThat(tableInfo.toTableDescriptor())
-                .isEqualTo(
-                        DEFAULT_TABLE_DESCRIPTOR
-                                .withReplicationFactor(3)
-                                .withDataLakeFormat(DataLakeFormat.PAIMON));
+        // recreate the connection because the metadata of tablet server has changed
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
+                Admin admin = conn.getAdmin()) {
+            TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
+            assertThat(tableInfo.toTableDescriptor())
+                    .isEqualTo(
+                            DEFAULT_TABLE_DESCRIPTOR
+                                    .withReplicationFactor(3)
+                                    .withDataLakeFormat(DataLakeFormat.PAIMON));
+        }
     }
 
     @Test
@@ -609,7 +613,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             Map<Integer, CompletedSnapshot> expectedSnapshots = new HashMap<>();
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 CompletedSnapshot completedSnapshot =
-                        FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(
+                        FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(
                                 new TableBucket(tableId, bucket), 0);
                 expectedSnapshots.put(bucket, completedSnapshot);
             }
@@ -624,9 +628,9 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             upsertWriter.flush();
 
             TableBucket tb = new TableBucket(snapshots.getTableId(), 0);
-            // wait util the snapshot finish
+            // wait until the snapshot finish
             expectedSnapshots.put(
-                    tb.getBucket(), FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tb, 1));
+                    tb.getBucket(), FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tb, 1));
 
             // check snapshot
             snapshots = admin.getLatestKvSnapshots(tablePath1).get();

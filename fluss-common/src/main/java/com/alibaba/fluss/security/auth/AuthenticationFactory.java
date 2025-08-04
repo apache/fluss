@@ -118,7 +118,12 @@ public class AuthenticationFactory {
             String protocol, Class<T> pluginInterface, @Nullable PluginManager pluginManager) {
 
         Collection<Supplier<Iterator<AuthenticationPlugin>>> pluginSuppliers = new ArrayList<>(2);
-        pluginSuppliers.add(() -> ServiceLoader.load(AuthenticationPlugin.class).iterator());
+        pluginSuppliers.add(
+                () ->
+                        ServiceLoader.load(
+                                        AuthenticationPlugin.class,
+                                        AuthenticationPlugin.class.getClassLoader())
+                                .iterator());
         if (pluginManager != null) {
             pluginSuppliers.add(() -> pluginManager.load(AuthenticationPlugin.class));
         }

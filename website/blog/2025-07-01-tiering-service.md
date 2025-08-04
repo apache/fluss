@@ -5,24 +5,6 @@ authors: [gyang94]
 toc_max_heading_level: 5
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Tiering Service Deep Dive
 
 ## Background
@@ -56,7 +38,7 @@ In the sections that follow, we’ll dive into the **TieringSource** and **Tieri
 ![](assets/tiering_service/tiering-source.png)
 
 The **TieringSource** operator reads records from the Fluss tiering table and writes them into your data lake. 
-Built on Flink’s Source V2 API ([FLIP-27](https://cwiki.apache.org/confluence/display/FLINK/FLIP-238:+Introduce+FLIP-27-based+Data+Generator+Source)), it breaks down into two core components: the **TieringSourceEnumerator** and the **TieringSourceReader**. 
+Built on Flink’s Source V2 API ([FLIP-27](https://cwiki.apache.org/confluence/display/FLINK/FLIP-27%3A+Refactor+Source+Interface)), it breaks down into two core components: the **TieringSourceEnumerator** and the **TieringSourceReader**. 
 The high-level workflow is as follows:
 
 1. The **Enumerator** queries the **CoordinatorService** for current tiering table metadata.
@@ -151,7 +133,7 @@ The **TieringSourceReader** pulls assigned splits from the enumerator, uses a `T
   - **LogScanner** for `TieringLogSplit` (append-only tables)
   - **BoundedSplitReader** for `TieringSnapshotSplit` (primary-keyed tables)
 - **Data Fetch:** The chosen reader fetches the records defined by the split’s offset or snapshot boundaries from the Fluss server.
-- **Lake Writing"** Retrieved records are handed off to the lake writer, which persists them into the data lake.
+- **Lake Writing:** Retrieved records are handed off to the lake writer, which persists them into the data lake.
 
 By cleanly separating split assignment, reader selection, data fetching, and lake writing, the TieringSourceReader ensures scalable, parallel ingestion of streaming and snapshot data into your lakehouse.
 
@@ -166,16 +148,16 @@ public interface LakeTieringFactory {
 
 	SimpleVersionedSerializer<WriteResult> getWriteResultSerializer();
 
-	LakeCommitter<WriteResult, CommitableT> createLakeCommitter(
+	LakeCommitter<WriteResult, CommittableT> createLakeCommitter(
             CommitterInitContext committerInitContext);
 
-	SimpleVersionedSerializer<CommitableT> getCommitableSerializer();
+	SimpleVersionedSerializer<CommittableT> getCommittableSerializer();
 }
 ```
 - **createLakeWriter(WriterInitContext)**: builds a `LakeWriter` to convert Fluss rows into the target table format.
 - **getWriteResultSerializer()**: supplies a serializer for the writer’s output.
 - **createLakeCommitter(CommitterInitContext)**: constructs a `LakeCommitter` to finalize and atomically commit data files.
-- **getCommitableSerializer()**: provides a serializer for committable tokens.```
+- **getCommittableSerializer()**: provides a serializer for committable tokens.
 
 By default, Fluss includes a Paimon-backed tiering factory; Iceberg support is coming soon. Once the `TieringSourceReader` writes a batch of records through the `LakeWriter`, it emits the resulting write metadata downstream to the **TieringCommitOperator**, which then commits those changes both in the lakehouse and back to the Fluss cluster.
 

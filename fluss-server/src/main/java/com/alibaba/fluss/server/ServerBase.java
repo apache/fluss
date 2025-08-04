@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.server;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussException;
@@ -24,6 +25,7 @@ import com.alibaba.fluss.fs.FileSystem;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.plugin.PluginManager;
 import com.alibaba.fluss.plugin.PluginUtils;
+import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.exception.FlussParseException;
 import com.alibaba.fluss.server.tablet.TabletServer;
@@ -36,6 +38,8 @@ import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.lang.reflect.UndeclaredThrowableException;
 import java.time.Duration;
@@ -60,6 +64,9 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     private static final long FATAL_ERROR_SHUTDOWN_TIMEOUT_MS = 10000L;
 
     private static final Duration INITIALIZATION_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30L);
+
+    protected static final long ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS = 60 * 1000L;
+    protected static final long ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS = 3 * 1000L;
 
     protected final Configuration conf;
 
@@ -173,6 +180,9 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     protected abstract CompletableFuture<Result> getTerminationFuture();
 
     protected abstract String getServerName();
+
+    @VisibleForTesting
+    public abstract @Nullable Authorizer getAuthorizer();
 
     /** Result for run {@link ServerBase}. */
     public enum Result {

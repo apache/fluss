@@ -69,7 +69,7 @@ public class RemoteLogITCase {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         return tb;
     }
 
@@ -88,7 +88,7 @@ public class RemoteLogITCase {
                     0,
                     i * 10L);
         }
-        FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
                 new TableBucket(tb.getTableId(), 0));
     }
 
@@ -161,7 +161,7 @@ public class RemoteLogITCase {
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
         int follower;
         for (int i = 0; true; i++) {
@@ -193,12 +193,12 @@ public class RemoteLogITCase {
                     i * 10L);
         }
 
-        FLUSS_CLUSTER_EXTENSION.waitUtilReplicaShrinkFromIsr(tb, follower);
-        FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, follower);
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
 
         // restart follower
         FLUSS_CLUSTER_EXTENSION.startTabletServer(follower);
-        FLUSS_CLUSTER_EXTENSION.waitUtilReplicaExpandToIsr(tb, follower);
+        FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, follower);
     }
 
     private static Configuration initConfig() {

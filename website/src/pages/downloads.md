@@ -1,24 +1,12 @@
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
+# Apache Fluss (Incubating) Downloads
 
-      http://www.apache.org/licenses/LICENSE-2.0
+> Apache Fluss (Incubating) is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures. 
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
+**Note:** We are currently preparing for the first release under the Apache Incubator. Previous releases were non-Apache releases.
 
-# Fluss Downloads
+## Previous Releases (Non-Apache)
 
-## Fluss 0.7.0
+### Fluss 0.7.0
 
 #### Fluss
 
@@ -44,7 +32,7 @@
 
 - [fluss-flink-tiering-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/0.7.0/fluss-flink-tiering-0.7.0.jar.sha1))
 
-## Fluss 0.6.1
+### Fluss 0.6.1
 
 #### Fluss
 
@@ -60,7 +48,7 @@
 - [fluss-fs-oss-0.6.1.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.6.1/fluss-fs-oss-0.6.1.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.6.1/fluss-fs-oss-0.6.1.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.6.1/fluss-fs-oss-0.6.1.jar.sha1))
 - [fluss-fs-hadoop-0.6.1.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.6.1/fluss-fs-hadoop-0.6.1.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.6.1/fluss-fs-hadoop-0.6.1.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.6.1/fluss-fs-hadoop-0.6.1.jar.sha1))
 
-## Fluss 0.5.0
+### Fluss 0.5.0
 
 #### Fluss
 

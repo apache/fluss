@@ -59,7 +59,7 @@ public class PaimonLakeTieringFactory
     }
 
     @Override
-    public SimpleVersionedSerializer<PaimonCommittable> getCommitableSerializer() {
+    public SimpleVersionedSerializer<PaimonCommittable> getCommittableSerializer() {
         return new PaimonCommittableSerializer();
     }
 }

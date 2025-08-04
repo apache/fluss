@@ -91,7 +91,7 @@ import static com.alibaba.fluss.utils.concurrent.LockUtils.inWriteLock;
 @ThreadSafe
 public class RemoteLogIndexCache implements Closeable {
 
-    private static final Logger LOG = LoggerFactory.getLogger(RemoteLogManager.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RemoteLogIndexCache.class);
 
     private static final String TMP_FILE_SUFFIX = ".tmp";
     public static final String REMOTE_LOG_INDEX_CACHE_CLEANER_THREAD =

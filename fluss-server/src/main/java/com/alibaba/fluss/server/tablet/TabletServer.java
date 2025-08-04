@@ -79,9 +79,6 @@ public class TabletServer extends ServerBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(TabletServer.class);
 
-    private static final long ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS = 60 * 1000L;
-    private static final long ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS = 3 * 1000L;
-
     private final int serverId;
 
     /**

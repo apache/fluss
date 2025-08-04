@@ -24,8 +24,8 @@ import java.util.concurrent.ScheduledFuture;
 /**
  * A scheduler for running jobs.
  *
- * <p>This interface controls a job scheduler that allows scheduling either repeating backgroud jobs
- * that execute periodically, or one-time jobs that execute once.
+ * <p>This interface controls a job scheduler that allows scheduling either repeating background
+ * jobs that execute periodically, or one-time jobs that execute once.
  */
 @Internal
 public interface Scheduler {
