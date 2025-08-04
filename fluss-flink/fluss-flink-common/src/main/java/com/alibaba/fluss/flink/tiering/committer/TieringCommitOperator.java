@@ -75,7 +75,7 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
  * LakeCommitter#toCommittable(List)}, and then call method {@link LakeCommitter#commit(Object,
  * Map)} to commit to lake.
  *
- * <p>Finally, it will also commit the commited lake snapshot to Fluss cluster to make Fluss aware
+ * <p>Finally, it will also commit the committed lake snapshot to Fluss cluster to make Fluss aware
  * of the tiering progress.
  */
 public class TieringCommitOperator<WriteResult, Committable>
@@ -195,7 +195,7 @@ public class TieringCommitOperator<WriteResult, Committable>
 
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
-            // before commit to lake, check fluss not missing any lake snapshot commited by fluss
+            // before commit to lake, check fluss not missing any lake snapshot committed by fluss
             checkFlussNotMissingLakeSnapshot(
                     tablePath,
                     lakeCommitter,
@@ -203,7 +203,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                     flussCurrentLakeSnapshot == null
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId());
-            long commitedSnapshotId =
+            long committedSnapshotId =
                     lakeCommitter.commit(committable, toBucketOffsetsProperty(logOffsets));
             // commit to fluss
             Map<TableBucket, Long> logEndOffsets = new HashMap<>();
@@ -211,7 +211,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                 logEndOffsets.put(writeResult.tableBucket(), writeResult.logEndOffset());
             }
             flussTableLakeSnapshotCommitter.commit(
-                    new FlussTableLakeSnapshot(tableId, commitedSnapshotId, logEndOffsets));
+                    new FlussTableLakeSnapshot(tableId, committedSnapshotId, logEndOffsets));
             return committable;
         }
     }
