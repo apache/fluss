@@ -22,8 +22,10 @@ import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
-import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.maintencance.GoalType;
+import com.alibaba.fluss.cluster.maintencance.RebalancePlanForBucket;
+import com.alibaba.fluss.cluster.maintencance.ServerTag;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -40,6 +42,7 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.AddServerTagRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
@@ -64,11 +67,13 @@ import com.alibaba.fluss.rpc.messages.ListTablesResponse;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+import com.alibaba.fluss.rpc.messages.RemoveServerTagRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsRequest;
 import com.alibaba.fluss.rpc.messages.TableExistsResponse;
 import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
+import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.CompleteFuture;
 import com.alibaba.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
@@ -85,7 +90,7 @@ import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePar
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
-import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static com.alibaba.fluss.client.utils.MetadataUtils.sendDescribeClusterRequest;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclFilter;
@@ -121,17 +126,8 @@ public class FlussAdmin implements Admin {
         CompletableFuture.runAsync(
                 () -> {
                     try {
-                        List<ServerNode> serverNodeList = new ArrayList<>();
-                        Cluster cluster =
-                                sendMetadataRequestAndRebuildCluster(
-                                        readOnlyGateway,
-                                        false,
-                                        metadataUpdater.getCluster(),
-                                        null,
-                                        null,
-                                        null);
-                        serverNodeList.add(cluster.getCoordinatorServer());
-                        serverNodeList.addAll(cluster.getAliveTabletServerList());
+                        List<ServerNode> serverNodeList =
+                                sendDescribeClusterRequest(readOnlyGateway);
                         future.complete(serverNodeList);
                     } catch (Throwable t) {
                         future.completeExceptionally(t);
@@ -463,6 +459,37 @@ public class FlussAdmin implements Admin {
                             }
                         });
         return result;
+    }
+
+    @Override
+    public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
+        AddServerTagRequest request = new AddServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.addServerTag(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTag(
+            List<Integer> tabletServers, ServerTag serverTag) {
+        RemoveServerTagRequest request = new RemoveServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.removeServerTag(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompleteFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+            List<GoalType> priorityGoals, boolean dryRun) {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompleteFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess() {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelRebalance() {
+        throw new UnsupportedOperationException("Support soon");
     }
 
     @Override

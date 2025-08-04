@@ -554,6 +554,25 @@ public final class ZkData {
         }
     }
 
+    /**
+     * The znode for server tags. The znode path is:
+     *
+     * <p>/tabletServers/server_tags
+     */
+    public static final class ServerTagsZNode {
+        public static String path() {
+            return "/tabletservers/server_tags";
+        }
+
+        public static byte[] encode(ServerTags serverTag) {
+            return JsonSerdeUtils.writeValueAsBytes(serverTag, ServerTagsJsonSerde.INSTANCE);
+        }
+
+        public static ServerTags decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, ServerTagsJsonSerde.INSTANCE);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // ZNodes for ACL(Access Control List).
     // ------------------------------------------------------------------------------------------
@@ -647,6 +666,29 @@ public final class ZkData {
                         "expected a string in format ResourceType:ResourceName but got "
                                 + resourceStr);
             }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes under "/cluster/"
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * The znode for rebalance. The znode path is:
+     *
+     * <p>/cluster/rebalance
+     */
+    public static final class RebalanceZNode {
+        public static String path() {
+            return "/cluster/rebalance";
+        }
+
+        public static byte[] encode(RebalancePlan rebalancePlan) {
+            return JsonSerdeUtils.writeValueAsBytes(rebalancePlan, RebalancePlanJsonSerde.INSTANCE);
+        }
+
+        public static RebalancePlan decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalancePlanJsonSerde.INSTANCE);
         }
     }
 }
