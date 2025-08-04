@@ -18,9 +18,13 @@
 package com.alibaba.fluss.server.coordinator.event;
 
 import com.alibaba.fluss.annotation.Internal;
+import com.alibaba.fluss.metadata.TableBucketReplica;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
 import com.alibaba.fluss.metrics.Histogram;
 import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.server.coordinator.CoordinatorContext;
+import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
 import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
@@ -31,6 +35,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
@@ -56,7 +61,15 @@ public final class CoordinatorEventManager implements EventManager {
     private Histogram eventProcessingTime;
     private Histogram eventQueueTime;
 
+    // Coordinator metrics moved from CoordinatorEventProcessor
+    private volatile int tabletServerCount;
+    private volatile int offlineBucketCount;
+    private volatile int tableCount;
+    private volatile int bucketCount;
+    private volatile int replicasToDeleteCount;
+
     private static final int WINDOW_SIZE = 100;
+    private static final long METRICS_UPDATE_INTERVAL_MS = 5000; // 5 seconds
 
     public CoordinatorEventManager(
             EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
@@ -77,6 +90,80 @@ public final class CoordinatorEventManager implements EventManager {
                 coordinatorMetricGroup.histogram(
                         MetricNames.EVENT_QUEUE_TIME_MS,
                         new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+
+        // Register coordinator metrics
+        coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
+        coordinatorMetricGroup.gauge(
+                MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
+        coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
+        coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
+        coordinatorMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
+    }
+
+    /** Not thread safety! this method can only be executed in the CoordinatorEventThread. */
+    private void updateMetricsViaAccessContext() {
+        // Create AccessContextEvent to safely access CoordinatorContext
+        AccessContextEvent<MetricsData> accessContextEvent =
+                new AccessContextEvent<>(
+                        context -> {
+                            int tabletServerCount = context.getLiveTabletServers().size();
+                            int tableCount = context.allTables().size();
+                            int bucketCount = context.bucketLeaderAndIsr().size();
+                            int offlineBucketCount = context.getOfflineBucketCount();
+
+                            int replicasToDeletes = 0;
+                            // for replica in partitions to be deleted
+                            for (TablePartition tablePartition :
+                                    context.getPartitionsToBeDeleted()) {
+                                for (TableBucketReplica replica :
+                                        context.getAllReplicasForPartition(
+                                                tablePartition.getTableId(),
+                                                tablePartition.getPartitionId())) {
+                                    replicasToDeletes =
+                                            isReplicaToDelete(replica, context)
+                                                    ? replicasToDeletes + 1
+                                                    : replicasToDeletes;
+                                }
+                            }
+                            // for replica in tables to be deleted
+                            for (long tableId : context.getTablesToBeDeleted()) {
+                                for (TableBucketReplica replica :
+                                        context.getAllReplicasForTable(tableId)) {
+                                    replicasToDeletes =
+                                            isReplicaToDelete(replica, context)
+                                                    ? replicasToDeletes + 1
+                                                    : replicasToDeletes;
+                                }
+                            }
+
+                            return new MetricsData(
+                                    tabletServerCount,
+                                    tableCount,
+                                    bucketCount,
+                                    offlineBucketCount,
+                                    replicasToDeletes);
+                        });
+
+        eventProcessor.process(accessContextEvent);
+
+        // Wait for the result and update local metrics
+        try {
+            MetricsData metricsData = accessContextEvent.getResultFuture().get();
+            this.tabletServerCount = metricsData.tabletServerCount;
+            this.tableCount = metricsData.tableCount;
+            this.bucketCount = metricsData.bucketCount;
+            this.offlineBucketCount = metricsData.offlineBucketCount;
+            this.replicasToDeleteCount = metricsData.replicasToDeleteCount;
+        } catch (Exception e) {
+            LOG.warn("Failed to update metrics via AccessContextEvent", e);
+        }
+    }
+
+    private boolean isReplicaToDelete(TableBucketReplica replica, CoordinatorContext context) {
+        ReplicaState replicaState = context.getReplicaState(replica);
+        return replicaState != null && replicaState != ReplicaDeletionSuccessful;
     }
 
     public void start() {
@@ -123,12 +210,21 @@ public final class CoordinatorEventManager implements EventManager {
 
     private class CoordinatorEventThread extends ShutdownableThread {
 
+        private long lastMetricsUpdateTime = System.currentTimeMillis();
+
         public CoordinatorEventThread(String name) {
             super(name, false);
         }
 
         @Override
         public void doWork() throws Exception {
+            // Check if it's time to update metrics (before taking event from queue)
+            long currentTime = System.currentTimeMillis();
+            if (currentTime - lastMetricsUpdateTime >= METRICS_UPDATE_INTERVAL_MS) {
+                updateMetricsViaAccessContext();
+                lastMetricsUpdateTime = currentTime;
+            }
+
             QueuedEvent queuedEvent = queue.take();
             CoordinatorEvent coordinatorEvent = queuedEvent.event;
 
@@ -144,7 +240,7 @@ public final class CoordinatorEventManager implements EventManager {
                     eventProcessor.process(coordinatorEvent);
                 }
             } catch (Throwable e) {
-                log.error("Uncaught error processing event {}.", coordinatorEvent, e);
+                LOG.error("Uncaught error processing event {}.", coordinatorEvent, e);
             } finally {
                 long costTimeMs = System.currentTimeMillis() - eventStartTimeMs;
                 eventProcessingTime.update(costTimeMs);
@@ -164,6 +260,27 @@ public final class CoordinatorEventManager implements EventManager {
         public QueuedEvent(CoordinatorEvent event, long enqueueTimeMs) {
             this.event = event;
             this.enqueueTimeMs = enqueueTimeMs;
+        }
+    }
+
+    private static class MetricsData {
+        private final int tabletServerCount;
+        private final int tableCount;
+        private final int bucketCount;
+        private final int offlineBucketCount;
+        private final int replicasToDeleteCount;
+
+        public MetricsData(
+                int tabletServerCount,
+                int tableCount,
+                int bucketCount,
+                int offlineBucketCount,
+                int replicasToDeleteCount) {
+            this.tabletServerCount = tabletServerCount;
+            this.tableCount = tableCount;
+            this.bucketCount = bucketCount;
+            this.offlineBucketCount = offlineBucketCount;
+            this.replicasToDeleteCount = replicasToDeleteCount;
         }
     }
 }
