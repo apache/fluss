@@ -15,7 +15,7 @@ Fluss primary key tables can accept all types of messages (`INSERT`, `UPDATE_BEF
 They support both streaming and batch modes and are compatible with primary-key tables (for upserting data) as well as log tables (for appending data).
 
 ### Appending Data to the Log Table
-#### Create a Log table.
+#### Create a Log Table.
 ```sql title="Flink SQL"
 CREATE TABLE log_table (
   order_id BIGINT,
@@ -25,7 +25,7 @@ CREATE TABLE log_table (
 );
 ```
 
-#### Insert data into the Log table.
+#### Insert Data into the Log Table.
 ```sql title="Flink SQL"
 CREATE TEMPORARY TABLE source (
   order_id BIGINT,
@@ -91,7 +91,7 @@ SELECT shop_id, user_id, num_orders FROM source;
 
 Fluss supports deleting data for primary-key tables in batch mode via `DELETE FROM` statement. Currently, only single data deletions based on the primary key are supported.
 
-* the primary key table
+* the Primary Key Table
 ```sql title="Flink SQL"
 -- DELETE statement requires batch mode
 SET 'execution.runtime-mode' = 'batch';
@@ -99,7 +99,7 @@ SET 'execution.runtime-mode' = 'batch';
 
 ```sql title="Flink SQL"
 -- The condition must include all primary key equality conditions.
-DELETE FROM pk_table WHERE shop_id = 10000 and user_id = 123456;
+DELETE FROM pk_table WHERE shop_id = 10000 AND user_id = 123456;
 ```
 
 ## UPDATE
@@ -112,5 +112,5 @@ SET execution.runtime-mode = batch;
 
 ```sql title="Flink SQL"
 -- The condition must include all primary key equality conditions.
-UPDATE pk_table SET total_amount = 2 WHERE shop_id = 10000 and user_id = 123456;
+UPDATE pk_table SET total_amount = 2 WHERE shop_id = 10000 AND user_id = 123456;
 ```

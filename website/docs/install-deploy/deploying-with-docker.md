@@ -316,7 +316,7 @@ volumes:
 
 ### Launch the components
 
-Save the `docker-compose.yaml` script and execute the `docker compose up -d` command in the same directory
+Save the `docker-compose.yml` script and execute the `docker compose up -d` command in the same directory
 to create the cluster.
 
 Run the below command to check the container status:

@@ -745,7 +745,7 @@ When using Flink to read and write, Fluss has implemented some key standard Flin
 to measure the source latency and output of sink, see [FLIP-33: Standardize Connector Metrics](https://cwiki.apache.org/confluence/display/FLINK/FLIP-33%3A+Standardize+Connector+Metrics). 
 Flink source / sink metrics implemented are listed here.
 
-How to use flink metrics, you can see [flink metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
+How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
 
 #### Source Metrics
 

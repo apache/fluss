@@ -7,12 +7,12 @@ sidebar_position: 4
 # Flink Reads
 Fluss supports streaming and batch read with [Apache Flink](https://flink.apache.org/)'s SQL & Table API. Execute the following SQL command to switch execution mode from streaming to batch, and vice versa:
 ```sql title="Flink SQL"
--- Execute the flink job in streaming mode for current session context
+-- Execute the Flink job in streaming mode for current session context
 SET 'execution.runtime-mode' = 'streaming';
 ```
 
 ```sql title="Flink SQL"
--- Execute the flink job in batch mode for current session context
+-- Execute the Flink job in batch mode for current session context
 SET 'execution.runtime-mode' = 'batch';
 ```
 
