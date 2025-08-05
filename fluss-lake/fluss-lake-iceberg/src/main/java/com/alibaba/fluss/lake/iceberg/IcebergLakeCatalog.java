@@ -25,6 +25,7 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.utils.IOUtils;
+
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
@@ -68,13 +69,10 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private static final String ICEBERG_CONF_PREFIX = "iceberg.";
 
     public IcebergLakeCatalog(Configuration configuration) {
-        // Extract Iceberg catalog properties from Fluss configuration
-
         this.icebergCatalog = createIcebergCatalog(configuration);
     }
 
     private Catalog createIcebergCatalog(Configuration configuration) {
-        // Configuration has already been filtered by extractLakeProperties()
         Map<String, String> icebergProps = configuration.toMap();
 
         String catalogType = icebergProps.get("type");
@@ -97,10 +95,15 @@ public class IcebergLakeCatalog implements LakeCatalog {
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException {
         try {
+
+            if (!tableDescriptor.hasPrimaryKey()) {
+                throw new UnsupportedOperationException(
+                        "Iceberg integration currently supports only primary key tables.");
+            }
+
             TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
 
-            // Ensure namespace exists
-            createDatabase(tablePath.getDatabaseName());
+            createDatabaseIfAbsent(tablePath.getDatabaseName());
 
             Schema icebergSchema = convertToIcebergSchema(tableDescriptor);
             PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
@@ -200,18 +203,17 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
 
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
-        builder.bucket(bucketKeys.get(0), bucketCount);
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         for (String partitionKey : partitionKeys) {
             builder.identity(partitionKey);
         }
+        builder.bucket(bucketKeys.get(0), bucketCount);
 
         return builder.build();
     }
 
     private void setFlussPropertyToIceberg(
             String key, String value, Map<String, String> icebergProperties) {
-
         if (key.startsWith(ICEBERG_CONF_PREFIX)) {
             icebergProperties.put(key.substring(ICEBERG_CONF_PREFIX.length()), value);
         } else {
@@ -219,11 +221,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
-    private void createDatabase(String databaseName) {
+    private void createDatabaseIfAbsent(String databaseName) {
+        Namespace namespace = Namespace.of(databaseName);
         if (icebergCatalog instanceof SupportsNamespaces) {
             SupportsNamespaces supportsNamespaces = (SupportsNamespaces) icebergCatalog;
-            if (!supportsNamespaces.namespaceExists(Namespace.of(databaseName))) {
-                supportsNamespaces.createNamespace(Namespace.of(databaseName));
+            if (!supportsNamespaces.namespaceExists(namespace)) {
+                supportsNamespaces.createNamespace(namespace);
             }
         } else {
             throw new UnsupportedOperationException(
