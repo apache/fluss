@@ -193,8 +193,8 @@ class IcebergLakeCatalogTest {
         Namespace namespace = Namespace.of(databaseName);
 
         if (!namespaceSupport.namespaceExists(namespace)) {
-            Map<String, String> metadata =
-                    Map.of("location", tempWarehouseDir.toURI() + "/" + databaseName);
+            Map<String, String> metadata = new HashMap<>();
+            metadata.put("location", tempWarehouseDir.toURI() + "/" + databaseName);
             namespaceSupport.createNamespace(namespace, metadata);
         }
     }
