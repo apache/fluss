@@ -220,10 +220,29 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Deleted table assignment for table id {}.", tableId);
     }
 
-    public void deletePartitionAssignment(long partitionId) throws Exception {
+    public void deletePartitionAssignment(
+            long partitionId, Runnable successCallback, Runnable failureCallback) throws Exception {
         String path = PartitionIdZNode.path(partitionId);
-        zkClient.delete().deletingChildrenIfNeeded().forPath(path);
-        LOG.info("Deleted table assignment for partition id {}.", partitionId);
+        // delete partition assignment ZNode will recursively delete all the children which may
+        // block
+        // for a long time, so we use background mode here.
+        zkClient.delete()
+                .deletingChildrenIfNeeded()
+                .inBackground(
+                        (client, event) -> {
+                            if (event.getResultCode() == KeeperException.Code.OK.intValue()) {
+                                successCallback.run();
+                            } else {
+                                KeeperException.Code code =
+                                        KeeperException.Code.get(event.getResultCode());
+                                failureCallback.run();
+                                LOG.error(
+                                        "Failed to delete partition assignment for partition id {}. Error message: {}",
+                                        partitionId,
+                                        code.toString());
+                            }
+                        })
+                .forPath(path);
     }
 
     // --------------------------------------------------------------------------------------------
