@@ -52,7 +52,12 @@ In Flink, we attempted to explicitly specify the consumption column schema in th
 
 In data warehouse construction, data profiling is a basic business requirement, used for problem location, case troubleshooting, etc. Two data profiling methods for message queues have been explored in production practice, both of which have advantages and disadvantages and cannot comprehensively meet business requirements.
 
-// TODO Image Placeholder
+
+| Query Type                           | Query Method                                                                              | Advantages                | Disadvantages                                                                               |
+|--------------------------------------|-------------------------------------------------------------------------------------------|---------------------------|---------------------------------------------------------------------------------------------|
+| Sampling query                       | Randomly query according to time slices.                                                  | High timeliness           | Unable to query the specified data.                                                         |
+| Synchronize additional storage query | Synchronize the data in the message queue to additional storage and then perform queries. | Can query specified data  | 1. Additional synchronization, storage, and query resources. 2. Has a synchronization delay |
+
 
 ![](assets/taotian_practice/mq_profiling.png)
 
@@ -262,9 +267,10 @@ After the Fluss remodeling, the Dual-Stream Join of the Babel Tower transaction 
 - A comprehensive comparison between traditional Dual-Stream Join and the new Fluss-based architecture reveals the following advantages and disadvantages of the two:
 
 
-
-
-// TODO Image Placeholder
+| Job Type                          | Advantages                                                                                                                                      | Disadvantages                                                                                                                                                                                                                                                                                                                 |
+|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Traditional MQ + Dual-Stream Join | One job can implement the Join business logic.                                                                                                  | 1. Data is consumed row by row, resulting in wasted IO resources for useless columns.2. The Join State of the dual-stream is too large, making job maintenance difficult.3. State Black box, difficult to probe internal state. 4. If the resource plan does not match after modifying the job, then State needs to be rerun. |
+| Fluss + Delta Join                | 1. Consume the required columns and reduce the IO traffic of useless columns.  2. Implemented through Delta Join, state is decoupled from jobs. | 1. Status is traceable, and backfilling efficiency is high.2. Delta Join relies on the point query capability of the Fluss KV table. 3. The number of Flink jobs has increased.                                                                                                                                               |
 
 
 ### 4.1.4 Evolution of Lake Jobs
@@ -442,8 +448,9 @@ After a period of in-depth research, comprehensive testing, and smooth launch of
 
 We tested the read-write and column pruning capabilities of Fluss. Among them, in terms of read-write performance, we conducted tests with the same traffic. While maintaining the input **RPS at 800 w/s** and the output **RPS at 44 w/s** , we compared the actual CPU and Memory usage of Flink jobs. The details are as follows:
 
+![](assets/taotian_practice/performance_write.png)
 
-// TODO Image Placeholder
+![](assets/taotian_practice/performance_read.png)
 
 
 ### 5.1.2 Column Pruning Performance
@@ -451,7 +458,9 @@ We tested the read-write and column pruning capabilities of Fluss. Among them, i
 Regarding column pruning capabilities, we also tested TT, Fluss, and different numbers of columns in Fluss to explore the consumption of CPU, Memory, and IO. With the input **RPS maintained at 25 w/s** , the specific test results are as follows:
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/performance_column_pruning2.png)
+
+![](assets/taotian_practice/performance_column_pruning1.png)
 
 
 At this point, we will find a problem: as the number of columns decreases (a total of 13 columns out of 43 columns are consumed), IO does not show a linear decrease. After verification, the storage of each column in the source is not evenly distributed, and the storage of some required columns **accounts for 72%** . It can be seen that the input IO traffic **decreases by 20%** , which is consistent with the expected proportion of the storage of the read columns.
@@ -461,7 +470,9 @@ At this point, we will find a problem: as the number of columns decreases (a tot
 We also tested and compared the resources and performance of the above **Dual-Stream Join and Fluss Delta Join** , and under the condition of maintaining the **input RPS of the left table at 68,000/s** and the **input RPS of the right table at 1,700/s** , all jobs ran for 24 hours.
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/performance_delta1.png)
+
+![](assets/taotian_practice/performance_delta2.png)
 
 
 After actual testing, after migrating from the Dual-Stream Join to Merge Engine + Delta Join, it successfully **reduced 95TB** of large state, making the job run more stably and significantly shortening the CP time. Meanwhile, the actual usage of CPU and Memory also **decreased by more than 80%** .
@@ -471,7 +482,9 @@ After actual testing, after migrating from the Dual-Stream Join to Merge Engine 
 Since Delta Join **does not need to maintain state** , it can use batch mode **Batch Join** to catch up. After catching up, it switches back to stream mode Delta Join. During this process, a small amount of data will be reprocessed, and the end-to-end consistency is ensured through the idempotence update mechanism of the result table. We **performed a test comparison on the data catch-up of the above** Dual-Stream Join and Batch Join **for one day (24H).**
 
 
-// TODO Image Placeholder
+![](assets/taotian_practice/performance_data_backtracking1.png)
+
+![](assets/taotian_practice/performance_data_backtracking2.png)
 
 
 After actual testing, the batch mode Batch Join backtracking for one day (24H) takes **70%+ less time** compared to the Dual-Stream Join backtracking.
