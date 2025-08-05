@@ -148,7 +148,7 @@ public final class LogTablet {
         writerExpireCheck =
                 scheduler.schedule(
                         "PeriodicWriterIdExpirationCheck",
-                        () -> removeExpiredWriter(System.currentTimeMillis()),
+                        () -> removeExpiredWriter(clock.milliseconds()),
                         writerExpirationCheckIntervalMs,
                         writerExpirationCheckIntervalMs);
         this.logFormat = logFormat;
