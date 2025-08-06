@@ -28,7 +28,7 @@ import java.util.List;
 /** Function to test a field. */
 public abstract class LeafUnaryFunction extends LeafFunction {
 
-    private static final long serialVersionUID = -155104972966998013L;
+    private static final long serialVersionUID = 1L;
 
     public abstract boolean test(DataType type, Object value);
 

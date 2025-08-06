@@ -29,7 +29,7 @@ import java.util.Objects;
 /** A reference to a field in an input. */
 public class FieldRef implements Serializable {
 
-    private static final long serialVersionUID = 4982103776651292199L;
+    private static final long serialVersionUID = 1L;
 
     private final int index;
     private final String name;

@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.predicate;
 
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.DataType;
 
 import static java.lang.Math.min;
@@ -30,16 +29,9 @@ import static java.lang.Math.min;
 public class CompareUtils {
     private CompareUtils() {}
 
+    @SuppressWarnings("unchecked")
     public static int compareLiteral(DataType type, Object v1, Object v2) {
         if (v1 instanceof Comparable) {
-            // because BinaryString can not serialize so v1 or v2 may be BinaryString convert to
-            // String for compare
-            if (v1 instanceof BinaryString) {
-                v1 = ((BinaryString) v1).toString();
-            }
-            if (v2 instanceof BinaryString) {
-                v2 = ((BinaryString) v2).toString();
-            }
             return ((Comparable<Object>) v1).compareTo(v2);
         } else if (v1 instanceof byte[]) {
             return compare((byte[]) v1, (byte[]) v2);

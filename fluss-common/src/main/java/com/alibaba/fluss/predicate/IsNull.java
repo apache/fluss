@@ -29,6 +29,8 @@ import java.util.Optional;
 /** A {@link NullFalseLeafBinaryFunction} to eval is null. */
 public class IsNull extends LeafUnaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final IsNull INSTANCE = new IsNull();
 
     private IsNull() {}
