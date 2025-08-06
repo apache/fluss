@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.predicate;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.TimestampLtz;
@@ -60,9 +61,13 @@ import static java.util.Collections.singletonList;
 /**
  * A utility class to create {@link Predicate} object for common filter conditions.
  *
- * @since 0.4.0
+ * @since 0.8
  */
+@PublicEvolving
 public class PredicateBuilder {
+
+    private static final LocalDate EPOCH_DAY =
+            Instant.ofEpochSecond(0).atOffset(ZoneOffset.UTC).toLocalDate();
 
     private final RowType rowType;
     private final List<String> fieldNames;
@@ -168,7 +173,7 @@ public class PredicateBuilder {
 
     public static Predicate and(List<Predicate> predicates) {
         checkArgument(
-                predicates.size() > 0,
+                !predicates.isEmpty(),
                 "There must be at least 1 inner predicate to construct an AND predicate");
         if (predicates.size() == 1) {
             return predicates.get(0);
@@ -199,8 +204,11 @@ public class PredicateBuilder {
 
     public static Predicate or(List<Predicate> predicates) {
         checkArgument(
-                predicates.size() > 0,
+                !predicates.isEmpty(),
                 "There must be at least 1 inner predicate to construct an OR predicate");
+        if (predicates.size() == 1) {
+            return predicates.get(0);
+        }
         return predicates.stream()
                 .reduce((a, b) -> new CompoundPredicate(Or.INSTANCE, Arrays.asList(a, b)))
                 .get();
@@ -280,9 +288,7 @@ public class PredicateBuilder {
                     throw new UnsupportedOperationException(
                             "Unexpected date literal of class " + o.getClass().getName());
                 }
-                LocalDate epochDay =
-                        Instant.ofEpochSecond(0).atOffset(ZoneOffset.UTC).toLocalDate();
-                return (int) ChronoUnit.DAYS.between(epochDay, localDate);
+                return (int) ChronoUnit.DAYS.between(EPOCH_DAY, localDate);
             case TIME_WITHOUT_TIME_ZONE:
                 LocalTime localTime;
                 if (o instanceof java.sql.Time) {
@@ -409,10 +415,20 @@ public class PredicateBuilder {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Creates a {@link Predicate} that represents a condition where partition fields are equal to
+     * the specified partition values.
+     *
+     * @param partitionSpec A map containing partition field names as keys and their corresponding
+     *     values as strings.
+     * @param rowType The {@link RowType} describing the schema of the row, including field names
+     *     and types.
+     * @return A {@link Predicate} representing the equality conditions for the partition fields, or
+     *     {@code null} if no conditions are specified.
+     */
     @Nullable
-    public static Predicate partition(
-            Map<String, String> map, RowType rowType, String defaultPartValue) {
-        Map<String, Object> internalValues = convertSpecToInternal(map, rowType, defaultPartValue);
+    public static Predicate partition(Map<String, String> partitionSpec, RowType rowType) {
+        Map<String, Object> internalValues = convertSpecToInternal(partitionSpec, rowType);
         List<String> fieldNames = rowType.getFieldNames();
         Predicate predicate = null;
         PredicateBuilder builder = new PredicateBuilder(rowType);
@@ -430,24 +446,21 @@ public class PredicateBuilder {
         return predicate;
     }
 
-    public static Predicate partitions(
-            List<Map<String, String>> partitions, RowType rowType, String defaultPartValue) {
+    public static Predicate partitions(List<Map<String, String>> partitions, RowType rowType) {
         return PredicateBuilder.or(
                 partitions.stream()
-                        .map(p -> PredicateBuilder.partition(p, rowType, defaultPartValue))
+                        .map(p -> PredicateBuilder.partition(p, rowType))
                         .toArray(Predicate[]::new));
     }
 
     public static Map<String, Object> convertSpecToInternal(
-            Map<String, String> spec, RowType partType, String defaultPartValue) {
+            Map<String, String> spec, RowType partType) {
         Map<String, Object> partValues = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : spec.entrySet()) {
             partValues.put(
                     entry.getKey(),
-                    defaultPartValue.equals(entry.getValue())
-                            ? null
-                            : TypeUtils.castFromString(
-                                    entry.getValue(), partType.getField(entry.getKey()).getType()));
+                    TypeUtils.castFromString(
+                            entry.getValue(), partType.getField(entry.getKey()).getType()));
         }
         return partValues;
     }

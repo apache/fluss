@@ -28,7 +28,7 @@ import java.util.List;
 /** Function to test a field with a literal. */
 public abstract class NullFalseLeafBinaryFunction extends LeafFunction {
 
-    private static final long serialVersionUID = 5617091663961558170L;
+    private static final long serialVersionUID = 1L;
 
     public abstract boolean test(DataType type, Object field, Object literal);
 

@@ -70,15 +70,15 @@ public class BinaryStringUtils {
         return date;
     }
 
-    /** Used by {@code CAST(x as TIMESTAMPNTZ)}. */
+    /** Used by {@code CAST(x as TIMESTAMP_NTZ)}. */
     public static TimestampNtz toTimestampNtz(BinaryString input, int precision)
             throws DateTimeException {
         return DateTimeUtils.parseTimestampData(input.toString(), precision);
     }
 
-    /** Used by {@code CAST(x as TIMESTAMPLTZ)}. */
-    public static TimestampLtz toTimestampltz(BinaryString input, int precision, TimeZone timeZone)
-            throws DateTimeException {
-        return DateTimeUtils.parseTimestampData(input.toString(), precision, timeZone);
+    /** Used by {@code CAST(x as TIMESTAMP_LTZ)}. */
+    public static TimestampLtz toTimestampLtz(
+            BinaryString input, int precision, TimeZone localTimeZone) throws DateTimeException {
+        return DateTimeUtils.parseTimestampData(input.toString(), precision, localTimeZone);
     }
 }

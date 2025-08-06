@@ -34,6 +34,7 @@ import java.util.Optional;
  */
 public class CompoundPredicate implements Predicate {
 
+    private static final long serialVersionUID = 1L;
     private final Function function;
     private final List<Predicate> children;
 
@@ -53,6 +54,12 @@ public class CompoundPredicate implements Predicate {
     @Override
     public boolean test(InternalRow row) {
         return function.test(row, children);
+    }
+
+    @Override
+    public boolean test(
+            long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts) {
+        return function.test(rowCount, minValues, maxValues, nullCounts, children);
     }
 
     @Override
@@ -87,7 +94,16 @@ public class CompoundPredicate implements Predicate {
     /** Evaluate the predicate result based on multiple {@link Predicate}s. */
     public abstract static class Function implements Serializable {
 
+        private static final long serialVersionUID = 1L;
+
         public abstract boolean test(InternalRow row, List<Predicate> children);
+
+        public abstract boolean test(
+                long rowCount,
+                InternalRow minValues,
+                InternalRow maxValues,
+                Long[] nullCounts,
+                List<Predicate> children);
 
         public abstract Optional<Predicate> negate(List<Predicate> children);
 

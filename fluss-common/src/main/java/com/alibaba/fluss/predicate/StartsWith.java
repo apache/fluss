@@ -32,6 +32,8 @@ import java.util.Optional;
  */
 public class StartsWith extends NullFalseLeafBinaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final StartsWith INSTANCE = new StartsWith();
 
     private StartsWith() {}
