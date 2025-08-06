@@ -21,6 +21,7 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lake.iceberg.IcebergLakeCatalog;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.apache.iceberg.PartitionSpec;
@@ -32,7 +33,6 @@ import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.inmemory.InMemoryCatalog;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
-import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +46,7 @@ import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 
 /** Unit test for {@link IcebergLakeCatalog}. */
 class IcebergLakeCatalogTest {
@@ -55,6 +56,7 @@ class IcebergLakeCatalogTest {
     private Configuration configuration;
     private Catalog icebergCatalog;
     private SupportsNamespaces namespaceSupport;
+    private IcebergLakeCatalog flussIcebergCatalog;
 
     @BeforeEach
     void setupCatalog() {
@@ -67,6 +69,7 @@ class IcebergLakeCatalogTest {
 
         this.icebergCatalog = inMemoryCatalog;
         this.namespaceSupport = inMemoryCatalog;
+        this.flussIcebergCatalog = new IcebergLakeCatalog(inMemoryCatalog);
     }
 
     @Test
@@ -118,7 +121,8 @@ class IcebergLakeCatalogTest {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(flussSchema).distributedBy(4, "order_id").build();
 
-        org.apache.iceberg.Schema icebergSchema = convertFlussToIcebergSchema(tableDescriptor);
+        org.apache.iceberg.Schema icebergSchema =
+                flussIcebergCatalog.convertToIcebergSchema(tableDescriptor);
 
         assertThat(icebergSchema.findField("order_id")).isNotNull();
         assertThat(icebergSchema.findField("customer_name")).isNotNull();
@@ -158,10 +162,12 @@ class IcebergLakeCatalogTest {
                 TableDescriptor.builder().schema(flussSchema).distributedBy(4, "user_id").build();
 
         TableIdentifier tableId = TableIdentifier.of(database, tableName);
-        org.apache.iceberg.Schema icebergSchema = convertFlussToIcebergSchema(tableDescriptor);
+
+        org.apache.iceberg.Schema icebergSchema =
+                flussIcebergCatalog.convertToIcebergSchema(tableDescriptor);
 
         PartitionSpec expectedPartitionSpec =
-                PartitionSpec.builderFor(icebergSchema).bucket("user_id", 4).build();
+                flussIcebergCatalog.createPartitionSpec(tableDescriptor, icebergSchema);
 
         SortOrder expectedSortOrder =
                 SortOrder.builderFor(icebergSchema).asc(OFFSET_COLUMN_NAME).build();
@@ -189,6 +195,133 @@ class IcebergLakeCatalogTest {
         assertThat(createdTable.properties()).containsEntry("write.merge.mode", "merge-on-read");
     }
 
+    @Test
+    void rejectsPrimaryKeyTableWithMultipleBucketKeys() {
+        String database = "test_db";
+        String tableName = "multi_bucket_pk_table";
+
+        createNamespaceIfAbsent(database);
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("user_id", DataTypes.BIGINT())
+                        .column("shop_id", DataTypes.BIGINT())
+                        .column("order_id", DataTypes.BIGINT())
+                        .column("amount", DataTypes.DOUBLE())
+                        .primaryKey("user_id", "shop_id") // Composite primary key
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(4, "user_id", "shop_id") // Multiple bucket keys
+                        .build();
+
+        TableIdentifier tableId = TableIdentifier.of(database, tableName);
+
+        assertThatThrownBy(
+                        () -> {
+                            org.apache.iceberg.Schema icebergSchema =
+                                    flussIcebergCatalog.convertToIcebergSchema(tableDescriptor);
+                            PartitionSpec partitionSpec =
+                                    flussIcebergCatalog.createPartitionSpec(
+                                            tableDescriptor, icebergSchema);
+                            icebergCatalog.createTable(tableId, icebergSchema, partitionSpec);
+                        })
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+    }
+
+    @Test
+    void verifiesFlussCreatesValidIcebergTable() throws Exception {
+        String database = "test_db";
+
+        createNamespaceIfAbsent(database);
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("user_id", DataTypes.BIGINT())
+                        .column("amount", DataTypes.DOUBLE())
+                        .primaryKey("user_id")
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(flussSchema).distributedBy(4, "user_id").build();
+
+        // Create via Fluss iceberg catalog
+        TablePath flussTablePath = TablePath.of(database, "fluss_created");
+        flussIcebergCatalog.createTable(flussTablePath, tableDescriptor);
+
+        // Create equivalent via raw Iceberg catalog
+        org.apache.iceberg.Schema pureIcebergSchema =
+                new org.apache.iceberg.Schema(
+                        Types.NestedField.optional(1, "user_id", Types.LongType.get()),
+                        Types.NestedField.optional(2, "amount", Types.DoubleType.get()));
+
+        TableIdentifier pureTableId = TableIdentifier.of(database, "pure_iceberg");
+        Table pureIcebergTable = icebergCatalog.createTable(pureTableId, pureIcebergSchema);
+
+        TableIdentifier flussTableId = TableIdentifier.of(database, "fluss_created");
+        Table flussCreatedTable = icebergCatalog.loadTable(flussTableId);
+
+        assertThat(pureIcebergTable).isNotNull();
+        assertThat(flussCreatedTable).isNotNull();
+
+        // Verify Fluss table has additional features pure Iceberg doesn't
+        assertThat(pureIcebergTable.schema().columns()).hasSize(2); // Just business columns
+        assertThat(flussCreatedTable.schema().columns()).hasSize(5); // Business + system columns
+
+        // both readable by standard Iceberg APIs
+        assertThat(pureIcebergTable.location()).isNotNull();
+        assertThat(flussCreatedTable.location()).isNotNull();
+        assertThat(pureIcebergTable.currentSnapshot()).isNull();
+        assertThat(flussCreatedTable.currentSnapshot()).isNull();
+    }
+
+    @Test
+    void createsFlussTableWithIcebergIntegration() throws Exception {
+        String database = "test_db";
+        String tableName = "fluss_integration_table";
+
+        createNamespaceIfAbsent(database);
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(flussSchema).distributedBy(4, "id").build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        flussIcebergCatalog.createTable(tablePath, tableDescriptor);
+
+        TableIdentifier tableId = TableIdentifier.of(database, tableName);
+        Table createdTable = icebergCatalog.loadTable(tableId);
+
+        assertThat(createdTable).isNotNull();
+        assertThat(createdTable.name()).endsWith(tableName);
+
+        assertThat(createdTable.schema().columns()).hasSize(5);
+
+        // Verify business columns
+        assertThat(createdTable.schema().findField("id")).isNotNull();
+        assertThat(createdTable.schema().findField("name")).isNotNull();
+
+        // system columns were added by Fluss
+        assertThat(createdTable.schema().findField(BUCKET_COLUMN_NAME)).isNotNull();
+        assertThat(createdTable.schema().findField(OFFSET_COLUMN_NAME)).isNotNull();
+        assertThat(createdTable.schema().findField(TIMESTAMP_COLUMN_NAME)).isNotNull();
+
+        // Fluss-specific features
+        assertThat(createdTable.spec().fields()).hasSize(1); // Bucket partitioning
+        assertThat(createdTable.sortOrder().fields()).hasSize(1); // Sort by __offset
+        assertThat(createdTable.properties()).containsEntry("write.merge.mode", "merge-on-read");
+    }
+
     private void createNamespaceIfAbsent(String databaseName) {
         Namespace namespace = Namespace.of(databaseName);
 
@@ -196,62 +329,6 @@ class IcebergLakeCatalogTest {
             Map<String, String> metadata = new HashMap<>();
             metadata.put("location", tempWarehouseDir.toURI() + "/" + databaseName);
             namespaceSupport.createNamespace(namespace, metadata);
-        }
-    }
-
-    private org.apache.iceberg.Schema convertFlussToIcebergSchema(TableDescriptor tableDescriptor) {
-        int fieldId = 1;
-
-        Types.NestedField[] businessFields =
-                new Types.NestedField[tableDescriptor.getSchema().getColumns().size()];
-        int i = 0;
-        for (Schema.Column column : tableDescriptor.getSchema().getColumns()) {
-            businessFields[i] =
-                    Types.NestedField.optional(
-                            fieldId++,
-                            column.getName(),
-                            convertFlussTypeToIcebergType(column.getDataType()));
-            i++;
-        }
-
-        Types.NestedField bucketField =
-                Types.NestedField.required(fieldId++, BUCKET_COLUMN_NAME, Types.IntegerType.get());
-        Types.NestedField offsetField =
-                Types.NestedField.required(fieldId++, OFFSET_COLUMN_NAME, Types.LongType.get());
-        Types.NestedField timestampField =
-                Types.NestedField.required(
-                        fieldId, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone());
-
-        Types.NestedField[] allFields = new Types.NestedField[businessFields.length + 3];
-        System.arraycopy(businessFields, 0, allFields, 0, businessFields.length);
-        allFields[businessFields.length] = bucketField;
-        allFields[businessFields.length + 1] = offsetField;
-        allFields[businessFields.length + 2] = timestampField;
-
-        return new org.apache.iceberg.Schema(allFields);
-    }
-
-    private Type convertFlussTypeToIcebergType(com.alibaba.fluss.types.DataType flussType) {
-        switch (flussType.getTypeRoot()) {
-            case INTEGER:
-                return Types.IntegerType.get();
-            case BIGINT:
-                return Types.LongType.get();
-            case STRING:
-                return Types.StringType.get();
-            case BOOLEAN:
-                return Types.BooleanType.get();
-            case DOUBLE:
-                return Types.DoubleType.get();
-            case FLOAT:
-                return Types.FloatType.get();
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return Types.TimestampType.withZone();
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return Types.TimestampType.withoutZone();
-            default:
-                throw new UnsupportedOperationException(
-                        "Unsupported Fluss data type: " + flussType.getTypeRoot());
         }
     }
 }

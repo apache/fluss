@@ -72,6 +72,10 @@ public class IcebergLakeCatalog implements LakeCatalog {
         this.icebergCatalog = createIcebergCatalog(configuration);
     }
 
+    public IcebergLakeCatalog(Catalog icebergCatalog) {
+        this.icebergCatalog = icebergCatalog;
+    }
+
     private Catalog createIcebergCatalog(Configuration configuration) {
         Map<String, String> icebergProps = configuration.toMap();
 
@@ -127,7 +131,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    private Schema convertToIcebergSchema(TableDescriptor tableDescriptor) {
+    public Schema convertToIcebergSchema(TableDescriptor tableDescriptor) {
         List<Types.NestedField> fields = new ArrayList<>();
         int fieldId = 1;
 
@@ -152,7 +156,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return new Schema(fields);
     }
 
-    private Type convertFlussToIcebergType(DataType dataType) {
+    Type convertFlussToIcebergType(DataType dataType) {
         DataTypeRoot typeRoot = dataType.getTypeRoot();
 
         switch (typeRoot) {
@@ -179,7 +183,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
-    private PartitionSpec createPartitionSpec(
+    public PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema) {
 
         // Only PK tables supported for now
