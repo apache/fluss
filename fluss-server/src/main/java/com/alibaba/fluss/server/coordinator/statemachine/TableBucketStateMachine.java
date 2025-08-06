@@ -169,7 +169,7 @@ public class TableBucketStateMachine {
      * <p>-- For OnlineBucket -> OfflineBucket, it happens that the tablet server holds the previous
      * leader replica fail; Do: mark it as OfflineBucket.
      *
-     * <p>OfflinePartition -> NonExistentPartition
+     * <p>OfflineBucket -> NonExistentBucket
      *
      * <p>-- Only happens when dropping the table. Do: remove it from state machine.
      *
