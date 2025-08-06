@@ -232,7 +232,7 @@ Continuing from the previous prefix lookup example, if our dimension table is a 
 ```sql title="Flink SQL"
 -- primary keys are (c_custkey, c_nationkey, dt)
 -- bucket key is (c_custkey)
-CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned_with_bukcet_key` (
+CREATE TABLE `fluss_catalog`.`my_db`.`customer_partitioned_with_bucket_key` (
   `c_custkey` INT NOT NULL,
   `c_name` STRING NOT NULL,
   `c_address` STRING NOT NULL,
@@ -259,7 +259,7 @@ INSERT INTO prefix_lookup_join_sink
 SELECT `o`.`o_orderkey`, `o`.`o_totalprice`, `c`.`c_name`, `c`.`c_address`
 FROM 
 (SELECT `orders_with_dt`.*, proctime() AS ptime FROM `orders_with_dt`) AS `o`
-LEFT JOIN `customer_partitioned_with_bukcet_key`
+LEFT JOIN `customer_partitioned_with_bucket_key`
 FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
 ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 

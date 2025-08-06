@@ -23,7 +23,7 @@ For Flink's Table API, Fluss supports the following features:
 | Feature support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
 | [SQL create catalog](ddl.md#create-catalog)       | ✔️    |                                        |
-| [SQl create database](ddl.md#create-database)     | ✔️    |                                        |
+| [SQL create database](ddl.md#create-database)     | ✔️    |                                        |
 | [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
 | [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
@@ -43,7 +43,7 @@ For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datas
 ## Preparation when using Flink SQL Client
 - **Download Flink**
 
-Flink runs on all UNIX-like environments, i.e. Linux, Mac OS X, and Cygwin (for Windows).
+Flink runs on all UNIX-like environments, i.e., Linux, Mac OS X, and Cygwin (for Windows).
 If you haven’t downloaded Flink, you can download [the binary release](https://flink.apache.org/downloads.html) of Flink, then extract the archive with the following command.
 ```shell
 tar -xzf flink-1.20.1-bin-scala_2.12.tgz
@@ -70,7 +70,7 @@ You should be able to navigate to the web UI at [localhost:8081](http://localhos
 ```shell
 ps aux | grep flink
 ```
-- **Start a sql client**
+- **Start a SQL Client**
 
 To quickly stop the cluster and all running components, you can use the provided script:
 ```shell
@@ -92,7 +92,7 @@ CREATE CATALOG fluss_catalog WITH (
    you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
-2. The` bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
+2. The`bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
 :::
 
 ## Creating a Table

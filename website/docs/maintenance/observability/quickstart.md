@@ -12,7 +12,7 @@ On this page, you can find the following guides to set up an observability stack
 
 ## Observability with Prometheus, Loki and Grafana
 
-We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation sytem) and Grafana (dashboard system). 
+We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation system) and Grafana (dashboard system). 
 
 The quickstart configuration comes with 2 metric dashboards.
 
@@ -69,7 +69,7 @@ Detailed configuration instructions for Fluss and Logback can be found [here](lo
 3. Additionally, you need to adapt the `docker-compose.yml` and 
 
 - add containers for Prometheus, Loki and Grafana and mount the corresponding configuration directories.
-- build and use the new Fluss image manifest (`fluss-sfl4j-logback.Dockerfile`).
+- build and use the new Fluss image manifest (`fluss-slf4j-logback.Dockerfile`).
 - configure Fluss to expose metrics via Prometheus.
 - add the desired application name that should be used when displaying logs in Grafana as environment variable (`APP_NAME`).
 - configure Flink to expose metrics via Prometheus.

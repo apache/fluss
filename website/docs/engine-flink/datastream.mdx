@@ -7,7 +7,7 @@ sidebar_position: 6
 ## Overview
 The Fluss DataStream Connector for Apache Flink provides a Flink DataStream source implementation for reading data from Fluss tables and a Flink DataStream sink implementation for writing data to Fluss tables. It allows you to seamlessly integrate Fluss tables with Flink's DataStream API, enabling you to process data from Fluss in your Flink applications.
 
-Key features of the Fluss Datastream Connector include:
+Key features of the Fluss DataStream Connector include:
 * Reading from both primary key tables and log tables
 * Support for projection pushdown to select specific fields
 * Flexible offset initialization strategies
@@ -191,7 +191,7 @@ DataStreamSource<RowData> stream = env.fromSource(
 // For INSERT, UPDATE_BEFORE, UPDATE_AFTER, DELETE events
 ```
 
-**Note:** If you are mapping from `RowData` to your pojos object, you might want to include the row kind operation.
+**Note:** If you are mapping from `RowData` to your POJO objects, you might want to include the row kind operation.
 
 #### Reading from a Log Table
 When reading from a log table, all records are emitted with `RowKind.INSERT` since log tables only support appends.

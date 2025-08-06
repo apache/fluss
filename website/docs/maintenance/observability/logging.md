@@ -13,7 +13,7 @@ By default, [Log4j 2](https://logging.apache.org/log4j/2.x/index.html) is used a
 
 ## Configuring Log4j 2
 ### Log4j 2 property files
-The Fluss distribution ships with the following log4j properties files in the conf directory, which are used automatically if Log4j 2 is enabled:
+The Fluss distribution ships with the following Log4j properties files in the conf directory, which are used automatically if Log4j 2 is enabled:
 * `log4j-console.properties`: used for CoordinatorServer/TabletServer if they are run in the foreground (e.g., Kubernetes).
 * `log4j.properties`: used for CoordinatorServer/TabletServer by default.
 
@@ -43,12 +43,12 @@ To use Fluss with [Log4j 1](https://logging.apache.org/log4j/1.2/) you must ensu
 For Fluss distributions this means you have to:
 * remove the `log4j-core`, `log4j-slf4j-impl` and `log4j-1.2-api` jars from the lib directory,
 * add the `log4j`, `slf4j-log4j12` and `log4j-to-slf4j` jars to the lib directory,
-* replace all log4j properties files in the conf directory with Log4j1-compliant versions.
+* replace all Log4j properties files in the conf directory with Log4j1-compliant versions.
 
 In the IDE this means you have to replace such dependencies defined in your pom, and possibly add exclusions on dependencies that transitively depend on them.
 
-## Configuring logback
-To use Fluss with [logback](https://logback.qos.ch/) you must ensure that:
+## Configuring Logback
+To use Fluss with [Logback](https://logback.qos.ch/) you must ensure that:
 * `org.apache.logging.log4j:log4j-slf4j-impl` is not on the classpath,
 * `ch.qos.logback:logback-core` and `ch.qos.logback:logback-classic` are on the classpath.
 
@@ -57,10 +57,10 @@ For Fluss distributions this means you have to:
 * add the `logback-core`, and `logback-classic` jars to the lib directory.
 
 :::info
-Fluss currently uses SLF4J 1.7.x, which is _incompatible_ with logback 1.3.0 and higher.
+Fluss currently uses SLF4J 1.7.x, which is _incompatible_ with Logback 1.3.0 and higher.
 :::
 
-The Fluss distribution ships with the following logback configuration files in the conf directory, which are used automatically if logback is enabled:
+The Fluss distribution ships with the following Logback configuration files in the conf directory, which are used automatically if logback is enabled:
 * `logback-console.xml`: used for CoordinatorServer/TabletServer if they are run in the foreground (e.g., Kubernetes).
 * `logback.xml`: used for CoordinatorServer/TabletServer by default.
 
