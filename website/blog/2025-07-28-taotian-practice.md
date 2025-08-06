@@ -1,7 +1,7 @@
 ---
 slug: taotian-practice
-title: "Fluss Joins the Apache Incubator"
-sidebar_label: "The Implementation Practice Of Fluss On Taotian AB Test Analysis Platform : A Message Queue More Suitable for Real-Time OLAP"
+title: "The Implementation Practice Of Fluss On Taotian AB Test Analysis Platform : A Message Queue More Suitable for Real-Time OLAP"
+sidebar_label: "The Implementation Practice Of Fluss On Taotian"
 authors: [Zhang Xinyu, Wang Lilei]
 ---
 
