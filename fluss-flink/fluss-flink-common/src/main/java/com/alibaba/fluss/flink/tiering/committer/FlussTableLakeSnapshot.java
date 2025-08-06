@@ -18,28 +18,26 @@
 package com.alibaba.fluss.flink.tiering.committer;
 
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.utils.types.Tuple2;
 
 import java.util.HashMap;
 import java.util.Map;
 
 /** A lake snapshot for a Fluss table. */
-public class FlussTableLakeSnapshot {
+class FlussTableLakeSnapshot {
 
     private final long tableId;
 
     private final long lakeSnapshotId;
 
-    private final Map<TableBucket, Long> logEndOffsets;
+    // <table_bucket, partition_name> -> log end offsets,
+    // if the bucket is not of a partition, the partition_name is null
+    private final Map<Tuple2<TableBucket, String>, Long> logEndOffsets;
 
-    public FlussTableLakeSnapshot(long tableId, long lakeSnapshotId) {
-        this(tableId, lakeSnapshotId, new HashMap<>());
-    }
-
-    public FlussTableLakeSnapshot(
-            long tableId, long lakeSnapshotId, Map<TableBucket, Long> logEndOffsets) {
+    FlussTableLakeSnapshot(long tableId, long lakeSnapshotId) {
         this.tableId = tableId;
         this.lakeSnapshotId = lakeSnapshotId;
-        this.logEndOffsets = logEndOffsets;
+        this.logEndOffsets = new HashMap<>();
     }
 
     public long tableId() {
@@ -50,12 +48,16 @@ public class FlussTableLakeSnapshot {
         return lakeSnapshotId;
     }
 
-    public Map<TableBucket, Long> logEndOffsets() {
+    public Map<Tuple2<TableBucket, String>, Long> logEndOffsets() {
         return logEndOffsets;
     }
 
     public void addBucketOffset(TableBucket bucket, long offset) {
-        logEndOffsets.put(bucket, offset);
+        logEndOffsets.put(Tuple2.of(bucket, null), offset);
+    }
+
+    public void addPartitionBucketOffset(TableBucket bucket, String partitionName, long offset) {
+        logEndOffsets.put(Tuple2.of(bucket, partitionName), offset);
     }
 
     @Override
