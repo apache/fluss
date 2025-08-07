@@ -1312,9 +1312,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 });
 
         List<CompletedSnapshot> completedSnapshots = new ArrayList<>();
-        // wait util we get completed snapshots for all table buckets.
+        // wait until we get completed snapshots for all table buckets.
         for (TableBucket tableBucket : tableBuckets) {
-            completedSnapshots.add(snapshotReporter.waitUtilSnapshotComplete(tableBucket, 0));
+            completedSnapshots.add(snapshotReporter.waitUntilSnapshotComplete(tableBucket, 0));
         }
 
         // check the snapshots for each table bucket
@@ -1350,9 +1350,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 });
 
         completedSnapshots.clear();
-        // wait util we get completed snapshots for all table buckets.
+        // wait until we get completed snapshots for all table buckets.
         for (TableBucket tableBucket : tableBuckets) {
-            completedSnapshots.add(snapshotReporter.waitUtilSnapshotComplete(tableBucket, 1));
+            completedSnapshots.add(snapshotReporter.waitUntilSnapshotComplete(tableBucket, 1));
         }
         // check the snapshots for each table bucket
         for (int i = 0; i < tableBuckets.size(); i++) {

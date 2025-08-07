@@ -30,7 +30,7 @@ import java.util.Optional;
 /** A {@link CompoundPredicate.Function} to eval and. */
 public class And extends CompoundPredicate.Function {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = -2977938814804928712L;
 
     public static final And INSTANCE = new And();
 
@@ -40,6 +40,21 @@ public class And extends CompoundPredicate.Function {
     public boolean test(InternalRow row, List<Predicate> children) {
         for (Predicate child : children) {
             if (!child.test(row)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public boolean test(
+            long rowCount,
+            InternalRow minValues,
+            InternalRow maxValues,
+            Long[] nullCounts,
+            List<Predicate> children) {
+        for (Predicate child : children) {
+            if (!child.test(rowCount, minValues, maxValues, nullCounts)) {
                 return false;
             }
         }

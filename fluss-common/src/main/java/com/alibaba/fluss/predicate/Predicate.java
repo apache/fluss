@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.predicate;
 
+import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.row.InternalRow;
 
 import java.io.Serializable;
@@ -30,18 +31,25 @@ import java.util.Optional;
  * Predicate which returns Boolean and provides testing by stats.
  *
  * @see PredicateBuilder
- * @since 0.4.0
+ * @since 0.8
  */
+@PublicEvolving
 public interface Predicate extends Serializable {
 
     /**
-     * Now only support test based on the specific input row. Todo: boolean test(long rowCount,
-     * InternalRow minValues, InternalRow maxValues, InternalArray nullCounts); Test based on the
-     * specific input row.
+     * Test based on the specific input row.
      *
      * @return return true when hit, false when not hit.
      */
     boolean test(InternalRow row);
+
+    /**
+     * Test based on the statistical information to determine whether a hit is possible.
+     *
+     * @return return true is likely to hit (there may also be false positives), return false is
+     *     absolutely not possible to hit.
+     */
+    boolean test(long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts);
 
     /** @return the negation predicate of this predicate if possible. */
     Optional<Predicate> negate();

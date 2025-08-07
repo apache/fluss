@@ -4,24 +4,6 @@ title: Observability Quickstart Guides
 sidebar_position: 1
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Observability Quickstart Guides
 
 On this page, you can find the following guides to set up an observability stack **based on the instructions in the [Flink quickstart guide](quickstart/flink.md)**:
@@ -30,7 +12,7 @@ On this page, you can find the following guides to set up an observability stack
 
 ## Observability with Prometheus, Loki and Grafana
 
-We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation sytem) and Grafana (dashboard system). 
+We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation system) and Grafana (dashboard system). 
 
 The quickstart configuration comes with 2 metric dashboards.
 
@@ -87,7 +69,7 @@ Detailed configuration instructions for Fluss and Logback can be found [here](lo
 3. Additionally, you need to adapt the `docker-compose.yml` and 
 
 - add containers for Prometheus, Loki and Grafana and mount the corresponding configuration directories.
-- build and use the new Fluss image manifest (`fluss-sfl4j-logback.Dockerfile`).
+- build and use the new Fluss image manifest (`fluss-slf4j-logback.Dockerfile`).
 - configure Fluss to expose metrics via Prometheus.
 - add the desired application name that should be used when displaying logs in Grafana as environment variable (`APP_NAME`).
 - configure Flink to expose metrics via Prometheus.

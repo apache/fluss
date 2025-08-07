@@ -41,7 +41,7 @@ public class LeafPredicate implements Predicate {
     private final int fieldIndex;
     private final String fieldName;
 
-    private List<Object> literals;
+    private final List<Object> literals;
 
     public LeafPredicate(
             LeafFunction function,
@@ -87,6 +87,23 @@ public class LeafPredicate implements Predicate {
     @Override
     public boolean test(InternalRow row) {
         return function.test(type, get(row, fieldIndex, type), literals);
+    }
+
+    @Override
+    public boolean test(
+            long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts) {
+        Object min = get(minValues, fieldIndex, type);
+        Object max = get(maxValues, fieldIndex, type);
+        Long nullCount = nullCounts != null ? nullCounts[fieldIndex] : null;
+        if (nullCount == null || rowCount != nullCount) {
+            // not all null
+            // min or max is null
+            // unknown stats
+            if (min == null || max == null) {
+                return true;
+            }
+        }
+        return function.test(type, rowCount, min, max, nullCount, literals);
     }
 
     @Override

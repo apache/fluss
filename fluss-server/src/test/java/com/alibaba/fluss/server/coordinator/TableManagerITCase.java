@@ -375,7 +375,7 @@ class TableManagerITCase {
         TableDescriptor tableDescriptor = newPartitionedTable().withProperties(options);
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
-        // wait util partition is created
+        // wait until partition is created
         Map<String, Long> partitions =
                 waitValue(
                         () -> {
@@ -462,11 +462,11 @@ class TableManagerITCase {
         // retry until all replica ready.
         int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
         for (int i = 0; i < expectBucketCount; i++) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(new TableBucket(tableId, i));
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, i));
         }
 
         // retry to check metadata.
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
         MetadataResponse metadataResponse =
                 gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
         // should be no tablet server as we only create tablet service.
@@ -575,7 +575,7 @@ class TableManagerITCase {
 
         for (long partitionId : partitionById.values()) {
             for (int i = 0; i < expectBucketCount; i++) {
-                FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(
+                FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
                         new TableBucket(tableId, partitionId, i));
             }
         }

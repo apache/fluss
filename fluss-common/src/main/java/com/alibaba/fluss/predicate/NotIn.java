@@ -32,7 +32,6 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 public class NotIn extends LeafFunction {
 
     private static final long serialVersionUID = 1L;
-
     public static final NotIn INSTANCE = new NotIn();
 
     private NotIn() {}
@@ -63,6 +62,9 @@ public class NotIn extends LeafFunction {
         }
         for (Object literal : literals) {
             if (literal == null
+                    // only if max == min == literal, the row set are all IN the literal, return
+                    // false; other cases, the row set MAY contain elements NOT IN the literal,
+                    // return true
                     || (compareLiteral(type, literal, min) == 0
                             && compareLiteral(type, literal, max) == 0)) {
                 return false;

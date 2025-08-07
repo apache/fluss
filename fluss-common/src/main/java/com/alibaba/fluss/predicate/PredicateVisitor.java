@@ -21,7 +21,14 @@ package com.alibaba.fluss.predicate;
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
 
-/** A visitor to visit {@link Predicate}. */
+import com.alibaba.fluss.annotation.PublicEvolving;
+
+/**
+ * A visitor to visit {@link Predicate}.
+ *
+ * @since 0.8
+ */
+@PublicEvolving
 public interface PredicateVisitor<T> {
 
     T visit(LeafPredicate predicate);

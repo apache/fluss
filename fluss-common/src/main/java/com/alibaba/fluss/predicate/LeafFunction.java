@@ -30,8 +30,29 @@ import java.util.Optional;
 /** Function to test a field with literals. */
 public abstract class LeafFunction implements Serializable {
 
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * Tests whether a field satisfies the condition based on the provided literals.
+     *
+     * @param type the data type of the field being tested
+     * @param field the value of the field to test
+     * @param literals the list of literals to test against the field
+     * @return true if the field satisfies the condition, false otherwise
+     */
     public abstract boolean test(DataType type, Object field, List<Object> literals);
 
+    /**
+     * Tests whether a set of rows satisfies the condition based on the provided statistics.
+     *
+     * @param type the data type of the field being tested
+     * @param rowCount the total number of rows
+     * @param min the minimum value of the field in the rows
+     * @param max the maximum value of the field in the rows
+     * @param nullCount the number of null values in the field, or null if unknown
+     * @param literals the literals to test against the field
+     * @return true if there is any row satisfies the condition, false otherwise
+     */
     public abstract boolean test(
             DataType type,
             long rowCount,
@@ -41,6 +62,9 @@ public abstract class LeafFunction implements Serializable {
             List<Object> literals);
 
     public abstract Optional<LeafFunction> negate();
+
+    public abstract <T> T visit(
+            FunctionVisitor<T> visitor, FieldRef fieldRef, List<Object> literals);
 
     @Override
     public int hashCode() {
@@ -54,9 +78,6 @@ public abstract class LeafFunction implements Serializable {
         }
         return o != null && getClass() == o.getClass();
     }
-
-    public abstract <T> T visit(
-            FunctionVisitor<T> visitor, FieldRef fieldRef, List<Object> literals);
 
     @Override
     public String toString() {

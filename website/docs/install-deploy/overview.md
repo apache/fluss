@@ -4,24 +4,6 @@ title: Installation & Deployment
 sidebar_position: 1
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Overview
 
 Below, we provide an overview of the key components of a Fluss cluster, detailing their functionalities and implementations. Additionally, we will introduce the various deployment methods available for Fluss.
@@ -70,7 +52,7 @@ We have listed them in the table below the figure.
             <td>
                 <p>
                 CoordinatorServer is the name of the central work coordination component of Fluss. 
-                The coordinator server is responsible to:
+                The coordinator server is responsible for:
                 </p>
                 <ul>
                     <li>Manage the TabletServer</li>
@@ -103,7 +85,7 @@ We have listed them in the table below the figure.
                 <td>ZooKeeper</td>
                     <td>
                         :::warning
-                        Zookeeper will be removed to simplify deployment in the near future. For more details, please checkout [Roadmap](/roadmap/).
+                        ZooKeeper will be removed to simplify deployment in the near future. For more details, please checkout [Roadmap](/roadmap/).
                         :::
                         <p>
                         Fluss leverages ZooKeeper for distributed coordination between all running CoordinatorServer instances and for metadata management.
@@ -111,7 +93,7 @@ We have listed them in the table below the figure.
                     </td>
                     <td>
                         <ul>
-                            <li><a href="https://zookeeper.apache.org/">Zookeeper</a></li>
+                            <li><a href="https://zookeeper.apache.org/">ZooKeeper</a></li>
                         </ul>
                     </td>
                 </tr>
@@ -156,7 +138,7 @@ We have listed them in the table below the figure.
 Fluss can be deployed in three different ways:
 - [Local Cluster](install-deploy/deploying-local-cluster.md)
 - [Distributed Cluster](install-deploy/deploying-distributed-cluster.md)
-- [Docker run/ Docker compose](install-deploy/deploying-with-docker.md)
+- [Docker run / Docker Compose](install-deploy/deploying-with-docker.md)
 
 **NOTE**:
 - Local Cluster is for testing purpose only.

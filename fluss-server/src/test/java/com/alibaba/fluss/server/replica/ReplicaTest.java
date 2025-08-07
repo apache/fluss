@@ -333,9 +333,9 @@ final class ReplicaTest extends ReplicaTestBase {
         // trigger one snapshot,
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
 
-        // wait util the snapshot 0 success
+        // wait until the snapshot 0 success
         CompletedSnapshot completedSnapshot0 =
-                kvSnapshotStore.waitUtilSnapshotComplete(tableBucket, 0);
+                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
         // check snapshot
         long expectedLogOffset = 4;
@@ -353,9 +353,9 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // trigger next checkpoint
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
-        // wait util the snapshot 1 success
+        // wait until the snapshot 1 success
         CompletedSnapshot completedSnapshot1 =
-                kvSnapshotStore.waitUtilSnapshotComplete(tableBucket, 1);
+                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
 
         // check snapshot
         expectedLogOffset = 7;
@@ -394,9 +394,9 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // trigger another one snapshot,
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
-        //  wait util the snapshot 2 success
+        //  wait until the snapshot 2 success
         CompletedSnapshot completedSnapshot2 =
-                kvSnapshotStore.waitUtilSnapshotComplete(tableBucket, 2);
+                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 2);
         expectedLogOffset = 10;
         expectedKeyValues =
                 getKeyValuePairs(
@@ -434,7 +434,7 @@ final class ReplicaTest extends ReplicaTestBase {
         int latestLeaderEpoch = 1;
         int snapshot = 0;
         makeKvReplicaAsLeader(kvReplica, latestLeaderEpoch);
-        kvSnapshotStore.waitUtilSnapshotComplete(tableBucket, snapshot);
+        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, snapshot);
         assertThat(kvSnapshotStore.getSnapshotLeaderEpoch(tableBucket, snapshot))
                 .isEqualTo(latestLeaderEpoch);
     }
@@ -474,8 +474,8 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // trigger one snapshot,
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
-        // wait util the snapshot success
-        kvSnapshotStore.waitUtilSnapshotComplete(tableBucket, 0);
+        // wait until the snapshot success
+        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
         // write data again
         putRecordsToLeader(

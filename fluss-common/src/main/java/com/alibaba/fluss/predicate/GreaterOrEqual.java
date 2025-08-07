@@ -31,6 +31,8 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 /** A {@link NullFalseLeafBinaryFunction} to eval greater or equal. */
 public class GreaterOrEqual extends NullFalseLeafBinaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final GreaterOrEqual INSTANCE = new GreaterOrEqual();
 
     private GreaterOrEqual() {}

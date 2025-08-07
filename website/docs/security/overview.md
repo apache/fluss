@@ -4,24 +4,6 @@ title: Security Overview
 sidebar_position: 1
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Security Overview
 Fluss provides a comprehensive security model based on two core components:
 * **[Authentication](authentication.md)**: is the process of verifying the identity of the client
@@ -97,18 +79,18 @@ For example:
 ### Fluss Principal – The Bridge Between Authentication and Authorization
 Once a client successfully authenticates, Fluss creates a **Fluss Principal**, which represents the authenticated identity. This  **Fluss Principal** is used throughout the system during authorization checks.
 
-The principal type indicates the category of the principal (e. g., "User", "Group", "Role"), while the name identifies the specific entity within that category. By default, the simple authorizer uses "User" as the principal type, but custom authorizers can extend this to support role-based or group-based access control lists (ACLs).
+The principal type indicates the category of the principal (e.g., "User", "Group", "Role"), while the name identifies the specific entity within that category. By default, the simple authorizer uses "User" as the principal type, but custom authorizers can extend this to support role-based or group-based access control lists (ACLs).
 Example usage:
 * `new FlussPrincipal("admin", "User")` – A standard user principal.
 * `new FlussPrincipal("admins", "Group")` – A group-based principal for authorization.
 
 ### Enable Authorization and Assign Super Users
-Fluss provides a pluggable authorization framework that uses Access Control Lists (ACLs) to determine whether a given FlussPrincipal is allowed to perform an operation on a specific resource.To enable authorization, you need to configure the following properties:
+Fluss provides a pluggable authorization framework that uses Access Control Lists (ACLs) to determine whether a given Fluss Principal is allowed to perform an operation on a specific resource.To enable authorization, you need to configure the following properties:
 | Option             | Type    | Default Value | Description                                                                                                                                                                                                                                                                                                    |
 |--------------------|---------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | authorizer.enabled | Boolean | false         | Specifies whether to enable the authorization feature.                                                                                                                                                                                                                                                         |
 | authorizer.type    | String  | default       | Specifies the type of authorizer to be used for access control. This value corresponds to the identifier of the authorization plugin. The default value is `default`, which indicates the built-in authorizer implementation. Custom authorizers can be implemented by providing a matching plugin identifier. |
-| super.users                                      | String     | (None)                                                                                                                                                                | A semicolon-separated list of superusers who have unrestricted access to all operations and resources. Note that the delimiter is semicolon since SSL user names may contain comma, and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. This configuration is critical for defining administrative privileges in the system.                                             |
+| super.users                                      | String     | (None)                                                                                                                                                                | A semicolon-separated list of  super users who have unrestricted access to all operations and resources. Note that the delimiter is semicolon since SSL user names may contain comma, and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. This configuration is critical for defining administrative privileges in the system.                                             |
 
 
 ## Security Workflow When Client Established a Connection
@@ -134,13 +116,13 @@ security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
 
    If the credentials are valid and the authentication is successful, and the client is allowed to proceed with further operations. Otherwise, the connection is rejected, and an authentication error is returned.
 
-4. Fluss Principal Is created
+4. Fluss Principal is created
 
    Upon successful authentication, Fluss creates a FlussPrincipal, representing the identity of the authenticated user
 
 5. Authorization check occur
 
-   Before allowing any operation (like producing or consuming data), Fluss checks whether the FlussPrincipal has permission to perform that action based on configured ACL rules.
+   Before allowing any operation (like producing or consuming data), Fluss checks whether the Fluss Principal has permission to perform that action based on configured ACL rules.
 
 6. Response to the client
 

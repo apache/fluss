@@ -31,6 +31,8 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 /** A {@link NullFalseLeafBinaryFunction} to eval less or equal. */
 public class LessOrEqual extends NullFalseLeafBinaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final LessOrEqual INSTANCE = new LessOrEqual();
 
     private LessOrEqual() {}

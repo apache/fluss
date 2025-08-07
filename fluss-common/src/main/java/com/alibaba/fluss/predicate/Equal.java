@@ -31,6 +31,8 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 /** A {@link NullFalseLeafBinaryFunction} to eval equal. */
 public class Equal extends NullFalseLeafBinaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final Equal INSTANCE = new Equal();
 
     private Equal() {}

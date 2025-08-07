@@ -34,8 +34,8 @@ public interface Lookuper {
      * Lookups certain row from the given lookup key.
      *
      * <p>The lookup key must be a primary key if the lookuper is a Primary Key Lookuper (created by
-     * {@code table.newLookuper().create()}), or be the prefix key if the lookuper is a Prefix Key
-     * Lookuper (created by {@code table.newLookuper().withLookupColumns(prefixKeys).create()}).
+     * {@code table.newLookup().createLookuper()}), or be the prefix key if the lookuper is a Prefix
+     * Key Lookuper (created by {@code table.newLookup().lookupBy(prefixKeys).createLookuper()}).
      *
      * @param lookupKey the lookup key.
      * @return the result of lookup.

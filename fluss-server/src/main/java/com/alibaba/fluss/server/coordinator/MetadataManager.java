@@ -305,7 +305,8 @@ public class MetadataManager {
         try {
             optionalTable = zookeeperClient.getTable(tablePath);
         } catch (Exception e) {
-            throw new FlussRuntimeException(String.format("Fail to get table '%s'.", tablePath), e);
+            throw new FlussRuntimeException(
+                    String.format("Failed to get table '%s'.", tablePath), e);
         }
         if (!optionalTable.isPresent()) {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");

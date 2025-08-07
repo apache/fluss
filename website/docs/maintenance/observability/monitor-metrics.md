@@ -3,24 +3,6 @@ title: Monitor Metrics
 sidebar_position: 3
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Monitor Metrics
 
 Fluss has built a metrics system to measure the behaviours of cluster and table, like the active CoordinatorServer, 
@@ -312,8 +294,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="6"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="6">-</td>
+      <th rowspan="9"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="9">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
@@ -342,6 +324,21 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>replicasToDeleteCount</td>
       <td>The total number of replicas in the progress to be deleted in this cluster.</td>
       <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>eventQueueSize</td>
+      <td>The number of events waiting to be processed in the queue.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>eventQueueTimeMs</td>
+      <td>The time that an event spent waiting in the queue to be processed.</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>eventProcessingTimeMs</td>
+      <td>The time that an event took to be processed.</td>
+      <td>Histogram</td>
     </tr>
   </tbody>
 </table>
@@ -748,7 +745,7 @@ When using Flink to read and write, Fluss has implemented some key standard Flin
 to measure the source latency and output of sink, see [FLIP-33: Standardize Connector Metrics](https://cwiki.apache.org/confluence/display/FLINK/FLIP-33%3A+Standardize+Connector+Metrics). 
 Flink source / sink metrics implemented are listed here.
 
-How to use flink metrics, you can see [flink metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
+How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
 
 #### Source Metrics
 

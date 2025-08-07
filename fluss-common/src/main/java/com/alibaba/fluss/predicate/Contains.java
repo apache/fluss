@@ -29,6 +29,8 @@ import java.util.Optional;
 /** A {@link NullFalseLeafBinaryFunction} to evaluate {@code filter like '%abc%'}. */
 public class Contains extends NullFalseLeafBinaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final Contains INSTANCE = new Contains();
 
     private Contains() {}

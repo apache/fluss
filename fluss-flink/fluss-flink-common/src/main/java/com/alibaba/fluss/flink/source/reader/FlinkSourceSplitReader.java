@@ -108,6 +108,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Set<String> emptyLogSplits;
     // track split IDs corresponding to removed partitions
     private final Set<String> removedSplits = new HashSet<>();
+    // Set to collect table buckets that are unsubscribed.
+    private Set<TableBucket> unsubscribedTableBuckets = new HashSet<>();
 
     public FlinkSourceSplitReader(
             Configuration flussConf,
@@ -267,6 +269,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     if (partitionNotExist) {
                         // mark the not exist partition to be removed
                         removedSplits.add(split.splitId());
+                        // mark the table bucket to be unsubscribed
+                        unsubscribedTableBuckets.add(tableBucket);
                         LOG.warn(
                                 "Partition {} does not exist when subscribing to log for split {}. Skipping subscription.",
                                 partitionId,
@@ -290,8 +294,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     public Set<TableBucket> removePartitions(Map<Long, String> removedPartitions) {
-        // Set to collect table buckets that are unsubscribed.
-        Set<TableBucket> unsubscribedTableBuckets = new HashSet<>();
         // First, if the current active bounded split belongs to a removed partition,
         // finish it so it will not be restored.
         if (currentBoundedSplit != null) {
@@ -352,7 +354,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             }
         }
 
-        return unsubscribedTableBuckets;
+        Set<TableBucket> currentUnsubscribedTableBuckets = this.unsubscribedTableBuckets;
+        this.unsubscribedTableBuckets = new HashSet<>();
+        return currentUnsubscribedTableBuckets;
     }
 
     private void checkSnapshotSplitOrStartNext() {

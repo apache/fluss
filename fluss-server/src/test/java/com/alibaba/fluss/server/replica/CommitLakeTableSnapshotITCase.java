@@ -84,7 +84,7 @@ class CommitLakeTableSnapshotITCase {
             int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
             TabletServerGateway leaderGateWay =
                     FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
-            FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
 
             for (int i = 0; i < 10; i++) {
                 leaderGateWay

@@ -28,7 +28,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static com.alibaba.fluss.predicate.PredicateBuilderTest.test;
 import static com.alibaba.fluss.row.BinaryString.fromString;
+import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link Predicate}s. */
@@ -43,6 +45,11 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(5))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
 
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 0, 6, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.notEqual(0, 5));
     }
 
@@ -50,6 +57,10 @@ public class PredicateTest {
     public void testEqualNull() {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new IntType()));
         Predicate predicate = builder.equal(0, null);
+
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(false);
+        // null not equal to null
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
@@ -64,6 +75,12 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(5))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
 
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 0, 6, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, 5, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.equal(0, 5));
     }
 
@@ -74,6 +91,9 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -86,6 +106,12 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(6))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
 
+        assertThat(test(predicate, 3, 0, 4, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 6, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, 6, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.lessOrEqual(0, 5));
     }
 
@@ -96,6 +122,9 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 1, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -108,6 +137,12 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(6))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
 
+        assertThat(test(predicate, 3, 0, 4, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 0, 6, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, 6, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.lessThan(0, 5));
     }
 
@@ -118,6 +153,9 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 1, 0, 4, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -130,6 +168,12 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(6))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
 
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 5, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 4, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, 3, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.greaterOrEqual(0, 5));
     }
 
@@ -140,6 +184,9 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 1, 3, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -152,6 +199,12 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(6))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
 
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 5, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 4, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, 3, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.greaterThan(0, 5));
     }
 
@@ -162,6 +215,9 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 1, 3, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -171,6 +227,11 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(true);
+
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 5, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 5, 7, 1L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(true);
 
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.isNotNull(0));
     }
@@ -182,6 +243,11 @@ public class PredicateTest {
 
         assertThat(predicate.test(GenericRow.of(4))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 5, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 5, 7, 1L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
 
         assertThat(predicate.negate().orElse(null)).isEqualTo(builder.isNull(0));
     }
@@ -196,6 +262,10 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -208,6 +278,10 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -220,6 +294,13 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 1, 1, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 3, 3, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 1, 3, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -232,6 +313,13 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 1, 1, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 3, 3, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 1, 3, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -239,8 +327,13 @@ public class PredicateTest {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
         Predicate predicate = builder.endsWith(0, ("bcc"));
         GenericRow row = GenericRow.of(fromString("aabbcc"));
-
         assertThat(predicate.test(row)).isEqualTo(true);
+
+        GenericRow max = row(fromString("aaba"));
+        GenericRow min = row(fromString("aabb"));
+        Long[] nullCounts = {null};
+        assertThat(predicate.test(10, min, max, nullCounts)).isEqualTo(true);
+        assertThat(predicate.test(10, min, max, new Long[] {10L})).isEqualTo(false);
     }
 
     @Test
@@ -248,8 +341,17 @@ public class PredicateTest {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
         Predicate predicate = builder.startsWith(0, ("aab"));
         GenericRow row = GenericRow.of(fromString("aabbcc"));
-
         assertThat(predicate.test(row)).isEqualTo(true);
+
+        GenericRow aaab = row(fromString("aaab"));
+        GenericRow aaba = row(fromString("aaba"));
+        GenericRow bbaa = row(fromString("bbaa"));
+        GenericRow ccbb = row(fromString("ccbb"));
+        Long[] nullCounts = {null};
+        assertThat(predicate.test(10, aaab, aaba, nullCounts)).isEqualTo(true);
+        assertThat(predicate.test(10, aaba, bbaa, nullCounts)).isEqualTo(true);
+        assertThat(predicate.test(10, bbaa, ccbb, nullCounts)).isEqualTo(false);
+        assertThat(predicate.test(10, aaab, aaba, new Long[] {10L})).isEqualTo(false);
     }
 
     @Test
@@ -258,9 +360,14 @@ public class PredicateTest {
         Predicate predicate = builder.contains(0, ("def"));
         GenericRow row1 = GenericRow.of(fromString("aabbdefcc"));
         GenericRow row2 = GenericRow.of(fromString("aabbdcefcc"));
-
         assertThat(predicate.test(row1)).isEqualTo(true);
         assertThat(predicate.test(row2)).isEqualTo(false);
+
+        GenericRow aaab = row(fromString("aaab"));
+        GenericRow aaba = row(fromString("aaba"));
+        Long[] nullCounts = {null};
+        assertThat(predicate.test(10, aaab, aaba, nullCounts)).isEqualTo(true);
+        assertThat(predicate.test(10, aaab, aaba, new Long[] {10L})).isEqualTo(false);
     }
 
     @Test
@@ -279,6 +386,11 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 29, 32, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -298,6 +410,11 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 29, 32, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -316,6 +433,14 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 1, 1, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 3, 3, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 1, 3, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 3, 29, 32, 0L)).isEqualTo(true);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -335,6 +460,14 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(2))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of((Object) null))).isEqualTo(false);
+
+        assertThat(test(predicate, 3, 1, 1, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 3, 3, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 1, 3, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 0, 5, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 6, 7, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 3, 29, 32, 0L)).isEqualTo(false);
+        assertThat(test(predicate, 1, null, null, 1L)).isEqualTo(false);
     }
 
     @Test
@@ -346,6 +479,10 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(3, 6))).isEqualTo(false);
         assertThat(predicate.test(GenericRow.of(3, 5))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of(null, 5))).isEqualTo(false);
+
+        assertThat(predicate.test(3, row(3, 4), row(6, 6), new Long[] {0L, 0L})).isEqualTo(true);
+        assertThat(predicate.test(3, row(3, 6), row(6, 8), new Long[] {0L, 0L})).isEqualTo(false);
+        assertThat(predicate.test(3, row(6, 4), row(7, 6), new Long[] {0L, 0L})).isEqualTo(false);
 
         assertThat(predicate.negate().orElse(null))
                 .isEqualTo(PredicateBuilder.or(builder.notEqual(0, 3), builder.notEqual(1, 5)));
@@ -361,6 +498,10 @@ public class PredicateTest {
         assertThat(predicate.test(GenericRow.of(3, 5))).isEqualTo(true);
         assertThat(predicate.test(GenericRow.of(null, 5))).isEqualTo(true);
 
+        assertThat(predicate.test(3, row(3, 4), row(6, 6), new Long[] {0L, 0L})).isEqualTo(true);
+        assertThat(predicate.test(3, row(3, 6), row(6, 8), new Long[] {0L, 0L})).isEqualTo(true);
+        assertThat(predicate.test(3, row(6, 8), row(7, 10), new Long[] {0L, 0L})).isEqualTo(false);
+
         assertThat(predicate.negate().orElse(null))
                 .isEqualTo(PredicateBuilder.and(builder.notEqual(0, 3), builder.notEqual(1, 5)));
     }
@@ -369,6 +510,9 @@ public class PredicateTest {
     public void testUnknownStats() {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new IntType()));
         Predicate predicate = builder.equal(0, 5);
+
+        assertThat(test(predicate, 3, null, null, null)).isEqualTo(true);
+        assertThat(test(predicate, 3, null, null, 3L)).isEqualTo(false);
     }
 
     @Test

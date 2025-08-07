@@ -30,9 +30,9 @@ import java.util.Objects;
 public class CommittedLakeSnapshot {
 
     private final long lakeSnapshotId;
-    // <partition_name, bucket> -> log offset, partition_name will be null if it's not a
+    // <partition_id, bucket> -> log offset, partition_id will be null if it's not a
     // partition bucket
-    private final Map<Tuple2<String, Integer>, Long> logEndOffsets = new HashMap<>();
+    private final Map<Tuple2<Long, Integer>, Long> logEndOffsets = new HashMap<>();
 
     public CommittedLakeSnapshot(long lakeSnapshotId) {
         this.lakeSnapshotId = lakeSnapshotId;
@@ -46,11 +46,11 @@ public class CommittedLakeSnapshot {
         logEndOffsets.put(Tuple2.of(null, bucketId), offset);
     }
 
-    public void addPartitionBucket(String partitionName, int bucketId, long offset) {
-        logEndOffsets.put(Tuple2.of(partitionName, bucketId), offset);
+    public void addPartitionBucket(Long partitionId, int bucketId, long offset) {
+        logEndOffsets.put(Tuple2.of(partitionId, bucketId), offset);
     }
 
-    public Map<Tuple2<String, Integer>, Long> getLogEndOffsets() {
+    public Map<Tuple2<Long, Integer>, Long> getLogEndOffsets() {
         return logEndOffsets;
     }
 

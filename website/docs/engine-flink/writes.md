@@ -4,24 +4,6 @@ title: Flink Writes
 sidebar_position: 3
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Flink Writes
 
 You can directly insert or update data into a Fluss table using the `INSERT INTO` statement.
@@ -33,7 +15,7 @@ Fluss primary key tables can accept all types of messages (`INSERT`, `UPDATE_BEF
 They support both streaming and batch modes and are compatible with primary-key tables (for upserting data) as well as log tables (for appending data).
 
 ### Appending Data to the Log Table
-#### Create a Log table.
+#### Create a Log Table.
 ```sql title="Flink SQL"
 CREATE TABLE log_table (
   order_id BIGINT,
@@ -43,7 +25,7 @@ CREATE TABLE log_table (
 );
 ```
 
-#### Insert data into the Log table.
+#### Insert Data into the Log Table.
 ```sql title="Flink SQL"
 CREATE TEMPORARY TABLE source (
   order_id BIGINT,
@@ -109,7 +91,7 @@ SELECT shop_id, user_id, num_orders FROM source;
 
 Fluss supports deleting data for primary-key tables in batch mode via `DELETE FROM` statement. Currently, only single data deletions based on the primary key are supported.
 
-* the primary key table
+* the Primary Key Table
 ```sql title="Flink SQL"
 -- DELETE statement requires batch mode
 SET 'execution.runtime-mode' = 'batch';
@@ -117,7 +99,7 @@ SET 'execution.runtime-mode' = 'batch';
 
 ```sql title="Flink SQL"
 -- The condition must include all primary key equality conditions.
-DELETE FROM pk_table WHERE shop_id = 10000 and user_id = 123456;
+DELETE FROM pk_table WHERE shop_id = 10000 AND user_id = 123456;
 ```
 
 ## UPDATE
@@ -130,5 +112,5 @@ SET execution.runtime-mode = batch;
 
 ```sql title="Flink SQL"
 -- The condition must include all primary key equality conditions.
-UPDATE pk_table SET total_amount = 2 WHERE shop_id = 10000 and user_id = 123456;
+UPDATE pk_table SET total_amount = 2 WHERE shop_id = 10000 AND user_id = 123456;
 ```

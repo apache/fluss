@@ -4,24 +4,6 @@ title: "Getting Started with Flink"
 sidebar_position: 1
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Getting Started with Flink Engine
 ## Quick Start
 For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
@@ -41,7 +23,7 @@ For Flink's Table API, Fluss supports the following features:
 | Feature support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
 | [SQL create catalog](ddl.md#create-catalog)       | ✔️    |                                        |
-| [SQl create database](ddl.md#create-database)     | ✔️    |                                        |
+| [SQL create database](ddl.md#create-database)     | ✔️    |                                        |
 | [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
 | [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
@@ -61,7 +43,7 @@ For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datas
 ## Preparation when using Flink SQL Client
 - **Download Flink**
 
-Flink runs on all UNIX-like environments, i.e. Linux, Mac OS X, and Cygwin (for Windows).
+Flink runs on all UNIX-like environments, i.e., Linux, Mac OS X, and Cygwin (for Windows).
 If you haven’t downloaded Flink, you can download [the binary release](https://flink.apache.org/downloads.html) of Flink, then extract the archive with the following command.
 ```shell
 tar -xzf flink-1.20.1-bin-scala_2.12.tgz
@@ -88,7 +70,7 @@ You should be able to navigate to the web UI at [localhost:8081](http://localhos
 ```shell
 ps aux | grep flink
 ```
-- **Start a sql client**
+- **Start a SQL Client**
 
 To quickly stop the cluster and all running components, you can use the provided script:
 ```shell
@@ -110,7 +92,7 @@ CREATE CATALOG fluss_catalog WITH (
    you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
-2. The` bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
+2. The`bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
 :::
 
 ## Creating a Table

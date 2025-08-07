@@ -18,8 +18,14 @@
 
 # This workflow is meant for checking broken links in the documentation.
 name: Check Documentation
+permissions:
+  contents: read
 on:
   pull_request:
+    branches: [main, release-*, ci-*]
+    paths:
+      - 'website/**'
+  push:
     branches: [main, release-*, ci-*]
     paths:
       - 'website/**'

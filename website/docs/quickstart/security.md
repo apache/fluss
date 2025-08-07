@@ -39,7 +39,7 @@ Before proceeding with this guide, ensure that [Docker](https://docs.docker.com/
 All commands were tested with Docker version 27.4.0 and Docker Compose version v2.30.3.
 
 :::note
-We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
+We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptations).
 :::
 
 #### Starting required components
@@ -226,7 +226,7 @@ CALL admin_catalog.sys.add_acl(
 Allow `consumer` user to read data:
 ```sql
 CALL admin_catalog.sys.add_acl(
-   resource => 'cluster', 
+    resource => 'cluster', 
     permission => 'ALLOW',
     principal => 'User:consumer', 
     operation => 'READ'
@@ -242,13 +242,13 @@ CALL admin_catalog.sys.list_acl(
 Output will show like:
 
 ```text
-+-------------------------------------------------------------------------------------------------------+
-|                                                                                                result |
-+-------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------+
+|                                                                                      result |
++---------------------------------------------------------------------------------------------+
 |  resource="cluster";permission="ALLOW";principal="User:developer";operation="READ";host="*" |
 | resource="cluster";permission="ALLOW";principal="User:developer";operation="WRITE";host="*" |
 |   resource="cluster";permission="ALLOW";principal="User:consumer";operation="READ";host="*" |
-+-------------------------------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------+
 3 rows in set
 ```
 
@@ -260,7 +260,7 @@ USE CATALOG admin_catalog;
 
 -- create table using admin credentials
 CREATE TABLE fluss_order (
-     `order_key`  INT NOT NULL,
+    `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
@@ -540,12 +540,12 @@ CALL admin_catalog.sys.list_acl(
 ```
 Output will show like:
 ```text
-+----------------------------------------------------------------------------------------------------+
-|                                                                                             result |
-+----------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------+
+|                                                                                                 result |
++--------------------------------------------------------------------------------------------------------+
 | resource="cluster.marketing_db";permission="ALLOW";principal="User:marketing";operation="ALL";host="*" |
 |     resource="cluster.finance_db";permission="ALLOW";principal="User:finance";operation="ALL";host="*" |
-+----------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------+
 2 rows in set
 ```
 
@@ -555,9 +555,9 @@ Output will show like:
 The `marketing` user can only see the `marketing_db` database
 ```sql title="Flink SQL"
 -- switch to marketing user context
-use catalog marketing_catalog;
+USE CATALOG marketing_catalog;
 -- show databases using marketing user credentials
-show databases;
+SHOW DATABASES;
 ```
 **Output:**
 ```text
@@ -572,9 +572,9 @@ show databases;
 The `finance` user can only see the `finance_db` database:
 ```sql title="Flink SQL"
 -- switch to finance user context
-use catalog finance_catalog;
+USE CATALOG finance_catalog;
 -- show databases using finance user credentials
-show databases;
+SHOW DATABASES;
 ```
 
 **Output:**
@@ -591,10 +591,10 @@ show databases;
 The `marketing` user can operate on their own database:
 ```sql title="Flink SQL"
 -- switch to marketing user context
-use catalog marketing_catalog;
+USE CATALOG marketing_catalog;
 -- create table using marketing user credentials
 CREATE TABLE `marketing_db`.`order` (
-     `order_key`  INT NOT NULL,
+    `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );
@@ -609,10 +609,10 @@ CREATE TABLE `marketing_db`.`order` (
 The `finance` user cannot access the `marketing` database:
 ```sql title="Flink SQL"
 -- switch to finance user context
-use catalog finance_catalog;
+USE CATALOG finance_catalog;
 -- create table using finance user credentials
 CREATE TABLE `marketing_db`.`order` (
-     `order_key`  INT NOT NULL,
+    `order_key`  INT NOT NULL,
     `total_price` DECIMAL(15, 2),
     PRIMARY KEY (`order_key`) NOT ENFORCED
 );

@@ -19,6 +19,9 @@ package com.alibaba.fluss.predicate;
 
 /** Encounter an unsupported expression, the caller can choose to ignore this filter branch. */
 public class UnsupportedExpression extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+
     public UnsupportedExpression(String message) {
         super(message);
     }

@@ -31,7 +31,7 @@ zookeeper.address: localhost:2181
 # Common
 #==============================================================================
 
-# THe default bucket number to be used when creating tables if no bucket number
+# The default bucket number to be used when creating tables if no bucket number
 # is specified for the table.
 default.bucket.number: 1
 

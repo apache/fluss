@@ -62,7 +62,7 @@ class CommitRemoteLogManifestITCase {
 
         // find the tb whose leader is the server with large log tiering interval.
         TableBucket tb = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUtilAllReplicaReady(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         int leader =
                 Objects.requireNonNull(
                         FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb).getLeaderId());
@@ -91,7 +91,7 @@ class CommitRemoteLogManifestITCase {
                         newProduceLogRequest(tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                 .get();
         for (int stopFollower : stopFollowers) {
-            FLUSS_CLUSTER_EXTENSION.waitUtilReplicaShrinkFromIsr(tb, stopFollower);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stopFollower);
             LogTablet stopfollowerLogTablet =
                     FLUSS_CLUSTER_EXTENSION
                             .waitAndGetFollowerReplica(tb, stopFollower)
@@ -106,7 +106,7 @@ class CommitRemoteLogManifestITCase {
                         .set(
                                 ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION,
                                 Duration.ofMillis(1)));
-        FLUSS_CLUSTER_EXTENSION.waitUtilSomeLogSegmentsCopyToRemote(tb);
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
 
         // check only has two remote log segments for the stopped replicas
         for (int stopFollower : stopFollowers) {

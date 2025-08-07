@@ -4,24 +4,6 @@ title: Security Authentication
 sidebar_position: 2
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Authentication
 Fluss provides a pluggable authentication mechanism, allowing users to configure client and server authentication methods based on their security requirements.
 
@@ -44,7 +26,7 @@ No additional configuration is required for this mode.
 ## SASL
 This mechanism is based on SASL (Simple Authentication and Security Layer) authentication. Currently, only SASL/PLAIN is supported, which involves authentication using a username and password. It is recommended for production environments.
 
-### SASL server side configuration
+### SASL Client-Side Configuration
 | Option                                                         | Type   | Default Value | Description                                                                                                                           |
 |----------------------------------------------------------------|--------|---------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | security.sasl.enabled.mechanisms                               | List   | PLAIN         | Comma-separated list of enabled SASL mechanisms. Only support PLAIN(which involves authentication using a username and password) now. |
@@ -70,7 +52,7 @@ security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.Plai
 ```
 
 
-### SASL client side configuration
+### SASL Client-Side Configuration
 Clients must specify the appropriate security protocol and authentication mechanism when connecting to Fluss brokers.
 
 | Option                           | Type   | Default Value | Description                                                                                                                                                                                                                                                                               |
@@ -104,10 +86,10 @@ Fluss supports custom authentication logic through its plugin architecture.
 Steps to implement a custom authenticator:
 1. **Implement AuthenticationPlugin Interfaces**: 
 Implement `ClientAuthenticationPlugin` for client-side logic and implement `ServerAuthenticationPlugin` for server-side logic.
-2.  **Server-side Plugin Installation**:
+2.  **Server-Side Plugin Installation**:
 Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin directory: `<FLUSS_HOME>/plugins/<custom_auth_plugin>/`. The server will automatically load the plugin at startup.
-3.  **Client-side Plugin Packaging**  :
+3.  **Client-Side Plugin Packaging**  :
 To enable plugin functionality on the client side, include the plugin JAR in your application’s classpath. This allows the Fluss client to auto-discover the plugin during runtime.
-4. **Configure the desired protocol**:
+4. **Configure the Desired Protocol**:
   * `security.protocol.map` – for server-side listener authentication and use the `com.alibaba.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier.
   * `client.security.protocol` – for client-side authentication and use the `com.alibaba.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier

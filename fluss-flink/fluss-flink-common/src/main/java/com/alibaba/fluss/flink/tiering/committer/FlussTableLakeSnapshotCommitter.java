@@ -85,18 +85,14 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         // construct lake snapshot to commit to Fluss
         FlussTableLakeSnapshot flussTableLakeSnapshot =
                 new FlussTableLakeSnapshot(tableId, committedLakeSnapshot.getLakeSnapshotId());
-        for (Map.Entry<Tuple2<String, Integer>, Long> entry :
+        for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
                 committedLakeSnapshot.getLogEndOffsets().entrySet()) {
-            Tuple2<String, Integer> partitionBucket = entry.getKey();
+            Tuple2<Long, Integer> partitionBucket = entry.getKey();
             TableBucket tableBucket;
             if (partitionBucket.f0 == null) {
                 tableBucket = new TableBucket(tableId, partitionBucket.f1);
             } else {
-                String partitionName = partitionBucket.f0;
-                // todo: remove this
-                // in paimon 1.12, we can store this offsets(including partitionId) into snapshot
-                // properties, then, we won't need to get partitionId from partition name
-                Long partitionId = partitionIdByName.get(partitionName);
+                Long partitionId = partitionBucket.f0;
                 if (partitionId != null) {
                     tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
                 } else {

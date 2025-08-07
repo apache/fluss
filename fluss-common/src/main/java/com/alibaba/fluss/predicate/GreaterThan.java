@@ -31,6 +31,8 @@ import static com.alibaba.fluss.predicate.CompareUtils.compareLiteral;
 /** A {@link LeafFunction} to eval greater. */
 public class GreaterThan extends NullFalseLeafBinaryFunction {
 
+    private static final long serialVersionUID = 1L;
+
     public static final GreaterThan INSTANCE = new GreaterThan();
 
     private GreaterThan() {}

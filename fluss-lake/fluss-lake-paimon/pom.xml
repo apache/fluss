@@ -33,9 +33,7 @@
     <packaging>jar</packaging>
 
     <properties>
-        <paimon.version>1.0.1</paimon.version>
-        <flink.major.version>1.20</flink.major.version>
-        <flink.version>1.20.1</flink.version>
+        <paimon.version>1.2.0</paimon.version>
     </properties>
 
     <dependencies>
@@ -74,6 +72,14 @@
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-mapreduce-client-core</artifactId>
+            <version>2.8.5</version>
             <scope>test</scope>
         </dependency>
 
@@ -135,7 +141,6 @@
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-flink-${flink.major.version}</artifactId>
-            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -164,42 +169,36 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-core</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-common</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-runtime</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-base</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-files</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-test-utils</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

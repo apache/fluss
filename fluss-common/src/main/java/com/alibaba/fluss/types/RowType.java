@@ -67,6 +67,16 @@ public final class RowType extends DataType {
         return fields.stream().map(DataField::getName).collect(Collectors.toList());
     }
 
+    public DataField getField(String fieldName) {
+        for (DataField field : fields) {
+            if (field.getName().equals(fieldName)) {
+                return field;
+            }
+        }
+
+        throw new RuntimeException("Cannot find field: " + fieldName);
+    }
+
     public DataType getTypeAt(int i) {
         return fields.get(i).getType();
     }

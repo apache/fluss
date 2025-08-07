@@ -359,6 +359,33 @@ Apache Kafka
 ./fluss-server/src/main/java/com/alibaba/fluss/server/utils/timer/TimingWheel.java
 
 Apache Paimon
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/And.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/CompareUtils.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/CompoundPredicate.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/Contains.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/EndsWith.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/Equal.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/FieldRef.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/FunctionVisitor.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/GreaterOrEqual.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/GreaterThan.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/In.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/IsNotNull.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/IsNull.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/LeafFunction.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/LeafPredicate.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/LeafUnaryFunction.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/LessOrEqual.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/LessThan.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/NotEqual.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/NotIn.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/NullFalseLeafBinaryFunction.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/Or.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/PartitionPredicateVisitor.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/Predicate.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/PredicateBuilder.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/PredicateVisitor.java
+./fluss-common/src/main/java/com/alibaba/fluss/predicate/StartsWith.java
 ./fluss-common/src/main/java/com/alibaba/fluss/row/encode/paimon/PaimonBinaryRowWriter.java
 ./fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lakehouse/paimon/reader/PaimonSnapshotScanner.java
 

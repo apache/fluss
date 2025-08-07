@@ -52,7 +52,7 @@ public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<Pa
                             + version
                             + ".");
         }
-        CommitMessage commitMessage = messageSer.deserialize(version, serialized);
+        CommitMessage commitMessage = messageSer.deserialize(messageSer.getVersion(), serialized);
         return new PaimonWriteResult(commitMessage);
     }
 }

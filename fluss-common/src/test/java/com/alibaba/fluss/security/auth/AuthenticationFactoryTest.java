@@ -21,8 +21,12 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.metadata.ValidationException;
 import com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierClientAuthenticator;
 import com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierServerAuthenticator;
+import com.alibaba.fluss.utils.ParentResourceBlockingClassLoader;
+import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
 
 import org.junit.jupiter.api.Test;
+
+import java.net.URL;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -94,5 +98,17 @@ public class AuthenticationFactoryTest {
                                 .get()
                                 .get())
                 .isInstanceOf(TestIdentifierServerAuthenticator.class);
+    }
+
+    @Test
+    void testNotIncludedInThreadContextClassloader() {
+        try (TemporaryClassLoaderContext ignored =
+                TemporaryClassLoaderContext.of(new ParentResourceBlockingClassLoader(new URL[0]))) {
+            Configuration configuration = new Configuration();
+            configuration.setString("client.security.protocol", "SSL_TEST");
+            configuration.setString("security.protocol.map", "FLUSS:SSL_TEST");
+            assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration).get())
+                    .isInstanceOf(TestIdentifierClientAuthenticator.class);
+        }
     }
 }

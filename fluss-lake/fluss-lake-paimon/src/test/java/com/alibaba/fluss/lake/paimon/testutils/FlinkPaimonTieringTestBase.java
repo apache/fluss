@@ -43,10 +43,15 @@ import com.alibaba.fluss.types.DataTypes;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.reader.RecordReader;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +62,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -64,7 +70,7 @@ import java.util.Optional;
 import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -162,7 +168,7 @@ public class FlinkPaimonTieringTestBase {
     protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
         for (int i = 0; i < bucketNum; i++) {
             TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUtilSnapshotFinished(tableBucket, snapshotId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 
@@ -354,6 +360,20 @@ public class FlinkPaimonTieringTestBase {
         return createTable(tablePath, table1Descriptor);
     }
 
+    protected void dropTable(TablePath tablePath) throws Exception {
+        admin.dropTable(tablePath, false).get();
+        Identifier tableIdentifier = toPaimonIdentifier(tablePath);
+        try {
+            paimonCatalog.dropTable(tableIdentifier, false);
+        } catch (Catalog.TableNotExistException e) {
+            // do nothing, table not exists
+        }
+    }
+
+    private Identifier toPaimonIdentifier(TablePath tablePath) {
+        return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
     protected void assertReplicaStatus(
             TablePath tablePath,
             long tableId,
@@ -389,31 +409,70 @@ public class FlinkPaimonTieringTestBase {
                 });
     }
 
-    protected void waitUtilBucketSynced(
+    protected void waitUntilBucketSynced(
             TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
         if (isPartition) {
             Map<Long, String> partitionById = waitUntilPartitions(tablePath);
             for (Long partitionId : partitionById.keySet()) {
                 for (int i = 0; i < bucketCount; i++) {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-                    waitUtilBucketSynced(tableBucket);
+                    waitUntilBucketSynced(tableBucket);
                 }
             }
         } else {
             for (int i = 0; i < bucketCount; i++) {
                 TableBucket tableBucket = new TableBucket(tableId, i);
-                waitUtilBucketSynced(tableBucket);
+                waitUntilBucketSynced(tableBucket);
             }
         }
     }
 
-    protected void waitUtilBucketSynced(TableBucket tb) {
-        waitUtil(
+    protected void waitUntilBucketSynced(TableBucket tb) {
+        waitUntil(
                 () -> {
                     Replica replica = getLeaderReplica(tb);
                     return replica.getLogTablet().getLakeTableSnapshotId() >= 0;
                 },
                 Duration.ofMinutes(2),
                 "bucket " + tb + "not synced");
+    }
+
+    protected void checkDataInPaimonPrimayKeyTable(
+            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                getPaimonRowCloseableIterator(tablePath);
+        for (InternalRow expectedRow : expectedRows) {
+            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+            assertThat(row.getInt(0)).isEqualTo(expectedRow.getInt(0));
+            assertThat(row.getString(1).toString()).isEqualTo(expectedRow.getString(1).toString());
+        }
+    }
+
+    protected CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
+            TablePath tablePath) throws Exception {
+        Identifier tableIdentifier =
+                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+
+        paimonCatalog = getPaimonCatalog();
+
+        FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
+
+        RecordReader<org.apache.paimon.data.InternalRow> reader =
+                table.newRead().createReader(table.newReadBuilder().newScan().plan());
+        return reader.toCloseableIterator();
+    }
+
+    protected void checkSnapshotPropertyInPaimon(
+            TablePath tablePath, Map<String, String> expectedProperties) throws Exception {
+        FileStoreTable table =
+                (FileStoreTable)
+                        getPaimonCatalog()
+                                .getTable(
+                                        Identifier.create(
+                                                tablePath.getDatabaseName(),
+                                                tablePath.getTableName()));
+        Snapshot snapshot = table.snapshotManager().latestSnapshot();
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.properties()).isEqualTo(expectedProperties);
     }
 }

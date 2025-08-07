@@ -47,7 +47,7 @@ public class TableAssignmentUtils {
             TabletServerInfo[] servers,
             int startIndex,
             int nextReplicaShift) {
-        if (nBuckets < 0) {
+        if (nBuckets <= 0) {
             throw new InvalidBucketsException("Number of buckets must be larger than 0.");
         }
 
