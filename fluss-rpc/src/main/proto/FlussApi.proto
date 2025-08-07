@@ -157,6 +157,8 @@ message MetadataRequest {
   // metadata request
   // todo: we won't need the assumption after we introduce metadata cache in server
   repeated int64 partitions_id = 3 [packed = true];
+  // when cache_only is true, server will return immediately if data is not in cache
+  optional bool cache_only = 4 [default = false];
 }
 
 message MetadataResponse {

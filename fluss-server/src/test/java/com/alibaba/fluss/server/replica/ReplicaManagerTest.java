@@ -22,7 +22,6 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
-import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
@@ -1800,10 +1799,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k))
                                 .isEqualTo(v);
                     } else {
-                        assertThatThrownBy(() -> serverMetadataCache.getPartitionMetadata(k))
-                                .isInstanceOf(PartitionNotExistException.class)
-                                .hasMessageContaining(
-                                        "Table partition '" + k + "' does not exist.");
+                        assertThat(serverMetadataCache.getPartitionMetadata(k)).isNull();
                     }
                 });
     }
