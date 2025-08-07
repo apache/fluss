@@ -1189,7 +1189,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .stream()
                         .filter(s -> s.contains("2025") || s.contains("2026"))
                         .collect(Collectors.toList());
-        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
 
         String plan =
                 tEnv.explainSql("select * from partitioned_table_in where c in ('2025','2026')");
@@ -1247,7 +1247,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         }
 
         writeRows(conn, tablePath, rows, false);
-        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
 
         String plan =
                 tEnv.explainSql(
@@ -1291,7 +1291,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 allData.stream()
                         .filter(s -> s.contains("2025") || s.contains("2026"))
                         .collect(Collectors.toList());
-        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "3026"));
+        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "3026"));
 
         String plan = tEnv.explainSql("select * from partitioned_table_like where c like '202%'");
         assertThat(plan)
@@ -1350,7 +1350,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 allData.stream()
                         .filter(s -> s.contains("v3") && !s.contains("2025, 2"))
                         .collect(Collectors.toList());
-        waitUtilAllBucketFinishSnapshot(
+        waitUntilAllBucketFinishSnapshot(
                 admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
 
         String plan =
