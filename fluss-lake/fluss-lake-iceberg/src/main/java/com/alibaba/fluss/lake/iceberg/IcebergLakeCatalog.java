@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.lake.iceberg;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
@@ -72,8 +73,9 @@ public class IcebergLakeCatalog implements LakeCatalog {
         this.icebergCatalog = createIcebergCatalog(configuration);
     }
 
-    public IcebergLakeCatalog(Catalog icebergCatalog) {
-        this.icebergCatalog = icebergCatalog;
+    @VisibleForTesting
+    public Catalog getIcebergCatalog() {
+        return icebergCatalog;
     }
 
     private Catalog createIcebergCatalog(Configuration configuration) {
@@ -113,7 +115,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
             PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
             SortOrder sortOrder = createSortOrder(icebergSchema);
 
-            // table builder for complete configuration
             Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
             tableBuilder.withProperties(buildTableProperties(tableDescriptor));
             tableBuilder.withPartitionSpec(partitionSpec);
@@ -183,7 +184,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
-    public PartitionSpec createPartitionSpec(
+    private PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema) {
 
         // Only PK tables supported for now
@@ -253,7 +254,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
         icebergProperties.put("write.update.mode", "merge-on-read");
         icebergProperties.put("write.merge.mode", "merge-on-read");
 
-        // Add Fluss-specific properties with prefix
         tableDescriptor
                 .getProperties()
                 .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
