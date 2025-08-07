@@ -46,6 +46,7 @@ import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.DefaultAuthorizer;
 import com.alibaba.fluss.server.coordinator.CoordinatorServer;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
+import com.alibaba.fluss.server.coordinator.rebalance.RebalanceManager;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
@@ -454,6 +455,10 @@ public final class FlussClusterExtension
 
     public ZooKeeperClient getZooKeeperClient() {
         return zooKeeperClient;
+    }
+
+    public RebalanceManager getRebalanceManager() {
+        return coordinatorServer.getRebalanceManager();
     }
 
     public RpcClient getRpcClient() {

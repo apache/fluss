@@ -20,6 +20,7 @@ package com.alibaba.fluss.server.utils;
 import com.alibaba.fluss.cluster.Endpoint;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
+import com.alibaba.fluss.cluster.rebalance.RebalancePlanForBucket;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
@@ -29,6 +30,7 @@ import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.BytesViewLogRecords;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
@@ -108,6 +110,8 @@ import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbRebalancePlanForBucket;
+import com.alibaba.fluss.rpc.messages.PbRebalancePlanForTable;
 import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import com.alibaba.fluss.rpc.messages.PbServerNode;
@@ -124,6 +128,7 @@ import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
+import com.alibaba.fluss.rpc.messages.RebalanceResponse;
 import com.alibaba.fluss.rpc.messages.StopReplicaRequest;
 import com.alibaba.fluss.rpc.messages.StopReplicaResponse;
 import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
@@ -155,6 +160,7 @@ import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
+import com.alibaba.fluss.server.zk.data.RebalancePlan;
 
 import javax.annotation.Nullable;
 
@@ -1604,6 +1610,76 @@ public class ServerRpcMessageUtils {
     public static LakeTieringHeartbeatResponse makeLakeTieringHeartbeatResponse(
             int coordinatorEpoch) {
         return new LakeTieringHeartbeatResponse().setCoordinatorEpoch(coordinatorEpoch);
+    }
+
+    public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
+        RebalanceResponse response = new RebalanceResponse();
+        List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
+
+        // for none-partitioned tables.
+        for (Map.Entry<Long, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBuckets().entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForTable.getKey());
+            List<PbRebalancePlanForBucket> planForBuckets = new ArrayList<>();
+            planForTable
+                    .getValue()
+                    .forEach(
+                            planForBucket ->
+                                    planForBuckets.add(toPbRebalancePlanForBucket(planForBucket)));
+            pbRebalancePlanForTable.addAllBucketsPlans(planForBuckets);
+            planForTables.add(pbRebalancePlanForTable);
+        }
+        response.addAllPlanForTables(planForTables);
+
+        // for partitioned tables.
+        Map<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForBucketsOfPartitionedTable =
+                new HashMap<>();
+        for (Map.Entry<TablePartition, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBucketsOfPartitionedTable().entrySet()) {
+            Map<Long, List<PbRebalancePlanForBucket>> bucketsPlanForPartition =
+                    planForBucketsOfPartitionedTable.computeIfAbsent(
+                            planForTable.getKey().getTableId(), k -> new HashMap<>());
+            bucketsPlanForPartition.put(
+                    planForTable.getKey().getPartitionId(),
+                    planForTable.getValue().stream()
+                            .map(ServerRpcMessageUtils::toPbRebalancePlanForBucket)
+                            .collect(Collectors.toList()));
+        }
+
+        for (Map.Entry<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForPartition :
+                planForBucketsOfPartitionedTable.entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForPartition.getKey());
+            planForPartition
+                    .getValue()
+                    .forEach(
+                            (partitionId, planForBuckets) ->
+                                    pbRebalancePlanForTable
+                                            .addPartitionsPlan()
+                                            .setPartitionId(partitionId)
+                                            .addAllBucketsPlans(planForBuckets));
+        }
+        return response;
+    }
+
+    private static PbRebalancePlanForBucket toPbRebalancePlanForBucket(
+            RebalancePlanForBucket planForBucket) {
+        PbRebalancePlanForBucket pbRebalancePlanForBucket =
+                new PbRebalancePlanForBucket()
+                        .setBucketId(planForBucket.getBucketId())
+                        .setOriginalLeader(planForBucket.getOriginalLeader())
+                        .setNewLeader(planForBucket.getNewLeader());
+        pbRebalancePlanForBucket
+                .setOriginalReplicas(
+                        planForBucket.getOriginReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setNewReplicas(
+                        planForBucket.getNewReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray());
+        return pbRebalancePlanForBucket;
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

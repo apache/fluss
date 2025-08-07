@@ -25,6 +25,7 @@ import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.client.write.KvWriteBatch;
 import com.alibaba.fluss.client.write.ReadyWriteBatch;
+import com.alibaba.fluss.cluster.rebalance.RebalancePlanForBucket;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
@@ -51,10 +52,14 @@ import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
+import com.alibaba.fluss.rpc.messages.PbRebalancePlanForBucket;
+import com.alibaba.fluss.rpc.messages.PbRebalancePlanForPartition;
+import com.alibaba.fluss.rpc.messages.PbRebalancePlanForTable;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
+import com.alibaba.fluss.rpc.messages.RebalanceResponse;
 
 import javax.annotation.Nullable;
 
@@ -317,6 +322,48 @@ public class ClientRpcMessageUtils {
         PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
         dropPartitionRequest.setPartitionSpec(pbPartitionSpec);
         return dropPartitionRequest;
+    }
+
+    public static Map<TableBucket, RebalancePlanForBucket> toRebalancePlan(
+            RebalanceResponse response) {
+        Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
+        for (PbRebalancePlanForTable pbTable : response.getPlanForTablesList()) {
+            long tableId = pbTable.getTableId();
+            if (pbTable.getPartitionsPlansCount() == 0) {
+                // none-partition table.
+                for (PbRebalancePlanForBucket pbBucket : pbTable.getBucketsPlansList()) {
+                    int bucketId = pbBucket.getBucketId();
+                    rebalancePlan.put(
+                            new TableBucket(tableId, null, bucketId),
+                            toRebalancePlanForBucket(tableId, null, bucketId, pbBucket));
+                }
+            } else {
+                // partition table.
+                for (PbRebalancePlanForPartition pbPartition : pbTable.getPartitionsPlansList()) {
+                    long partitionId = pbPartition.getPartitionId();
+                    for (PbRebalancePlanForBucket pbBucket : pbPartition.getBucketsPlansList()) {
+                        int bucketId = pbBucket.getBucketId();
+                        rebalancePlan.put(
+                                new TableBucket(tableId, partitionId, bucketId),
+                                toRebalancePlanForBucket(tableId, partitionId, bucketId, pbBucket));
+                    }
+                }
+            }
+        }
+        return rebalancePlan;
+    }
+
+    private static RebalancePlanForBucket toRebalancePlanForBucket(
+            long tableId,
+            @Nullable Long partitionId,
+            int bucketId,
+            PbRebalancePlanForBucket pbBucket) {
+        return new RebalancePlanForBucket(
+                new TableBucket(tableId, partitionId, bucketId),
+                pbBucket.getOriginalLeader(),
+                pbBucket.getNewLeader(),
+                Arrays.stream(pbBucket.getOriginalReplicas()).boxed().collect(Collectors.toList()),
+                Arrays.stream(pbBucket.getNewReplicas()).boxed().collect(Collectors.toList()));
     }
 
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
