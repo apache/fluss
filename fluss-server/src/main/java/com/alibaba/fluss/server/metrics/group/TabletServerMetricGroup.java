@@ -38,6 +38,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
             MapUtils.newConcurrentHashMap();
 
     protected final String clusterId;
+    protected final String rack;
     protected final String hostname;
     protected final int serverId;
 
@@ -49,9 +50,10 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter delayedFetchFromClientExpireCount;
 
     public TabletServerMetricGroup(
-            MetricRegistry registry, String clusterId, String hostname, int serverId) {
+            MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
+        this.rack = rack;
         this.hostname = hostname;
         this.serverId = serverId;
 
@@ -75,6 +77,12 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     @Override
     protected final void putVariables(Map<String, String> variables) {
         variables.put("cluster_id", clusterId);
+        if (rack != null) {
+            variables.put("rack", rack);
+        } else {
+            // The value of an empty string indicates no rack
+            variables.put("rack", "");
+        }
         variables.put("host", hostname);
         variables.put("server_id", String.valueOf(serverId));
     }
