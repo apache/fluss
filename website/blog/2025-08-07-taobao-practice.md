@@ -1,7 +1,7 @@
 ---
 slug: taobao-practice
-title: "The Implementation Practice Of Fluss On Taobao AB Test Analysis Platform"
-sidebar_label: "The Implementation Practice Of Fluss On Taobao"
+title: "How Taobao uses Apache Fluss (Incubating) for Real-Time Processing in Search and RecSys"
+sidebar_label: "Apache Fluss (Incubating) at Taobao"
 authors: [zhangxinyu, wanglilei]
 ---
 
@@ -19,21 +19,21 @@ Looking ahead, the team will continue to extend Fluss within a **Lakehouse archi
 ### Business Background
 
 
-![](assets/taotian_practice/ab_experiment_platform_arch.png)
+![](assets/taobao_practice/ab_experiment_platform_arch.png)
 
-Taobao AB Test Analysis Platform, mainly focuses on AB data of Taobao's C-end algorithms, aiming to promote scientific decision-making activities through the construction of generalized AB data capabilities. 
-Since its inception in **2015** , it has continuously and effectively supported the analysis of Taobao's algorithm AB data for **10 years** . 
+Taobao A/B testing Analysis Platform, mainly focuses on A/B data of Taobao's C-end algorithms, aiming to promote scientific decision-making activities through the construction of generalized A/B data capabilities. 
+Since its inception in **2015** , it has continuously and effectively supported the analysis of Taobao's algorithm A/B data for **10 years** . 
 Currently, it is applied to **over 100** A/B testing scenarios across various business areas, including **search, recommendation, content,** **user growth**, and **marketing**.
 
 
-![](assets/taotian_practice/realtime_data_warehouse_arch.png)
+![](assets/taobao_practice/realtime_data_warehouse_arch.png)
 
 
 Taobao provides the following capabilities:
 
-- **AB Data Public Data Warehouse:** Serves various data applications of downstream algorithms, including: `online traffic splitting`, `distribution alignment`, `general features`, `scenario labels`, and other application scenarios.
+- **A/B Data Public Data Warehouse:** Serves various data applications of downstream algorithms, including: `online traffic splitting`, `distribution alignment`, `general features`, `scenario labels`, and other application scenarios.
 
-- **Scientific Experiment Evaluation:** Implement mature scientific evaluation solutions in the industry, conduct long-term tracking of the effects of AB tests, and help businesses obtain real and reliable experimental evaluation results.
+- **Scientific Experiment Evaluation:** Implement mature scientific evaluation solutions in the industry, conduct long-term tracking of the effects of A/B testing, and help businesses obtain real and reliable experimental evaluation results.
 
 - **Multidimensional Ad Hoc OLAP Self-Service Analysis:** Through mature data solutions, it supports multidimensional and ad hoc OLAP queries, serving data effectiveness analysis across all clients, businesses, and scenarios.
 
@@ -43,7 +43,7 @@ Taobao provides the following capabilities:
 Currently, the real-time data warehouse of Taobao is based on technology stacks such as Flink, message queue, OLAP engine, etc., where the message queue is TT (Kafka-like architecture MQ) within Taobao, and the OLAP engine is Alibaba Cloud Hologres.
 
 
-![](assets/taotian_practice/origin_data_pipeline.png)
+![](assets/taobao_practice/origin_data_pipeline.png)
 
 
 After ingesting access log data from the message queue, we execute business logic within Apache Flink. 
@@ -68,7 +68,7 @@ To mitigate this, we explored column pruning within **Apache Flink** by explicit
 While this approach aimed to reduce data ingestion costs, its **practical impact was minimal**.
 The performance gains were negligible, and the added complexity in pipeline design and maintenance introduced new operational challenges.
 
-![](assets/taotian_practice/column_pruning_operator.png)
+![](assets/taobao_practice/column_pruning_operator.png)
 
 ### Challenges In Data Profiling & Debugging 
 
@@ -84,7 +84,7 @@ While each method offers unique benefits, **both exhibit trade-offs and limitati
 | Synchronize additional storage query | Synchronize the data in the message queue to additional storage and then perform queries. | Can query specified data  | 1. Additional synchronization, storage, and query resources. 2. Has a synchronization delay |
 
 
-![](assets/taotian_practice/mq_profiling.png)
+![](assets/taobao_practice/mq_profiling.png)
 
 
 #### Challenges with State Visibility in Flink
@@ -96,14 +96,14 @@ However, Flink’s managed state is inherently opaque;it functions as a high-per
 
 As a result, teams may encounter **increased operational overhead** and **longer development cycles**, particularly when dealing with stateful streaming jobs that require precise control over historical data.
 
-![](assets/taotian_practice/flink_sorting_job.png)
+![](assets/taobao_practice/flink_sorting_job.png)
 
 
 ### Operational Challenges of Large Flink State in Stateful Jobs
 
 In many Flink jobs, maintaining intermediate result sets in state is essential to support operations such as sorting and joining. When modifying a job, Flink attempts to reuse the previous state by validating the updated execution plan against the existing state schema. If the plan verification succeeds, the job can resume from the latest checkpoint. However, if the verification fails, the system is forced to **reinitialize the entire state from scratch (epoch 0)**, a process that is both **time-consuming** and **operationally intensive**.
 
-![](assets/taotian_practice/transaction_attribution_state.png)
+![](assets/taobao_practice/transaction_attribution_state.png)
 
 
 In our current scenario, each incoming record triggers updates to both Sort State and Join State. These states have grown significantly in size, with the sort operator's state reaching up to **90 TB** and the join operator's state peaking at **10 TB**. Managing such large-scale state introduces a number of serious challenges:
@@ -116,7 +116,7 @@ In our current scenario, each incoming record triggers updates to both Sort Stat
 This highlights the need for **more efficient state management strategies**, such as state compaction, state TTLs, or alternative storage architectures, to support large-scale, high-throughput streaming workloads with minimal operational burden.
 
 
-![](assets/taotian_practice/transaction_attribution_flink_job.png)
+![](assets/taobao_practice/transaction_attribution_flink_job.png)
 
 ## Apache Fluss Key Advantages
 
@@ -128,7 +128,7 @@ This highlights the need for **more efficient state management strategies**, suc
 
 
 
-![](assets/taotian_practice/fulss_arch.png)
+![](assets/taobao_practice/fulss_arch.png)
 
 
 Fluss, developed by the Flink team, is the next-generation stream storage for stream analysis, a stream storage built for real-time analysis. Fluss innovatively integrates columnar storage format and real-time update capabilities into stream storage, and is deeply integrated with Flink to help users build a streaming data warehouse with high throughput, low latency, and low cost. It has the following core features:
@@ -143,7 +143,7 @@ Fluss, developed by the Flink team, is the next-generation stream storage for st
 
 ### Table Types
 
-![](assets/taotian_practice/fulss_underlying_arch.png)
+![](assets/taobao_practice/fulss_underlying_arch.png)
 
 
 **Type:** Divided into log tables and primary key tables. Log tables are columnar MQs that only support insert operations, while primary key tables can be updated according to the primary key and specified merge engine.
@@ -222,7 +222,7 @@ Fluss is a column-based streaming storage, with its underlying file storage adop
 A key advantage of Fluss is that column pruning is performed at the server level, and **only the necessary columns are transferred to the Client**. This architecture not only improves performance but also reduces network costs and resource consumption.
 
 
-![](assets/taotian_practice/comparison_of_row_and_column_storage_consumption.png)
+![](assets/taobao_practice/comparison_of_row_and_column_storage_consumption.png)
 
 
 #### Fluss Key-Value Storage Architecture and Benefits
@@ -232,7 +232,7 @@ One of the standout advantages of this architecture is that the **changelog** pr
 
 Fluss’s built-in KV index supports **low-latency primary key lookups**, making it ideal for operational queries, streaming joins, and dimension table enrichment. Beyond real-time ingestion and processing, Fluss also supports **ad-hoc data exploration**, with efficient execution of queries involving operations like `LIMIT` and `COUNT`. This allows users to **debug** and **inspect live data** within Fluss quickly and interactively;without requiring a separate query engine or offline process.
 
-![](assets/taotian_practice/fluss_kv_store_point_query.png)
+![](assets/taobao_practice/fluss_kv_store_point_query.png)
 
 
 #### Dual-Stream Join → Delta Join
@@ -242,7 +242,7 @@ In Flink, Dual-Stream Join is a very fundamental function, often used to build w
 Fluss has developed a brand-new Flink join operator implementation called Delta Join, which fully leverages Fluss's streaming read and Prefix Lookup capabilities. Delta Join can be simply understood as "**dual-sided driven dimension table join**". When data arrives on the left side, it performs a point query on the right table based on the Join Key; when data arrives on the right side, it performs a point query on the left table based on the Join Key. Throughout the process, it does not require state like a dimension table join, but implements semantics similar to a Dual-Stream Join, meaning that any data update on either side will trigger an update to the associated results.
 
 
-![](assets/taotian_practice/dual_stream_join2delta_join.png)
+![](assets/taobao_practice/dual_stream_join2delta_join.png)
 
 
 #### Lake-Stream Integration
@@ -250,7 +250,7 @@ Fluss has developed a brand-new Flink join operator implementation called Delta 
 In the Kappa architecture, due to differences in production pipelines, data is stored separately in streams and lakes, resulting in cost waste. At the same time, additional data services need to be defined to unify data consumption. The goal of lake-stream integration is to enable **Lakehouse data**" and **streaming data** to be stored, managed, and consumed as a unified whole, thereby avoiding data redundancy and metadata inconsistency issues.
 
 
-![](assets/taotian_practice/lake_stream_integration.png)
+![](assets/taobao_practice/lake_stream_integration.png)
 
 
 Fluss introduces **Union Reads** to fully support the unified data access layer required by **Kappa architecture** principles. This functionality enables seamless access to both real-time streaming data and historical batch data through a consistent abstraction, ensuring a **fully managed, end-to-end unified data service**.
@@ -273,7 +273,7 @@ The following takes the typical upgrade scenario of the Taobao as an example to 
 #### Evolution of Regular Jobs
 
 
-![](assets/taotian_practice/regular_jobs_evolution.png)
+![](assets/taobao_practice/regular_jobs_evolution.png)
 
 The above is the architecture before and after the job upgrade. For routine jobs such as `Source -> ETL cleaning -> Sink`, since the message queue is row-based storage, when consuming, Flink first loads the entire row of data into memory and then filters the required columns, resulting in a significant waste of Source IO. 
 
@@ -282,7 +282,7 @@ After upgrading to Fluss, due to the columnar storage at the bottom of Fluss, co
 #### Evolution of Sorting Jobs
 
 
-![](assets/taotian_practice/sorting_jobs_evolution.png)
+![](assets/taobao_practice/sorting_jobs_evolution.png)
 
 
 In Flink, the implementation of sorting relies on Flink explicitly computing and using State to store the intermediate state of data. This model incurs significant business overhead and extremely low business reusability. The introduction of Fluss pushes this computation and storage down to the Sink side, and in conjunction with the Fluss Merge Engine, implements different deduplication methods for KV tables. Currently, it supports **FirstRow Merge Engine** (the first row) and **Versioned Merge Engine** (the latest row). The Changelog generated during deduplication can be directly read by Flink streams, saving a large amount of computing resources and enabling the rapid reuse and implementation of data services.
@@ -290,7 +290,7 @@ In Flink, the implementation of sorting relies on Flink explicitly computing and
 #### Evolution of Dual-Stream Join Jobs
 
 
-![](assets/taotian_practice/dual_stream_jobs_evolution.png)
+![](assets/taobao_practice/dual_stream_jobs_evolution.png)
 
 
 After the Fluss remodeling, the Dual-Stream Join of the Taobao transaction attributed job has been enhanced with the following upgrade points:
@@ -311,7 +311,7 @@ A comprehensive comparison between traditional Dual-Stream Join and the new Flus
 
 
 
-![](assets/taotian_practice/lake_jobs_evolution.png)
+![](assets/taobao_practice/lake_jobs_evolution.png)
 
 
 Under the Fluss lake-stream integrated architecture, Fluss provides a **fully managed** unified data service. Fluss and Paimon store stream and lake data respectively, output a Catalog to the computing engine (such as Flink), and the data is output externally in the form of a unified table. Consumers can directly access the data in Fluss and lake storage in the form of Union Read.
@@ -323,12 +323,12 @@ Under the Fluss lake-stream integrated architecture, Fluss provides a **fully ma
 In the job of consuming message queues, consumers typically only consume a portion of the data, but Flink jobs still need to read data from all columns, resulting in significant waste in Flink Source IO. Fundamentally, existing message queues are all row-based storage, and for scenarios that need to process large-scale data, the efficiency of row-based storage format appears insufficient. The underlying storage needs to have powerful Data Skipping capabilities and support features such as column pruning. In this case, Fluss with columnar storage is clearly more suitable.
 
 
-![](assets/taotian_practice/fluss_column_pruning_evolution.png)
+![](assets/taobao_practice/fluss_column_pruning_evolution.png)
 
 
 In our real-time data warehouse, 70% of jobs only consume partial columns of Source. Taking the Taobao recommendation clicks job as an example, out of the 43 fields in Source, we only need 13. Additional operator resources are required to trim the entire row of data, wasting more than 20% of IO resources. After using Fluss, it directly consumes the required columns, avoiding additional IO waste and reducing the additional resources brought by Flink column pruning operators. To date, multiple core jobs in the Taobao Search and Recommendation domain have already launched Fluss and have been verified during the Taobao 618 promotion.
 
-![](assets/taotian_practice/comparison_of_fluss_and_mq_column_pruning.png)
+![](assets/taobao_practice/comparison_of_fluss_and_mq_column_pruning.png)
 
 
 #### Real-time Data Profiling
@@ -338,13 +338,13 @@ In our real-time data warehouse, 70% of jobs only consume partial columns of Sou
 Whether troubleshooting issues or conducting data exploration, data queries are necessary. However, the message queue only supports sampling queries in the interface and queries of synchronized data in additional storage. In sampling queries, it is not possible to query specified data; only a batch of output can be retrieved for display and inspection. Using the method of synchronizing additional storage, on the other hand, incurs minute-level latency as well as additional storage and computational costs.
 
 
-![](assets/taotian_practice/comparison_of_fulss_and_mq_data_profiling.png)
+![](assets/taobao_practice/comparison_of_fulss_and_mq_data_profiling.png)
 
 
 In Fluss KV Table, a KV index is built, so it can support high-performance primary key point queries, directly probe Fluss data through point query statements, and also support query functions such as LIMIT and COUNT to meet daily Data Profiling requirements. An example is as follows:
 
 
-![](assets/taotian_practice/fluss_query_example1.png)
+![](assets/taobao_practice/fluss_query_example1.png)
 
 
 **Flink State Query**
@@ -352,13 +352,13 @@ In Fluss KV Table, a KV index is built, so it can support high-performance prima
 Flink's State mechanism (such as KeyedState or OperatorState) provides efficient state management capabilities, but its internal implementation is a "Black box" to developers. Developers cannot directly query, analyze, or debug the data in State, resulting in a strong coupling between business logic and state management, making it difficult to dynamically adjust or expand. When data anomalies occur, developers can only infer the content in State from the result data, unable to directly access the specific data in State, leading to high costs for troubleshooting.
 
 
-![](assets/taotian_practice/flink_state_evolution.png)
+![](assets/taobao_practice/flink_state_evolution.png)
 
 
 We externalize Flink State into Fluss, such as states for duak-stream join, data deduplication, etc. Based on Fluss's KV index, we provide State exploration capabilities, white-box the internal data of State, and efficiently locate issues.
 
 
-![](assets/taotian_practice/fluss_query_example2.png)
+![](assets/taobao_practice/fluss_query_example2.png)
 
 
 #### Merge Engine & Delta Join
@@ -366,7 +366,7 @@ We externalize Flink State into Fluss, such as states for duak-stream join, data
 In the current real-time data warehouse, the transaction attribution task is a job that heavily relies on State, with State **reaching up to 100TB** , which includes operations such as sorting and Dual-Stream Join. After consuming TT data, we first perform data sorting and then conduct a Dual-Stream Join to attribute order data.
 
 
-![](assets/taotian_practice/transaction_attribution_state_size.png)
+![](assets/taobao_practice/transaction_attribution_state_size.png)
 
 
 As shown in the figure, in the first attribution logic implementation of the attribution job, the State of the sorting operator is as high as **90TB** , and that of the Dual-Stream Join operator is **10TB** . Large State jobs bring many problems, including high costs, job instability, long CP time, etc.
@@ -375,7 +375,7 @@ As shown in the figure, in the first attribution logic implementation of the att
 **Sorting optimization, Merge Engine**
 
 
-![](assets/taotian_practice/fluss_sort_tunning.png)
+![](assets/taobao_practice/fluss_sort_tunning.png)
 
 
 In the implementation of the Merge Engine, it mainly relies on Fluss's KV table. The Changelog generated by KV can be read by Flink streams without additional deduplication operations, saving Flink's computing resources and achieving business reuse of data. Through Fluss's KV table, the sorting logic in our jobs is implemented, and there is no longer a need to maintain the state of the sorting operator in the jobs.
@@ -384,7 +384,7 @@ In the implementation of the Merge Engine, it mainly relies on Fluss's KV table.
 **Join Optimization, Dual Sides Driving**
 
 
-![](assets/taotian_practice/comparison_of_dual_stream_join_and_delta_join.png)
+![](assets/taobao_practice/comparison_of_dual_stream_join_and_delta_join.png)
 
 
 The jobs of Delta Join are as described above. The original job, after consuming data, sorts it according to business requirements, performs Dual-Stream Join after sorting, and saves the state for 24 hours. This results in issues such as long CP time, poor job maintainability, and the need to rerun when modifying the job state. In Fluss, data sorting is completed through the Merge Engine of the KV table, and through Delta Join, the job and state are decoupled, eliminating the need to rerun the state when modifying the job, making the state data queryable, and improving flexibility.
@@ -447,13 +447,13 @@ Some operations are shown in the above code. After migrating from the Dual-Strea
 In addition to resource reduction and performance improvement, there is also an enhancement in flexibility for our benefits. The state of traditional stream-to-stream connections is tightly coupled with Flink jobs, like an opaque "black box". When the job is modified, it is found that the historical resource plan is incompatible with the current job, and the State can only be rerun from scratch, which is time-consuming and labor-intensive. After using Delta Join, it is equivalent to decoupling the state from the job, so modifying the job does not require rerunning the State. Moreover, all data is stored in Fluss, making it queryable and analyzable, thus improving business flexibility and development efficiency.
 
 
-![](assets/taotian_practice/fluss_historical_data_consumption.png)
+![](assets/taobao_practice/fluss_historical_data_consumption.png)
 
 
 Meanwhile, Fluss maintains a Tiering Service to synchronize Fluss data to Paimon, with the latest data stored in Fluss and historical data in Paimon. Flink can support Union Read, which combines the data in Fluss and Paimon to achieve second-level freshness analysis.
 
 
-![](assets/taotian_practice/join_jobs_evolution.png)
+![](assets/taobao_practice/join_jobs_evolution.png)
 
 
 In addition, Data Join also addresses the scenario of backtracking data. In the case of Dual-Stream Join, if a job modification causes the Operating Plan verification to fail, only data backfilling can be performed. During the Fluss backtracking process, the Paimon table archived by the unified lake-stream architecture combined with Flink Batch Join can be used to accelerate data backfilling.
@@ -463,7 +463,7 @@ In addition, Data Join also addresses the scenario of backtracking data. In the 
 Fluss provides high compatibility with Data lake warehouses. Through the underlying service, it automatically converts Fluss data into Paimon format data, enabling real-time data to be ingested into the lake with a single click, while ensuring consistent data partitioning and bucketing on both the lake and stream sides.
 
 
-![](assets/taotian_practice/lake_stream_evolution.png)
+![](assets/taobao_practice/lake_stream_evolution.png)
 
 
 After having **lake** and **stream** two levels of data, Fluss has the key characteristic of sharing data. Paimon stores long-period, minute-level latency data; Fluss stores short-period, millisecond-level latency data, and the data of both can be shared with each other.
@@ -480,9 +480,9 @@ After a period of in-depth research, comprehensive testing, and smooth launch of
 
 We tested the read-write and column pruning capabilities of Fluss. Among them, in terms of read-write performance, we conducted tests with the same traffic. While maintaining the input **RPS at 800 w/s** and the output **RPS at 44 w/s** , we compared the actual CPU and Memory usage of Flink jobs. The details are as follows:
 
-![](assets/taotian_practice/performance_write.png)
+![](assets/taobao_practice/performance_write.png)
 
-![](assets/taotian_practice/performance_read.png)
+![](assets/taobao_practice/performance_read.png)
 
 
 #### Column Pruning Performance
@@ -490,9 +490,9 @@ We tested the read-write and column pruning capabilities of Fluss. Among them, i
 Regarding column pruning capabilities, we also tested TT, Fluss, and different numbers of columns in Fluss to explore the consumption of CPU, Memory, and IO. With the input **RPS maintained at 25 w/s**, the specific test results are as follows:
 
 
-![](assets/taotian_practice/performance_column_pruning2.png)
+![](assets/taobao_practice/performance_column_pruning2.png)
 
-![](assets/taotian_practice/performance_column_pruning1.png)
+![](assets/taobao_practice/performance_column_pruning1.png)
 
 
 At this point, we will find a problem: as the number of columns decreases (a total of 13 columns out of 43 columns are consumed), IO does not show a linear decrease. After verification, the storage of each column in the source is not evenly distributed, and the storage of some required columns **accounts for 72%** . It can be seen that the input IO traffic **decreases by 20%** , which is consistent with the expected proportion of the storage of the read columns.
@@ -502,9 +502,9 @@ At this point, we will find a problem: as the number of columns decreases (a tot
 We also tested and compared the resources and performance of the above **Dual-Stream Join and Fluss Delta Join** , and under the condition of maintaining the **input RPS of the left table at 68,000/s** and the **input RPS of the right table at 1,700/s** , all jobs ran for 24 hours.
 
 
-![](assets/taotian_practice/performance_delta1.png)
+![](assets/taobao_practice/performance_delta1.png)
 
-![](assets/taotian_practice/performance_delta2.png)
+![](assets/taobao_practice/performance_delta2.png)
 
 
 After actual testing, after migrating from the Dual-Stream Join to Merge Engine + Delta Join, it successfully **reduced 95TB** of large state, making the job run more stably and significantly shortening the CP time. Meanwhile, the actual usage of CPU and Memory also **decreased by more than 80%** .
@@ -514,9 +514,9 @@ After actual testing, after migrating from the Dual-Stream Join to Merge Engine 
 Since Delta Join **does not need to maintain state** , it can use batch mode **Batch Join** to catch up. After catching up, it switches back to stream mode Delta Join. During this process, a small amount of data will be reprocessed, and the end-to-end consistency is ensured through the idempotence update mechanism of the result table. We **performed a test comparison on the data catch-up of the above** Dual-Stream Join and Batch Join **for one day (24H).**
 
 
-![](assets/taotian_practice/performance_data_backtracking1.png)
+![](assets/taobao_practice/performance_data_backtracking1.png)
 
-![](assets/taotian_practice/performance_data_backtracking2.png)
+![](assets/taobao_practice/performance_data_backtracking2.png)
 
 
 After actual testing, the batch mode Batch Join backtracking for one day (24H) takes **70%+ less time** compared to the Dual-Stream Join backtracking.
@@ -525,7 +525,7 @@ After actual testing, the batch mode Batch Join backtracking for one day (24H) t
 
 Fluss has core features such as columnar pruning, streaming updates, real-time point queries, and lake-stream integration. At the same time, it innovatively integrates columnar storage format and real-time update capabilities into stream storage, and deeply integrates with Flink and Paimon to build a lake warehouse with high throughput, low latency, and low cost. Just as the original intention of Fluss: **Real-time stream storage for analytics.**
 
-After nearly three months of exploration, Fluss has been implemented in **Taobao's core search and recommendation scenarios** , built a unified lake-stream AB data warehouse, and continuously served internal business through Taobao's AB Experiment Platform. In practical applications, the following results have been achieved:
+After nearly three months of exploration, Fluss has been implemented in **Taobao's core search and recommendation scenarios** , built a unified lake-stream A/B data warehouse, and continuously served internal business through Taobao's A/B Experiment Platform. In practical applications, the following results have been achieved:
 
 - **Scenarios are widely implemented:** covering core Taobao business such as search and recommendation, and successfully passing the test of Taobao's 618 Grand Promotion **,** with peak traffic reaching tens of millions and average latency **within 1 second** .
 
@@ -538,7 +538,7 @@ After nearly three months of exploration, Fluss has been implemented in **Taobao
 
 ## Planning
 
-![](assets/taotian_practice/future_plans.png)
+![](assets/taobao_practice/future_plans.png)
 
 
 In the upcoming work, we will develop a new generation of lakehouse data architecture and continue to explore in Data & AI scenarios.
