@@ -110,8 +110,8 @@ For this tutorial, we'll use **Fluss 0.7** and **Flink 1.20** to run the tiering
    - Copy these Paimon plugin jars from Fluss into `<FLINK_HOME>/lib`:
 
    ```
-   <FLUSS_HOME>/plugins/paimon/fluss-lake-paimon-0.7.0.jar
-   <FLUSS_HOME>/plugins/paimon/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
+   <FLINK_HOME>/lib/fluss-lake-paimon-0.7.0.jar
+   <FLINK_HOME>/lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
    ```
 
 4. Increase Task Slots
