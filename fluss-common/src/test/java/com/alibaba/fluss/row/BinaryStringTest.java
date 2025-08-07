@@ -24,6 +24,10 @@ import com.alibaba.fluss.testutils.junit.parameterized.Parameters;
 import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -144,6 +148,30 @@ public class BinaryStringTest {
         assertThat(fromBytes(new byte[0])).isEqualTo(empty);
         assertThat(empty.numChars()).isEqualTo(0);
         assertThat(empty.getSizeInBytes()).isEqualTo(0);
+    }
+
+    @TestTemplate
+    public void testJavaSerialization() throws Exception {
+        String str = "hello world";
+        BinaryString bs = fromString(str);
+        byte[] data;
+
+        // serialization: object -> bytes
+        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                ObjectOutputStream oos = new ObjectOutputStream(bos)) {
+
+            oos.writeObject(bs);
+            data = bos.toByteArray();
+        }
+
+        // deserialization：bytes -> object
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(data);
+                ObjectInputStream ois = new ObjectInputStream(bis)) {
+            BinaryString deserializedString = (BinaryString) ois.readObject();
+
+            assertThat(deserializedString).isEqualTo(bs);
+            assertThat(deserializedString.toString()).isEqualTo(str);
+        }
     }
 
     @TestTemplate

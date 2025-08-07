@@ -87,15 +87,21 @@ abstract class BinarySection implements MemoryAwareGetters, Serializable {
         }
     }
 
+    /**
+     * Support Java Serialization by customize writeObject and readObject methods, because {@link
+     * MemorySegment} doesn't support Java Serialization.
+     */
     private void writeObject(ObjectOutputStream out) throws IOException {
-        out.defaultWriteObject();
         byte[] bytes = toBytes();
         out.writeInt(bytes.length);
         out.write(bytes);
     }
 
+    /**
+     * Support Java Serialization by customize writeObject and readObject methods, because {@link
+     * MemorySegment} doesn't support Java Serialization.
+     */
     private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
-        in.defaultReadObject();
         byte[] bytes = new byte[in.readInt()];
         IOUtils.readFully(in, bytes);
         pointTo(MemorySegment.wrap(bytes), 0, bytes.length);
