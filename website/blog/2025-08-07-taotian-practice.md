@@ -1,17 +1,17 @@
 ---
-slug: taotian-practice
-title: "The Implementation Practice Of Fluss On Taotian AB Test Analysis Platform"
-sidebar_label: "The Implementation Practice Of Fluss On Taotian"
+slug: taobao-practice
+title: "The Implementation Practice Of Fluss On Taobao AB Test Analysis Platform"
+sidebar_label: "The Implementation Practice Of Fluss On Taobao"
 authors: [zhangxinyu, wanglilei]
 ---
 
 ## Streaming Storage More Suitable for Real-Time OLAP
 ### Introduction
-The Data Development Team of Taotian Group has built a new **generation of real-time data warehouse** based on Apache Fluss.
+The Data Development Team of Taobao has built a new **generation of real-time data warehouse** based on Apache Fluss.
 Fluss solves the problems of redundant data transfer, difficulties in data profiling, and challenges in large scale stateful workload operations and maintenance.
 By combining columnar storage with real-time update capabilities, Fluss supports column pruning, key-value point lookups, Delta Join, and seamless lake–stream integration, thereby **cutting I/O and compute overhead** while enhancing job stability and profiling efficiency.
 
-Already deployed on Taotian’s A/B-testing platform for critical services such as search and recommendation, the system proved its resilience during the 618 Grand Promotion: 
+Already deployed on Taobao’s A/B-testing platform for critical services such as search and recommendation, the system proved its resilience during the 618 Grand Promotion: 
 **it handled tens of millions of requests with sub-second latency**, lowered resource usage by **30%**, and removed more than 100 TB from state storage. 
 Looking ahead, the team will continue to extend Fluss within a **Lakehouse architecture** and broaden its use across **AI-driven** workloads.
 <!-- truncate -->
@@ -21,15 +21,15 @@ Looking ahead, the team will continue to extend Fluss within a **Lakehouse archi
 
 ![](assets/taotian_practice/ab_experiment_platform_arch.png)
 
-Taotian AB Test Analysis Platform (hereinafter collectively referred to as the Babel Tower) mainly focuses on AB data of Taotian's C-end algorithms, aiming to promote scientific decision-making activities through the construction of generalized AB data capabilities. 
-Since its inception in **2015** , it has continuously and effectively supported the analysis of Taotian's algorithm AB data for **10 years** . 
+Taobao AB Test Analysis Platform, mainly focuses on AB data of Taobao's C-end algorithms, aiming to promote scientific decision-making activities through the construction of generalized AB data capabilities. 
+Since its inception in **2015** , it has continuously and effectively supported the analysis of Taobao's algorithm AB data for **10 years** . 
 Currently, it is applied to **over 100** A/B testing scenarios across various business areas, including **search, recommendation, content,** **user growth**, and **marketing**.
 
 
 ![](assets/taotian_practice/realtime_data_warehouse_arch.png)
 
 
-The Babel Tower provides the following capabilities:
+Taobao provides the following capabilities:
 
 - **AB Data Public Data Warehouse:** Serves various data applications of downstream algorithms, including: `online traffic splitting`, `distribution alignment`, `general features`, `scenario labels`, and other application scenarios.
 
@@ -40,7 +40,7 @@ The Babel Tower provides the following capabilities:
 
 ## Business Pain Points
 
-Currently, the real-time data warehouse of the Babel Tower is based on technology stacks such as Flink, message queue, OLAP engine, etc., where the message queue is TT (Kafka-like architecture MQ) within the Taotian group, and the OLAP engine is Alibaba Cloud Hologres.
+Currently, the real-time data warehouse of Taobao is based on technology stacks such as Flink, message queue, OLAP engine, etc., where the message queue is TT (Kafka-like architecture MQ) within Taobao, and the OLAP engine is Alibaba Cloud Hologres.
 
 
 ![](assets/taotian_practice/origin_data_pipeline.png)
@@ -56,7 +56,7 @@ Currently, the message queue still has some limitations, and the main problems e
 
 ### Redundant Data Transfer
 In traditional data warehouse environments, **write-once**, **read-many** is the prevailing access pattern, where each downstream consumer typically reads only a subset of the available data. 
-For example, in the exposure job for Babel Tower, the message queue provides 44 fields per record, yet the job only requires 13 of them. 
+For example, in the exposure job for Taobao, the message queue provides 44 fields per record, yet the job only requires 13 of them. 
 However, due to the row-based nature of the message queue storage format, all 44 fields must still be read and transmitted during consumption.
 
 This results in significant **I/O inefficiency; approximately 70% of the network throughput** is wasted on reading unused columns. 
@@ -268,7 +268,7 @@ Together, these capabilities enable Fluss to function as a **next-generation str
 
 Fluss innovatively integrates columnar storage format and real-time update capabilities into stream storage and deeply integrates with Flink. Based on Fluss's core capabilities, we further enhance the real-time architecture, building a high-throughput, low-latency, and low-cost lakehouse through Fluss. 
 
-The following takes the typical upgrade scenario of the Babel Tower as an example to introduce the implementation practice of Fluss.
+The following takes the typical upgrade scenario of the Taobao as an example to introduce the implementation practice of Fluss.
 
 #### Evolution of Regular Jobs
 
@@ -293,7 +293,7 @@ In Flink, the implementation of sorting relies on Flink explicitly computing and
 ![](assets/taotian_practice/dual_stream_jobs_evolution.png)
 
 
-After the Fluss remodeling, the Dual-Stream Join of the Babel Tower transaction attributed job has been enhanced with the following upgrade points:
+After the Fluss remodeling, the Dual-Stream Join of the Taobao transaction attributed job has been enhanced with the following upgrade points:
 * **Column pruning** is truly pre-positioned to Source consumption, avoiding IO consumption of useless columns. 
 * **Introduce Fluss KV table & Merge Engines** to implement data sorting and eliminate the dependency on Flink sorting State.
 * **Refactor the Dual-Stream Join into FlussDeltaJoin**, using stream reading and index point query, and externalize the Flink Dual-Stream JoinState. 
@@ -326,7 +326,7 @@ In the job of consuming message queues, consumers typically only consume a porti
 ![](assets/taotian_practice/fluss_column_pruning_evolution.png)
 
 
-In our real-time data warehouse, 70% of jobs only consume partial columns of Source. Taking the Babel Tower recommendation clicks job as an example, out of the 43 fields in Source, we only need 13. Additional operator resources are required to trim the entire row of data, wasting more than 20% of IO resources. After using Fluss, it directly consumes the required columns, avoiding additional IO waste and reducing the additional resources brought by Flink column pruning operators. To date, multiple core jobs in the Taotian Search and Recommendation domain have already launched Fluss and have been verified during the Taotian 618 promotion.
+In our real-time data warehouse, 70% of jobs only consume partial columns of Source. Taking the Taobao recommendation clicks job as an example, out of the 43 fields in Source, we only need 13. Additional operator resources are required to trim the entire row of data, wasting more than 20% of IO resources. After using Fluss, it directly consumes the required columns, avoiding additional IO waste and reducing the additional resources brought by Flink column pruning operators. To date, multiple core jobs in the Taobao Search and Recommendation domain have already launched Fluss and have been verified during the Taobao 618 promotion.
 
 ![](assets/taotian_practice/comparison_of_fluss_and_mq_column_pruning.png)
 
@@ -525,9 +525,9 @@ After actual testing, the batch mode Batch Join backtracking for one day (24H) t
 
 Fluss has core features such as columnar pruning, streaming updates, real-time point queries, and lake-stream integration. At the same time, it innovatively integrates columnar storage format and real-time update capabilities into stream storage, and deeply integrates with Flink and Paimon to build a lake warehouse with high throughput, low latency, and low cost. Just as the original intention of Fluss: **Real-time stream storage for analytics.**
 
-After nearly three months of exploration, Fluss has been implemented in **Taotian's core search and recommendation scenarios** , built a unified lake-stream AB data warehouse, and continuously served internal business through Taobao's AB Experiment Platform (The Babel Tower). In practical applications, the following results have been achieved:
+After nearly three months of exploration, Fluss has been implemented in **Taobao's core search and recommendation scenarios** , built a unified lake-stream AB data warehouse, and continuously served internal business through Taobao's AB Experiment Platform. In practical applications, the following results have been achieved:
 
-- **Scenarios are widely implemented:** covering core Taotian business such as search and recommendation, and successfully passing the test of Taotian's 618 Grand Promotion **,** with peak traffic reaching tens of millions and average latency **within 1 second** .
+- **Scenarios are widely implemented:** covering core Taobao business such as search and recommendation, and successfully passing the test of Taobao's 618 Grand Promotion **,** with peak traffic reaching tens of millions and average latency **within 1 second** .
 
 - **Column Pruning Resource Optimization** : The column pruning feature has been implemented in all Fluss real-time jobs. When the consumption of columnar storage accounts for 75% of the source data, the average IO **is reduced by 25%** , and the average job resource consumption **is reduced by 30%** .
 
