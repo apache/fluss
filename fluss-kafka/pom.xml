@@ -41,7 +41,7 @@
         </dependency>
 
         <dependency>
-            <groupId>${project.groupId}</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-shaded-netty</artifactId>
         </dependency>
 
