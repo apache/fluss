@@ -36,6 +36,7 @@
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-shaded-guava</artifactId>
+            <version>${guava.version}</version>
         </dependency>
 
         <dependency>
