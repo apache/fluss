@@ -21,7 +21,9 @@ import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lake.lakestorage.LakeStorage;
 import com.alibaba.fluss.lake.lance.tiering.LanceCommittable;
 import com.alibaba.fluss.lake.lance.tiering.LanceWriteResult;
+import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
+import com.alibaba.fluss.metadata.TablePath;
 
 /** Lance implementation of {@link LakeStorage}. */
 public class LanceLakeStorage implements LakeStorage {
@@ -39,5 +41,10 @@ public class LanceLakeStorage implements LakeStorage {
     @Override
     public LanceLakeCatalog createLakeCatalog() {
         return new LanceLakeCatalog(config);
+    }
+
+    @Override
+    public LakeSource<?> createLakeSource(TablePath tablePath) {
+        throw new UnsupportedOperationException("Not implemented");
     }
 }

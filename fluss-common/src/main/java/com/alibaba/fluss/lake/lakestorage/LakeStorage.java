@@ -18,7 +18,9 @@
 package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
+import com.alibaba.fluss.metadata.TablePath;
 
 /**
  * The LakeStorage interface defines how to implement lakehouse storage system such as Paimon and
@@ -38,4 +40,14 @@ public interface LakeStorage {
 
     /** Create lake catalog. */
     LakeCatalog createLakeCatalog();
+
+    /**
+     * Creates a lake source instance for reading lakehouse data from the specified table path. The
+     * lake source provides capabilities for split planning and record reading, enabling efficient
+     * distributed processing of lakehouse data.
+     *
+     * @param tablePath the logical path identifying the table in the lakehouse storage
+     * @return a configured lake source instance for the specified table
+     */
+    LakeSource<?> createLakeSource(TablePath tablePath);
 }

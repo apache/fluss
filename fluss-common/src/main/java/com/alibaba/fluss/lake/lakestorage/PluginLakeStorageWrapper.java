@@ -19,6 +19,7 @@ package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
+import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -115,6 +116,11 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 return new ClassLoaderFixingLakeCatalog(inner.createLakeCatalog(), loader);
             }
+        }
+
+        @Override
+        public LakeSource<?> createLakeSource(TablePath tablePath) {
+            return inner.createLakeSource(tablePath);
         }
     }
 }
