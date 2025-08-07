@@ -34,7 +34,7 @@
     <dependencies>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-shaded-guava</artifactId>
         </dependency>
 
