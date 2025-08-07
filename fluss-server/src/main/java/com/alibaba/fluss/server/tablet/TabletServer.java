@@ -177,6 +177,7 @@ public class TabletServer extends ServerBase {
                     ServerMetricUtils.createTabletServerGroup(
                             metricRegistry,
                             ServerMetricUtils.validateAndGetClusterId(conf),
+                            rack,
                             endpoints.get(0).getHost(),
                             serverId);
 

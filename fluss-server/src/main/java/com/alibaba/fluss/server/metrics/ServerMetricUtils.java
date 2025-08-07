@@ -31,6 +31,7 @@ import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.management.AttributeNotFoundException;
 import javax.management.InstanceNotFoundException;
 import javax.management.MBeanException;
@@ -79,9 +80,13 @@ public class ServerMetricUtils {
     }
 
     public static TabletServerMetricGroup createTabletServerGroup(
-            MetricRegistry registry, String clusterId, String hostname, int serverId) {
+            MetricRegistry registry,
+            String clusterId,
+            @Nullable String rack,
+            String hostname,
+            int serverId) {
         TabletServerMetricGroup tabletServerMetricGroup =
-                new TabletServerMetricGroup(registry, clusterId, hostname, serverId);
+                new TabletServerMetricGroup(registry, clusterId, rack, hostname, serverId);
         createAndInitializeStatusMetricGroup(tabletServerMetricGroup);
         return tabletServerMetricGroup;
     }

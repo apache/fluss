@@ -25,7 +25,7 @@ import com.alibaba.fluss.metrics.registry.NOPMetricRegistry;
 public class TestingMetricGroups {
 
     public static final TabletServerMetricGroup TABLET_SERVER_METRICS =
-            new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "host", 0);
+            new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "fluss", "host", "rack", 0);
 
     public static final CoordinatorMetricGroup COORDINATOR_METRICS =
             new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
