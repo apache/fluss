@@ -22,7 +22,11 @@ import com.alibaba.fluss.client.metadata.KvSnapshotMetadata;
 import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.cluster.maintencance.GoalType;
+import com.alibaba.fluss.cluster.maintencance.RebalancePlanForBucket;
+import com.alibaba.fluss.cluster.maintencance.ServerTag;
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -31,10 +35,15 @@ import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.InvalidReplicationFactorException;
 import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.exception.KvSnapshotNotExistException;
+import com.alibaba.fluss.exception.NoRebalanceInProgressException;
 import com.alibaba.fluss.exception.NonPrimaryKeyTableException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
+import com.alibaba.fluss.exception.RebalanceFailureException;
 import com.alibaba.fluss.exception.SchemaNotExistException;
+import com.alibaba.fluss.exception.ServerNotExistException;
+import com.alibaba.fluss.exception.ServerTagAlreadyExistException;
+import com.alibaba.fluss.exception.ServerTagNotExistException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
@@ -52,9 +61,11 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
+import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.CompleteFuture;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -450,4 +461,90 @@ public interface Admin extends AutoCloseable {
      * @return A CompletableFuture indicating completion of the operation.
      */
     DropAclsResult dropAcls(Collection<AclBindingFilter> filters);
+
+    /**
+     * Add server tag to the specified tabletServers, one tabletServer can only have one serverTag.
+     *
+     * <p>If one tabletServer failed adding tag, none of the tags will take effect.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
+     *       access to the cluster.
+     *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
+     *       exist.
+     *   <li>{@link ServerTagAlreadyExistException} If the server tag already exists when {@code
+     *       overWriteIfExists} is false.
+     * </ul>
+     *
+     * @param tabletServers the tabletServers we want to add server tags.
+     * @param serverTag the server tag to be added.
+     */
+    CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag);
+
+    /**
+     * Remove server tag from the specified tabletServers.
+     *
+     * <p>If one tabletServer failed removing tag, none of the tags will be removed.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
+     *       access to the cluster.
+     *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
+     *       exist.
+     *   <li>{@link ServerTagNotExistException} If the server tag does not exist when {@code
+     *       overWriteIfExists} is false.
+     * </ul>
+     *
+     * @param tabletServers the tabletServers we want to remove server tags.
+     */
+    CompletableFuture<Void> removeServerTag(List<Integer> tabletServers, ServerTag serverTag);
+
+    /**
+     * Based on the provided {@code priorityGoals}, Fluss performs load balancing on the cluster's
+     * bucket load.
+     *
+     * <p>More details, Fluss collects the cluster's load information and optimizes to perform load
+     * balancing according to the user-defined {@code priorityGoals}.
+     *
+     * <p>Currently, Fluss only supports one active rebalance task in the cluster. If an uncompleted
+     * rebalance task exists, an {@link RebalanceFailureException} will be thrown.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
+     *       access to the cluster.
+     *   <li>{@link RebalanceFailureException} If the rebalance failed. Such as there is an ongoing
+     *       execution.
+     * </ul>
+     *
+     * @param priorityGoals the goals to be optimized.
+     * @param dryRun Calculate and return the rebalance optimization proposal, but do not execute
+     *     it.
+     * @return the generated rebalance plan for all the tableBuckets which need to do rebalance.
+     */
+    CompleteFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+            List<GoalType> priorityGoals, boolean dryRun);
+
+    /**
+     * List the rebalance process.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
+     *       access to the cluster.
+     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
+     * </ul>
+     *
+     * @return the rebalance process for all the tableBuckets doing rebalance.
+     */
+    CompleteFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess();
+
+    /**
+     * Cannel the rebalance task.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
+     *       access to the cluster.
+     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
+     * </ul>
+     */
+    CompletableFuture<Void> cancelRebalance();
 }
