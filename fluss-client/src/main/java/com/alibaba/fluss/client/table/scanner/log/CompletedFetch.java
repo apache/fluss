@@ -67,6 +67,7 @@ abstract class CompletedFetch {
     private Exception cachedRecordException = null;
     private boolean corruptLastRecord = false;
     private long nextFetchOffset;
+    private long lastTimeStamp;
     private boolean isConsumed = false;
     private boolean initialized = false;
 
@@ -115,6 +116,10 @@ abstract class CompletedFetch {
 
     long nextFetchOffset() {
         return nextFetchOffset;
+    }
+
+    long lastTimeStamp() {
+        return lastTimeStamp;
     }
 
     void setInitialized() {
@@ -179,6 +184,7 @@ abstract class CompletedFetch {
                 scanRecords.add(record);
                 recordsRead++;
                 nextFetchOffset = lastRecord.logOffset() + 1;
+                lastTimeStamp = lastRecord.timestamp();
                 cachedRecordException = null;
             }
         } catch (Exception e) {

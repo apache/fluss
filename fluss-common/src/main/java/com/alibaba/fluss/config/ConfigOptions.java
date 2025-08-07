@@ -1019,6 +1019,14 @@ public class ConfigOptions {
                                     + CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
 
+    public static final ConfigOption<Duration> CLIENT_SCANNER_LOG_FETCH_MAX_ALLOWED_TIME_GAP =
+            key("client.scanner.log.fetch.max-allowed-time-gap")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(5))
+                    .withDescription(
+                            "The maximum time lag allowed between table buckets. If a table bucket's timestamp "
+                                    + "is much larger than others, pause it until other table buckets catch up.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()

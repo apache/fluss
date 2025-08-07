@@ -63,7 +63,7 @@ public interface LogScanner extends AutoCloseable {
     void subscribe(int bucket, long offset);
 
     /**
-     * Subscribe to the given table buckets from beginning dynamically. If the table bucket is
+     * Subscribe to the given table buckets from beginning dynamicallyø. If the table bucket is
      * already subscribed, the start offset will be updated.
      *
      * <p>It equals to call {@link #subscribe(int, long)} with offset {@link #EARLIEST_OFFSET} for
