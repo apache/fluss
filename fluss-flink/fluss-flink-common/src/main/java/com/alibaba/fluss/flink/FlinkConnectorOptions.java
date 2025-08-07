@@ -26,6 +26,7 @@ import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.description.InlineElement;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.apache.flink.configuration.description.TextElement.text;
@@ -131,6 +132,14 @@ public class FlinkConnectorOptions {
 
     public static final List<ConfigOption<?>> CLIENT_OPTIONS =
             FlinkConversions.toFlinkOptions(FlussConfigUtils.CLIENT_OPTIONS.values());
+
+    public static final List<ConfigOption<?>> CLIENT_SECURITY_OPTIONS =
+            FlinkConversions.toFlinkOptions(
+                    Arrays.asList(
+                            com.alibaba.fluss.config.ConfigOptions.CLIENT_SECURITY_PROTOCOL,
+                            com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM,
+                            com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_USERNAME,
+                            com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_PASSWORD));
 
     // ------------------------------------------------------------------------------------------
 
