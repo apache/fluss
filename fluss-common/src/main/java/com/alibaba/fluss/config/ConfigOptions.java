@@ -1001,6 +1001,16 @@ public class ConfigOptions {
                                     + "from client. Records are fetched in batches, the max bytes size is config by "
                                     + "this option.");
 
+    public static final ConfigOption<MemorySize>
+            CLIENT_SCANNER_REMOTE_LOG_FETCH_MAX_BYTES_FOR_BUCKET =
+                    key("client.scanner.remote-log.fetch.max-bytes-for-bucket")
+                            .memoryType()
+                            .defaultValue(LOG_SEGMENT_FILE_SIZE.defaultValue())
+                            .withDescription(
+                                    "The maximum amount of remote data the server should return for a table bucket in fetch request "
+                                            + "from client. Records are fetched in batches, the max bytes size of remote log is config by "
+                                            + "this option.");
+
     public static final ConfigOption<Duration> CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME =
             key("client.scanner.log.fetch.wait-max-time")
                     .durationType()
