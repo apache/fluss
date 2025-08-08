@@ -232,12 +232,15 @@ public class MetadataManager {
                 String.format("Delete tablet assignment meta fail for table %s.", tableId));
     }
 
-    public void completeDeletePartition(long partitionId) {
+    public void completeDeletePartition(
+            long partitionId, Runnable successCallback, Runnable failureCallback) {
         // final step for delete a partition.
         // delete partition assignments node, which will also delete the bucket state node,
         // so that all the zk nodes related to this partition are deleted.
         rethrowIfIsNotNoNodeException(
-                () -> zookeeperClient.deletePartitionAssignment(partitionId),
+                () ->
+                        zookeeperClient.deletePartitionAssignment(
+                                partitionId, successCallback, failureCallback),
                 String.format("Delete tablet assignment meta fail for partition %s.", partitionId));
     }
 
