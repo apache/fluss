@@ -62,6 +62,7 @@ public final class CoordinatorEventManager implements EventManager {
     private Histogram eventQueueTime;
 
     // Coordinator metrics moved from CoordinatorEventProcessor
+    private volatile int aliveCoordinatorServerCount;
     private volatile int tabletServerCount;
     private volatile int offlineBucketCount;
     private volatile int tableCount;
@@ -88,6 +89,8 @@ public final class CoordinatorEventManager implements EventManager {
 
         // Register coordinator metrics
         coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
+        coordinatorMetricGroup.gauge(
+                MetricNames.ALIVE_COORDINATOR_COUNT, () -> aliveCoordinatorServerCount);
         coordinatorMetricGroup.gauge(
                 MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
         coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);

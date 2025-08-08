@@ -20,78 +20,71 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.server.zk.data.ZkData;
 import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderSelector;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderSelectorListener;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
-import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
+import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatchListener;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Using by coordinator server. Coordinator servers listen ZK node and elect leadership. */
-public class CoordinatorLeaderElection {
+public class CoordinatorLeaderElection implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorLeaderElection.class);
 
-    private final CuratorFramework zkClient;
     private final int serverId;
-    private final ScheduledExecutorService executor;
+    private final LeaderLatch leaderLatch;
+    private final AtomicBoolean isLeader = new AtomicBoolean(false);
 
     public CoordinatorLeaderElection(CuratorFramework zkClient, int serverId) {
-        this(
-                zkClient,
-                serverId,
-                Executors.newSingleThreadScheduledExecutor(
-                        new ExecutorThreadFactory("fluss-coordinator-leader-election")));
-    }
-
-    protected CoordinatorLeaderElection(
-            CuratorFramework zkClient, int serverId, ScheduledExecutorService executor) {
-        this.zkClient = zkClient;
         this.serverId = serverId;
-        this.executor = executor;
+        this.leaderLatch =
+                new LeaderLatch(
+                        zkClient, ZkData.CoordinatorElectionZNode.path(), String.valueOf(serverId));
     }
 
     public void startElectLeader(Runnable initLeaderServices) {
-        executor.schedule(() -> electLeader(initLeaderServices), 0, TimeUnit.MILLISECONDS);
+        leaderLatch.addListener(
+                new LeaderLatchListener() {
+                    @Override
+                    public void isLeader() {
+                        LOG.info("Coordinator server {} has become the leader.", serverId);
+                        isLeader.set(true);
+                    }
+
+                    @Override
+                    public void notLeader() {
+                        LOG.warn("Coordinator server {} has lost the leadership.", serverId);
+                        isLeader.set(false);
+                    }
+                });
+
+        try {
+            leaderLatch.start();
+            LOG.info("Coordinator server {} started leader election.", serverId);
+
+            // todo: Currently, we await the leader latch and do nothing until it becomes leader.
+            // Later we can make it as a hot backup server to continuously synchronize metadata from
+            // Zookeeper, which save time from initializing context
+            leaderLatch.await();
+            initLeaderServices.run();
+
+        } catch (Exception e) {
+            LOG.error("Failed to start LeaderLatch for server {}", serverId, e);
+            throw new RuntimeException("Leader election start failed", e);
+        }
     }
 
-    private void electLeader(Runnable initLeaderServices) {
-        LeaderSelector leaderSelector =
-                new LeaderSelector(
-                        zkClient,
-                        ZkData.CoordinatorElectionZNode.path(),
-                        new LeaderSelectorListener() {
-                            @Override
-                            public void takeLeadership(CuratorFramework client) {
-                                LOG.info(
-                                        "Coordinator server {} win the leader in election now.",
-                                        serverId);
-                                initLeaderServices.run();
+    @Override
+    public void close() throws IOException {
+        LOG.info("Closing LeaderLatch for server {}.", serverId);
+        if (leaderLatch != null) {
+            leaderLatch.close();
+        }
+    }
 
-                                // Do not return, otherwise the leader will be released immediately.
-                                while (true) {
-                                    try {
-                                        Thread.sleep(1000);
-                                    } catch (InterruptedException e) {
-                                    }
-                                }
-                            }
-
-                            @Override
-                            public void stateChanged(
-                                    CuratorFramework client, ConnectionState newState) {
-                                if (newState == ConnectionState.LOST) {
-                                    LOG.info("Coordinator leader {} lost connection", serverId);
-                                }
-                            }
-                        });
-
-        // allow reelection
-        leaderSelector.autoRequeue();
-        leaderSelector.start();
+    public boolean isLeader() {
+        return this.isLeader.get();
     }
 }
