@@ -202,6 +202,7 @@ public class ClientRpcMessageUtils {
         long snapshotId = response.getSnapshotId();
         Map<TableBucket, Long> tableBucketsOffset =
                 new HashMap<>(response.getBucketSnapshotsCount());
+        Map<Long, String> partitionNameById = new HashMap<>();
         for (PbLakeSnapshotForBucket pbLakeSnapshotForBucket : response.getBucketSnapshotsList()) {
             Long partitionId =
                     pbLakeSnapshotForBucket.hasPartitionId()
@@ -209,9 +210,12 @@ public class ClientRpcMessageUtils {
                             : null;
             TableBucket tableBucket =
                     new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
+            if (partitionId != null && pbLakeSnapshotForBucket.hasPartitionName()) {
+                partitionNameById.put(partitionId, pbLakeSnapshotForBucket.getPartitionName());
+            }
             tableBucketsOffset.put(tableBucket, pbLakeSnapshotForBucket.getLogOffset());
         }
-        return new LakeSnapshot(snapshotId, tableBucketsOffset);
+        return new LakeSnapshot(snapshotId, tableBucketsOffset, partitionNameById);
     }
 
     public static List<FsPathAndFileName> toFsPathAndFileName(

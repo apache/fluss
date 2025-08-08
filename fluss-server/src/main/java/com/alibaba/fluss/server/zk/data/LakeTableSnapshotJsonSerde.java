@@ -43,6 +43,7 @@ public class LakeTableSnapshotJsonSerde
     private static final String BUCKET_ID = "bucket_id";
     private static final String LOG_START_OFFSET = "log_start_offset";
     private static final String LOG_END_OFFSET = "log_end_offset";
+    private static final String PARTITION_NAME = "partition_name";
 
     private static final int VERSION = 1;
 
@@ -55,11 +56,19 @@ public class LakeTableSnapshotJsonSerde
         generator.writeNumberField(TABLE_ID, lakeTableSnapshot.getTableId());
 
         generator.writeArrayFieldStart(BUCKETS);
-        for (TableBucket tableBucket : lakeTableSnapshot.getBucketLogStartOffset().keySet()) {
+        for (TableBucket tableBucket : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
             generator.writeStartObject();
 
             if (tableBucket.getPartitionId() != null) {
                 generator.writeNumberField(PARTITION_ID, tableBucket.getPartitionId());
+                // have partition name
+                String partitionName =
+                        lakeTableSnapshot
+                                .getPartitionNameIdByPartitionId()
+                                .get(tableBucket.getPartitionId());
+                if (partitionName != null) {
+                    generator.writeStringField(PARTITION_NAME, partitionName);
+                }
             }
             generator.writeNumberField(BUCKET_ID, tableBucket.getBucket());
 
@@ -91,6 +100,7 @@ public class LakeTableSnapshotJsonSerde
         Iterator<JsonNode> buckets = node.get(BUCKETS).elements();
         Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
         while (buckets.hasNext()) {
             JsonNode bucket = buckets.next();
             TableBucket tableBucket;
@@ -109,7 +119,17 @@ public class LakeTableSnapshotJsonSerde
             } else {
                 bucketLogEndOffset.put(tableBucket, null);
             }
+
+            if (partitionId != null && bucket.get(PARTITION_NAME) != null) {
+                partitionNameIdByPartitionId.put(
+                        tableBucket.getPartitionId(), bucket.get(PARTITION_NAME).asText());
+            }
         }
-        return new LakeTableSnapshot(snapshotId, tableId, bucketLogStartOffset, bucketLogEndOffset);
+        return new LakeTableSnapshot(
+                snapshotId,
+                tableId,
+                bucketLogStartOffset,
+                bucketLogEndOffset,
+                partitionNameIdByPartitionId);
     }
 }

@@ -37,15 +37,21 @@ public class LakeTableSnapshot {
     private final Map<TableBucket, Long> bucketLogStartOffset;
     private final Map<TableBucket, Long> bucketLogEndOffset;
 
+    // mapping from partition id to partition name, will be empty if the table is not partitioned
+    // table
+    private final Map<Long, String> partitionNameIdByPartitionId;
+
     public LakeTableSnapshot(
             long snapshotId,
             long tableId,
             Map<TableBucket, Long> bucketLogStartOffset,
-            Map<TableBucket, Long> bucketLogEndOffset) {
+            Map<TableBucket, Long> bucketLogEndOffset,
+            Map<Long, String> partitionNameIdByPartitionId) {
         this.snapshotId = snapshotId;
         this.tableId = tableId;
         this.bucketLogStartOffset = bucketLogStartOffset;
         this.bucketLogEndOffset = bucketLogEndOffset;
+        this.partitionNameIdByPartitionId = partitionNameIdByPartitionId;
     }
 
     public long getSnapshotId() {
@@ -80,24 +86,31 @@ public class LakeTableSnapshot {
         return bucketLogStartOffset;
     }
 
+    public Map<Long, String> getPartitionNameIdByPartitionId() {
+        return partitionNameIdByPartitionId;
+    }
+
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof LakeTableSnapshot)) {
+        if (o == null || getClass() != o.getClass()) {
             return false;
         }
         LakeTableSnapshot that = (LakeTableSnapshot) o;
         return snapshotId == that.snapshotId
                 && tableId == that.tableId
                 && Objects.equals(bucketLogStartOffset, that.bucketLogStartOffset)
-                && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset);
+                && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset)
+                && Objects.equals(partitionNameIdByPartitionId, that.partitionNameIdByPartitionId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(snapshotId, tableId, bucketLogStartOffset, bucketLogEndOffset);
+        return Objects.hash(
+                snapshotId,
+                tableId,
+                bucketLogStartOffset,
+                bucketLogEndOffset,
+                partitionNameIdByPartitionId);
     }
 
     @Override
@@ -111,6 +124,8 @@ public class LakeTableSnapshot {
                 + bucketLogStartOffset
                 + ", bucketLogEndOffset="
                 + bucketLogEndOffset
+                + ", partitionNameIdByPartitionId="
+                + partitionNameIdByPartitionId
                 + '}';
     }
 }

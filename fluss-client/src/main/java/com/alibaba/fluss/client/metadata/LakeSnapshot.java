@@ -36,9 +36,17 @@ public class LakeSnapshot {
     // the specific log offset of the snapshot
     private final Map<TableBucket, Long> tableBucketsOffset;
 
-    public LakeSnapshot(long snapshotId, Map<TableBucket, Long> tableBucketsOffset) {
+    // the partition name by partition id of this lake snapshot if
+    // is a partitioned table, empty if not a partitioned table
+    private final Map<Long, String> partitionNameById;
+
+    public LakeSnapshot(
+            long snapshotId,
+            Map<TableBucket, Long> tableBucketsOffset,
+            Map<Long, String> partitionNameById) {
         this.snapshotId = snapshotId;
         this.tableBucketsOffset = tableBucketsOffset;
+        this.partitionNameById = partitionNameById;
     }
 
     public long getSnapshotId() {
@@ -49,6 +57,10 @@ public class LakeSnapshot {
         return tableBucketsOffset;
     }
 
+    public Map<Long, String> getPartitionNameById() {
+        return partitionNameById;
+    }
+
     @Override
     public String toString() {
         return "LakeSnapshot{"
@@ -56,6 +68,8 @@ public class LakeSnapshot {
                 + snapshotId
                 + ", tableBucketsOffset="
                 + tableBucketsOffset
+                + ", partitionNameById="
+                + partitionNameById
                 + '}';
     }
 }

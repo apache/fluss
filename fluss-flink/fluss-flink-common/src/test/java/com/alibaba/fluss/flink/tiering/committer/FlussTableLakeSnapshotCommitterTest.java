@@ -20,7 +20,7 @@ package com.alibaba.fluss.flink.tiering.committer;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.flink.utils.FlinkTestBase;
 import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 
@@ -34,7 +34,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -71,14 +70,15 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
                                 ? DATA1_PARTITIONED_TABLE_DESCRIPTOR
                                 : DATA1_TABLE_DESCRIPTOR);
 
-        List<Long> partitions;
-        Map<String, Long> partitionNameAndIds = Collections.emptyMap();
+        List<String> partitions;
+        Map<String, Long> partitionNameAndIds = new HashMap<>();
+        Map<Long, String> expectedPartitionNameById = new HashMap<>();
         if (!isPartitioned) {
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
             partitions = Collections.singletonList(null);
         } else {
             partitionNameAndIds = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
-            partitions = new ArrayList<>(partitionNameAndIds.values());
+            partitions = new ArrayList<>(partitionNameAndIds.keySet());
         }
 
         CommittedLakeSnapshot committedLakeSnapshot = new CommittedLakeSnapshot(3);
@@ -86,34 +86,37 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         Map<TableBucket, Long> expectedOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
             long bucketOffset = bucket * bucket;
-            for (Long partition : partitions) {
-                if (partition == null) {
+            for (String partitionName : partitions) {
+                if (partitionName == null) {
                     committedLakeSnapshot.addBucket(bucket, bucketOffset);
                     expectedOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
                 } else {
-                    committedLakeSnapshot.addPartitionBucket(partition, bucket, bucketOffset);
-                    expectedOffsets.put(new TableBucket(tableId, partition, bucket), bucketOffset);
+                    long partitionId = partitionNameAndIds.get(partitionName);
+                    committedLakeSnapshot.addPartitionBucket(
+                            partitionId,
+                            ResolvedPartitionSpec.fromPartitionName(
+                                            Collections.singletonList("a"), partitionName)
+                                    .getPartitionQualifiedName(),
+                            bucket,
+                            bucketOffset);
+                    expectedOffsets.put(
+                            new TableBucket(tableId, partitionId, bucket), bucketOffset);
+                    expectedPartitionNameById.put(partitionId, partitionName);
                 }
             }
         }
 
-        Map<String, Long> partitionIdByName = null;
-        if (isPartitioned) {
-            partitionIdByName =
-                    admin.listPartitionInfos(tablePath).get().stream()
-                            .collect(
-                                    Collectors.toMap(
-                                            PartitionInfo::getPartitionName,
-                                            PartitionInfo::getPartitionId));
-        }
-
         // commit offsets
-        flussTableLakeSnapshotCommitter.commit(tableId, partitionIdByName, committedLakeSnapshot);
+        flussTableLakeSnapshotCommitter.commit(tableId, committedLakeSnapshot);
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(3);
 
         // get and check the offsets
         Map<TableBucket, Long> bucketLogOffsets = lakeSnapshot.getTableBucketsOffset();
         assertThat(bucketLogOffsets).isEqualTo(expectedOffsets);
+
+        // check partition name
+        Map<Long, String> partitionNameById = lakeSnapshot.getPartitionNameById();
+        assertThat(partitionNameById).isEqualTo(expectedPartitionNameById);
     }
 }

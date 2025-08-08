@@ -39,6 +39,9 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
 
     private final TableBucket tableBucket;
 
+    // null when the bucket is not for a partition
+    @Nullable private final String partitionName;
+
     // will be null when no any data write, such as for tiering a empty log split
     @Nullable private final WriteResult writeResult;
 
@@ -53,11 +56,13 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     public TableBucketWriteResult(
             TablePath tablePath,
             TableBucket tableBucket,
+            @Nullable String partitionName,
             @Nullable WriteResult writeResult,
             long logEndOffset,
             int numberOfWriteResults) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
+        this.partitionName = partitionName;
         this.writeResult = writeResult;
         this.logEndOffset = logEndOffset;
         this.numberOfWriteResults = numberOfWriteResults;
@@ -69,6 +74,11 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
 
     public TableBucket tableBucket() {
         return tableBucket;
+    }
+
+    @Nullable
+    public String partitionName() {
+        return partitionName;
     }
 
     @Nullable

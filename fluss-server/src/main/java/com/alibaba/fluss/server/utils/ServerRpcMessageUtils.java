@@ -1427,6 +1427,7 @@ public class ServerRpcMessageUtils {
             long snapshotId = pdLakeTableSnapshotInfo.getSnapshotId();
             Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
             Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+            Map<Long, String> partitionNameByPartitionId = new HashMap<>();
 
             for (PbLakeTableOffsetForBucket lakeTableOffsetForBucket :
                     pdLakeTableSnapshotInfo.getBucketsReqsList()) {
@@ -1447,11 +1448,20 @@ public class ServerRpcMessageUtils {
                                 : null;
                 bucketLogStartOffset.put(tableBucket, logStartOffset);
                 bucketLogEndOffset.put(tableBucket, logEndOffset);
+
+                if (lakeTableOffsetForBucket.hasPartitionName()) {
+                    partitionNameByPartitionId.put(
+                            partitionId, lakeTableOffsetForBucket.getPartitionName());
+                }
             }
             lakeTableInfoByTableId.put(
                     tableId,
                     new LakeTableSnapshot(
-                            snapshotId, tableId, bucketLogStartOffset, bucketLogEndOffset));
+                            snapshotId,
+                            tableId,
+                            bucketLogStartOffset,
+                            bucketLogEndOffset,
+                            partitionNameByPartitionId));
         }
         return new CommitLakeTableSnapshotData(lakeTableInfoByTableId);
     }
@@ -1517,6 +1527,13 @@ public class ServerRpcMessageUtils {
                     .setLogOffset(logEndLogOffsetEntry.getValue());
             if (tableBucket.getPartitionId() != null) {
                 pbLakeSnapshotForBucket.setPartitionId(tableBucket.getPartitionId());
+                String partitionName =
+                        lakeTableSnapshot
+                                .getPartitionNameIdByPartitionId()
+                                .get(tableBucket.getPartitionId());
+                if (partitionName != null) {
+                    pbLakeSnapshotForBucket.setPartitionName(partitionName);
+                }
             }
         }
 

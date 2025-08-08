@@ -448,6 +448,7 @@ message PbLakeTableOffsetForBucket {
   required int32 bucket_id = 2;
   optional int64 log_start_offset = 3;
   optional int64 log_end_offset = 4;
+  optional string partition_name = 5;
 }
 
 message CommitLakeTableSnapshotResponse {
@@ -773,6 +774,7 @@ message PbLakeSnapshotForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_offset = 3;
+  optional string partition_name = 4;
 }
 
 message PbRemotePathAndLocalFile {

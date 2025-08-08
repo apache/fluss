@@ -34,7 +34,12 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
     @Override
     protected LakeTableSnapshot[] createObjects() {
         LakeTableSnapshot lakeTableSnapshot1 =
-                new LakeTableSnapshot(1, 1L, Collections.emptyMap(), Collections.emptyMap());
+                new LakeTableSnapshot(
+                        1,
+                        1L,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
 
         long tableId = 4;
         Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
@@ -45,10 +50,18 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
         bucketLogEndOffset.put(new TableBucket(tableId, 2), 4L);
 
         LakeTableSnapshot lakeTableSnapshot2 =
-                new LakeTableSnapshot(2, tableId, bucketLogStartOffset, bucketLogEndOffset);
+                new LakeTableSnapshot(
+                        2,
+                        tableId,
+                        bucketLogStartOffset,
+                        bucketLogEndOffset,
+                        Collections.emptyMap());
 
         tableId = 5;
         bucketLogStartOffset = new HashMap<>();
+        Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
+        partitionNameIdByPartitionId.put(1L, "partition1");
+        partitionNameIdByPartitionId.put(2L, "partition2");
         bucketLogStartOffset.put(new TableBucket(tableId, 1L, 1), 1L);
         bucketLogStartOffset.put(new TableBucket(tableId, 2L, 1), 2L);
 
@@ -57,7 +70,12 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
         bucketLogEndOffset.put(new TableBucket(tableId, 2L, 1), 4L);
 
         LakeTableSnapshot lakeTableSnapshot3 =
-                new LakeTableSnapshot(3, tableId, bucketLogStartOffset, bucketLogEndOffset);
+                new LakeTableSnapshot(
+                        3,
+                        tableId,
+                        bucketLogStartOffset,
+                        bucketLogEndOffset,
+                        partitionNameIdByPartitionId);
 
         return new LakeTableSnapshot[] {
             lakeTableSnapshot1, lakeTableSnapshot2, lakeTableSnapshot3,
@@ -72,8 +90,8 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
                     + "\"buckets\":[{\"bucket_id\":2,\"log_start_offset\":2,\"log_end_offset\":4},"
                     + "{\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3}]}",
             "{\"version\":1,\"snapshot_id\":3,\"table_id\":5,"
-                    + "\"buckets\":[{\"partition_id\":1,\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3},"
-                    + "{\"partition_id\":2,\"bucket_id\":1,\"log_start_offset\":2,\"log_end_offset\":4}]}"
+                    + "\"buckets\":[{\"partition_id\":1,\"partition_name\":\"partition1\",\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3},"
+                    + "{\"partition_id\":2,\"partition_name\":\"partition2\",\"bucket_id\":1,\"log_start_offset\":2,\"log_end_offset\":4}]}"
         };
     }
 }

@@ -29,14 +29,15 @@ public class BucketOffsetJsonSerdeTest extends JsonSerdeTestBase<BucketOffset> {
     @Override
     protected BucketOffset[] createObjects() {
         return new BucketOffset[] {
-            new BucketOffset(10, 1, 1L, "eu-central$2023$12"), new BucketOffset(20, 2, null, null)
+            new BucketOffset(10, 1, 1L, "country=eu-central/year=2023/month=12"),
+            new BucketOffset(20, 2, null, null)
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"partition_id\":1,\"bucket_id\":1,\"partition_name\":\"eu-central$2023$12\",\"log_offset\":10}",
+            "{\"partition_id\":1,\"bucket_id\":1,\"partition_name\":\"country=eu-central/year=2023/month=12\",\"log_offset\":10}",
             "{\"bucket_id\":2,\"log_offset\":20}"
         };
     }
