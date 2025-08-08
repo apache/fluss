@@ -438,15 +438,17 @@ class FlinkCatalogTest {
 
         // Test catalog with null default database
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        Catalog catalogWithoutDefault =
-                new FlinkCatalog(
-                        "test-catalog-no-default",
-                        null, // null default database
-                        String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
-                        Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
-
-        assertThat(catalogWithoutDefault.getDefaultDatabase()).isNull();
+        assertThatThrownBy(
+                        () ->
+                                new FlinkCatalog(
+                                        "test-catalog-no-default",
+                                        null, // null default database
+                                        String.join(
+                                                ",",
+                                                flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
+                                        Thread.currentThread().getContextClassLoader(),
+                                        Collections.emptyMap()))
+                .hasMessageContaining("defaultDatabase cannot be null or empty");
     }
 
     @Test
