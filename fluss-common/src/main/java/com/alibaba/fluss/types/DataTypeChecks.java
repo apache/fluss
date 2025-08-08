@@ -17,6 +17,8 @@
 
 package com.alibaba.fluss.types;
 
+import java.util.List;
+
 /**
  * Utilities for checking {@link DataType} and avoiding a lot of type casting and repetitive work.
  */
@@ -26,6 +28,10 @@ public final class DataTypeChecks {
     private static final PrecisionExtractor PRECISION_EXTRACTOR = new PrecisionExtractor();
 
     private static final ScaleExtractor SCALE_EXTRACTOR = new ScaleExtractor();
+
+    private static final FieldCountExtractor FIELD_COUNT_EXTRACTOR = new FieldCountExtractor();
+
+    private static final FieldTypesExtractor FIELD_TYPES_EXTRACTOR = new FieldTypesExtractor();
 
     public static int getLength(DataType dataType) {
         return dataType.accept(LENGTH_EXTRACTOR);
@@ -39,6 +45,16 @@ public final class DataTypeChecks {
     /** Returns the scale of all types that define a scale implicitly or explicitly. */
     public static int getScale(DataType dataType) {
         return dataType.accept(SCALE_EXTRACTOR);
+    }
+
+    /** Returns the field count of row and structured types. Other types return 1. */
+    public static int getFieldCount(DataType dataType) {
+        return dataType.accept(FIELD_COUNT_EXTRACTOR);
+    }
+
+    /** Returns the field types of row and structured types. */
+    public static List<DataType> getFieldTypes(DataType dataType) {
+        return dataType.accept(FIELD_TYPES_EXTRACTOR);
     }
 
     private DataTypeChecks() {
@@ -64,8 +80,18 @@ public final class DataTypeChecks {
         }
 
         @Override
+        public Integer visit(VarCharType varCharType) {
+            return varCharType.getLength();
+        }
+
+        @Override
         public Integer visit(BinaryType binaryType) {
             return binaryType.getLength();
+        }
+
+        @Override
+        public Integer visit(VarBinaryType varBinaryType) {
+            return varBinaryType.getLength();
         }
     }
 
@@ -116,6 +142,27 @@ public final class DataTypeChecks {
         @Override
         public Integer visit(BigIntType bigIntType) {
             return 0;
+        }
+    }
+
+    private static class FieldCountExtractor extends Extractor<Integer> {
+
+        @Override
+        public Integer visit(RowType rowType) {
+            return rowType.getFieldCount();
+        }
+
+        @Override
+        protected Integer defaultMethod(DataType dataType) {
+            return 1;
+        }
+    }
+
+    private static class FieldTypesExtractor extends Extractor<List<DataType>> {
+
+        @Override
+        public List<DataType> visit(RowType rowType) {
+            return rowType.getChildren();
         }
     }
 }
