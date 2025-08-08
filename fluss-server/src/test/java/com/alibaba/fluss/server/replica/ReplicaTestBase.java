@@ -640,5 +640,11 @@ public class ReplicaTestBase {
         private void unchecked(ThrowingRunnable<?> throwingRunnable) {
             ThrowingRunnable.unchecked(throwingRunnable).run();
         }
+
+        @Override
+        public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+            // TODO Auto-generated method stub
+            throw new UnsupportedOperationException("Unimplemented method 'handleSnapshotBroken'");
+        }
     }
 }
