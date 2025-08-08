@@ -23,8 +23,6 @@ import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.utils.IOUtils;
 
 import org.apache.iceberg.PartitionSpec;
@@ -35,14 +33,17 @@ import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
+import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -74,7 +75,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
     }
 
     @VisibleForTesting
-    public Catalog getIcebergCatalog() {
+    protected Catalog getIcebergCatalog() {
         return icebergCatalog;
     }
 
@@ -100,36 +101,48 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException {
+        if (!tableDescriptor.hasPrimaryKey()) {
+            throw new UnsupportedOperationException(
+                    "Iceberg integration currently supports only primary key tables.");
+        }
+        // convert Fluss table path to iceberg table
+        TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
+        Schema icebergSchema = convertToIcebergSchema(tableDescriptor);
+        Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
+
+        PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
+        SortOrder sortOrder = createSortOrder(icebergSchema);
+        tableBuilder.withProperties(buildTableProperties(tableDescriptor));
+        tableBuilder.withPartitionSpec(partitionSpec);
+        tableBuilder.withSortOrder(sortOrder);
         try {
-
-            if (!tableDescriptor.hasPrimaryKey()) {
-                throw new UnsupportedOperationException(
-                        "Iceberg integration currently supports only primary key tables.");
+            createTable(tablePath, tableBuilder);
+        } catch (NoSuchNamespaceException e) {
+            createDatabase(tablePath.getDatabaseName());
+            try {
+                createTable(tablePath, tableBuilder);
+            } catch (NoSuchNamespaceException t) {
+                // shouldn't happen in normal cases
+                throw new RuntimeException(
+                        String.format(
+                                "Fail to create table %s in Iceberg, because "
+                                        + "Namespace %s still doesn't exist although create namespace "
+                                        + "successfully, please try again.",
+                                tablePath, tablePath.getDatabaseName()));
             }
-
-            TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
-
-            createDatabaseIfAbsent(tablePath.getDatabaseName());
-
-            Schema icebergSchema = convertToIcebergSchema(tableDescriptor);
-            PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
-            SortOrder sortOrder = createSortOrder(icebergSchema);
-
-            Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
-            tableBuilder.withProperties(buildTableProperties(tableDescriptor));
-            tableBuilder.withPartitionSpec(partitionSpec);
-            tableBuilder.withSortOrder(sortOrder);
-            tableBuilder.create();
-
-        } catch (AlreadyExistsException e) {
-            throw new TableAlreadyExistException(tablePath.getTableName(), e);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to create Iceberg table: " + tablePath, e);
         }
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    private void createTable(TablePath tablePath, Catalog.TableBuilder tableBuilder) {
+        try {
+            tableBuilder.create();
+        } catch (AlreadyExistsException e) {
+            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+        }
     }
 
     public Schema convertToIcebergSchema(TableDescriptor tableDescriptor) {
@@ -143,50 +156,43 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 throw new IllegalArgumentException(
                         "Column '" + colName + "' conflicts with a reserved system column name.");
             }
-            fields.add(
-                    Types.NestedField.optional(
-                            fieldId++, colName, convertFlussToIcebergType(column.getDataType())));
+            Types.NestedField field;
+            if (column.getDataType().isNullable()) {
+                field =
+                        Types.NestedField.optional(
+                                fieldId++,
+                                colName,
+                                column.getDataType()
+                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                                column.getComment().orElse(null));
+            } else {
+                field =
+                        Types.NestedField.required(
+                                fieldId++,
+                                colName,
+                                column.getDataType()
+                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                                column.getComment().orElse(null));
+            }
+            fields.add(field);
         }
-
         for (Map.Entry<String, Type> systemColumn : SYSTEM_COLUMNS.entrySet()) {
             fields.add(
-                    Types.NestedField.optional(
+                    Types.NestedField.required(
                             fieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }
 
-        return new Schema(fields);
-    }
-
-    Type convertFlussToIcebergType(DataType dataType) {
-        DataTypeRoot typeRoot = dataType.getTypeRoot();
-
-        switch (typeRoot) {
-            case INTEGER:
-                return Types.IntegerType.get();
-            case BIGINT:
-                return Types.LongType.get();
-            case STRING:
-                return Types.StringType.get();
-            case BOOLEAN:
-                return Types.BooleanType.get();
-            case DOUBLE:
-                return Types.DoubleType.get();
-            case FLOAT:
-                return Types.FloatType.get();
-            case DATE:
-                return Types.DateType.get();
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return Types.TimestampType.withZone();
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return Types.TimestampType.withoutZone();
-            default:
-                throw new UnsupportedOperationException("Unsupported Fluss data type: " + typeRoot);
+        // set identifier fields
+        int[] primaryKeyIndexes = tableDescriptor.getSchema().getPrimaryKeyIndexes();
+        Set<Integer> identifierFieldIds = new HashSet<>();
+        for (int i = 0; i < primaryKeyIndexes.length; i++) {
+            identifierFieldIds.add(fields.get(i).fieldId());
         }
+        return new Schema(fields, identifierFieldIds);
     }
 
     private PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema) {
-
         // Only PK tables supported for now
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         int bucketCount =
@@ -226,7 +232,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
-    private void createDatabaseIfAbsent(String databaseName) {
+    private void createDatabase(String databaseName) {
         Namespace namespace = Namespace.of(databaseName);
         if (icebergCatalog instanceof SupportsNamespaces) {
             SupportsNamespaces supportsNamespaces = (SupportsNamespaces) icebergCatalog;
