@@ -134,6 +134,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
+    private final boolean logTableAllowCreation;
+    private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final ServerMetadataCache metadataCache;
@@ -156,6 +158,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
+        this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
+        this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
@@ -243,6 +247,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 throw new InvalidTableException(e.getMessage());
             }
         }
+
+        // Check table creation permissions based on table type
+        validateTableCreationPermission(tableDescriptor, tablePath);
 
         // apply system defaults if the config is not set
         tableDescriptor = applySystemDefaults(tableDescriptor);
@@ -649,5 +656,37 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     bucketMetadataList.add(bucketMetadata);
                 });
         return bucketMetadataList;
+    }
+
+    /**
+     * Validates whether the table creation is allowed based on the table type and configuration.
+     *
+     * @param tableDescriptor the table descriptor to validate
+     * @param tablePath the table path for error reporting
+     * @throws InvalidTableException if table creation is not allowed
+     */
+    private void validateTableCreationPermission(
+            TableDescriptor tableDescriptor, TablePath tablePath) {
+        boolean hasPrimaryKey = tableDescriptor.hasPrimaryKey();
+
+        if (hasPrimaryKey) {
+            // This is a KV table (Primary Key Table)
+            if (!kvTableAllowCreation) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Creation of KV tables (primary key tables) is not allowed. "
+                                        + "Table: %s. Please set '%s' to true to enable KV table creation.",
+                                tablePath, ConfigOptions.KV_TABLE_ALLOW_CREATION.key()));
+            }
+        } else {
+            // This is a Log table
+            if (!logTableAllowCreation) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Creation of Log tables is not allowed. "
+                                        + "Table: %s. Please set '%s' to true to enable Log table creation.",
+                                tablePath, ConfigOptions.LOG_TABLE_ALLOW_CREATION.key()));
+            }
+        }
     }
 }
