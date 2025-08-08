@@ -457,6 +457,13 @@ public class TabletServer extends ServerBase {
             throw new IllegalConfigurationException(
                     String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
         }
+
+        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
     }
 
     @VisibleForTesting
