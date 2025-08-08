@@ -148,7 +148,7 @@ class CoordinatorEventProcessorTest {
         // register coordinator server
         zookeeperClient.registerCoordinatorLeader(
                 new CoordinatorAddress(
-                        "2", Endpoint.fromListenersString("CLIENT://localhost:10012")));
+                        2, Endpoint.fromListenersString("CLIENT://localhost:10012")));
 
         // register 3 tablet servers
         for (int i = 0; i < 3; i++) {
@@ -309,7 +309,7 @@ class CoordinatorEventProcessorTest {
                         System.currentTimeMillis());
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
-        // retry until the tablet server register event is been handled
+        // retry until the tablet server register event has been handled
         retryVerifyContext(
                 ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
 
@@ -377,7 +377,7 @@ class CoordinatorEventProcessorTest {
         BucketState t1Bucket0State = fromCtx(ctx -> ctx.getBucketState(t1Bucket0));
         assertThat(t1Bucket0State).isEqualTo(OnlineBucket);
         // t1 bucket 1 should reelect a leader since the leader is not alive
-        // the bucket whose leader is in the server should be online a again, but the leadership
+        // the bucket whose leader is in the server should be online again, but the leadership
         // should change the leader for bucket2 of t1 should change since the leader fail
         BucketState t1Bucket1State = fromCtx(ctx -> ctx.getBucketState(t1Bucket1));
         assertThat(t1Bucket1State).isEqualTo(OnlineBucket);
