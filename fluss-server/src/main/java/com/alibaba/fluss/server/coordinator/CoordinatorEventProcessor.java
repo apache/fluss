@@ -91,6 +91,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -831,6 +832,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // TODO verify leader epoch.
 
         List<AdjustIsrResultForBucket> result = new ArrayList<>();
+        Map<TableBucket, LeaderAndIsr> newLeaderAndIsrList = new HashMap<>();
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr tryAdjustLeaderAndIsr = entry.getValue();
@@ -863,21 +865,37 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             tryAdjustLeaderAndIsr.isr(),
                             coordinatorContext.getCoordinatorEpoch(),
                             currentLeaderAndIsr.bucketEpoch() + 1);
-            try {
-                zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
-            } catch (Exception e) {
-                LOG.error("Error when register leader and isr.", e);
-                result.add(new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
-            }
-
-            // update coordinator leader and isr cache.
-            coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
-
-            // TODO update metadata for all alive tablet servers.
-
-            // Successful return.
-            result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
+            newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
         }
+
+        try {
+            zooKeeperClient.batchUpdateLeaderAndIsr(newLeaderAndIsrList);
+            newLeaderAndIsrList.forEach(
+                    (tableBucket, newLeaderAndIsr) ->
+                            result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr)));
+        } catch (Exception batchException) {
+            LOG.error("Error when batch update leader and isr. Try one by one.", batchException);
+
+            for (Map.Entry<TableBucket, LeaderAndIsr> entry : newLeaderAndIsrList.entrySet()) {
+                TableBucket tableBucket = entry.getKey();
+                LeaderAndIsr newLeaderAndIsr = entry.getValue();
+                try {
+                    zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
+                } catch (Exception e) {
+                    LOG.error("Error when register leader and isr.", e);
+                    result.add(
+                            new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
+                }
+                // Successful return.
+                result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
+            }
+        }
+
+        // update coordinator leader and isr cache.
+        newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+
+        // TODO update metadata for all alive tablet servers.
+
         return result;
     }
 
