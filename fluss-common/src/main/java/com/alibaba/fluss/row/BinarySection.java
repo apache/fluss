@@ -36,8 +36,8 @@ abstract class BinarySection implements MemoryAwareGetters, Serializable {
     private static final long serialVersionUID = 1L;
 
     protected transient MemorySegment[] segments;
-    protected int offset;
-    protected int sizeInBytes;
+    protected transient int offset;
+    protected transient int sizeInBytes;
 
     public BinarySection() {}
 
