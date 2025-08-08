@@ -18,6 +18,7 @@
 package com.alibaba.fluss.memory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
@@ -74,7 +75,9 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
-    public void write(int b) throws IOException {}
+    public void write(int b) throws IOException {
+        writeByte(b);
+    }
 
     @Override
     public void write(byte[] b) throws IOException {
@@ -110,7 +113,14 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
-    public void writeChar(int v) throws IOException {}
+    public void writeChar(int v) throws IOException {
+        if (this.position >= this.memorySegment.size() - 1) {
+            resize(2);
+        }
+
+        memorySegment.putChar(position, (char) v);
+        position += 2;
+    }
 
     @Override
     public void writeInt(int v) throws IOException {
@@ -157,13 +167,30 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
-    public void writeBytes(String s) throws IOException {}
+    public void writeBytes(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeByte(s.charAt(i));
+        }
+    }
 
     @Override
-    public void writeChars(String s) throws IOException {}
+    public void writeChars(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeChar(s.charAt(i));
+        }
+    }
 
     @Override
-    public void writeUTF(String s) throws IOException {}
+    public void writeUTF(String s) throws IOException {
+        if (s == null) {
+            writeInt(-1);
+            return;
+        }
+
+        byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
+        writeInt(bytes.length);
+        write(bytes);
+    }
 
     @Override
     public void write(MemorySegment segment, int off, int len) throws IOException {
