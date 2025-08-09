@@ -258,6 +258,37 @@ final class NettyClientTest {
         }
     }
 
+    @Test
+    void testMaxInflightRequestsLimit() throws Exception {
+        int maxInflight = 2;
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_CONNECTION, maxInflight);
+
+        try (NettyClient client =
+                new NettyClient(conf, TestingClientMetricGroup.newInstance(), false)) {
+
+            ApiVersionsRequest request =
+                    new ApiVersionsRequest()
+                            .setClientSoftwareName("testing_client")
+                            .setClientSoftwareVersion("1.0");
+
+            List<CompletableFuture<ApiMessage>> futures = new ArrayList<>();
+
+            for (int i = 0; i < 5; i++) {
+                futures.add(client.sendRequest(serverNode, ApiKeys.API_VERSIONS, request));
+            }
+
+            FutureUtils.waitForAll(futures).get();
+
+            assertThat(futures)
+                    .allSatisfy(
+                            future -> {
+                                assertThat(future.isDone()).isTrue();
+                                assertThat(future.get()).isNotNull();
+                            });
+        }
+    }
+
     private void buildNettyServer(int serverId) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort()) {
             serverNode =
