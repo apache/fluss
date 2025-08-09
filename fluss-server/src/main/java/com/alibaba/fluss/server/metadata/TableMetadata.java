@@ -20,6 +20,8 @@ package com.alibaba.fluss.server.metadata;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -40,7 +42,17 @@ public class TableMetadata {
      */
     public static final Long DELETED_TABLE_ID = -2L;
 
-    private final TableInfo tableInfo;
+    private final long tableId;
+
+    private final int schemaId;
+
+    private final long createdTime;
+
+    private final long modifiedTime;
+
+    private final TablePath tablePath;
+
+    private final @Nullable TableInfo tableInfo;
 
     /**
      * For partition table, this list is always empty. The detail partition metadata is stored in
@@ -53,10 +65,54 @@ public class TableMetadata {
     private final List<BucketMetadata> bucketMetadataList;
 
     public TableMetadata(TableInfo tableInfo, List<BucketMetadata> bucketMetadataList) {
+        this(
+                tableInfo.getTableId(),
+                tableInfo.getSchemaId(),
+                tableInfo.getCreatedTime(),
+                tableInfo.getModifiedTime(),
+                tableInfo.getTablePath(),
+                tableInfo,
+                bucketMetadataList);
+    }
+
+    public TableMetadata(
+            long tableId,
+            int schemaId,
+            long createdTime,
+            long modifiedTime,
+            TablePath tablePath,
+            @Nullable TableInfo tableInfo,
+            List<BucketMetadata> bucketMetadataList) {
+        this.tableId = tableId;
+        this.schemaId = schemaId;
+        this.createdTime = createdTime;
+        this.modifiedTime = modifiedTime;
+        this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.bucketMetadataList = bucketMetadataList;
     }
 
+    public long getTableId() {
+        return tableId;
+    }
+
+    public int getSchemaId() {
+        return schemaId;
+    }
+
+    public long getCreatedTime() {
+        return createdTime;
+    }
+
+    public long getModifiedTime() {
+        return modifiedTime;
+    }
+
+    public TablePath getTablePath() {
+        return tablePath;
+    }
+
+    @Nullable
     public TableInfo getTableInfo() {
         return tableInfo;
     }
@@ -68,7 +124,17 @@ public class TableMetadata {
     @Override
     public String toString() {
         return "TableMetadata{"
-                + "tableInfo="
+                + "tableId="
+                + tableId
+                + ", schemaId="
+                + schemaId
+                + ", createdTime="
+                + createdTime
+                + ", modifiedTime="
+                + modifiedTime
+                + ", tablePath="
+                + tablePath
+                + ", tableInfo="
                 + tableInfo
                 + ", bucketMetadataList="
                 + bucketMetadataList
@@ -77,21 +143,28 @@ public class TableMetadata {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         TableMetadata that = (TableMetadata) o;
-        if (!tableInfo.equals(that.tableInfo)) {
-            return false;
-        }
-        return bucketMetadataList.equals(that.bucketMetadataList);
+        return tableId == that.tableId
+                && schemaId == that.schemaId
+                && createdTime == that.createdTime
+                && modifiedTime == that.modifiedTime
+                && Objects.equals(tablePath, that.tablePath)
+                && Objects.equals(tableInfo, that.tableInfo)
+                && Objects.equals(bucketMetadataList, that.bucketMetadataList);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableInfo, bucketMetadataList);
+        return Objects.hash(
+                tableId,
+                schemaId,
+                createdTime,
+                modifiedTime,
+                tablePath,
+                tableInfo,
+                bucketMetadataList);
     }
 }

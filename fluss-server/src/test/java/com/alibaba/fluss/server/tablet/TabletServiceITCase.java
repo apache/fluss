@@ -25,6 +25,7 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
@@ -44,13 +45,18 @@ import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
+import com.alibaba.fluss.rpc.messages.PbTableMetadata;
 import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
 import com.alibaba.fluss.rpc.messages.PutKvResponse;
+import com.alibaba.fluss.rpc.messages.UpdateMetadataRequest;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrData;
 import com.alibaba.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import com.alibaba.fluss.server.log.ListOffsetsParam;
+import com.alibaba.fluss.server.metadata.BucketMetadata;
 import com.alibaba.fluss.server.metadata.ServerInfo;
+import com.alibaba.fluss.server.metadata.TableMetadata;
+import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.utils.ServerRpcMessageUtils;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
@@ -104,6 +110,7 @@ import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newPutKvReq
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toPbTableMetadata;
 import static com.alibaba.fluss.testutils.DataTestUtils.compactedRow;
 import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -888,6 +895,66 @@ public class TabletServiceITCase {
         result = getNotifyLeaderAndIsrResponseData(notifyLeaderAndIsrResponse);
         assertThat(result.size()).isEqualTo(1);
         assertThat(result.get(0).getError().error()).isEqualTo(Errors.NONE);
+    }
+
+    @Test
+    void testUpdateMetadata() throws Exception {
+        long tableId =
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        TabletServerMetadataCache metadataCache =
+                FLUSS_CLUSTER_EXTENSION.getTabletServerById(leader).getMetadataCache();
+
+        // Update metadata
+        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            BucketMetadata bucketMetadata =
+                    new BucketMetadata(i, i, i, Arrays.asList(i, i + 1, i + 2));
+            bucketMetadataList.add(bucketMetadata);
+        }
+        TableMetadata tableMetadata =
+                new TableMetadata(
+                        tableId,
+                        0,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis(),
+                        DATA1_TABLE_PATH,
+                        null,
+                        bucketMetadataList);
+        UpdateMetadataRequest updateMetadataRequest =
+                makeUpdateMetadataRequest(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(tableMetadata),
+                        Collections.emptyList());
+        leaderGateWay.updateMetadata(updateMetadataRequest).get();
+
+        // Verify update
+        assertThat(metadataCache.getBucketMetadataForTable(tableId).values())
+                .containsExactlyInAnyOrderElementsOf(bucketMetadataList);
+
+        // Clear the metadataCache
+        metadataCache.clearTableMetadata();
+
+        // Since we have modified the UpdateMetadataRequest protocol, we need to test whether the
+        // old data format can still be parsed here.
+        TableInfo tableInfo = FLUSS_CLUSTER_EXTENSION.getTableInfo(DATA1_TABLE_PATH);
+        TableMetadata tableMetadataV1 = new TableMetadata(tableInfo, bucketMetadataList);
+        List<PbTableMetadata> pbTableMetadataList = new ArrayList<>();
+        pbTableMetadataList.add(toPbTableMetadata(tableMetadataV1));
+
+        UpdateMetadataRequest updateMetadataRequestV1 = new UpdateMetadataRequest();
+        updateMetadataRequestV1.addAllTableMetadatas(pbTableMetadataList);
+        leaderGateWay.updateMetadata(updateMetadataRequestV1).get();
+
+        assertThat(metadataCache.getBucketMetadataForTable(tableId).values())
+                .containsExactlyElementsOf(bucketMetadataList);
     }
 
     private static void assertPutKvResponse(PutKvResponse putKvResponse) {
