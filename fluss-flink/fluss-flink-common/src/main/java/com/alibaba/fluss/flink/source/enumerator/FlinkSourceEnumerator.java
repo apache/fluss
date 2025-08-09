@@ -37,6 +37,7 @@ import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
 import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -263,8 +264,13 @@ public class FlinkSourceEnumerator
 
     private Set<PartitionInfo> listPartitions() {
         try {
-            List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-            partitionInfos = applyPartitionFilter(partitionInfos);
+            PartitionSpec partitionSpec = convertFiltersToPartitionSpec(partitionFilters);
+            if (partitionSpec == null && !partitionFilters.isEmpty()) {
+                // Contradictory conditions, no partitions can satisfy
+                return new HashSet<>();
+            }
+            List<PartitionInfo> partitionInfos =
+                    flussAdmin.listPartitionInfos(tablePath, partitionSpec).get();
             return new HashSet<>(partitionInfos);
         } catch (Exception e) {
             throw new FlinkRuntimeException(
@@ -273,32 +279,27 @@ public class FlinkSourceEnumerator
         }
     }
 
-    /** Apply partition filter. */
-    private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
-        if (!partitionFilters.isEmpty()) {
-            return partitionInfos.stream()
-                    .filter(
-                            partitionInfo -> {
-                                Map<String, String> specMap =
-                                        partitionInfo.getPartitionSpec().getSpecMap();
-                                // use getFields() instead of getFieldNames() to
-                                // avoid collection construction
-                                List<DataField> fields = tableInfo.getRowType().getFields();
-                                for (FieldEqual filter : partitionFilters) {
-                                    String fieldName = fields.get(filter.fieldIndex).getName();
-                                    String partitionValue = specMap.get(fieldName);
-                                    if (partitionValue == null
-                                            || !filter.equalValue
-                                                    .toString()
-                                                    .equals(partitionValue)) {
-                                        return false;
-                                    }
-                                }
-                                return true;
-                            })
-                    .collect(Collectors.toList());
+    /** Convert partition filters to PartitionSpec for server-side filtering. */
+    @Nullable
+    private PartitionSpec convertFiltersToPartitionSpec(List<FieldEqual> partitionFilters) {
+        if (partitionFilters.isEmpty()) {
+            return null;
         }
-        return partitionInfos;
+        // use getFields() instead of getFieldNames() to avoid collection construction
+        List<DataField> fields = tableInfo.getRowType().getFields();
+        Map<String, String> specMap = new HashMap<>();
+
+        for (FieldEqual filter : partitionFilters) {
+            String fieldName = fields.get(filter.fieldIndex).getName();
+            String currValue = filter.equalValue.toString();
+
+            String existingValue = specMap.putIfAbsent(fieldName, currValue);
+            if (existingValue != null && !existingValue.equals(currValue)) {
+                return null;
+            }
+        }
+
+        return new PartitionSpec(specMap);
     }
 
     /** Init the splits for Fluss. */
