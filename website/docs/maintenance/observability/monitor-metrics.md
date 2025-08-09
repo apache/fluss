@@ -327,7 +327,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>eventQueueSize</td>
-      <td>The number of events waiting to be processed in the queue.</td>
+      <td>The number of events currently waiting to be processed in the coordinator event queue. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -337,7 +337,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>eventProcessingTimeMs</td>
-      <td>The time that an event took to be processed.</td>
+      <td>The time that an event took to be processed by the coordinator event processor. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
       <td>Histogram</td>
     </tr>
   </tbody>
