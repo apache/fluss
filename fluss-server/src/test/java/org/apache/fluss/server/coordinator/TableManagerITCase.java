@@ -284,6 +284,18 @@ class TableManagerITCase {
         TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
         assertThat(gottenTable).isEqualTo(tableDescriptor.withReplicationFactor(1));
 
+        // alter table
+        TableDescriptor updateTableDescriptor = alterTable(gottenTable);
+        adminGateway
+                .alterTable(newAlterTableRequest(tablePath, updateTableDescriptor, false))
+                .get();
+        // get the table and check it
+        GetTableInfoResponse responseAfterAlter =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        TableDescriptor gottenTableAfterAlter =
+                TableDescriptor.fromJsonBytes(responseAfterAlter.getTableJson());
+        assertThat(gottenTableAfterAlter).isEqualTo(updateTableDescriptor.withReplicationFactor(1));
+
         // check assignment, just check replica numbers, don't care about actual assignment
         checkAssignmentWithReplicaFactor(
                 zkClient.getTableAssignment(response.getTableId()).get(),
@@ -754,6 +766,31 @@ class TableManagerITCase {
                 .schema(newSchema())
                 .comment("first table")
                 .distributedBy(3, "a")
+                .build();
+    }
+
+    private static TableDescriptor alterTable(TableDescriptor existTableDescriptor) {
+        Map<String, String> existingProperties = existTableDescriptor.getProperties();
+        Map<String, String> existingCustomProperties = existTableDescriptor.getCustomProperties();
+
+        Map<String, String> newProperties = new HashMap<>(existingProperties);
+        newProperties.put("table.datalake.enabled", "true");
+
+        Map<String, String> newCustomProperties = new HashMap<>(existingCustomProperties);
+        newCustomProperties.put("table.datalake.enabled", "true");
+
+        return TableDescriptor.builder()
+                .schema(existTableDescriptor.getSchema())
+                .comment(existTableDescriptor.getComment().orElse(""))
+                .distributedBy(
+                        existTableDescriptor
+                                .getTableDistribution()
+                                .get()
+                                .getBucketCount()
+                                .orElse(3),
+                        existTableDescriptor.getBucketKeys())
+                .properties(newProperties)
+                .customProperties(newCustomProperties)
                 .build();
     }
 

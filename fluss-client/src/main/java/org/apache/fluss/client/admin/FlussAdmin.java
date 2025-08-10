@@ -236,6 +236,19 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> alterTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
+        tablePath.validate();
+        AlterTableRequest request = new AlterTableRequest();
+        request.setTableJson(tableDescriptor.toJsonBytes())
+                .setIgnoreIfNotExists(ignoreIfNotExists)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.alterTable(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
         request.setTablePath()

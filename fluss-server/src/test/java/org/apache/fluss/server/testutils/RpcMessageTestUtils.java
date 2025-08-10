@@ -139,6 +139,18 @@ public class RpcMessageTestUtils {
         return createTableRequest;
     }
 
+    public static AlterTableRequest newAlterTableRequest(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
+        AlterTableRequest alterTableRequest = new AlterTableRequest();
+        alterTableRequest
+                .setIgnoreIfNotExists(ignoreIfExists)
+                .setTableJson(tableDescriptor.toJsonBytes())
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return alterTableRequest;
+    }
+
     public static MetadataRequest newMetadataRequest(List<TablePath> tablePaths) {
         MetadataRequest metadataRequest = new MetadataRequest();
         metadataRequest.addAllTablePaths(

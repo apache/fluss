@@ -55,6 +55,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -62,6 +63,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -298,6 +300,65 @@ public class MetadataManager {
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
+    }
+
+    public void alterTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
+        // validate table properties before creating table
+        validateTableDescriptor(tableDescriptor, maxBucketNum);
+
+        if (!databaseExists(tablePath.getDatabaseName())) {
+            throw new DatabaseNotExistException(
+                    "Database " + tablePath.getDatabaseName() + " does not exist.");
+        }
+        if (!tableExists(tablePath)) {
+            if (ignoreIfNotExists) {
+                return;
+            } else {
+                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+            }
+        }
+
+        try {
+            TableRegistration updatedTableRegistration =
+                    getUpdatedTableRegistration(tablePath, tableDescriptor);
+            zookeeperClient.updateTable(tablePath, updatedTableRegistration);
+        } catch (Exception e) {
+            if (e instanceof KeeperException.NoNodeException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+            } else {
+                throw new FlussRuntimeException("Failed to alter table: " + tablePath, e);
+            }
+        }
+    }
+
+    private TableRegistration getUpdatedTableRegistration(
+            TablePath tablePath, TableDescriptor updateTableDescriptor) {
+        TableRegistration existTableReg = getTableRegistration(tablePath);
+        Map<String, String> updateProperties = updateTableDescriptor.getProperties();
+        Map<String, String> updateCustomProperties = updateTableDescriptor.getCustomProperties();
+        validateAlterTableProperties(updateTableDescriptor);
+
+        Map<String, String> newProperties = new HashMap<>(existTableReg.properties);
+        for (Map.Entry<String, String> updateProperty : updateProperties.entrySet()) {
+            // only alterable configs can be updated, other properties keep unchanged.
+            if (FlussConfigUtils.ALTERABLE_CONFIG_OPTIONS.contains(updateProperty.getKey())) {
+                newProperties.put(updateProperty.getKey(), updateProperty.getValue());
+            }
+        }
+
+        Map<String, String> newCustomProperties = new HashMap<>(existTableReg.customProperties);
+        for (Map.Entry<String, String> updateCustomProperty : updateCustomProperties.entrySet()) {
+            if (FlussConfigUtils.ALTERABLE_CONFIG_OPTIONS.contains(updateCustomProperty.getKey())) {
+                newCustomProperties.put(
+                        updateCustomProperty.getKey(), updateCustomProperty.getValue());
+            }
+        }
+
+        return existTableReg.newProperties(newProperties, newCustomProperties);
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {

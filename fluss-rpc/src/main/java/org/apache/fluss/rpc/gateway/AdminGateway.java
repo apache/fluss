@@ -65,6 +65,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request);
 
     /**
+     * Alter a table.
+     *
+     * @param request the request to alter a table.
+     */
+    @RPC(api = ApiKeys.ALTER_TABLE)
+    CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request);
+
+    /**
      * Drop a table.
      *
      * @param request Drop table request

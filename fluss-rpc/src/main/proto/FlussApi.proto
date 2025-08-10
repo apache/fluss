@@ -108,6 +108,17 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+// alter table request and response
+message AlterTableRequest {
+  required PbTablePath table_path = 1;
+  required bytes table_json = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message AlterTableResponse {
+
+}
+
 // get table request and response
 message GetTableInfoRequest {
   required PbTablePath table_path = 1;

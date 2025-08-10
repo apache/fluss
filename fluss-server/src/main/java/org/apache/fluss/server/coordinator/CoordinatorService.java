@@ -283,6 +283,33 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(new CreateTableResponse());
     }
 
+    @Override
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        tablePath.validate();
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
+        }
+
+        AlterTableResponse alterTableResponse = new AlterTableResponse();
+
+        TableDescriptor tableDescriptor;
+
+        try {
+            tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
+        } catch (Exception e) {
+            if (e instanceof UncheckedIOException) {
+                throw new InvalidTableException(
+                        "Failed to parse table descriptor: " + e.getMessage());
+            } else {
+                // wrap the validate message to InvalidTableException
+                throw new InvalidTableException(e.getMessage());
+            }
+        }
+        metadataManager.alterTable(tablePath, tableDescriptor, request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(alterTableResponse);
+    }
+
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {
         TableDescriptor newDescriptor = tableDescriptor;
 

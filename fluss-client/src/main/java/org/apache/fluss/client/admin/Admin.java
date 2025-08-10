@@ -236,6 +236,23 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<String>> listTables(String databaseName);
 
     /**
+     * Alter a table.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} if the database does not exist.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param tableDescriptor The table descriptor.
+     * @param ignoreIfNotExists if it is true, do nothing if table does not exist. If false, throw a
+     *     TableNotExistException.
+     */
+    CompletableFuture<Void> alterTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists);
+
+    /**
      * List all partitions in the given table in fluss cluster asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
