@@ -31,7 +31,7 @@ on:
         type: string
         default: ""
 jobs:
-  build-and-test:
+  test:
     runs-on: self-hosted
     steps:
       - name: Checkout code

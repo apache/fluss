@@ -51,7 +51,7 @@ jobs:
           mvn -T 1C -B clean install -DskipTests -Pjava8
 
   build-on-jdk11:
-    name: "Build Java 11"
+    name: "Java 11"
     uses: ./.github/workflows/ci-template.yaml
     with:
         java-version: "11"

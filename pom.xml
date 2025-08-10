@@ -428,7 +428,7 @@
         <profile>
             <id>java8</id>
             <properties>
-                <target.java.version>8</target.java.version>
+                <target.java.version>1.8</target.java.version>
             </properties>
             <build>
                 <plugins>
@@ -436,8 +436,8 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-compiler-plugin</artifactId>
                         <configuration>
-                            <source>8</source>
-                            <target>8</target>
+                            <source>${target.java.version}</source>
+                            <target>${target.java.version}</target>
                             <useIncrementalCompilation>false</useIncrementalCompilation>
                             <compilerArgs >
                                 <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
