@@ -426,7 +426,10 @@
 
     <profiles>
         <profile>
-            <id>java8-target</id>
+            <id>java8</id>
+            <properties>
+                <target.java.version>8</target.java.version>
+            </properties>
             <build>
                 <plugins>
                     <plugin>
@@ -728,11 +731,11 @@
                         <configuration>
                             <rules>
                                 <requireMavenVersion>
-                                    <!-- enforce at least mvn version 3.1.1 (see FLINK-12447) -->
-                                    <version>[3.1.1,)</version>
+                                    <!-- enforce at least mvn version 3.8.6 -->
+                                    <version>[3.8.6,)</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
-                                    <version>[1.8,)</version>
+                                    <version>${target.java.version}</version>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>

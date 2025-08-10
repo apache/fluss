@@ -18,8 +18,9 @@
 name: Nightly
 on:
   schedule:
-    # Run at 2:00 daily.
-    - cron: "0 2 * * *"
+    # Run at 20:00 UTC daily which is the lowest traffic time for Fluss project.
+    - cron: "0 20 * * *"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
   cancel-in-progress: true
@@ -30,7 +31,7 @@ jobs:
     uses: ./.github/workflows/ci-template.yaml
     with:
       java-version: "8"
-      maven-parameters: "-Pjava8-target"
+      maven-parameters: "-Pjava8"
     strategy:
       fail-fast: false
       matrix:
