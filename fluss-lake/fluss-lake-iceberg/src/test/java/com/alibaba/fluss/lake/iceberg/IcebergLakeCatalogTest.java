@@ -61,7 +61,7 @@ class IcebergLakeCatalogTest {
         this.flussIcebergCatalog = new IcebergLakeCatalog(configuration);
     }
 
-    /** Verify property prefix rewriting */
+    /** Verify property prefix rewriting. */
     @Test
     void testPropertyPrefixRewriting() {
         String database = "test_db";
@@ -249,7 +249,6 @@ class IcebergLakeCatalogTest {
                 .hasMessageContaining("Only one bucket key is supported for Iceberg");
     }
 
-    /** No Bucket Key and No Partition */
     @Test
     void testCreateLogTable() {
         String database = "test_db";
