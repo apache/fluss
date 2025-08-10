@@ -363,39 +363,21 @@ public class ConfigOptions {
                             "This configuration controls the directory where fluss will store its data. "
                                     + "The default value is /tmp/fluss-data");
 
-    public static final ConfigOption<Duration> WRITER_ID_TEMPORARY_EXPIRATION_TIME =
-            key("server.writer-id.temporary-expiration-time")
-                    .durationType()
-                    .defaultValue(Duration.ofHours(12))
-                    .withDescription(
-                            "The time that the tabletServer will wait without receiving any write request from "
-                                    + "a client before expiring the related status. This expiration is temporary. It "
-                                    + "marks the state associated with the writerID as expired but does not completely "
-                                    + "remove the state. This reduces memory pressure on the server while allowing "
-                                    + "new writes for the same writerID without throw OutOfOrderSequenceException. "
-                                    + "However, server cannot guarantee the order of the next few batches after expiration. "
-                                    + "The default value is 12 hours.");
-
-    public static final ConfigOption<Duration> WRITER_ID_PERMANENT_EXPIRATION_TIME =
-            key("server.writer-id.permanent-expiration-time")
+    public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
+            key("server.writer-id.expiration-time")
                     .durationType()
                     .defaultValue(Duration.ofDays(7))
                     .withDescription(
-                            "The time that the tabletServer permanently expire the writer status after permanent expiration."
-                                    + " This expiration is permanent, the server will no longer retain the state "
-                                    + "associated with this writerId. After expiration, server cannot guarantee the "
-                                    + "write order for the same writerId and the new write request will throw "
-                                    + "OutOfOrderSequenceException. The default value is 7 days.");
+                            "The time that the tablet server will wait without receiving any write request from "
+                                    + "a client before expiring the related status. The default value is 7 days.");
 
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_CHECK_INTERVAL =
             key("server.writer-id.expiration-check-interval")
                     .durationType()
                     .defaultValue(Duration.ofMinutes(10))
                     .withDescription(
-                            "The interval at which to remove writerIds that have expired due to "
-                                    + WRITER_ID_TEMPORARY_EXPIRATION_TIME.key()
-                                    + " and "
-                                    + WRITER_ID_PERMANENT_EXPIRATION_TIME.key()
+                            "The interval at which to remove writer ids that have expired due to "
+                                    + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
     public static final ConfigOption<Integer> BACKGROUND_THREADS =

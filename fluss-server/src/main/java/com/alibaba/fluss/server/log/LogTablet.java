@@ -296,12 +296,7 @@ public final class LogTablet {
                 new WriterStateManager(
                         tableBucket,
                         tabletDir,
-                        (int)
-                                conf.get(ConfigOptions.WRITER_ID_TEMPORARY_EXPIRATION_TIME)
-                                        .toMillis(),
-                        (int)
-                                conf.get(ConfigOptions.WRITER_ID_PERMANENT_EXPIRATION_TIME)
-                                        .toMillis());
+                        (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis());
 
         LoadedLogOffsets offsets =
                 new LogLoader(
@@ -1120,7 +1115,8 @@ public final class LogTablet {
         // update writers.
         WriterAppendInfo appendInfo =
                 writers.computeIfAbsent(writerId, id -> writerStateManager.prepareUpdate(writerId));
-        appendInfo.append(batch);
+        appendInfo.append(
+                batch, writerStateManager.isBatchExpired(System.currentTimeMillis(), batch));
     }
 
     static void rebuildWriterState(

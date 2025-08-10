@@ -56,7 +56,6 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.server.log.WriterStateEntry.BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE;
 import static com.alibaba.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
 import static com.alibaba.fluss.utils.FlussPaths.writerSnapshotFile;
 
@@ -80,8 +79,7 @@ public class WriterStateManager {
     private static final Logger LOG = LoggerFactory.getLogger(WriterStateManager.class);
 
     private final TableBucket tableBucket;
-    private final int temporaryWriterExpirationMs;
-    private final int permanentWriterExpirationMs;
+    private final int writerExpirationMs;
     private final Map<Long, WriterStateEntry> writers = new HashMap<>();
 
     private final File logTabletDir;
@@ -92,15 +90,10 @@ public class WriterStateManager {
     private long lastMapOffset = 0L;
     private long lastSnapOffset = 0L;
 
-    public WriterStateManager(
-            TableBucket tableBucket,
-            File logTabletDir,
-            int temporaryWriterExpirationMs,
-            int permanentWriterExpirationMs)
+    public WriterStateManager(TableBucket tableBucket, File logTabletDir, int writerExpirationMs)
             throws IOException {
         this.tableBucket = tableBucket;
-        this.temporaryWriterExpirationMs = temporaryWriterExpirationMs;
-        this.permanentWriterExpirationMs = permanentWriterExpirationMs;
+        this.writerExpirationMs = writerExpirationMs;
         this.logTabletDir = logTabletDir;
         this.snapshots = loadSnapshots();
     }
@@ -133,25 +126,12 @@ public class WriterStateManager {
     }
 
     public void removeExpiredWriters(long currentTimeMs) {
-        // First to trigger temporary expiration.
         List<Long> keys =
                 writers.entrySet().stream()
-                        .filter(
-                                entry ->
-                                        writerNeedTemporaryExpired(currentTimeMs, entry.getValue()))
+                        .filter(entry -> isWriterExpired(currentTimeMs, entry.getValue()))
                         .map(Map.Entry::getKey)
                         .collect(Collectors.toList());
-        temporaryRemoveWriterIds(keys);
-
-        // First to trigger permanent expiration.
-        keys =
-                writers.entrySet().stream()
-                        .filter(
-                                entry ->
-                                        writerNeedPermanentExpired(currentTimeMs, entry.getValue()))
-                        .map(Map.Entry::getKey)
-                        .collect(Collectors.toList());
-        permanentRemoveWriterIds(keys);
+        removeWriterIds(keys);
     }
 
     /**
@@ -366,21 +346,9 @@ public class WriterStateManager {
     }
 
     /** Remove the writer ids from the map permanently. */
-    private void permanentRemoveWriterIds(List<Long> keys) {
+    private void removeWriterIds(List<Long> keys) {
         keys.forEach(writers::remove);
         writerIdCount = writers.size();
-    }
-
-    /** Remove the writer ids from the map temporarily, . */
-    private void temporaryRemoveWriterIds(List<Long> keys) {
-        for (long writerId : keys) {
-            WriterStateEntry writerStateEntry = writers.get(writerId);
-            writerStateEntry.removeAllBatches();
-            // For writer id expiration, we add a batch with sequence BATCH_SEQUENCE_AFTER_EXPIRE to
-            // identify.
-            writerStateEntry.addBath(
-                    BATCH_SEQUENCE_AFTER_TEMPORARY_EXPIRE, -1L, 0, System.currentTimeMillis());
-        }
     }
 
     private void clearWriterIds() {
@@ -442,16 +410,12 @@ public class WriterStateManager {
         addWriterId(writerId, entry);
     }
 
-    private boolean writerNeedTemporaryExpired(
-            long currentTimeMs, WriterStateEntry writerStateEntry) {
-        return !writerStateEntry.isTemporaryExpiredBatch()
-                && currentTimeMs - writerStateEntry.lastBatchTimestamp()
-                        > temporaryWriterExpirationMs;
+    private boolean isWriterExpired(long currentTimeMs, WriterStateEntry writerStateEntry) {
+        return currentTimeMs - writerStateEntry.lastBatchTimestamp() > writerExpirationMs;
     }
 
-    private boolean writerNeedPermanentExpired(
-            long currentTimeMs, WriterStateEntry writerStateEntry) {
-        return currentTimeMs - writerStateEntry.lastBatchTimestamp() > permanentWriterExpirationMs;
+    public boolean isBatchExpired(long currentTimeMs, LogRecordBatch recordBatch) {
+        return currentTimeMs - recordBatch.commitTimestamp() > writerExpirationMs;
     }
 
     private static List<WriterStateEntry> readSnapshot(File file) {
