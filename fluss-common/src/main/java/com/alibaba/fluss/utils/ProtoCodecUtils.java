@@ -19,8 +19,8 @@
 
 package com.alibaba.fluss.utils;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufUtil;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufUtil;
 
 import java.nio.charset.StandardCharsets;
 

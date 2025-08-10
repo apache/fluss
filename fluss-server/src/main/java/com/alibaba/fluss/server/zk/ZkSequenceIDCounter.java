@@ -18,10 +18,11 @@
 package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.server.SequenceIDCounter;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.atomic.AtomicValue;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.atomic.DistributedAtomicLong;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.BoundedExponentialBackoffRetry;
+
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.atomic.AtomicValue;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.atomic.DistributedAtomicLong;
+import org.apache.fluss.shaded.curator5.org.apache.curator.retry.BoundedExponentialBackoffRetry;
 
 import javax.annotation.concurrent.ThreadSafe;
 

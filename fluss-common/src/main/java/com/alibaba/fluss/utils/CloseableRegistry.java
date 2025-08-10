@@ -27,7 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.shaded.guava32.com.google.common.collect.Lists.reverse;
+import static org.apache.fluss.shaded.guava32.com.google.common.collect.Lists.reverse;
 
 /**
  * This class allows to register instances of {@link Closeable}, which are all closed if this

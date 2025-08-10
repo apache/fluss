@@ -17,17 +17,17 @@
 
 package com.alibaba.fluss.kafka;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelPipeline;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelProgressivePromise;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelPromise;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.Attribute;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.AttributeKey;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPipeline;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelProgressivePromise;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPromise;
+import org.apache.fluss.shaded.netty4.io.netty.util.Attribute;
+import org.apache.fluss.shaded.netty4.io.netty.util.AttributeKey;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
 
 import java.net.SocketAddress;
 

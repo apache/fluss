@@ -17,7 +17,7 @@
 
 package com.alibaba.fluss.utils.json;
 
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 
 /** Json deserializer for jackson. */
 public interface JsonDeserializer<T> {

@@ -18,14 +18,14 @@
 package com.alibaba.fluss.server.authorizer;
 
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import com.alibaba.fluss.utils.clock.Clock;
 
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,7 +33,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import static com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent.Type.CHILD_ADDED;
+import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent.Type.CHILD_ADDED;
 
 /** A watcher to watch the change notification (create/delete/alter) in zookeeper. */
 public class ZkNodeChangeNotificationWatcher {

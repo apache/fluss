@@ -20,9 +20,9 @@ package com.alibaba.fluss.metrics.reporter;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.plugin.PluginManager;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import com.alibaba.fluss.utils.CollectionUtils;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

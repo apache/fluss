@@ -25,8 +25,8 @@ import com.alibaba.fluss.server.entity.BatchRegisterLeadAndIsr;
 import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Sets;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

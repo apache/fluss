@@ -26,12 +26,12 @@ import com.alibaba.fluss.metrics.SimpleCounter;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.util.TestHistogram;
 import com.alibaba.fluss.metrics.util.TestMeter;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import com.alibaba.fluss.utils.NetUtils;
 
 import com.mashape.unirest.http.HttpResponse;
 import com.mashape.unirest.http.Unirest;
 import com.mashape.unirest.http.exceptions.UnirestException;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

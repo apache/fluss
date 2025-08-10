@@ -21,9 +21,10 @@ import com.alibaba.fluss.metrics.Gauge;
 import com.alibaba.fluss.metrics.MeterView;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PoolArenaMetric;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocatorMetric;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.PoolArenaMetric;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocatorMetric;
 
 /** A netty metrics class to register metrics from netty. */
 public class NettyMetrics {

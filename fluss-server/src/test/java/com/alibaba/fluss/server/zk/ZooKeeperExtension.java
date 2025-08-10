@@ -18,10 +18,10 @@
 package com.alibaba.fluss.server.zk;
 
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.testutils.common.CustomExtension;
 
 import org.apache.curator.test.TestingServer;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.junit.jupiter.api.extension.Extension;
 import org.junit.jupiter.api.extension.ExtensionContext;

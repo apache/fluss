@@ -17,12 +17,11 @@
 
 package com.alibaba.fluss.rpc.netty;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufHolder;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
-
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufHolder;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

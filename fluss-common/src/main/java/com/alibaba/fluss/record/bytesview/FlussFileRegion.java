@@ -17,18 +17,18 @@
 
 package com.alibaba.fluss.record.bytesview;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.DefaultFileRegion;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.FileRegion;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.AbstractReferenceCounted;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.IllegalReferenceCountException;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.internal.ObjectUtil;
+import org.apache.fluss.shaded.netty4.io.netty.channel.DefaultFileRegion;
+import org.apache.fluss.shaded.netty4.io.netty.channel.FileRegion;
+import org.apache.fluss.shaded.netty4.io.netty.util.AbstractReferenceCounted;
+import org.apache.fluss.shaded.netty4.io.netty.util.IllegalReferenceCountException;
+import org.apache.fluss.shaded.netty4.io.netty.util.internal.ObjectUtil;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 
-import static com.alibaba.fluss.shaded.netty4.io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
+import static org.apache.fluss.shaded.netty4.io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 
 /**
  * A {@link FileRegion} implementation which transfer data from a {@link FileChannel} or {@link

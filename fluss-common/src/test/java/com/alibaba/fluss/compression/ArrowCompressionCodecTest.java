@@ -17,24 +17,23 @@
 
 package com.alibaba.fluss.compression;
 
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.util.AutoCloseables;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
-
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.util.AutoCloseables;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;

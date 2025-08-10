@@ -32,16 +32,16 @@ import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.MessageCodec;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.IOUtils;
 
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

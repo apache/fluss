@@ -18,8 +18,8 @@
 package com.alibaba.fluss.plugin;
 
 import com.alibaba.fluss.plugin.jar.pluginb.TestServiceB;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Lists;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
