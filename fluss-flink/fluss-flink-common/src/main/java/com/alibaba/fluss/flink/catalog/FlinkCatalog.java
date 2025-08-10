@@ -389,9 +389,25 @@ public class FlinkCatalog implements Catalog {
     }
 
     @Override
-    public void alterTable(ObjectPath objectPath, CatalogBaseTable catalogBaseTable, boolean b)
+    public void alterTable(
+            ObjectPath objectPath, CatalogBaseTable newTable, boolean ignoreIfNotExist)
             throws TableNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        TablePath tablePath = toTablePath(objectPath);
+        TableDescriptor tableDescriptor =
+                FlinkConversions.toFlussTable((ResolvedCatalogTable) newTable);
+        try {
+            admin.alterTable(tablePath, tableDescriptor, ignoreIfNotExist).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtils.isTableAlreadyExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (isTableInvalid(t)) {
+                throw new InvalidTableException(t.getMessage());
+            } else {
+                throw new CatalogException(
+                        String.format("Failed to create table %s in %s", objectPath, getName()), t);
+            }
+        }
     }
 
     @SuppressWarnings("checkstyle:WhitespaceAround")

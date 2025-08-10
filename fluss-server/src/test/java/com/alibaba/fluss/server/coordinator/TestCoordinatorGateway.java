@@ -22,6 +22,8 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
+import com.alibaba.fluss.rpc.messages.AlterTableRequest;
+import com.alibaba.fluss.rpc.messages.AlterTableResponse;
 import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
 import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -129,6 +131,11 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
         throw new UnsupportedOperationException();
     }
 
