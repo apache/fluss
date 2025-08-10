@@ -17,8 +17,8 @@
 
 package com.alibaba.fluss.bucketing;
 
-import com.alibaba.fluss.shaded.guava32.com.google.common.hash.HashFunction;
-import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hashing;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.HashFunction;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 
 /** An implementation of {@link BucketingFunction} to follow Iceberg's bucketing strategy. */
 public class IcebergBucketingFunction implements BucketingFunction {
