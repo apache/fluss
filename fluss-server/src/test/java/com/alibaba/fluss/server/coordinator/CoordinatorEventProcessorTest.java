@@ -31,16 +31,19 @@ import com.alibaba.fluss.metadata.TableBucketReplica;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import com.alibaba.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import com.alibaba.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import com.alibaba.fluss.server.coordinator.event.AccessContextEvent;
+import com.alibaba.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import com.alibaba.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
 import com.alibaba.fluss.server.coordinator.statemachine.BucketState;
 import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
+import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
 import com.alibaba.fluss.server.entity.CommitKvSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -78,6 +81,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -99,6 +103,7 @@ import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.Onli
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static com.alibaba.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -759,6 +764,59 @@ class CoordinatorEventProcessorTest {
                         responseCompletableFuture2));
         responseCompletableFuture2.get();
         verifyReceiveRequestExceptFor(3, leader, NotifyKvSnapshotOffsetRequest.class);
+    }
+
+    @Test
+    void testProcessAdjustIsr() throws Exception {
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+        // create a table,
+        TablePath t1 = TablePath.of(defaultDatabase, "create_process_adjust_isr");
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long t1Id = metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(t1Id, tableAssignment, nBuckets, replicationFactor);
+
+        // get the origin bucket leaderAndIsr
+        Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsrMap =
+                new HashMap<>(
+                        waitValue(
+                                () -> fromCtx((ctx) -> Optional.of(ctx.bucketLeaderAndIsr())),
+                                Duration.ofMinutes(1),
+                                "leader not elected"));
+
+        // verify AdjustIsrReceivedEvent
+        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new AdjustIsrReceivedEvent(bucketLeaderAndIsrMap, response));
+
+        retryVerifyContext(
+                ctx ->
+                        bucketLeaderAndIsrMap.forEach(
+                                (tableBucket, leaderAndIsr) ->
+                                        assertThat(ctx.getBucketLeaderAndIsr(tableBucket))
+                                                .contains(
+                                                        leaderAndIsr.newLeaderAndIsr(
+                                                                leaderAndIsr.leader(),
+                                                                leaderAndIsr.isr()))));
+
+        // verify the response
+        AdjustIsrResponse adjustIsrResponse = response.get();
+        Map<TableBucket, AdjustIsrResultForBucket> resultForBucketMap =
+                getAdjustIsrResponseData(adjustIsrResponse);
+        assertThat(resultForBucketMap.keySet())
+                .containsAnyElementsOf(bucketLeaderAndIsrMap.keySet());
+        assertThat(resultForBucketMap.values()).allMatch(AdjustIsrResultForBucket::succeeded);
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {

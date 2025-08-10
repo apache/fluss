@@ -58,6 +58,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -217,6 +218,45 @@ class ZooKeeperClientTest {
                     zookeeperClient.getLeaderAndIsr(partitionTableBucket.get(i).getTableBucket());
             assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
             assertThat(optionalLeaderAndIsr.get()).isIn(partitionleaderAndIsrList);
+        }
+    }
+
+    @Test
+    void testBatchUpdateLeaderAndIsr() throws Exception {
+        int totalCount = 100;
+
+        // try to register bucket leaderAndIsr
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrList = new HashMap<>();
+        for (int i = 0; i < totalCount; i++) {
+            TableBucket tableBucket = new TableBucket(1, i);
+            LeaderAndIsr leaderAndIsr =
+                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+            leaderAndIsrList.put(tableBucket, leaderAndIsr);
+            zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        }
+
+        // try to batch update
+        Map<TableBucket, LeaderAndIsr> updateLeaderAndIsrList =
+                leaderAndIsrList.entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey,
+                                        entry -> {
+                                            LeaderAndIsr old = entry.getValue();
+                                            return new LeaderAndIsr(
+                                                    old.leader() + 1,
+                                                    old.leaderEpoch() + 1,
+                                                    old.isr(),
+                                                    old.coordinatorEpoch() + 1,
+                                                    old.bucketEpoch() + 1);
+                                        }));
+        zookeeperClient.batchUpdateLeaderAndIsr(updateLeaderAndIsrList);
+        for (Map.Entry<TableBucket, LeaderAndIsr> entry : updateLeaderAndIsrList.entrySet()) {
+            TableBucket tableBucket = entry.getKey();
+            LeaderAndIsr leaderAndIsr = entry.getValue();
+            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
+            zookeeperClient.deleteLeaderAndIsr(tableBucket);
+            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
         }
     }
 
