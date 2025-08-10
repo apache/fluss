@@ -24,7 +24,6 @@ import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.IOUtils;
-
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
@@ -50,7 +49,7 @@ import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.iceberg.CatalogUtil.loadCatalog;
 
-/** A Iceberg implementation of {@link LakeCatalog}. */
+/** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
 
     private static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
@@ -101,18 +100,16 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException {
-        if (!tableDescriptor.hasPrimaryKey()) {
-            throw new UnsupportedOperationException(
-                    "Iceberg integration currently supports only primary key tables.");
-        }
         // convert Fluss table path to iceberg table
+        boolean isPkTable = tableDescriptor.hasPrimaryKey();
         TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
-        Schema icebergSchema = convertToIcebergSchema(tableDescriptor);
+        Schema icebergSchema = convertToIcebergSchema(tableDescriptor, isPkTable);
         Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
 
-        PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema);
+        PartitionSpec partitionSpec =
+                createPartitionSpec(tableDescriptor, icebergSchema, isPkTable);
         SortOrder sortOrder = createSortOrder(icebergSchema);
-        tableBuilder.withProperties(buildTableProperties(tableDescriptor));
+        tableBuilder.withProperties(buildTableProperties(tableDescriptor, isPkTable));
         tableBuilder.withPartitionSpec(partitionSpec);
         tableBuilder.withSortOrder(sortOrder);
         try {
@@ -145,10 +142,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
-    public Schema convertToIcebergSchema(TableDescriptor tableDescriptor) {
+    public Schema convertToIcebergSchema(TableDescriptor tableDescriptor, boolean isPkTable) {
         List<Types.NestedField> fields = new ArrayList<>();
         int fieldId = 1;
 
+        // general columns
         for (com.alibaba.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
             String colName = column.getName();
@@ -176,23 +174,29 @@ public class IcebergLakeCatalog implements LakeCatalog {
             }
             fields.add(field);
         }
+
+        // system columns
         for (Map.Entry<String, Type> systemColumn : SYSTEM_COLUMNS.entrySet()) {
             fields.add(
                     Types.NestedField.required(
                             fieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }
 
-        // set identifier fields
-        int[] primaryKeyIndexes = tableDescriptor.getSchema().getPrimaryKeyIndexes();
-        Set<Integer> identifierFieldIds = new HashSet<>();
-        for (int i = 0; i < primaryKeyIndexes.length; i++) {
-            identifierFieldIds.add(fields.get(i).fieldId());
+        if (isPkTable) {
+            // set identifier fields
+            int[] primaryKeyIndexes = tableDescriptor.getSchema().getPrimaryKeyIndexes();
+            Set<Integer> identifierFieldIds = new HashSet<>();
+            for (int pkIdx : primaryKeyIndexes) {
+                identifierFieldIds.add(fields.get(pkIdx).fieldId());
+            }
+            return new Schema(fields, identifierFieldIds);
+        } else {
+            return new Schema(fields);
         }
-        return new Schema(fields, identifierFieldIds);
     }
 
     private PartitionSpec createPartitionSpec(
-            TableDescriptor tableDescriptor, Schema icebergSchema) {
+            TableDescriptor tableDescriptor, Schema icebergSchema, boolean isPkTable) {
         // Only PK tables supported for now
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         int bucketCount =
@@ -204,21 +208,49 @@ public class IcebergLakeCatalog implements LakeCatalog {
                                         new IllegalArgumentException(
                                                 "Bucket count (bucket.num) must be set"));
 
-        if (bucketKeys.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "Bucket key must be set for primary key Iceberg tables");
-        }
+        // Only support one bucket key for now
         if (bucketKeys.size() > 1) {
             throw new UnsupportedOperationException(
                     "Only one bucket key is supported for Iceberg at the moment");
         }
 
+        // pk table must have bucket key
+        if (bucketKeys.isEmpty() && isPkTable) {
+            throw new IllegalArgumentException(
+                    "Bucket key must be set for primary key Iceberg tables");
+        }
+
+        // bucket key must exist in schema
+        if (!bucketKeys.isEmpty()) {
+            if (bucketKeyColumnExists(tableDescriptor, bucketKeys.get(0))
+                    || bucketKeyColumnExistsInIceberg(icebergSchema, bucketKeys.get(0))) {
+                throw new IllegalArgumentException(
+                        "Bucket key does not exist in schema: " + bucketKeys.get(0));
+            }
+        }
+
+        if (bucketCount <= 0) {
+            throw new IllegalArgumentException(
+                    "bucket.num must be greater than 0, but got: " + bucketCount);
+        }
+
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
+        // always set identity partition with partition key
         for (String partitionKey : partitionKeys) {
             builder.identity(partitionKey);
         }
-        builder.bucket(bucketKeys.get(0), bucketCount);
+
+        if (isPkTable) {
+            builder.bucket(bucketKeys.get(0), bucketCount);
+        } else {
+            // if there is no bucket keys, use identity(__bucket)
+            if (bucketKeys.isEmpty()) {
+                builder.identity(BUCKET_COLUMN_NAME);
+            } else {
+                builder.bucket(bucketKeys.get(0), bucketCount);
+            }
+        }
 
         return builder.build();
     }
@@ -252,13 +284,16 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return builder.build();
     }
 
-    private Map<String, String> buildTableProperties(TableDescriptor tableDescriptor) {
+    private Map<String, String> buildTableProperties(
+            TableDescriptor tableDescriptor, boolean isPkTable) {
         Map<String, String> icebergProperties = new HashMap<>();
 
-        // MOR table properties for streaming workloads
-        icebergProperties.put("write.delete.mode", "merge-on-read");
-        icebergProperties.put("write.update.mode", "merge-on-read");
-        icebergProperties.put("write.merge.mode", "merge-on-read");
+        if (isPkTable) {
+            // MOR table properties for streaming workloads
+            icebergProperties.put("write.delete.mode", "merge-on-read");
+            icebergProperties.put("write.update.mode", "merge-on-read");
+            icebergProperties.put("write.merge.mode", "merge-on-read");
+        }
 
         tableDescriptor
                 .getProperties()
@@ -268,6 +303,26 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
 
         return icebergProperties;
+    }
+
+    private boolean bucketKeyColumnExists(TableDescriptor tableDescriptor, String columnName) {
+        for (com.alibaba.fluss.metadata.Schema.Column column :
+                tableDescriptor.getSchema().getColumns()) {
+            if (column.getName().equals(columnName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean bucketKeyColumnExistsInIceberg(Schema icebergSchema, String columnName) {
+        for (Types.NestedField field : icebergSchema.columns()) {
+            if (field.name().equals(columnName)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     @Override
