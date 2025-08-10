@@ -45,6 +45,8 @@ public abstract class CmdBase implements Callable<Integer> {
     @Override
     public Integer call() throws Exception {
         spec.commandLine().usage(System.out);
-        return 0;
+        return execute();
     }
+
+    public abstract Integer execute();
 }

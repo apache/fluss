@@ -26,14 +26,23 @@ import picocli.CommandLine.Parameters;
 @Command(name = "table", description = "Table commands, e.g. list tables, get table")
 public class CmdTable extends CmdBase {
 
+    @Override
+    public Integer execute() {
+        return 0;
+    }
+
     /** List table command. */
     @Command(name = "list", description = "list all tables.")
     public static class CmdListTable extends CmdBase {
-        @Option(names = {"-f", "--format"})
+
+        @Option(
+                names = {"-f", "--format"},
+                required = true)
         private String format = "json";
 
         @Override
-        public Integer call() throws Exception {
+        public Integer execute() {
+            System.out.println("format: " + format);
             return 0;
         }
     }
@@ -45,8 +54,14 @@ public class CmdTable extends CmdBase {
         private String tableName;
 
         @Override
-        public Integer call() {
+        public Integer call() throws Exception {
             System.out.printf("Details of table '%s'...\n", tableName);
+            super.call();
+            return 0;
+        }
+
+        @Override
+        public Integer execute() {
             return 0;
         }
     }

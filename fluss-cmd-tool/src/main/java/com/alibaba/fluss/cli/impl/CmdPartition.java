@@ -23,11 +23,18 @@ import picocli.CommandLine.Command;
 /** Partition related command. */
 @Command(name = "partition", description = "partition commands")
 public class CmdPartition extends CmdBase {
+
+    @Override
+    public Integer execute() {
+        return 0;
+    }
+
     /** List partition command. */
     @Command(name = "list", description = "list table partition.")
     public static class CmdListPartition extends CmdBase {
+
         @Override
-        public Integer call() throws Exception {
+        public Integer execute() {
             return 0;
         }
     }

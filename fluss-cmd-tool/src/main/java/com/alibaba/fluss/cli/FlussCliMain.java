@@ -111,10 +111,12 @@ public class FlussCliMain implements Callable<Integer> {
                         .collect(Collectors.toCollection(LinkedHashSet::new));
 
         for (Class<?> cls : subCommands) {
-            CommandLine parent = buildCommandLine(cls);
+            // fluss is a parent, and the following cmd is the subParent. e.g. Table.
+            CommandLine subParent = buildCommandLine(cls);
+            subParent.setColorScheme(root.getColorScheme());
             String name = cls.getAnnotation(Command.class).name();
-            root.addSubcommand(name, parent);
-            registerNested(parent, cls);
+            root.addSubcommand(name, subParent);
+            registerNested(subParent, cls);
         }
     }
 
