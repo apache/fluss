@@ -232,11 +232,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
             }
         }
 
-        if (bucketCount <= 0) {
-            throw new IllegalArgumentException(
-                    "bucket.num must be greater than 0, but got: " + bucketCount);
-        }
-
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         // always set identity partition with partition key
