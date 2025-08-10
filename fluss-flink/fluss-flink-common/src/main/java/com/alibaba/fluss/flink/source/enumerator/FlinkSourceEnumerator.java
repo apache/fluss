@@ -131,6 +131,8 @@ public class FlinkSourceEnumerator
 
     private final List<FieldEqual> partitionFilters;
 
+    private final PartitionSpec filterPartitionSpec;
+
     public FlinkSourceEnumerator(
             TablePath tablePath,
             Configuration flussConf,
@@ -179,6 +181,7 @@ public class FlinkSourceEnumerator
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
+        this.filterPartitionSpec = convertFiltersToPartitionSpec(partitionFilters);
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
     }
@@ -264,13 +267,12 @@ public class FlinkSourceEnumerator
 
     private Set<PartitionInfo> listPartitions() {
         try {
-            PartitionSpec partitionSpec = convertFiltersToPartitionSpec(partitionFilters);
-            if (partitionSpec == null && !partitionFilters.isEmpty()) {
+            if (filterPartitionSpec == null && !partitionFilters.isEmpty()) {
                 // Contradictory conditions, no partitions can satisfy
                 return new HashSet<>();
             }
             List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tablePath, partitionSpec).get();
+                    flussAdmin.listPartitionInfos(tablePath, filterPartitionSpec).get();
             return new HashSet<>(partitionInfos);
         } catch (Exception e) {
             throw new FlinkRuntimeException(
