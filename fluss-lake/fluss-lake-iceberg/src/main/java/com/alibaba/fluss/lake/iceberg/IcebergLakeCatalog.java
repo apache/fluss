@@ -197,7 +197,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
     private PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema, boolean isPkTable) {
-        // Only PK tables supported for now
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         int bucketCount =
                 tableDescriptor
@@ -222,8 +221,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
         // bucket key must exist in schema
         if (!bucketKeys.isEmpty()) {
-            if (bucketKeyColumnExists(tableDescriptor, bucketKeys.get(0))
-                    || bucketKeyColumnExistsInIceberg(icebergSchema, bucketKeys.get(0))) {
+            if (!bucketKeyColumnExists(tableDescriptor, bucketKeys.get(0))
+                    || !bucketKeyColumnExistsInIceberg(icebergSchema, bucketKeys.get(0))) {
                 throw new IllegalArgumentException(
                         "Bucket key does not exist in schema: " + bucketKeys.get(0));
             }
