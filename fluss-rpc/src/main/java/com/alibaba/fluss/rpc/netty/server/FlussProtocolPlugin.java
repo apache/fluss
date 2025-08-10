@@ -26,7 +26,8 @@ import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.NetworkProtocolPlugin;
 import com.alibaba.fluss.security.auth.AuthenticationFactory;
 import com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;
 import java.util.Optional;

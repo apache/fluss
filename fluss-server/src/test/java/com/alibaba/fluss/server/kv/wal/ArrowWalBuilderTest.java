@@ -28,10 +28,10 @@ import com.alibaba.fluss.record.ChangeType;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

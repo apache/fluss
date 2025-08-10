@@ -18,7 +18,8 @@
 package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.plugin.PluginManager;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
+
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
 import javax.annotation.Nullable;
 

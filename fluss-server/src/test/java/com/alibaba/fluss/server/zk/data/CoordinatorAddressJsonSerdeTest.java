@@ -18,10 +18,10 @@
 package com.alibaba.fluss.server.zk.data;
 
 import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
 
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

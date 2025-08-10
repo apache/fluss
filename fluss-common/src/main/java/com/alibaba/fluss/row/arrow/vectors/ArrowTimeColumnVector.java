@@ -19,11 +19,12 @@ package com.alibaba.fluss.row.arrow.vectors;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.IntColumnVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 import static com.alibaba.fluss.utils.Preconditions.checkState;

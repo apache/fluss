@@ -32,13 +32,13 @@ import com.alibaba.fluss.rpc.netty.server.NettyServerHandler;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
 import com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelId;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
 
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.EventExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

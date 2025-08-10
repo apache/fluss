@@ -18,11 +18,12 @@
 package com.alibaba.fluss.utils.json;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonEncoding;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.util.ByteArrayBuilder;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonEncoding;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.util.ByteArrayBuilder;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;

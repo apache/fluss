@@ -34,15 +34,15 @@ import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.MessageCodec;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
-import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import com.alibaba.fluss.utils.ExponentialBackoff;
 import com.alibaba.fluss.utils.MapUtils;
 
+import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

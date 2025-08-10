@@ -19,9 +19,6 @@ package com.alibaba.fluss.utils.json;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.TableException;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ArrayNode;
 import com.alibaba.fluss.types.ArrayType;
 import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataType;
@@ -33,6 +30,10 @@ import com.alibaba.fluss.types.MapType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.types.TimeType;
 import com.alibaba.fluss.types.TimestampType;
+
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ArrayNode;
 
 import java.io.IOException;
 import java.util.ArrayList;

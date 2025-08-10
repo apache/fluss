@@ -19,10 +19,11 @@ package com.alibaba.fluss.kafka;
 
 import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldPrepender;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
+
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldPrepender;
+import org.apache.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
 
 /**
  * A {@link ChannelInitializer} for initializing {@link SocketChannel} instances that will be used

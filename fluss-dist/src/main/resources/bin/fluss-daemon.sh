@@ -39,7 +39,7 @@ case $DAEMON in
     ;;
 
     (zookeeper)
-        CLASS_TO_RUN=com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerMain
+        CLASS_TO_RUN=org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerMain
     ;;
 
     (*)

@@ -46,10 +46,10 @@ import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.function.RunnableWithException;
 import com.alibaba.fluss.utils.function.ThrowingRunnable;
 
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

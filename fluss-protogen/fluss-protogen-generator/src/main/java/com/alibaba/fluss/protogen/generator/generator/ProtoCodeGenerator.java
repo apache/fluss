@@ -17,11 +17,10 @@
 
 package com.alibaba.fluss.protogen.generator.generator;
 
-import com.alibaba.fluss.shaded.guava32.com.google.common.base.Joiner;
-import com.alibaba.fluss.shaded.guava32.com.google.common.base.Splitter;
-
 import io.protostuff.parser.Proto;
 import io.protostuff.parser.ProtoUtil;
+import org.apache.fluss.shaded.guava32.com.google.common.base.Joiner;
+import org.apache.fluss.shaded.guava32.com.google.common.base.Splitter;
 
 import java.io.File;
 import java.nio.file.Path;

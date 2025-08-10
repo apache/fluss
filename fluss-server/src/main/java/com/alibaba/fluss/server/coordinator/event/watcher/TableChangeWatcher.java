@@ -36,10 +36,10 @@ import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.ZkData.DatabasesZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.PartitionZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
 
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

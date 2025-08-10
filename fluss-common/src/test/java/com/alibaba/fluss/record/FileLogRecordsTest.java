@@ -38,11 +38,11 @@ import java.util.concurrent.Future;
 
 import static com.alibaba.fluss.record.TestData.DATA1;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.shaded.guava32.com.google.common.collect.Lists.newArrayList;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordBatchEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static com.alibaba.fluss.testutils.DataTestUtils.genLogRecordsWithBaseOffsetAndTimestamp;
 import static com.alibaba.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
+import static org.apache.fluss.shaded.guava32.com.google.common.collect.Lists.newArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;

@@ -17,10 +17,10 @@
 
 package com.alibaba.fluss.rpc.netty;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
 
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
 

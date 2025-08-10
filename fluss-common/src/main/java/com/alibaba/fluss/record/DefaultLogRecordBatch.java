@@ -23,14 +23,15 @@ import com.alibaba.fluss.exception.OutOfOrderSequenceException;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.row.arrow.ArrowReader;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.ArrowUtils;
 import com.alibaba.fluss.utils.CloseableIterator;
 import com.alibaba.fluss.utils.MurmurHashUtils;
 import com.alibaba.fluss.utils.crc.Crc32C;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;

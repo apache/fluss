@@ -44,7 +44,8 @@ import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceFilter;
 import com.alibaba.fluss.security.acl.ResourceType;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;

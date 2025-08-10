@@ -18,9 +18,9 @@
 package com.alibaba.fluss.plugin;
 
 import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.shaded.guava32.com.google.common.base.Joiner;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
+import org.apache.fluss.shaded.guava32.com.google.common.base.Joiner;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

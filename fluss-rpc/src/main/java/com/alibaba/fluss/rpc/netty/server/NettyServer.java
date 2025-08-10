@@ -28,15 +28,15 @@ import com.alibaba.fluss.rpc.RpcServer;
 import com.alibaba.fluss.rpc.netty.NettyMetrics;
 import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.protocol.NetworkProtocolPlugin;
-import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.AdaptiveRecvByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOption;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
+import org.apache.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.AdaptiveRecvByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
+import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

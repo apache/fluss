@@ -18,7 +18,8 @@
 package com.alibaba.fluss.record.bytesview;
 
 import com.alibaba.fluss.record.send.SendWritableOutput;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 /**
  * A view of a sequential bytes. It might be a primitive byte array, a Netty ByteBuf, a byte

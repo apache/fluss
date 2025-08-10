@@ -21,9 +21,9 @@ import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.protocol.ApiMethod;
 import com.alibaba.fluss.rpc.protocol.RequestType;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

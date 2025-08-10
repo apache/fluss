@@ -17,9 +17,8 @@
 
 package com.alibaba.fluss.protogen.generator.generator;
 
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Maps;
-
 import io.protostuff.parser.Field;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
 
 import java.io.PrintWriter;
 import java.util.Map;

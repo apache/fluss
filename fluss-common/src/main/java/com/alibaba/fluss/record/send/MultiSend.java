@@ -17,7 +17,7 @@
 
 package com.alibaba.fluss.record.send;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOutboundInvoker;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundInvoker;
 
 import java.io.IOException;
 import java.util.Queue;

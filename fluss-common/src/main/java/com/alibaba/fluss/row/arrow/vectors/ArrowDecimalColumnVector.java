@@ -20,7 +20,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.Decimal;
 import com.alibaba.fluss.row.columnar.DecimalColumnVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.DecimalVector;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.DecimalVector;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 

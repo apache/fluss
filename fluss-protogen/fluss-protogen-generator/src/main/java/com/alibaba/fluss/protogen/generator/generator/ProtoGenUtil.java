@@ -25,14 +25,15 @@ import com.alibaba.fluss.record.send.ByteBufWritableOutput;
 import com.alibaba.fluss.record.send.WritableOutput;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
 import com.alibaba.fluss.rpc.messages.ErrorMessage;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import com.alibaba.fluss.utils.ProtoCodecUtils;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
 import java.io.PrintWriter;
 
-import static com.alibaba.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_CAMEL;
-import static com.alibaba.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
+import static org.apache.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_CAMEL;
+import static org.apache.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
 
 /** Utility class for String manipulation. */
 public class ProtoGenUtil {

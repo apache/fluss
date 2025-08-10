@@ -24,9 +24,6 @@ import com.alibaba.fluss.flink.tiering.source.split.TieringSplitSerializer;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
-import com.alibaba.fluss.shaded.guava32.com.google.common.hash.HashFunction;
-import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hasher;
-import com.alibaba.fluss.shaded.guava32.com.google.common.hash.Hashing;
 
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
@@ -37,6 +34,9 @@ import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.HashFunction;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 
 import java.nio.charset.StandardCharsets;
 

@@ -23,7 +23,8 @@ import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
 import com.alibaba.fluss.rpc.messages.AuthenticateResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.RPC;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 
 import java.util.concurrent.CompletableFuture;
 

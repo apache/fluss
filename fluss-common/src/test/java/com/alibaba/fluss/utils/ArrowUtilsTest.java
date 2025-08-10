@@ -17,29 +17,6 @@
 
 package com.alibaba.fluss.utils;
 
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BitVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.DateDayVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.Float4Vector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.Float8Vector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.SmallIntVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TinyIntVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.util.Text;
 import com.alibaba.fluss.types.DataField;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypes;
@@ -47,6 +24,29 @@ import com.alibaba.fluss.types.RowType;
 
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BitVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.DateDayVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.Float4Vector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.Float8Vector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.SmallIntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TinyIntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.util.Text;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -56,7 +56,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
+import static org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link com.alibaba.fluss.utils.ArrowUtils}. */
