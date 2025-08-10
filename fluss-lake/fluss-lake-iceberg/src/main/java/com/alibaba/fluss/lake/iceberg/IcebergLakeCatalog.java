@@ -24,6 +24,7 @@ import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.utils.IOUtils;
+
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
@@ -221,8 +222,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
         // bucket key must exist in schema
         if (!bucketKeys.isEmpty()) {
-            if (!bucketKeyColumnExists(tableDescriptor, bucketKeys.get(0))
-                    || !bucketKeyColumnExistsInIceberg(icebergSchema, bucketKeys.get(0))) {
+            if (!bucketKeyColumnExists(tableDescriptor, bucketKeys.get(0))) {
+                throw new IllegalArgumentException(
+                        "Bucket key not found does not exist in schema: " + bucketKeys.get(0));
+            }
+            if (!bucketKeyColumnExistsInIceberg(icebergSchema, bucketKeys.get(0))) {
                 throw new IllegalArgumentException(
                         "Bucket key does not exist in schema: " + bucketKeys.get(0));
             }
