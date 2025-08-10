@@ -55,7 +55,3 @@ jobs:
     uses: ./.github/workflows/ci-template.yaml
     with:
         java-version: "11"
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [ core, flink ]

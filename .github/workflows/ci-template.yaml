@@ -31,8 +31,13 @@ on:
         type: string
         default: ""
 jobs:
-  test:
+  build:
     runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [ core, flink ]
+    name: "${{ matrix.module }}"
     steps:
       - name: Checkout code
         uses: actions/checkout@v2

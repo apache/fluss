@@ -32,7 +32,3 @@ jobs:
     with:
       java-version: "8"
       maven-parameters: "-Pjava8"
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [ core, flink ]
