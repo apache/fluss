@@ -143,6 +143,25 @@
           plugin executes before, the property is undefined and makes the tests fail. Thus we define an empty property
           here to make sure it doesn't fail. See also https://issues.apache.org/jira/browse/SUREFIRE-1431 -->
         <argLine/>
+        <extraJavaTestArgs>
+            -XX:+IgnoreUnrecognizedVMOptions
+            --add-opens=java.base/java.lang=ALL-UNNAMED
+            --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+            --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+            --add-opens=java.base/java.io=ALL-UNNAMED
+            --add-opens=java.base/java.net=ALL-UNNAMED
+            --add-opens=java.base/java.nio=ALL-UNNAMED
+            --add-opens=java.base/java.util=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+            --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.cs=ALL-UNNAMED
+            --add-opens=java.base/sun.security.action=ALL-UNNAMED
+            --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
+            -Djdk.reflect.useDirectMethodHandle=false
+            -Dio.netty.tryReflectionSetAccessible=true
+        </extraJavaTestArgs>
     </properties>
 
     <dependencies>
@@ -678,7 +697,7 @@
                         <junit.jupiter.execution.parallel.config.strategy>dynamic
                         </junit.jupiter.execution.parallel.config.strategy>
                     </systemPropertyVariables>
-                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC</argLine>
+                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC ${extraJavaTestArgs}</argLine>
                 </configuration>
                 <executions>
                     <!--execute all the unit tests-->
