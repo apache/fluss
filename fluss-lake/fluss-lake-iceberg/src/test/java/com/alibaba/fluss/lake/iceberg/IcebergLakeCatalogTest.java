@@ -22,6 +22,7 @@ import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.DataTypes;
+
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.SortDirection;
 import org.apache.iceberg.SortField;

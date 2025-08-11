@@ -386,6 +386,8 @@
                                         <exclude>com.alibaba.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->
                                         <exclude>com.alibaba.fluss.lake.iceberg.*</exclude>
+                                        <exclude>com.alibaba.fluss.row.encode.iceberg.*</exclude>
+                                        <exclude>com.alibaba.fluss.bucketing.IcebergBucketingFunction</exclude>
                                         <!-- start exclude for flink tiering service -->
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceOptions</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource.Builder</exclude>

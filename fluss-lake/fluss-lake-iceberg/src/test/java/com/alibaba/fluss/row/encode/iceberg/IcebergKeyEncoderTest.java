@@ -25,6 +25,8 @@ import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 
+import org.apache.iceberg.types.Conversions;
+import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -89,8 +91,9 @@ class IcebergKeyEncoderTest {
         byte[] equivalentBytes = toBytes(testValue);
         assertThat(ourEncoded).isEqualTo(equivalentBytes);
 
-        // Iceberg's implementation
-        byte[] icebergEncoded = new byte[] {21, -127, -23, 125, -12, 16, 34, 17};
+        // Encode with Iceberg's implementation
+        ByteBuffer icebergBuffer = Conversions.toByteBuffer(Types.LongType.get(), testValue);
+        byte[] icebergEncoded = toByteArray(icebergBuffer);
         assertThat(ourEncoded).isEqualTo(icebergEncoded);
     }
 
