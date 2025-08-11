@@ -472,7 +472,7 @@ When performing Fluss stream reads, Paimon can provide efficient backtracking ca
 
 ## Benefits and Summary
 
-After a period of in-depth research, comprehensive testing, and smooth launch of Fluss, we successfully completed the evolution of the technical architecture based on the Fluss link. Among them, we conducted comprehensive tests on core capabilities such as Fluss column pruning and Delta Join to ensure the stability and performance of the link met the standards.
+After a period of in-depth research, comprehensive testing, and smooth launch of Fluss, we successfully completed the evolution of the technical architecture based on Fluss as a solution. Among them, we conducted comprehensive tests on core capabilities such as Fluss column pruning and Delta Join to ensure the stability and performance of the solution met the standards.
 
 ### Performance Test
 
