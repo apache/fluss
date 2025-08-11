@@ -305,8 +305,8 @@ public class MetadataManager {
 
     public void alterTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
-        // validate table properties before creating table
-        validateTableDescriptor(tableDescriptor, maxBucketNum);
+        // validate table properties before altering table
+        validateAlterTableProperties(tableDescriptor);
 
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(

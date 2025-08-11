@@ -116,7 +116,6 @@ message AlterTableRequest {
 }
 
 message AlterTableResponse {
-
 }
 
 // get table request and response

@@ -240,7 +240,9 @@ public interface Admin extends AutoCloseable {
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
      * <ul>
-     *   <li>{@link DatabaseNotExistException} if the database does not exist.
+     *   <li>{@link DatabaseNotExistException} when the database does not exist.
+     *   <li>{@link TableNotExistException} when the table does not exist, if ignoreIfNotExists is
+     *       false.
      * </ul>
      *
      * @param tablePath The table path of the table.
