@@ -15,43 +15,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ################################################################################
-name: CI
+name: Nightly
 on:
-  push:
-    branches:
-      - main
-      - release-**
-      - ci-**
-    paths-ignore:
-      - 'website/**'
-      - '**/*.md'
-  pull_request:
-    paths-ignore:
-      - 'website/**'
-      - '**/*.md'
+  schedule:
+    # Run at 20:00 UTC daily which is the lowest traffic time for Fluss project.
+    - cron: "0 20 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  compile-on-jdk8:
-    name: "Compile Java 8"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Set up JDK 8
-        uses: actions/setup-java@v4
-        with:
-          java-version: '8'
-          distribution: 'temurin'
-      - name: Build
-        run: |
-          mvn -T 1C -B clean install -DskipTests -Pjava8
-
-  build-on-jdk11:
-    name: "Java 11"
+  build-on-jdk8:
+    name: "Java 8"
     uses: ./.github/workflows/ci-template.yaml
     with:
-        java-version: "11"
+      java-version: "8"
+      maven-parameters: "-Pjava8"

@@ -82,7 +82,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <target.java.version>1.8</target.java.version>
+        <target.java.version>11</target.java.version>
         <maven.compiler.source>${target.java.version}</maven.compiler.source>
         <maven.compiler.target>${target.java.version}</maven.compiler.target>
         <test.unit.pattern>**/*Test.*</test.unit.pattern>
@@ -143,6 +143,25 @@
           plugin executes before, the property is undefined and makes the tests fail. Thus we define an empty property
           here to make sure it doesn't fail. See also https://issues.apache.org/jira/browse/SUREFIRE-1431 -->
         <argLine/>
+        <extraJavaTestArgs>
+            -XX:+IgnoreUnrecognizedVMOptions
+            --add-opens=java.base/java.lang=ALL-UNNAMED
+            --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+            --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+            --add-opens=java.base/java.io=ALL-UNNAMED
+            --add-opens=java.base/java.net=ALL-UNNAMED
+            --add-opens=java.base/java.nio=ALL-UNNAMED
+            --add-opens=java.base/java.util=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+            --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.cs=ALL-UNNAMED
+            --add-opens=java.base/sun.security.action=ALL-UNNAMED
+            --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
+            -Djdk.reflect.useDirectMethodHandle=false
+            -Dio.netty.tryReflectionSetAccessible=true
+        </extraJavaTestArgs>
     </properties>
 
     <dependencies>
@@ -426,6 +445,29 @@
 
     <profiles>
         <profile>
+            <id>java8</id>
+            <properties>
+                <target.java.version>1.8</target.java.version>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <source>${target.java.version}</source>
+                            <target>${target.java.version}</target>
+                            <useIncrementalCompilation>false</useIncrementalCompilation>
+                            <compilerArgs >
+                                <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
+                                <arg>-Xpkginfo:always</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
             <id>test-coverage</id>
             <properties>
                 <test.skip.coverage>false</test.skip.coverage>
@@ -510,6 +552,22 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.0</version>
+                <configuration>
+                    <source>${target.java.version}</source>
+                    <target>${target.java.version}</target>
+                    <!-- The semantics of this option are reversed, see MCOMPILER-209. -->
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
+                    <compilerArgs >
+                        <arg>--add-exports=java.base/sun.net.util=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.management/sun.management=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                        <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
+                        <arg>-Xpkginfo:always</arg>
+                    </compilerArgs>
+                </configuration>
             </plugin>
 
             <plugin>
@@ -639,7 +697,7 @@
                         <junit.jupiter.execution.parallel.config.strategy>dynamic
                         </junit.jupiter.execution.parallel.config.strategy>
                     </systemPropertyVariables>
-                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC</argLine>
+                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC ${extraJavaTestArgs}</argLine>
                 </configuration>
                 <executions>
                     <!--execute all the unit tests-->
@@ -692,8 +750,8 @@
                         <configuration>
                             <rules>
                                 <requireMavenVersion>
-                                    <!-- enforce at least mvn version 3.1.1 (see FLINK-12447) -->
-                                    <version>[3.1.1,)</version>
+                                    <!-- enforce at least mvn version 3.8.6 -->
+                                    <version>[3.8.6,)</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
                                     <version>${target.java.version}</version>
@@ -879,6 +937,7 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.8.0</version>
                     <configuration>
+                        <!-- Make sure that we only use Java 8 compatible APIs -->
                         <source>${target.java.version}</source>
                         <target>${target.java.version}</target>
                         <!-- The semantics of this option are reversed, see MCOMPILER-209. -->
