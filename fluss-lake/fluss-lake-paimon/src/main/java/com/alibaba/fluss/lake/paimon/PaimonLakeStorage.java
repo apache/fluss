@@ -19,6 +19,8 @@ package com.alibaba.fluss.lake.paimon;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lake.lakestorage.LakeStorage;
+import com.alibaba.fluss.lake.paimon.source.PaimonLakeSource;
+import com.alibaba.fluss.lake.paimon.source.PaimonSplit;
 import com.alibaba.fluss.lake.paimon.tiering.PaimonCommittable;
 import com.alibaba.fluss.lake.paimon.tiering.PaimonLakeTieringFactory;
 import com.alibaba.fluss.lake.paimon.tiering.PaimonWriteResult;
@@ -46,7 +48,7 @@ public class PaimonLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<?> createLakeSource(TablePath tablePath) {
-        throw new UnsupportedOperationException("Not implemented");
+    public LakeSource<PaimonSplit> createLakeSource(TablePath tablePath) {
+        return new PaimonLakeSource(paimonConfig, tablePath);
     }
 }

@@ -50,6 +50,21 @@ public class PaimonConversions {
         }
     }
 
+    public static ChangeType toChangeType(RowKind rowKind) {
+        switch (rowKind) {
+            case INSERT:
+                return ChangeType.INSERT;
+            case UPDATE_BEFORE:
+                return ChangeType.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return ChangeType.UPDATE_AFTER;
+            case DELETE:
+                return ChangeType.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported rowKind: " + rowKind);
+        }
+    }
+
     public static Identifier toPaimon(TablePath tablePath) {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
     }

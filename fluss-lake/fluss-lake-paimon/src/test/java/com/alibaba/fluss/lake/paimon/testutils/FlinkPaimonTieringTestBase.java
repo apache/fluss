@@ -91,7 +91,7 @@ public class FlinkPaimonTieringTestBase {
     protected static Connection conn;
     protected static Admin admin;
     protected static Configuration clientConf;
-    private static String warehousePath;
+    protected static String warehousePath;
     protected static Catalog paimonCatalog;
 
     private static Configuration initConfig() {
