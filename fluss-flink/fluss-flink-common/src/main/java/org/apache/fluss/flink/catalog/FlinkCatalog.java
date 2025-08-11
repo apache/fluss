@@ -400,7 +400,7 @@ public class FlinkCatalog extends AbstractCatalog {
             admin.alterTable(tablePath, tableDescriptor, ignoreIfNotExist).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (CatalogExceptionUtils.isTableAlreadyExist(t)) {
+            if (CatalogExceptionUtils.isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else if (isTableInvalid(t)) {
                 throw new InvalidTableException(t.getMessage());

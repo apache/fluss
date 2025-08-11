@@ -198,6 +198,69 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterTable() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        TableDescriptor existingTableDescriptor = tableInfo.toTableDescriptor();
+        Map<String, String> updateProperties =
+                new HashMap<>(existingTableDescriptor.getProperties());
+        Map<String, String> updateCustomProperties =
+                new HashMap<>(existingTableDescriptor.getCustomProperties());
+        updateProperties.put("table.datalake.enabled", "true");
+        updateCustomProperties.put("table.datalake.enabled", "true");
+
+        TableDescriptor newTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(existingTableDescriptor.getSchema())
+                        .comment(existingTableDescriptor.getComment().orElse("test table"))
+                        .partitionedBy(existingTableDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                existingTableDescriptor
+                                        .getTableDistribution()
+                                        .get()
+                                        .getBucketCount()
+                                        .orElse(3),
+                                existingTableDescriptor.getBucketKeys())
+                        .properties(updateProperties)
+                        .customProperties(updateCustomProperties)
+                        .build();
+        // alter table
+        admin.alterTable(tablePath, newTableDescriptor, false).get();
+
+        TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
+        assertThat(alteredTableDescriptor).isEqualTo(newTableDescriptor);
+
+        // throw exception if table not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of("test_db", "alter_table_not_exist"),
+                                                newTableDescriptor,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+
+        // throw exception if database not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of(
+                                                        "test_db_not_exist",
+                                                        "alter_table_not_exist"),
+                                                newTableDescriptor,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(DatabaseNotExistException.class);
+    }
+
+    @Test
     void testCreateInvalidDatabaseAndTable() {
         assertThatThrownBy(
                         () ->
