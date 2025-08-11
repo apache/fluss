@@ -390,7 +390,7 @@ class IcebergLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        // Don't allow multiple bucket keys for log table
+        // Do not allow multiple bucket keys for log table
         assertThatThrownBy(() -> flussIcebergCatalog.createTable(tablePath, tableDescriptor))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Only one bucket key is supported for Iceberg");
