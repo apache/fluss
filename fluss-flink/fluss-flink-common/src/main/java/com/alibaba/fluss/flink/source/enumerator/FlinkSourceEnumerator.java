@@ -131,7 +131,7 @@ public class FlinkSourceEnumerator
 
     private final List<FieldEqual> partitionFilters;
 
-    private final PartitionSpec filterPartitionSpec;
+    private PartitionSpec filterPartitionSpec;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -181,7 +181,6 @@ public class FlinkSourceEnumerator
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
-        this.filterPartitionSpec = convertFiltersToPartitionSpec(partitionFilters);
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
     }
@@ -194,6 +193,7 @@ public class FlinkSourceEnumerator
         bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
         try {
             tableInfo = flussAdmin.getTableInfo(tablePath).get();
+            filterPartitionSpec = convertFiltersToPartitionSpec(partitionFilters);
             lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
         } catch (Exception e) {
             throw new FlinkRuntimeException(
