@@ -49,7 +49,9 @@ import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -229,5 +231,39 @@ public class CommonRpcMessageUtils {
             partitionValues.add(pbKeyValue.getValue());
         }
         return new ResolvedPartitionSpec(partitionKeys, partitionValues);
+    }
+
+    /**
+     * Convert PbPartitionSpec to ResolvedPartitionSpec with partition key ordering. This ensures
+     * the partition values are ordered according to the table's partition key sequence.
+     */
+    public static ResolvedPartitionSpec toResolvedPartitionSpec(
+            PbPartitionSpec pbPartitionSpec, List<String> orderedPartitionKeys) {
+
+        List<PbKeyValue> partitionKeyValuesList = pbPartitionSpec.getPartitionKeyValuesList();
+        if (partitionKeyValuesList.size() != orderedPartitionKeys.size()) {
+            return toResolvedPartitionSpec(pbPartitionSpec);
+        }
+
+        Map<String, String> pbkeyValueMap = new HashMap<>();
+        for (PbKeyValue pbKeyValue : partitionKeyValuesList) {
+            if (!orderedPartitionKeys.contains(pbKeyValue.getKey())) {
+                return toResolvedPartitionSpec(pbPartitionSpec);
+            }
+            pbkeyValueMap.put(pbKeyValue.getKey(), pbKeyValue.getValue());
+        }
+
+        List<String> partitionKeys = new ArrayList<>();
+        List<String> orderedPartitionValues = new ArrayList<>();
+
+        for (String orderedKey : orderedPartitionKeys) {
+            String value = pbkeyValueMap.get(orderedKey);
+            if (value != null) {
+                partitionKeys.add(orderedKey);
+                orderedPartitionValues.add(value);
+            }
+        }
+
+        return new ResolvedPartitionSpec(partitionKeys, orderedPartitionValues);
     }
 }
