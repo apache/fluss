@@ -277,7 +277,6 @@ public class TieringCommitOperator<WriteResult, Committable>
                                             partitionKeys, partitionNameById.get(partitionId))
                                     .getPartitionQualifiedName();
                 }
-                partitionNameById.get(entry.getKey().getPartitionId());
                 BucketOffsetJsonSerde.INSTANCE.serialize(
                         new BucketOffset(
                                 entry.getValue(),

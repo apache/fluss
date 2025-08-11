@@ -20,6 +20,7 @@ package com.alibaba.fluss.client.metadata;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.metadata.TableBucket;
 
+import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -54,11 +55,11 @@ public class LakeSnapshot {
     }
 
     public Map<TableBucket, Long> getTableBucketsOffset() {
-        return tableBucketsOffset;
+        return Collections.unmodifiableMap(tableBucketsOffset);
     }
 
     public Map<Long, String> getPartitionNameById() {
-        return partitionNameById;
+        return Collections.unmodifiableMap(partitionNameById);
     }
 
     @Override
