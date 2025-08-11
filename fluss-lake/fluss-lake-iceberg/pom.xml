@@ -79,5 +79,23 @@
         </plugins>
     </build>
 
+    <profiles>
+        <profile>
+            <id>java8</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <!--- Not compile in java8 since java8 not supported the version of iceberg. -->
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 
 </project>

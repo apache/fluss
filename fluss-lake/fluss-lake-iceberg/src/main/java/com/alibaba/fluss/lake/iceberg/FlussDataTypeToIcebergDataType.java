@@ -37,6 +37,7 @@ import com.alibaba.fluss.types.StringType;
 import com.alibaba.fluss.types.TimeType;
 import com.alibaba.fluss.types.TimestampType;
 import com.alibaba.fluss.types.TinyIntType;
+
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
