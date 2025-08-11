@@ -18,6 +18,7 @@
 package com.alibaba.fluss.lake.iceberg.tiering;
 
 import com.alibaba.fluss.config.Configuration;
+
 import org.apache.iceberg.catalog.Catalog;
 
 import java.io.Serializable;
