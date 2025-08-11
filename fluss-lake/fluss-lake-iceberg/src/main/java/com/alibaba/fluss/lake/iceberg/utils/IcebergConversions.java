@@ -40,10 +40,7 @@ public class IcebergConversions {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    /**
-     * Convert Iceberg Type to Flink LogicalType for runtime processing. Used when creating Flink
-     * RowType from Iceberg Schema.
-     */
+    /** Convert Iceberg Type to Flink LogicalType for runtime processing. */
     @SuppressWarnings("checkstyle:SimplifyBooleanExpression")
     public static LogicalType toFlinkLogicalType(Type icebergType) {
         switch (icebergType.typeId()) {

@@ -93,19 +93,16 @@ public class FlussRecordAsIcebergRow implements RowData {
         int totalFields = originRowFieldCount + LAKE_ICEBERG_SYSTEM_COLUMNS;
         GenericRowData rowData = new GenericRowData(totalFields);
 
-        // Set original fields
         for (int i = 0; i < originRowFieldCount; i++) {
             Object value =
                     convertFlussValueToFlink(internalRow, i, icebergSchema.columns().get(i).type());
             rowData.setField(i, value);
         }
 
-        // Set system columns
-        rowData.setField(originRowFieldCount, bucket); // __bucket
-        rowData.setField(originRowFieldCount + 1, logRecord.logOffset()); // __offset
+        rowData.setField(originRowFieldCount, bucket);
+        rowData.setField(originRowFieldCount + 1, logRecord.logOffset());
         rowData.setField(
-                originRowFieldCount + 2,
-                TimestampData.fromEpochMillis(logRecord.timestamp())); // __timestamp
+                originRowFieldCount + 2, TimestampData.fromEpochMillis(logRecord.timestamp()));
 
         return rowData;
     }
@@ -165,7 +162,6 @@ public class FlussRecordAsIcebergRow implements RowData {
             }
         }
 
-        // Add system columns
         fields.add(new RowType.RowField(BUCKET_COLUMN_NAME, new IntType()));
         fields.add(new RowType.RowField(OFFSET_COLUMN_NAME, new BigIntType()));
         fields.add(new RowType.RowField(TIMESTAMP_COLUMN_NAME, new TimestampType(3)));
@@ -179,7 +175,6 @@ public class FlussRecordAsIcebergRow implements RowData {
                 || TIMESTAMP_COLUMN_NAME.equals(columnName);
     }
 
-    // RowData interface implementation - delegate to converted rowData
     @Override
     public int getArity() {
         return rowData.getArity();
@@ -187,7 +182,6 @@ public class FlussRecordAsIcebergRow implements RowData {
 
     @Override
     public RowKind getRowKind() {
-        // Convert Fluss ChangeType to Flink RowKind
         switch (logRecord.getChangeType()) {
             case INSERT:
             case APPEND_ONLY:
