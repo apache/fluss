@@ -129,6 +129,19 @@ public class IdempotenceManager {
         this.idempotenceBucketMap.reset();
     }
 
+    /**
+     * This method is used to reset writer id and the sequence of the inflight writer batch to allow
+     * sender to send these batches again with a new writer id for the case that send with the old
+     * writer id meets {@link OutOfOrderSequenceException}.
+     */
+    synchronized void resetWriteIdAndSequence(ReadyWriteBatch readyWriteBatch) {
+        // reset writer id to no_writer_id
+        setWriterId(NO_WRITER_ID);
+
+        // reset sequence number to no sequence num for all inflight batches
+        this.idempotenceBucketMap.resetToNoSequenceNum(readyWriteBatch);
+    }
+
     synchronized boolean hasStaleWriterId(TableBucket tableBucket) {
         return writerId != idempotenceBucketMap.getOrCreate(tableBucket).writerId();
     }
