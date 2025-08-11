@@ -43,6 +43,10 @@
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-common</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
