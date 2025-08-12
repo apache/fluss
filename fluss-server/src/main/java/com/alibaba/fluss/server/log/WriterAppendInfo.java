@@ -44,13 +44,13 @@ public class WriterAppendInfo {
         return writerId;
     }
 
-    public void append(LogRecordBatch batch, boolean isBatchExpired) {
+    public void append(LogRecordBatch batch, boolean isWriterInBatchExpired) {
         LogOffsetMetadata firstOffsetMetadata = new LogOffsetMetadata(batch.baseLogOffset());
         appendDataBatch(
                 batch.batchSequence(),
                 firstOffsetMetadata,
                 batch.lastLogOffset(),
-                isBatchExpired,
+                isWriterInBatchExpired,
                 batch.commitTimestamp());
     }
 
@@ -58,9 +58,9 @@ public class WriterAppendInfo {
             int batchSequence,
             LogOffsetMetadata firstOffsetMetadata,
             long lastOffset,
-            boolean isBatchExpired,
+            boolean isWriterInBatchExpired,
             long batchTimestamp) {
-        maybeValidateDataBatch(batchSequence, isBatchExpired, lastOffset);
+        maybeValidateDataBatch(batchSequence, isWriterInBatchExpired, lastOffset);
         updatedEntry.addBath(
                 batchSequence,
                 lastOffset,
@@ -69,13 +69,13 @@ public class WriterAppendInfo {
     }
 
     private void maybeValidateDataBatch(
-            int appendFirstSeq, boolean isBatchExpired, long lastOffset) {
+            int appendFirstSeq, boolean isWriterInBatchExpired, long lastOffset) {
         int currentLastSeq =
                 !updatedEntry.isEmpty()
                         ? updatedEntry.lastBatchSequence()
                         : currentEntry.lastBatchSequence();
         // must be in sequence, even for the first batch should start from 0
-        if (!inSequence(currentLastSeq, appendFirstSeq, isBatchExpired)) {
+        if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired)) {
             throw new OutOfOrderSequenceException(
                     String.format(
                             "Out of order batch sequence for writer %s at offset %s in "
@@ -88,8 +88,21 @@ public class WriterAppendInfo {
         return updatedEntry;
     }
 
-    private boolean inSequence(int lastBatchSeq, int nextBatchSeq, boolean isBatchExpired) {
-        return (lastBatchSeq == NO_BATCH_SEQUENCE && isBatchExpired)
+    /**
+     * Check if the next batch sequence is in sequence with the last batch sequence. The following
+     * three scenarios will be judged as in sequence:
+     *
+     * <ul>
+     *   <li>If lastBatchSeq equals NO_BATCH_SEQUENCE, we need to check whether the committed
+     *       timestamp of the next batch under the current writerId has expired. If it has expired,
+     *       we consider this a special case caused by writerId expiration, for this case, to ensure
+     *       the correctness of follower sync, we still treat it as in sequence.
+     *   <li>nextBatchSeq == lastBatchSeq + 1L
+     *   <li>lastBatchSeq reaches its maximum value
+     * </ul>
+     */
+    private boolean inSequence(int lastBatchSeq, int nextBatchSeq, boolean isWriterInBatchExpired) {
+        return (lastBatchSeq == NO_BATCH_SEQUENCE && isWriterInBatchExpired)
                 || nextBatchSeq == lastBatchSeq + 1L
                 || (nextBatchSeq == 0 && lastBatchSeq == Integer.MAX_VALUE);
     }

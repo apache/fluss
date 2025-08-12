@@ -143,7 +143,8 @@ public class WriterStateManager {
      * UnknownWriterIdException} errors. Note that the log end offset is assumed to be less than or
      * equal to the high watermark.
      */
-    public void truncateAndReload(long logStartOffset, long logEndOffset) throws IOException {
+    public void truncateAndReload(long logStartOffset, long logEndOffset, long currentTimeMs)
+            throws IOException {
         // remove all out of range snapshots.
         for (SnapshotFile snapshot : snapshots.values()) {
             if (snapshot.offset > logEndOffset || snapshot.offset <= logStartOffset) {
@@ -153,7 +154,7 @@ public class WriterStateManager {
 
         if (logEndOffset != mapEndOffset()) {
             clearWriterIds();
-            loadFromSnapshot(logStartOffset);
+            loadFromSnapshot(logStartOffset, currentTimeMs);
         } else {
             if (lastMapOffset < logStartOffset) {
                 lastMapOffset = logStartOffset;
@@ -303,14 +304,19 @@ public class WriterStateManager {
         this.snapshots = snapshots;
     }
 
-    private void loadFromSnapshot(long logStartOffset) throws IOException {
+    private void loadFromSnapshot(long logStartOffset, long currentTime) throws IOException {
         while (true) {
             Optional<SnapshotFile> latestSnapshotFileOptional = latestSnapshotFile();
             if (latestSnapshotFileOptional.isPresent()) {
                 SnapshotFile snapshot = latestSnapshotFileOptional.get();
                 try {
                     LOG.info("Loading writer state from snapshot file '{}'", snapshot);
-                    Stream<WriterStateEntry> loadedWriters = readSnapshot(snapshot.file()).stream();
+                    Stream<WriterStateEntry> loadedWriters =
+                            readSnapshot(snapshot.file()).stream()
+                                    .filter(
+                                            writerStateEntry ->
+                                                    !isWriterExpired(
+                                                            currentTime, writerStateEntry));
                     loadedWriters.forEach(this::loadWriterEntry);
                     lastSnapOffset = snapshot.offset;
                     lastMapOffset = lastSnapOffset;
@@ -345,7 +351,6 @@ public class WriterStateManager {
         writerIdCount = writers.size();
     }
 
-    /** Remove the writer ids from the map permanently. */
     private void removeWriterIds(List<Long> keys) {
         keys.forEach(writers::remove);
         writerIdCount = writers.size();
@@ -414,7 +419,7 @@ public class WriterStateManager {
         return currentTimeMs - writerStateEntry.lastBatchTimestamp() > writerExpirationMs;
     }
 
-    public boolean isBatchExpired(long currentTimeMs, LogRecordBatch recordBatch) {
+    public boolean isWriterInBatchExpired(long currentTimeMs, LogRecordBatch recordBatch) {
         return currentTimeMs - recordBatch.commitTimestamp() > writerExpirationMs;
     }
 

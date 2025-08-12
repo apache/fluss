@@ -1116,7 +1116,8 @@ public final class LogTablet {
         WriterAppendInfo appendInfo =
                 writers.computeIfAbsent(writerId, id -> writerStateManager.prepareUpdate(writerId));
         appendInfo.append(
-                batch, writerStateManager.isBatchExpired(System.currentTimeMillis(), batch));
+                batch,
+                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch));
     }
 
     static void rebuildWriterState(
@@ -1168,7 +1169,8 @@ public final class LogTablet {
             boolean isEmptyBeforeTruncation =
                     writerStateManager.isEmpty() && writerStateManager.mapEndOffset() >= lastOffset;
             long writerStateLoadStart = System.currentTimeMillis();
-            writerStateManager.truncateAndReload(logStartOffset, lastOffset);
+            writerStateManager.truncateAndReload(
+                    logStartOffset, lastOffset, System.currentTimeMillis());
             long segmentRecoveryStart = System.currentTimeMillis();
 
             // Only do the potentially expensive reloading if the last snapshot offset is lower than
