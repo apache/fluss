@@ -66,8 +66,10 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             List<PaimonSplit> splits = new ArrayList<>();
             try (Catalog catalog = getCatalog()) {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
-                // TODO: support filter .withFilter(predicate)
                 InnerTableScan tableScan = fileStoreTable.newScan();
+                if (predicate != null) {
+                    tableScan = tableScan.withFilter(predicate);
+                }
                 for (Split split : tableScan.plan().splits()) {
                     DataSplit dataSplit = (DataSplit) split;
                     splits.add(new PaimonSplit(dataSplit));

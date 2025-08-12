@@ -19,6 +19,7 @@
 package com.alibaba.fluss.lake.paimon.source;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.lake.paimon.utils.FlussToPaimonPredicateConverter;
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.Planner;
@@ -30,13 +31,16 @@ import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.predicate.PredicateBuilder;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.types.RowType;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
@@ -69,7 +73,23 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
 
     @Override
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
-        return FilterPushDownResult.of(Collections.emptyList(), predicates);
+        List<Predicate> unConsumedPredicates = new ArrayList<>();
+        List<Predicate> consumedPredicates = new ArrayList<>();
+        List<org.apache.paimon.predicate.Predicate> converted = new ArrayList<>();
+        for (Predicate predicate : predicates) {
+            Optional<org.apache.paimon.predicate.Predicate> optPredicate =
+                    FlussToPaimonPredicateConverter.convert(getRowType(tablePath), predicate);
+            if (optPredicate.isPresent()) {
+                consumedPredicates.add(predicate);
+                converted.add(optPredicate.get());
+            } else {
+                unConsumedPredicates.add(predicate);
+            }
+        }
+        if (!converted.isEmpty()) {
+            predicate = PredicateBuilder.and(converted);
+        }
+        return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
     }
 
     @Override
@@ -106,5 +126,14 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
 
     private FileStoreTable getTable(Catalog catalog, TablePath tablePath) throws Exception {
         return (FileStoreTable) catalog.getTable(toPaimon(tablePath));
+    }
+
+    private RowType getRowType(TablePath tablePath) {
+        try (Catalog catalog = getCatalog()) {
+            FileStoreTable fileStoreTable = getTable(catalog, tablePath);
+            return fileStoreTable.rowType();
+        } catch (Exception e) {
+            throw new RuntimeException("Fail to get row type of " + tablePath, e);
+        }
     }
 }

@@ -25,7 +25,6 @@ import com.alibaba.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
-import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.schema.Schema;
@@ -58,9 +57,7 @@ class PaimonSplitTest extends PaimonSourceTestBase {
         builder.primaryKey("c1", "c3");
         builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
         createTable(tablePath, builder.build());
-        Table table =
-                paimonCatalog.getTable(
-                        Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName()));
+        Table table = getTable(tablePath);
 
         GenericRow record1 =
                 GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
