@@ -27,7 +27,6 @@ supports HDFS as a remote storage.
 
 
 ## Configurations setup
-
 To enabled HDFS as remote storage, you need to define the hdfs path as remote storage in Fluss' `server.yaml`:
 ```yaml title="conf/server.yaml"
 # The dir that used to be as the remote storage of Fluss
