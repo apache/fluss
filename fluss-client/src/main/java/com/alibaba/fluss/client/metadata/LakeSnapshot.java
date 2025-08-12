@@ -20,6 +20,7 @@ package com.alibaba.fluss.client.metadata;
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.metadata.TableBucket;
 
+import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -36,9 +37,17 @@ public class LakeSnapshot {
     // the specific log offset of the snapshot
     private final Map<TableBucket, Long> tableBucketsOffset;
 
-    public LakeSnapshot(long snapshotId, Map<TableBucket, Long> tableBucketsOffset) {
+    // the partition name by partition id of this lake snapshot if
+    // is a partitioned table, empty if not a partitioned table
+    private final Map<Long, String> partitionNameById;
+
+    public LakeSnapshot(
+            long snapshotId,
+            Map<TableBucket, Long> tableBucketsOffset,
+            Map<Long, String> partitionNameById) {
         this.snapshotId = snapshotId;
         this.tableBucketsOffset = tableBucketsOffset;
+        this.partitionNameById = partitionNameById;
     }
 
     public long getSnapshotId() {
@@ -46,7 +55,11 @@ public class LakeSnapshot {
     }
 
     public Map<TableBucket, Long> getTableBucketsOffset() {
-        return tableBucketsOffset;
+        return Collections.unmodifiableMap(tableBucketsOffset);
+    }
+
+    public Map<Long, String> getPartitionNameById() {
+        return Collections.unmodifiableMap(partitionNameById);
     }
 
     @Override
@@ -56,6 +69,8 @@ public class LakeSnapshot {
                 + snapshotId
                 + ", tableBucketsOffset="
                 + tableBucketsOffset
+                + ", partitionNameById="
+                + partitionNameById
                 + '}';
     }
 }

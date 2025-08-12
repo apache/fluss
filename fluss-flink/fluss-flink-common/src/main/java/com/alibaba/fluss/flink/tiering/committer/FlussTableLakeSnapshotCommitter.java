@@ -21,6 +21,7 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
@@ -32,8 +33,6 @@ import com.alibaba.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.types.Tuple2;
-
-import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Map;
@@ -63,7 +62,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
     }
 
-    public void commit(FlussTableLakeSnapshot flussTableLakeSnapshot) throws IOException {
+    void commit(FlussTableLakeSnapshot flussTableLakeSnapshot) throws IOException {
         try {
             CommitLakeTableSnapshotRequest request =
                     toCommitLakeTableSnapshotRequest(flussTableLakeSnapshot);
@@ -77,10 +76,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    public void commit(
-            long tableId,
-            @Nullable Map<String, Long> partitionIdByName,
-            CommittedLakeSnapshot committedLakeSnapshot)
+    public void commit(long tableId, CommittedLakeSnapshot committedLakeSnapshot)
             throws IOException {
         // construct lake snapshot to commit to Fluss
         FlussTableLakeSnapshot flussTableLakeSnapshot =
@@ -89,18 +85,22 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                 committedLakeSnapshot.getLogEndOffsets().entrySet()) {
             Tuple2<Long, Integer> partitionBucket = entry.getKey();
             TableBucket tableBucket;
-            if (partitionBucket.f0 == null) {
+            Long partitionId = partitionBucket.f0;
+            if (partitionId == null) {
                 tableBucket = new TableBucket(tableId, partitionBucket.f1);
+                flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
             } else {
-                Long partitionId = partitionBucket.f0;
-                if (partitionId != null) {
-                    tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
-                } else {
-                    // let's skip the bucket
-                    continue;
-                }
+                tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
+                // the partition name is qualified partition name in format:
+                // key1=value1/key2=value2.
+                // we need to convert to partition name in format: value1$value2$
+                String qualifiedPartitionName =
+                        committedLakeSnapshot.getQualifiedPartitionNameById().get(partitionId);
+                ResolvedPartitionSpec resolvedPartitionSpec =
+                        ResolvedPartitionSpec.fromPartitionQualifiedName(qualifiedPartitionName);
+                flussTableLakeSnapshot.addPartitionBucketOffset(
+                        tableBucket, resolvedPartitionSpec.getPartitionName(), entry.getValue());
             }
-            flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
         }
         commit(flussTableLakeSnapshot);
     }
@@ -114,14 +114,18 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
 
         pbLakeTableSnapshotInfo.setTableId(flussTableLakeSnapshot.tableId());
         pbLakeTableSnapshotInfo.setSnapshotId(flussTableLakeSnapshot.lakeSnapshotId());
-        for (Map.Entry<TableBucket, Long> bucketEndOffsetEntry :
+        for (Map.Entry<Tuple2<TableBucket, String>, Long> bucketEndOffsetEntry :
                 flussTableLakeSnapshot.logEndOffsets().entrySet()) {
             PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
                     pbLakeTableSnapshotInfo.addBucketsReq();
-            TableBucket tableBucket = bucketEndOffsetEntry.getKey();
+            TableBucket tableBucket = bucketEndOffsetEntry.getKey().f0;
+            String partitionName = bucketEndOffsetEntry.getKey().f1;
             long endOffset = bucketEndOffsetEntry.getValue();
             if (tableBucket.getPartitionId() != null) {
                 pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            if (partitionName != null) {
+                pbLakeTableOffsetForBucket.setPartitionName(partitionName);
             }
             pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
             pbLakeTableOffsetForBucket.setLogEndOffset(endOffset);

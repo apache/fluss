@@ -62,11 +62,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
 import static com.alibaba.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
+import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -180,7 +182,11 @@ class PaimonTieringTest {
                             committableSerializer.getVersion(), serialized);
             long snapshot =
                     lakeCommitter.commit(
-                            paimonCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+                            paimonCommittable,
+                            toBucketOffsetsProperty(
+                                    tableBucketOffsets,
+                                    partitionIdAndName,
+                                    getPartitionKeys(tablePath)));
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -271,7 +277,12 @@ class PaimonTieringTest {
                 createLakeCommitter(tablePath)) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             long snapshot =
-                    lakeCommitter.commit(committable, toBucketOffsetsProperty(tableBucketOffsets));
+                    lakeCommitter.commit(
+                            committable,
+                            toBucketOffsetsProperty(
+                                    tableBucketOffsets,
+                                    partitionIdAndName,
+                                    getPartitionKeys(tablePath)));
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -296,7 +307,7 @@ class PaimonTieringTest {
 
         // Test data for different three-level partitions using $ separator
         Map<Long, String> partitionIdAndName =
-                new HashMap<Long, String>() {
+                new LinkedHashMap<Long, String>() {
                     {
                         put(1L, "us-east$2024$01");
                         put(2L, "eu-central$2023$12");
@@ -324,13 +335,26 @@ class PaimonTieringTest {
         }
 
         // Commit all data
+        long snapshot;
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath)) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
-            long snapshot =
-                    lakeCommitter.commit(committable, toBucketOffsetsProperty(tableBucketOffsets));
+            snapshot =
+                    lakeCommitter.commit(
+                            committable,
+                            toBucketOffsetsProperty(
+                                    tableBucketOffsets,
+                                    partitionIdAndName,
+                                    getPartitionKeys(tablePath)));
             assertThat(snapshot).isEqualTo(1);
         }
+
+        // check fluss offsets in paimon snapshot property
+        String offsetProperty = getSnapshotLogOffsetProperty(tablePath, snapshot);
+        assertThat(offsetProperty)
+                .isEqualTo(
+                        "[{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"region=us-east/year=2024/month=01\",\"log_offset\":2},"
+                                + "{\"partition_id\":2,\"bucket_id\":0,\"partition_name\":\"region=eu-central/year=2023/month=12\",\"log_offset\":2}]");
 
         // Verify data for each partition
         for (String partition : partitionIdAndName.values()) {
@@ -769,5 +793,22 @@ class PaimonTieringTest {
                 PaimonLakeCommitter.PaimonCommitCallback.class.getName());
         paimonCatalog.createDatabase(tablePath.getDatabaseName(), true);
         paimonCatalog.createTable(toPaimon(tablePath), paimonSchemaBuilder.build(), true);
+    }
+
+    private String getSnapshotLogOffsetProperty(TablePath tablePath, long snapshotId)
+            throws Exception {
+        Identifier identifier = toPaimon(tablePath);
+        FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
+        return fileStoreTable
+                .snapshotManager()
+                .snapshot(snapshotId)
+                .properties()
+                .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+    }
+
+    private List<String> getPartitionKeys(TablePath tablePath) throws Exception {
+        Identifier identifier = toPaimon(tablePath);
+        FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
+        return fileStoreTable.partitionKeys();
     }
 }

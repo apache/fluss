@@ -279,9 +279,13 @@ public class TieringSplitReader<WriteResult>
                     // todo: should unsubscribe the log split if unsubscribe bucket for
                     // un-partitioned table is supported
                 }
+                TieringSplit currentTieringSplit = currentTableSplitsByBucket.remove(bucket);
+                String currentSplitId = currentTieringSplit.splitId();
                 // put write result of the bucket
-                writeResults.put(bucket, completeLakeWriter(bucket, stoppingOffset));
-                String currentSplitId = currentTableSplitsByBucket.remove(bucket).splitId();
+                writeResults.put(
+                        bucket,
+                        completeLakeWriter(
+                                bucket, currentTieringSplit.getPartitionName(), stoppingOffset));
                 // put split of the bucket
                 finishedSplitIds.put(bucket, currentSplitId);
                 LOG.info("Split {} has been finished.", currentSplitId);
@@ -312,13 +316,15 @@ public class TieringSplitReader<WriteResult>
     }
 
     private TableBucketWriteResult<WriteResult> completeLakeWriter(
-            TableBucket bucket, long logEndOffset) throws IOException {
+            TableBucket bucket, @Nullable String partitionName, long logEndOffset)
+            throws IOException {
         LakeWriter<WriteResult> lakeWriter = lakeWriters.remove(bucket);
         WriteResult writeResult = lakeWriter.complete();
         lakeWriter.close();
         return toTableBucketWriteResult(
                 currentTablePath,
                 bucket,
+                partitionName,
                 writeResult,
                 logEndOffset,
                 checkNotNull(currentTableNumberOfSplits));
@@ -335,6 +341,7 @@ public class TieringSplitReader<WriteResult>
                     toTableBucketWriteResult(
                             logSplit.getTablePath(),
                             tableBucket,
+                            logSplit.getPartitionName(),
                             null,
                             logSplit.getStoppingOffset(),
                             logSplit.getNumberOfSplits()));
@@ -355,7 +362,8 @@ public class TieringSplitReader<WriteResult>
         long logEndOffset = currentSnapshotSplit.getLogOffsetOfSnapshot();
         String splitId = currentTableSplitsByBucket.remove(tableBucket).splitId();
         TableBucketWriteResult<WriteResult> writeResult =
-                completeLakeWriter(tableBucket, logEndOffset);
+                completeLakeWriter(
+                        tableBucket, currentSnapshotSplit.getPartitionName(), logEndOffset);
         closeCurrentSnapshotSplit();
         mayFinishCurrentTable();
         return new TableBucketWriteResultWithSplitIds(
@@ -472,11 +480,12 @@ public class TieringSplitReader<WriteResult>
     private TableBucketWriteResult<WriteResult> toTableBucketWriteResult(
             TablePath tablePath,
             TableBucket tableBucket,
+            @Nullable String partitionName,
             @Nullable WriteResult writeResult,
             long endLogOffset,
             int numberOfSplits) {
         return new TableBucketWriteResult<>(
-                tablePath, tableBucket, writeResult, endLogOffset, numberOfSplits);
+                tablePath, tableBucket, partitionName, writeResult, endLogOffset, numberOfSplits);
     }
 
     private class TableBucketWriteResultWithSplitIds

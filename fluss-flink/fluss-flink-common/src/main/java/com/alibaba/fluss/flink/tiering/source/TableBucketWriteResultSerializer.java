@@ -65,6 +65,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
         if (tableBucket.getPartitionId() != null) {
             out.writeBoolean(true);
             out.writeLong(tableBucket.getPartitionId());
+            out.writeUTF(tableBucketWriteResult.partitionName());
         } else {
             out.writeBoolean(false);
         }
@@ -107,8 +108,10 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // deserialize bucket
         long tableId = in.readLong();
         Long partitionId = null;
+        String partitionName = null;
         if (in.readBoolean()) {
             partitionId = in.readLong();
+            partitionName = in.readUTF();
         }
         int bucketId = in.readInt();
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
@@ -129,6 +132,11 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
         return new TableBucketWriteResult<>(
-                tablePath, tableBucket, writeResult, logEndOffset, numberOfWriteResults);
+                tablePath,
+                tableBucket,
+                partitionName,
+                writeResult,
+                logEndOffset,
+                numberOfWriteResults);
     }
 }

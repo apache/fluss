@@ -125,6 +125,25 @@ public class ResolvedPartitionSpec {
         return sb.toString();
     }
 
+    public static ResolvedPartitionSpec fromPartitionQualifiedName(String qualifiedPartitionName) {
+        // convert from qualified name to ResolvedPartitionSpec
+        List<String> keys = new ArrayList<>();
+        List<String> values = new ArrayList<>();
+
+        String[] keyValuePairs = qualifiedPartitionName.split("/");
+
+        for (String pair : keyValuePairs) {
+            String[] keyValue = pair.split("=", 2);
+            if (keyValue.length != 2) {
+                throw new IllegalArgumentException(
+                        "Invalid partition name format. Expected key=value, got: " + pair);
+            }
+            keys.add(keyValue[0]);
+            values.add(keyValue[1]);
+        }
+        return new ResolvedPartitionSpec(keys, values);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {

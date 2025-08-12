@@ -32,7 +32,7 @@ import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
 import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.lake.writer.LakeWriter;
-import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -190,9 +190,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                             .collect(Collectors.toList());
 
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
-            Map<TableBucket, Long> logOffsets =
-                    mergeTableBucketOffsets(flussCurrentLakeSnapshot, committableWriteResults);
-
+            Map<String, String> logOffsetsProperty =
+                    toBucketOffsetsProperty(
+                            tablePath, flussCurrentLakeSnapshot, committableWriteResults);
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
@@ -203,32 +203,86 @@ public class TieringCommitOperator<WriteResult, Committable>
                     flussCurrentLakeSnapshot == null
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId());
-            long committedSnapshotId =
-                    lakeCommitter.commit(committable, toBucketOffsetsProperty(logOffsets));
+            long committedSnapshotId = lakeCommitter.commit(committable, logOffsetsProperty);
             // commit to fluss
-            Map<TableBucket, Long> logEndOffsets = new HashMap<>();
+            FlussTableLakeSnapshot flussTableLakeSnapshot =
+                    new FlussTableLakeSnapshot(tableId, committedSnapshotId);
             for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
-                logEndOffsets.put(writeResult.tableBucket(), writeResult.logEndOffset());
+                TableBucket tableBucket = writeResult.tableBucket();
+                if (writeResult.tableBucket().getPartitionId() == null) {
+                    flussTableLakeSnapshot.addBucketOffset(tableBucket, writeResult.logEndOffset());
+                } else {
+                    flussTableLakeSnapshot.addPartitionBucketOffset(
+                            tableBucket, writeResult.partitionName(), writeResult.logEndOffset());
+                }
             }
-            flussTableLakeSnapshotCommitter.commit(
-                    new FlussTableLakeSnapshot(tableId, committedSnapshotId, logEndOffsets));
+            flussTableLakeSnapshotCommitter.commit(flussTableLakeSnapshot);
             return committable;
         }
     }
 
+    /**
+     * Merge the log offsets of latest snapshot with current written bucket offsets to get full log
+     * offsets.
+     */
+    private Map<String, String> toBucketOffsetsProperty(
+            TablePath tablePath,
+            @Nullable LakeSnapshot latestLakeSnapshot,
+            List<TableBucketWriteResult<WriteResult>> currentWriteResults)
+            throws Exception {
+        // first of all, we need to merge latest lake snapshot with current write results
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+        Map<Long, String> partitionNameById = new HashMap<>();
+        if (latestLakeSnapshot != null) {
+            tableBucketOffsets = new HashMap<>(latestLakeSnapshot.getTableBucketsOffset());
+            partitionNameById = new HashMap<>(latestLakeSnapshot.getPartitionNameById());
+        }
+
+        for (TableBucketWriteResult<WriteResult> tableBucketWriteResult : currentWriteResults) {
+            tableBucketOffsets.put(
+                    tableBucketWriteResult.tableBucket(), tableBucketWriteResult.logEndOffset());
+            if (tableBucketWriteResult.tableBucket().getPartitionId() != null
+                    && tableBucketWriteResult.partitionName() != null) {
+                partitionNameById.put(
+                        tableBucketWriteResult.tableBucket().getPartitionId(),
+                        tableBucketWriteResult.partitionName());
+            }
+        }
+
+        List<String> partitionKeys = new ArrayList<>();
+        if (!partitionNameById.isEmpty()) {
+            partitionKeys = admin.getTableInfo(tablePath).get().getPartitionKeys();
+        }
+
+        // then, serialize the bucket offsets, partition name by id
+        return toBucketOffsetsProperty(tableBucketOffsets, partitionNameById, partitionKeys);
+    }
+
     public static Map<String, String> toBucketOffsetsProperty(
-            Map<TableBucket, Long> tableBucketOffsets) throws IOException {
+            Map<TableBucket, Long> tableBucketOffsets,
+            Map<Long, String> partitionNameById,
+            List<String> partitionKeys)
+            throws IOException {
         StringWriter sw = new StringWriter();
         try (JsonGenerator gen = JACKSON_FACTORY.createGenerator(sw)) {
             gen.writeStartArray();
             for (Map.Entry<TableBucket, Long> entry : tableBucketOffsets.entrySet()) {
+                Long partitionId = entry.getKey().getPartitionId();
+                String partitionQualifiedName = null;
+                if (partitionId != null) {
+                    // the partitionName is 2025$12$03, we need to convert to
+                    // qualified name year=2025/month=12/day=03
+                    partitionQualifiedName =
+                            ResolvedPartitionSpec.fromPartitionName(
+                                            partitionKeys, partitionNameById.get(partitionId))
+                                    .getPartitionQualifiedName();
+                }
                 BucketOffsetJsonSerde.INSTANCE.serialize(
                         new BucketOffset(
                                 entry.getValue(),
                                 entry.getKey().getBucket(),
                                 entry.getKey().getPartitionId(),
-                                // todo: fill partition name in #1448
-                                null),
+                                partitionQualifiedName),
                         gen);
             }
             gen.writeEndArray();
@@ -238,24 +292,6 @@ public class TieringCommitOperator<WriteResult, Committable>
                 put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, sw.toString());
             }
         };
-    }
-
-    /**
-     * Merge the log offsets of latest snapshot with current written bucket offsets to get full log
-     * offsets.
-     */
-    private Map<TableBucket, Long> mergeTableBucketOffsets(
-            @Nullable LakeSnapshot latestLakeSnapshot,
-            List<TableBucketWriteResult<WriteResult>> currentWriteResults) {
-        Map<TableBucket, Long> tableBucketOffsets =
-                latestLakeSnapshot == null
-                        ? new HashMap<>()
-                        : new HashMap<>(latestLakeSnapshot.getTableBucketsOffset());
-        for (TableBucketWriteResult<WriteResult> tableBucketWriteResult : currentWriteResults) {
-            tableBucketOffsets.put(
-                    tableBucketWriteResult.tableBucket(), tableBucketWriteResult.logEndOffset());
-        }
-        return tableBucketOffsets;
     }
 
     @Nullable
@@ -293,17 +329,8 @@ public class TieringCommitOperator<WriteResult, Committable>
         if (missingCommittedSnapshot != null) {
             // commit this missing snapshot to fluss
             TableInfo tableInfo = admin.getTableInfo(tablePath).get();
-            Map<String, Long> partitionIdByName = null;
-            if (tableInfo.isPartitioned()) {
-                partitionIdByName =
-                        admin.listPartitionInfos(tablePath).get().stream()
-                                .collect(
-                                        Collectors.toMap(
-                                                PartitionInfo::getPartitionName,
-                                                PartitionInfo::getPartitionId));
-            }
             flussTableLakeSnapshotCommitter.commit(
-                    tableInfo.getTableId(), partitionIdByName, missingCommittedSnapshot);
+                    tableInfo.getTableId(), missingCommittedSnapshot);
             // abort this committable to delete the written files
             lakeCommitter.abort(committable);
             throw new IllegalStateException(

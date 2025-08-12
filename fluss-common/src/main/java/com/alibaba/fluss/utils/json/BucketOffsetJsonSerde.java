@@ -60,8 +60,8 @@ public class BucketOffsetJsonSerde
         generator.writeNumberField(BUCKET_ID, bucketOffset.getBucket());
 
         // serialize partition name
-        if (bucketOffset.getPartitionName() != null) {
-            generator.writeStringField(PARTITION_NAME, bucketOffset.getPartitionName());
+        if (bucketOffset.getPartitionQualifiedName() != null) {
+            generator.writeStringField(PARTITION_NAME, bucketOffset.getPartitionQualifiedName());
         }
 
         // serialize bucket offset

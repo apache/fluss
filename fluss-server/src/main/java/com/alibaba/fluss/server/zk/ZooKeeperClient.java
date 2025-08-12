@@ -789,12 +789,17 @@ public class ZooKeeperClient implements AutoCloseable {
                     new HashMap<>(previous.getBucketLogEndOffset());
             bucketLogEndOffset.putAll(lakeTableSnapshot.getBucketLogEndOffset());
 
+            Map<Long, String> partitionNameById =
+                    new HashMap<>(previous.getPartitionNameIdByPartitionId());
+            partitionNameById.putAll(lakeTableSnapshot.getPartitionNameIdByPartitionId());
+
             lakeTableSnapshot =
                     new LakeTableSnapshot(
                             lakeTableSnapshot.getSnapshotId(),
                             lakeTableSnapshot.getTableId(),
                             bucketLogStartOffset,
-                            bucketLogEndOffset);
+                            bucketLogEndOffset,
+                            partitionNameById);
             zkClient.setData().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
         } else {
             zkClient.create()

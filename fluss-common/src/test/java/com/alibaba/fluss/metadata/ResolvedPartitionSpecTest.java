@@ -38,6 +38,11 @@ public class ResolvedPartitionSpecTest {
                         new PartitionSpec(Collections.singletonMap("a", "1")));
         assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo("1");
         assertThat(resolvedPartitionSpec.getPartitionQualifiedName()).isEqualTo("a=1");
+        assertThat(
+                        ResolvedPartitionSpec.fromPartitionQualifiedName(
+                                resolvedPartitionSpec.getPartitionQualifiedName()))
+                .isEqualTo(resolvedPartitionSpec);
+
         assertThat(resolvedPartitionSpec.getPartitionKeys())
                 .isEqualTo(Collections.singletonList("a"));
         assertThat(resolvedPartitionSpec.getPartitionValues())
@@ -52,5 +57,9 @@ public class ResolvedPartitionSpecTest {
         assertThat(resolvedPartitionSpec.getPartitionQualifiedName()).isEqualTo("a=1/b=2");
         assertThat(resolvedPartitionSpec.getPartitionKeys()).isEqualTo(Arrays.asList("a", "b"));
         assertThat(resolvedPartitionSpec.getPartitionValues()).isEqualTo(Arrays.asList("1", "2"));
+        assertThat(
+                        ResolvedPartitionSpec.fromPartitionQualifiedName(
+                                resolvedPartitionSpec.getPartitionQualifiedName()))
+                .isEqualTo(resolvedPartitionSpec);
     }
 }
