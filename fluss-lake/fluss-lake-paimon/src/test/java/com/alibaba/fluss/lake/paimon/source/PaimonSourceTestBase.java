@@ -73,7 +73,7 @@ class PaimonSourceTestBase {
 
     public void writeRecord(TablePath tablePath, List<InternalRow> records) throws Exception {
         Table table = getTable(tablePath);
-        BatchWriteBuilder writeBuilder = table.newBatchWriteBuilder().withOverwrite();
+        BatchWriteBuilder writeBuilder = table.newBatchWriteBuilder();
         try (BatchTableWrite writer = writeBuilder.newWrite()) {
             for (InternalRow record : records) {
                 writer.write(record);

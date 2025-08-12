@@ -67,7 +67,7 @@ public class PaimonRecordReader implements RecordReader {
             readBuilder.withFilter(predicate);
         }
 
-        TableRead tableRead = readBuilder.newRead();
+        TableRead tableRead = readBuilder.newRead().executeFilter();
         paimonRowType = readBuilder.readType();
 
         org.apache.paimon.reader.RecordReader<InternalRow> recordReader =

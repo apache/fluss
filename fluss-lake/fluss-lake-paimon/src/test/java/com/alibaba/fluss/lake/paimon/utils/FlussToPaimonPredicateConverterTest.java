@@ -30,8 +30,8 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link PredicateConverter}. */
-class PredicateConverterTest {
+/** Test for {@link FlussToPaimonPredicateConverter}. */
+class FlussToPaimonPredicateConverterTest {
 
     private static final PredicateBuilder FLUSS_BUILDER =
             new PredicateBuilder(
@@ -134,7 +134,7 @@ class PredicateConverterTest {
     void testPredicateConverter(
             Predicate flussPredicate, org.apache.paimon.predicate.Predicate expectedPredicate) {
         org.apache.paimon.predicate.Predicate convertedPaimonPredicate =
-                PredicateConverter.convert(PAIMON_ROW_TYPE, flussPredicate).get();
+                FlussToPaimonPredicateConverter.convert(PAIMON_ROW_TYPE, flussPredicate).get();
         assertThat(convertedPaimonPredicate.toString()).isEqualTo(expectedPredicate.toString());
     }
 }

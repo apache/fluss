@@ -117,7 +117,7 @@ class PaimonRecordReaderTest extends PaimonSourceTestBase {
     @Test
     void testReadLogTableWithProject() throws Exception {
         // first of all, create table and prepare data
-        String tableName = "logTable_non_partitioned";
+        String tableName = "logTable_non_partitioned_with_project";
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 

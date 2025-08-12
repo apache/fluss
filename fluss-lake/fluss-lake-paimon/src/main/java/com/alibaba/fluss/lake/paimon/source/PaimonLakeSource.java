@@ -19,7 +19,7 @@
 package com.alibaba.fluss.lake.paimon.source;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.paimon.utils.PredicateConverter;
+import com.alibaba.fluss.lake.paimon.utils.FlussToPaimonPredicateConverter;
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.Planner;
@@ -78,7 +78,7 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
         List<org.apache.paimon.predicate.Predicate> converted = new ArrayList<>();
         for (Predicate predicate : predicates) {
             Optional<org.apache.paimon.predicate.Predicate> optPredicate =
-                    PredicateConverter.convert(getRowType(tablePath), predicate);
+                    FlussToPaimonPredicateConverter.convert(getRowType(tablePath), predicate);
             if (optPredicate.isPresent()) {
                 consumedPredicates.add(predicate);
                 converted.add(optPredicate.get());

@@ -39,19 +39,19 @@ import java.util.stream.Collectors;
  * predicates. It handles both leaf-level conditions (like equals, greater than) and compound
  * conditions (AND, OR).
  */
-public class PredicateConverter implements PredicateVisitor<Predicate> {
+public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predicate> {
 
     private final PredicateBuilder builder;
     private final LeafFunctionConverter converter = new LeafFunctionConverter();
 
-    public PredicateConverter(RowType rowType) {
+    public FlussToPaimonPredicateConverter(RowType rowType) {
         this.builder = new PredicateBuilder(rowType);
     }
 
     public static Optional<Predicate> convert(
             RowType rowType, com.alibaba.fluss.predicate.Predicate flussPredicate) {
         try {
-            return Optional.of(flussPredicate.visit(new PredicateConverter(rowType)));
+            return Optional.of(flussPredicate.visit(new FlussToPaimonPredicateConverter(rowType)));
         } catch (UnsupportedOperationException e) {
             return Optional.empty();
         }
