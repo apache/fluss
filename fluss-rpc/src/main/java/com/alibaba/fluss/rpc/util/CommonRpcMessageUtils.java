@@ -253,17 +253,10 @@ public class CommonRpcMessageUtils {
             pbkeyValueMap.put(pbKeyValue.getKey(), pbKeyValue.getValue());
         }
 
-        List<String> partitionKeys = new ArrayList<>();
-        List<String> orderedPartitionValues = new ArrayList<>();
+        List<String> orderedPartitionValues =
+                orderedPartitionKeys.stream().map(pbkeyValueMap::get).collect(Collectors.toList());
 
-        for (String orderedKey : orderedPartitionKeys) {
-            String value = pbkeyValueMap.get(orderedKey);
-            if (value != null) {
-                partitionKeys.add(orderedKey);
-                orderedPartitionValues.add(value);
-            }
-        }
-
-        return new ResolvedPartitionSpec(partitionKeys, orderedPartitionValues);
+        return new ResolvedPartitionSpec(
+                new ArrayList<>(orderedPartitionKeys), orderedPartitionValues);
     }
 }
