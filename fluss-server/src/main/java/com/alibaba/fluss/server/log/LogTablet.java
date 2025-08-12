@@ -1115,7 +1115,9 @@ public final class LogTablet {
         // update writers.
         WriterAppendInfo appendInfo =
                 writers.computeIfAbsent(writerId, id -> writerStateManager.prepareUpdate(writerId));
-        appendInfo.append(batch);
+        appendInfo.append(
+                batch,
+                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch));
     }
 
     static void rebuildWriterState(

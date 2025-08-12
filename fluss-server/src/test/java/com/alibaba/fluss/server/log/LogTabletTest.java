@@ -411,7 +411,7 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testPeriodicWriterIdExpiration() throws Exception {
-        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofMillis(3000));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofMillis(1000));
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofMillis(1000));
         long writerId1 = 23L;
         LogTablet log = createLogTablet(conf);

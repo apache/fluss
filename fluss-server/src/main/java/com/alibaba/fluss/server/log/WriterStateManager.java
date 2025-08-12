@@ -419,6 +419,10 @@ public class WriterStateManager {
         return currentTimeMs - writerStateEntry.lastBatchTimestamp() > writerExpirationMs;
     }
 
+    public boolean isWriterInBatchExpired(long currentTimeMs, LogRecordBatch recordBatch) {
+        return currentTimeMs - recordBatch.commitTimestamp() > writerExpirationMs;
+    }
+
     private static List<WriterStateEntry> readSnapshot(File file) {
         try {
             byte[] json = Files.readAllBytes(file.toPath());
