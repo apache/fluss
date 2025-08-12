@@ -47,6 +47,16 @@
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-common</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-flink-runtime</artifactId>
+            <version>0.12.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-flink-${flink.major.version}</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

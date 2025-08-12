@@ -24,7 +24,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Committable for Iceberg lake committer. */
+/** The committable that derived from {@link IcebergWriteResult} to commit to Iceberg. */
 public class IcebergCommittable implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -49,6 +49,10 @@ public class IcebergCommittable implements Serializable {
         return new Builder();
     }
 
+    /**
+     * Builder for {@link IcebergCommittable}, collecting {@link DataFile} and {@link DeleteFile}
+     * entries.
+     */
     public static class Builder {
         private final List<DataFile> dataFiles = new ArrayList<>();
         private final List<DeleteFile> deleteFiles = new ArrayList<>();

@@ -21,7 +21,7 @@ import org.apache.iceberg.io.WriteResult;
 
 import java.io.Serializable;
 
-/** Write result for Iceberg lake writer. */
+/** The write result of Iceberg lake writer to pass to commiter to commit. */
 public class IcebergWriteResult implements Serializable {
 
     private static final long serialVersionUID = 1L;

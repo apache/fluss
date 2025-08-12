@@ -20,6 +20,7 @@ package com.alibaba.fluss.lake.iceberg.tiering;
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
+
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericRowData;

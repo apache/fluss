@@ -18,6 +18,7 @@
 package com.alibaba.fluss.lake.iceberg.utils;
 
 import com.alibaba.fluss.metadata.TablePath;
+
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.BooleanType;
