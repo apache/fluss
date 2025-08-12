@@ -145,7 +145,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
     public Schema convertToIcebergSchema(TableDescriptor tableDescriptor, boolean isPkTable) {
         List<Types.NestedField> fields = new ArrayList<>();
-        int fieldId = 1;
+        int fieldId = 0;
 
         // general columns
         for (com.alibaba.fluss.metadata.Schema.Column column :
@@ -220,18 +220,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
                     "Bucket key must be set for primary key Iceberg tables");
         }
 
-        // bucket key must exist in schema
-        if (!bucketKeys.isEmpty()) {
-            if (!bucketKeyColumnExists(tableDescriptor, bucketKeys.get(0))) {
-                throw new IllegalArgumentException(
-                        "Bucket key does not exist in Fluss schema: " + bucketKeys.get(0));
-            }
-            if (!bucketKeyColumnExistsInIceberg(icebergSchema, bucketKeys.get(0))) {
-                throw new IllegalArgumentException(
-                        "Bucket key does not exist in Iceberg schema: " + bucketKeys.get(0));
-            }
-        }
-
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         // always set identity partition with partition key
@@ -301,25 +289,6 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
 
         return icebergProperties;
-    }
-
-    private boolean bucketKeyColumnExists(TableDescriptor tableDescriptor, String columnName) {
-        for (com.alibaba.fluss.metadata.Schema.Column column :
-                tableDescriptor.getSchema().getColumns()) {
-            if (column.getName().equals(columnName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean bucketKeyColumnExistsInIceberg(Schema icebergSchema, String columnName) {
-        for (Types.NestedField field : icebergSchema.columns()) {
-            if (field.name().equals(columnName)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override
