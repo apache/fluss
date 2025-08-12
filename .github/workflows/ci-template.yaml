@@ -48,7 +48,7 @@ jobs:
           distribution: 'temurin'
       - name: Build
         run: |
-          mvn -T 1C -B clean install -DskipTests
+          mvn -T 1C -B clean install -DskipTests ${{ inputs.maven-parameters }}
       - name: Test
         timeout-minutes: 60
         run: |
