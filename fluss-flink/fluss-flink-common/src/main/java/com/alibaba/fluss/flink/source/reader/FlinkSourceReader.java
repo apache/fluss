@@ -18,7 +18,7 @@
 package com.alibaba.fluss.flink.source.reader;
 
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.lakehouse.LakeSplitStateInitializer;
+import com.alibaba.fluss.flink.lake.LakeSplitStateInitializer;
 import com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter;
 import com.alibaba.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import com.alibaba.fluss.flink.source.event.PartitionsRemovedEvent;
@@ -28,6 +28,8 @@ import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import com.alibaba.fluss.flink.source.split.LogSplitState;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
+import com.alibaba.fluss.lake.source.LakeSource;
+import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
@@ -57,7 +59,8 @@ public class FlinkSourceReader<OUT>
             SourceReaderContext context,
             @Nullable int[] projectedFields,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
-            FlinkRecordEmitter<OUT> recordEmitter) {
+            FlinkRecordEmitter<OUT> recordEmitter,
+            LakeSource<LakeSplit> lakeSource) {
         super(
                 elementsQueue,
                 new FlinkSourceFetcherManager(
@@ -68,7 +71,8 @@ public class FlinkSourceReader<OUT>
                                         tablePath,
                                         sourceOutputType,
                                         projectedFields,
-                                        flinkSourceReaderMetrics),
+                                        flinkSourceReaderMetrics,
+                                        lakeSource),
                         (ignore) -> {}),
                 recordEmitter,
                 context.getConfiguration(),

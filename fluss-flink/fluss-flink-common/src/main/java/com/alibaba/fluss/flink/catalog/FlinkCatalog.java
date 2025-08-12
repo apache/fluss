@@ -24,7 +24,7 @@ import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.InvalidTableException;
-import com.alibaba.fluss.flink.lakehouse.LakeCatalog;
+import com.alibaba.fluss.flink.lake.LakeCatalog;
 import com.alibaba.fluss.flink.procedure.ProcedureManager;
 import com.alibaba.fluss.flink.utils.CatalogExceptionUtils;
 import com.alibaba.fluss.flink.utils.DataLakeUtils;

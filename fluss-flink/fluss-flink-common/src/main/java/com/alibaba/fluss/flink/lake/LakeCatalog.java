@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.lakehouse;
+package com.alibaba.fluss.flink.lake;
 
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.ObjectPath;

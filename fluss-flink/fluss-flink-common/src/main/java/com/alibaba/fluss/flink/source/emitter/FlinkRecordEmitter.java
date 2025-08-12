@@ -18,7 +18,7 @@
 package com.alibaba.fluss.flink.source.emitter;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.flink.lakehouse.LakeRecordRecordEmitter;
+import com.alibaba.fluss.flink.lake.LakeRecordRecordEmitter;
 import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import com.alibaba.fluss.flink.source.reader.FlinkSourceReader;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
@@ -94,6 +94,8 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                     "Failed to deserialize record: " + scanRecord + ". Cause: " + e.getMessage(),
                     e);
         }
+
+        System.out.println("record: " + record);
 
         if (record != null) {
             long timestamp = scanRecord.timestamp();
