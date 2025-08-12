@@ -52,6 +52,8 @@ For example:
 - If you are using Hive catalog, you need to put [the flink sql hive connector jar](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) into directory `${FLUSS_HOME}/plugins/paimon/`.
 
 #### Hadoop Environment Configuration(required for kerberos-secured HDFS)
+Other usage scenarios can skip this section.
+
 Fluss automatically loads HDFS dependencies on the machine via the HADOOP_CLASSPATH environment variable.
 Make sure that the HADOOP_CLASSPATH environment variable is set up (it can be checked by running echo $HADOOP_CLASSPATH).
 If not, set it up using
