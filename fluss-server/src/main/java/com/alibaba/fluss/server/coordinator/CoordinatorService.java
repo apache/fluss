@@ -261,17 +261,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
-        // TODO: should support tiering a primary key table to lance in the future
-        // currently, we don't support primary key table for lance
-        if (isDataLakeEnabled(tableDescriptor)
-                && dataLakeFormat != null
-                && dataLakeFormat.equals(DataLakeFormat.LANCE)) {
-            if (tableDescriptor.hasPrimaryKey()) {
-                throw new InvalidTableException(
-                        "Currently, we don't support tiering a primary key table to Lance");
-            }
-        }
-
         // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
         //  consistent by idempotently creating the table multiple times. See #846
         // before create table in fluss, we may create in lake

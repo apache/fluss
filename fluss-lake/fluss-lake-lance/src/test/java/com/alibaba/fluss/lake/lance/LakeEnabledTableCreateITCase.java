@@ -220,6 +220,7 @@ class LakeEnabledTableCreateITCase {
         TablePath pkTablePath = TablePath.of(DATABASE, "pk_table");
         assertThatThrownBy(() -> admin.createTable(pkTablePath, pkTable, false).get())
                 .cause()
-                .isInstanceOf(InvalidTableException.class);
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage("Currently, we don't support tiering a primary key table to Lance");
     }
 }

@@ -18,6 +18,7 @@
 package com.alibaba.fluss.lake.lance;
 
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.lake.lance.utils.LanceArrowUtils;
 import com.alibaba.fluss.lake.lance.utils.LanceDatasetAdapter;
@@ -58,6 +59,12 @@ public class LanceLakeCatalog implements LakeCatalog {
 
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor) {
+        // currently, we don't support primary key table for lance
+        if (tableDescriptor.hasPrimaryKey()) {
+            throw new InvalidTableException(
+                    "Currently, we don't support tiering a primary key table to Lance");
+        }
+
         LanceConfig config =
                 LanceConfig.from(
                         options.toMap(), tablePath.getDatabaseName(), tablePath.getTableName());
