@@ -139,7 +139,6 @@ KEY_ENV_SSH_OPTS="env.ssh.opts"
 KEY_ZK_HEAP_MB="zookeeper.heap.mb"
 
 KEY_REMOTE_DATA_DIR="remote.data.dir"
-KEY_ENV_HADOOP_CLASSPATH="env.hadoop.class-path"
 
 ########################################################################################################################
 # PATHS AND CONFIG
@@ -292,10 +291,6 @@ fi
 
 if [ -z "${REMOTE_DATA_DIR}" ]; then
     REMOTE_DATA_DIR=$(readFromConfig ${KEY_REMOTE_DATA_DIR} "" "${YAML_CONF}")
-fi
-
-if [ -z "${HADOOP_CLASSPATH}" ]; then
-    HADOOP_CLASSPATH=$(readFromConfig ${KEY_ENV_HADOOP_CLASSPATH} "" "${YAML_CONF}")
 fi
 
 # Arguments for the JVM. Used for Coordinator server and Tablet server JVMs.

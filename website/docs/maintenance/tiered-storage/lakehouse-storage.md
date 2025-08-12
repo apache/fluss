@@ -52,16 +52,11 @@ For example:
 - If you are using Hive catalog, you need to put [the flink sql hive connector jar](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) into directory `${FLUSS_HOME}/plugins/paimon/`.
 
 #### Hadoop Environment Configuration(required for kerberos-secured HDFS)
-Other usage scenarios can skip this section.
-
-**Step 1: Set Hadoop Classpath**
+Fluss automatically loads HDFS dependencies on the machine via the HADOOP_CLASSPATH environment variable.
+Make sure that the HADOOP_CLASSPATH environment variable is set up (it can be checked by running echo $HADOOP_CLASSPATH).
+If not, set it up using
 ```bash
 export HADOOP_CLASSPATH=`hadoop classpath`
-```
-
-**Step 2: Add the following to your `server.yaml` file**
-```yaml
-plugin.classloader.parent-first-patterns.default: java.,com.alibaba.fluss.,javax.annotation.,org.slf4j,org.apache.log4j,org.apache.logging,org.apache.commons.logging,ch.qos.logback,hdfs-site,core-site,org.apache.hadoop.,META-INF
 ```
 
 ### Start The Datalake Tiering Service
