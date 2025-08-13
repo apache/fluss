@@ -52,7 +52,7 @@ jobs:
       - name: Test
         timeout-minutes: 60
         run: |
-          TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }})
+          TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }}) ${{ inputs.java-version }}
           echo "github ref: ${{ github.ref }}"
           echo "Start testing modules: $TEST_MODULES"
           mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties ${{ inputs.maven-parameters }}

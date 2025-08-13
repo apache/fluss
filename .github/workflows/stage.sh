@@ -23,30 +23,48 @@ STAGE_FLINK="flink"
 MODULES_FLINK="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
-fluss-flink/fluss-flink-2.0,\
 fluss-flink/fluss-flink-1.20,\
+fluss-flink/fluss-flink-2.1,\
 fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18,\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon,\
 fluss-lake/fluss-lake-iceberg,\
-fluss-lake/fluss-lake-lance
+fluss-lake/fluss-lake-lance\
 "
+
+# modules that are only built with JDK 11
+JDK_11_ONLY="fluss-flink/fluss-flink-2.1"
 
 function get_test_modules_for_stage() {
     local stage=$1
+    local jdk_version=$2
 
     local modules_flink=$MODULES_FLINK
     local modules_core=\!${MODULES_FLINK//,/,\!}
 
+    local included_modules=""
+    local excluded_modules=""
+    if [[ "$jdk_version" == "8" ]]; then
+        excluded_modules="!$JDK_11_ONLY"
+    fi
+
+
     case ${stage} in
         (${STAGE_CORE})
-            echo "-pl $modules_core"
+            included_modules="$modules_core"
         ;;
         (${STAGE_FLINK})
-            echo "-pl fluss-test-coverage,$modules_flink"
+            included_modules="fluss-test-coverage,$modules_flink"
         ;;
     esac
+
+    local result="$included_modules"
+    if [[ -n "$excluded_modules" ]]; then
+        result="$result,$excluded_modules"
+    fi
+
+    echo "-pl $result"
 }
 
-get_test_modules_for_stage $1
+get_test_modules_for_stage $1 $2
