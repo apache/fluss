@@ -30,7 +30,6 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.DefaultLogRecordBatch;
@@ -41,6 +40,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -277,6 +277,7 @@ public final class LogTablet {
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
+            TabletServerMetricGroup serverMetricGroup,
             long recoveryPoint,
             Scheduler scheduler,
             LogFormat logFormat,
@@ -313,6 +314,7 @@ public final class LogTablet {
                 new LocalLog(
                         tabletDir,
                         conf,
+                        serverMetricGroup,
                         segments,
                         recoveryPoint,
                         offsets.getNextOffsetMetadata(),
@@ -338,11 +340,6 @@ public final class LogTablet {
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
         metricGroup.gauge(MetricNames.LOG_SIZE, () -> localLog.getSegments().sizeInBytes());
-
-        // about flush
-        metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
-        metricGroup.histogram(
-                MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
     }
 
     public void updateLeaderEndOffsetSnapshot() {

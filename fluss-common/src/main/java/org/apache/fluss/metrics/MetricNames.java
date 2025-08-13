@@ -94,13 +94,8 @@ public class MetricNames {
     public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
             "failedPrefixLookupRequestsPerSecond";
 
-    // --------------------------------------------------------------------------------------------
-    // metrics for table bucket
-    // --------------------------------------------------------------------------------------------
-
     // for replica
     public static final String UNDER_REPLICATED = "underReplicated";
-    public static final String IN_SYNC_REPLICAS = "inSyncReplicasCount";
     public static final String UNDER_MIN_ISR = "underMinIsr";
     public static final String AT_MIN_ISR = "atMinIsr";
     public static final String ISR_EXPANDS_RATE = "isrExpandsPerSecond";
@@ -108,14 +103,10 @@ public class MetricNames {
     public static final String FAILED_ISR_UPDATES_RATE = "failedIsrUpdatesPerSecond";
 
     // for log tablet
-    public static final String LOG_NUM_SEGMENTS = "numSegments";
-    public static final String LOG_END_OFFSET = "endOffset";
-    public static final String LOG_SIZE = "size";
     public static final String LOG_FLUSH_RATE = "flushPerSecond";
     public static final String LOG_FLUSH_LATENCY_MS = "flushLatencyMs";
 
     // for kv tablet
-    public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE =
             "preWriteBufferTruncateAsDuplicatedPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
@@ -123,6 +114,17 @@ public class MetricNames {
     public static final String KV_PRE_WRITE_BUFFER_FLUSH_RATE = "preWriteBufferFlushPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS =
             "preWriteBufferFlushLatencyMs";
+    // --------------------------------------------------------------------------------------------
+    // metrics for table bucket
+    // --------------------------------------------------------------------------------------------
+
+    // for log tablet
+    public static final String LOG_NUM_SEGMENTS = "numSegments";
+    public static final String LOG_END_OFFSET = "endOffset";
+    public static final String LOG_SIZE = "size";
+
+    // for kv tablet
+    public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
