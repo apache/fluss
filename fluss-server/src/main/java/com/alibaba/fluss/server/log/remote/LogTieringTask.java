@@ -28,7 +28,7 @@ import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.log.LogSegment;
 import com.alibaba.fluss.server.log.LogTablet;
-import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
+import com.alibaba.fluss.server.metrics.group.TableMetricGroup;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.utils.clock.Clock;
 
@@ -121,7 +121,7 @@ public class LogTieringTask implements Runnable {
 
         try {
             LogTablet logTablet = replica.getLogTablet();
-            PhysicalTableMetricGroup metricGroup = replica.tableMetrics();
+            TableMetricGroup metricGroup = replica.tableMetrics();
             maybeUpdateCopiedOffset(logTablet);
 
             // Get these candidate log segments to copy and these expired remote log segments to
@@ -234,7 +234,7 @@ public class LogTieringTask implements Runnable {
             LogTablet log,
             List<EnrichedLogSegment> segments,
             List<RemoteLogSegment> copiedSegments,
-            PhysicalTableMetricGroup metricGroup)
+            TableMetricGroup metricGroup)
             throws Exception {
         long endOffset = -1;
         for (EnrichedLogSegment enrichedSegment : segments) {
@@ -449,7 +449,7 @@ public class LogTieringTask implements Runnable {
 
     /** Delete the remote log segment files. */
     private void deleteRemoteLogSegmentFiles(
-            List<RemoteLogSegment> remoteLogSegmentList, PhysicalTableMetricGroup metricGroup) {
+            List<RemoteLogSegment> remoteLogSegmentList, TableMetricGroup metricGroup) {
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
             try {
                 remoteLogStorage.deleteLogSegmentFiles(remoteLogSegment);

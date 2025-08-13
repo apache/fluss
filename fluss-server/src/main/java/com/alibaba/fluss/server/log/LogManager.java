@@ -29,6 +29,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.TabletManagerBase;
 import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
@@ -87,6 +88,7 @@ public final class LogManager extends TabletManagerBase {
     private final ZooKeeperClient zkClient;
     private final Scheduler scheduler;
     private final Clock clock;
+    private final TabletServerMetricGroup serverMetricGroup;
     private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
     private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
@@ -100,19 +102,25 @@ public final class LogManager extends TabletManagerBase {
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
             Scheduler scheduler,
-            Clock clock)
+            Clock clock,
+            TabletServerMetricGroup serverMetricGroup)
             throws Exception {
         super(TabletType.LOG, dataDir, conf, recoveryThreadsPerDataDir);
         this.zkClient = zkClient;
         this.scheduler = scheduler;
         this.clock = clock;
+        this.serverMetricGroup = serverMetricGroup;
         createAndValidateDataDir(dataDir);
 
         initializeCheckpointMaps();
     }
 
     public static LogManager create(
-            Configuration conf, ZooKeeperClient zkClient, Scheduler scheduler, Clock clock)
+            Configuration conf,
+            ZooKeeperClient zkClient,
+            Scheduler scheduler,
+            Clock clock,
+            TabletServerMetricGroup serverMetricGroup)
             throws Exception {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
@@ -122,7 +130,8 @@ public final class LogManager extends TabletManagerBase {
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
                 scheduler,
-                clock);
+                clock,
+                serverMetricGroup);
     }
 
     public void startup() {
@@ -246,6 +255,7 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    serverMetricGroup,
                                     0L,
                                     scheduler,
                                     logFormat,
@@ -348,6 +358,7 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
                         tableInfo.getTableConfig().getLogFormat(),

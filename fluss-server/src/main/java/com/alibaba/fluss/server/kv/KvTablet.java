@@ -56,6 +56,7 @@ import com.alibaba.fluss.server.kv.wal.WalBuilder;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.types.DataType;
@@ -124,6 +125,7 @@ public final class KvTablet {
             TableBucket tableBucket,
             LogTablet logTablet,
             File kvTabletDir,
+            TabletServerMetricGroup serverMetricGroup,
             RocksDBKv rocksDBKv,
             long writeBatchSize,
             LogFormat logFormat,
@@ -139,7 +141,7 @@ public final class KvTablet {
         this.kvTabletDir = kvTabletDir;
         this.rocksDBKv = rocksDBKv;
         this.writeBatchSize = writeBatchSize;
-        this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter());
+        this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter(), serverMetricGroup);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
@@ -153,6 +155,7 @@ public final class KvTablet {
             LogTablet logTablet,
             File kvTabletDir,
             Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -168,6 +171,7 @@ public final class KvTablet {
                 logTablet,
                 kvTabletDir,
                 serverConf,
+                serverMetricGroup,
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
@@ -182,6 +186,7 @@ public final class KvTablet {
             LogTablet logTablet,
             File kvTabletDir,
             Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -195,6 +200,7 @@ public final class KvTablet {
                 tableBucket,
                 logTablet,
                 kvTabletDir,
+                serverMetricGroup,
                 kv,
                 serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
                 logTablet.getLogFormat(),
