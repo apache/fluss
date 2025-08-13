@@ -38,7 +38,6 @@ public class IcebergCatalogProvider implements Serializable {
     }
 
     public Catalog get() {
-
         Map<String, String> icebergProps = icebergConfig.toMap();
 
         String catalogType = icebergProps.get("type");

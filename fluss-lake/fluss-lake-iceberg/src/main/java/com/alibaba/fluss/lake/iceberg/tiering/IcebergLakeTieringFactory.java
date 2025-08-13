@@ -31,7 +31,6 @@ import java.io.IOException;
 public class IcebergLakeTieringFactory
         implements LakeTieringFactory<IcebergWriteResult, IcebergCommittable> {
 
-    public static final String FLUSS_LAKE_TIERING_COMMIT_USER = "__fluss_lake_tiering";
     public static final String FLUSS_BUCKET_OFFSET_PROPERTY = "fluss-bucket-offset";
 
     private static final long serialVersionUID = 1L;

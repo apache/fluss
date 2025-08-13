@@ -19,6 +19,7 @@
 package com.alibaba.fluss.lake.iceberg.tiering;
 
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.utils.InstantiationUtils;
 
 import java.io.IOException;
 
@@ -33,12 +34,19 @@ public class IcebergCommittableSerializer implements SimpleVersionedSerializer<I
     }
 
     @Override
-    public byte[] serialize(IcebergCommittable obj) throws IOException {
-        return new byte[0];
+    public byte[] serialize(IcebergCommittable committable) throws IOException {
+        return InstantiationUtils.serializeObject(committable);
     }
 
     @Override
     public IcebergCommittable deserialize(int version, byte[] serialized) throws IOException {
-        return null;
+        IcebergCommittable icebergCommittable;
+        try {
+            icebergCommittable =
+                    InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new IOException(e);
+        }
+        return icebergCommittable;
     }
 }

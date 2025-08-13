@@ -26,25 +26,19 @@ import com.alibaba.fluss.record.LogRecord;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.io.WriteResult;
-import org.apache.iceberg.util.PropertyUtil;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.Collections;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 
 /** Implementation of {@link LakeWriter} for Iceberg. */
 public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
-    private static final String AUTO_MAINTENANCE_PROPERTY = "table.datalake.auto-maintenance";
-
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private final RecordWriter recordWriter;
-    private final boolean autoMaintenance;
-    private final ExecutorService compactionExecutor;
 
     public IcebergLakeWriter(
             IcebergCatalogProvider icebergCatalogProvider, WriterInitContext writerInitContext)
@@ -52,25 +46,12 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(writerInitContext.tablePath());
 
-        // Check if auto-maintenance is enabled
-        this.autoMaintenance =
-                PropertyUtil.propertyAsBoolean(
-                        icebergTable.properties(), AUTO_MAINTENANCE_PROPERTY, false);
-
-        // Initialize compaction executor if needed
-        this.compactionExecutor =
-                autoMaintenance
-                        ? Executors.newSingleThreadExecutor(
-                                r -> new Thread(r, "iceberg-compaction"))
-                        : null;
-
         // Create record writer based on table type
         // For now, only supporting non-partitioned append-only tables
         this.recordWriter = createRecordWriter(writerInitContext);
     }
 
-    private RecordWriter createRecordWriter(WriterInitContext writerInitContext)
-            throws IOException {
+    private RecordWriter createRecordWriter(WriterInitContext writerInitContext) {
         if (!icebergTable.spec().isUnpartitioned()) {
             throw new UnsupportedOperationException("Partitioned tables are not yet supported");
         }
@@ -79,11 +60,11 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
         return new AppendOnlyWriter(
                 icebergTable,
+                writerInitContext.schema().getRowType(),
                 writerInitContext.tableBucket(),
                 null, // No partition for non-partitioned table
-                Collections.emptyList(), // No partition keys
-                autoMaintenance,
-                compactionExecutor);
+                Collections.emptyList() // No partition keys
+                );
     }
 
     @Override
@@ -111,11 +92,8 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
             if (recordWriter != null) {
                 recordWriter.close();
             }
-            if (compactionExecutor != null) {
-                compactionExecutor.shutdown();
-            }
-            if (icebergCatalog != null && icebergCatalog instanceof AutoCloseable) {
-                ((AutoCloseable) icebergCatalog).close();
+            if (icebergCatalog != null && icebergCatalog instanceof Closeable) {
+                ((Closeable) icebergCatalog).close();
             }
         } catch (Exception e) {
             throw new IOException("Failed to close IcebergLakeWriter.", e);

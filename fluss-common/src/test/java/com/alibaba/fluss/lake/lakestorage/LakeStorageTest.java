@@ -24,6 +24,7 @@ import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.plugin.PluginManager;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;

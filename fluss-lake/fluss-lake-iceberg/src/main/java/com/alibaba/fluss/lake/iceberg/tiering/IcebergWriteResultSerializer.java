@@ -19,6 +19,9 @@
 package com.alibaba.fluss.lake.iceberg.tiering;
 
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
+import com.alibaba.fluss.utils.InstantiationUtils;
+
+import org.apache.iceberg.io.WriteResult;
 
 import java.io.IOException;
 
@@ -33,12 +36,19 @@ public class IcebergWriteResultSerializer implements SimpleVersionedSerializer<I
     }
 
     @Override
-    public byte[] serialize(IcebergWriteResult obj) throws IOException {
-        return new byte[0];
+    public byte[] serialize(IcebergWriteResult icebergWriteResult) throws IOException {
+        return InstantiationUtils.serializeObject(icebergWriteResult.getWriteResult());
     }
 
     @Override
     public IcebergWriteResult deserialize(int version, byte[] serialized) throws IOException {
-        return null;
+        WriteResult writeResult;
+        try {
+            writeResult =
+                    InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new IOException(e);
+        }
+        return new IcebergWriteResult(writeResult);
     }
 }

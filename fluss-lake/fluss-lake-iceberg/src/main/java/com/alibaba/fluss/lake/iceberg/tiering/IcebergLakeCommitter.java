@@ -26,55 +26,47 @@ import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMa
 import com.alibaba.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.iceberg.AppendFiles;
+import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.DataFile;
-import org.apache.iceberg.ExpireSnapshots;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.events.CreateSnapshotEvent;
+import org.apache.iceberg.events.Listener;
+import org.apache.iceberg.events.Listeners;
 import org.apache.iceberg.io.WriteResult;
-import org.apache.iceberg.util.PropertyUtil;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory.FLUSS_BUCKET_OFFSET_PROPERTY;
 import static com.alibaba.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Implementation of {@link LakeCommitter} for Iceberg. */
 public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, IcebergCommittable> {
 
-    private static final String AUTO_MAINTENANCE_PROPERTY = "table.datalake.auto-maintenance";
-    private static final String COMMIT_RETRY_PROPERTY = "commit.retry.num-retries";
-    private static final int DEFAULT_COMMIT_RETRIES = 4;
-
     private final Catalog icebergCatalog;
     private final Table icebergTable;
-    private final TablePath tablePath;
-    private final boolean autoMaintenance;
-    private final int commitRetries;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
     public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(tablePath);
-        this.tablePath = tablePath;
-        this.autoMaintenance =
-                PropertyUtil.propertyAsBoolean(
-                        icebergTable.properties(), AUTO_MAINTENANCE_PROPERTY, false);
-        this.commitRetries =
-                PropertyUtil.propertyAsInt(
-                        icebergTable.properties(), COMMIT_RETRY_PROPERTY, DEFAULT_COMMIT_RETRIES);
+        // register iceberg listener
+        Listeners.register(new IcebergSnapshotCreateListener(), CreateSnapshotEvent.class);
     }
 
     @Override
-    public IcebergCommittable toCommittable(List<IcebergWriteResult> icebergWriteResults)
-            throws IOException {
+    public IcebergCommittable toCommittable(List<IcebergWriteResult> icebergWriteResults) {
         // Aggregate all write results into a single committable
         IcebergCommittable.Builder builder = IcebergCommittable.builder();
 
@@ -96,14 +88,11 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         try {
             // Refresh table to get latest metadata
             icebergTable.refresh();
-
             // Simple append-only case: only data files, no delete files or compaction
             AppendFiles appendFiles = icebergTable.newAppend();
-
             for (DataFile dataFile : committable.getDataFiles()) {
                 appendFiles.appendFile(dataFile);
             }
-
             if (!committable.getDeleteFiles().isEmpty()) {
                 throw new IllegalStateException(
                         "Delete files are not supported in append-only mode. "
@@ -114,10 +103,13 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
             addFlussProperties(appendFiles, snapshotProperties);
 
-            long snapshotId = commitWithRetry(appendFiles);
+            appendFiles.commit();
 
-            return snapshotId;
+            Long commitSnapshotId = currentCommitSnapshotId.get();
+            currentCommitSnapshotId.remove();
 
+            return checkNotNull(
+                    commitSnapshotId, "Iceberg committed snapshot id must be non-null.");
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
@@ -126,58 +118,25 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     private void addFlussProperties(
             AppendFiles appendFiles, Map<String, String> snapshotProperties) {
         appendFiles.set("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER);
-
-        if (snapshotProperties.containsKey(FLUSS_BUCKET_OFFSET_PROPERTY)) {
-            appendFiles.set(
-                    FLUSS_BUCKET_OFFSET_PROPERTY,
-                    snapshotProperties.get(FLUSS_BUCKET_OFFSET_PROPERTY));
-        }
-
         for (Map.Entry<String, String> entry : snapshotProperties.entrySet()) {
-            if (!FLUSS_BUCKET_OFFSET_PROPERTY.equals(entry.getKey())) {
-                appendFiles.set(entry.getKey(), entry.getValue());
-            }
+            appendFiles.set(entry.getKey(), entry.getValue());
         }
-    }
-
-    private long commitWithRetry(AppendFiles appendFiles) throws IOException {
-        Exception lastException = null;
-
-        for (int attempt = 0; attempt <= commitRetries; attempt++) {
-            try {
-                appendFiles.commit();
-                return icebergTable.currentSnapshot().snapshotId();
-            } catch (Exception e) {
-                lastException = e;
-                if (attempt < commitRetries) {
-                    icebergTable.refresh();
-                    try {
-                        Thread.sleep(100 * (attempt + 1)); // Exponential backoff
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException("Commit interrupted", ie);
-                    }
-                }
-            }
-        }
-
-        throw new IOException(
-                "Failed to commit AppendFiles after " + (commitRetries + 1) + " attempts",
-                lastException);
     }
 
     @Override
-    public void abort(IcebergCommittable committable) throws IOException {
-        // For Iceberg, we don't need to explicitly abort since files are not
-        // visible until committed. The files will be cleaned up by table maintenance.
-        // TODO: Discuss with Yuxia, Consider deleting uncommitted files explicitly for immediate
-        // cleanup
+    public void abort(IcebergCommittable committable) {
+        List<String> filesToDelete =
+                committable.getDataFiles().stream()
+                        .map(dataFile -> dataFile.path().toString())
+                        .collect(Collectors.toList());
+        CatalogUtil.deleteFiles(icebergTable.io(), filesToDelete, "data file", true);
     }
 
     @Nullable
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
+        // todo: may refactor to common methods?
         Snapshot latestLakeSnapshot =
                 getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
 
@@ -213,6 +172,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             if (bucketOffset.getPartitionId() != null) {
                 committedLakeSnapshot.addPartitionBucket(
                         bucketOffset.getPartitionId(),
+                        bucketOffset.getPartitionQualifiedName(),
                         bucketOffset.getBucket(),
                         bucketOffset.getLogOffset());
             } else {
@@ -265,14 +225,11 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         return latestFlussSnapshot;
     }
 
-    private void performSnapshotExpiration() {
-        try {
-            ExpireSnapshots expireAction = icebergTable.expireSnapshots();
-            // TODO: Configure expiration policy based on table properties discuss with Yuxia
-            // expireAction.expireOlderThan(System.currentTimeMillis() - retentionPeriod);
-            expireAction.commit();
-        } catch (Exception e) {
-            System.err.println("Snapshot expiration failed: " + e.getMessage());
+    /** A {@link Listener} to listen the iceberg create snapshot event. */
+    public static class IcebergSnapshotCreateListener implements Listener<CreateSnapshotEvent> {
+        @Override
+        public void notify(CreateSnapshotEvent createSnapshotEvent) {
+            currentCommitSnapshotId.set(createSnapshotEvent.snapshotId());
         }
     }
 }
