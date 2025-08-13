@@ -61,6 +61,37 @@ class IcebergLakeCatalogTest {
         this.flussIcebergCatalog = new IcebergLakeCatalog(configuration);
     }
 
+    /** Verify property prefix rewriting. */
+    @Test
+    void testPropertyPrefixRewriting() {
+        String database = "test_db";
+        String tableName = "test_table";
+
+        Schema flussSchema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(3)
+                        .property("iceberg.commit.retry.num-retries", "5")
+                        .property("table.datalake.freshness", "30s")
+                        .build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        flussIcebergCatalog.createTable(tablePath, tableDescriptor);
+
+        Table created =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+
+        // Verify property prefix rewriting
+        assertThat(created.properties()).containsEntry("commit.retry.num-retries", "5");
+        assertThat(created.properties()).containsEntry("fluss.table.datalake.freshness", "30s");
+        assertThat(created.properties())
+                .doesNotContainKeys("iceberg.commit.retry.num-retries", "table.datalake.freshness");
+    }
+
     @Test
     void testCreatePrimaryKeyTable() {
         String database = "test_db";
@@ -213,6 +244,153 @@ class IcebergLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
+        assertThatThrownBy(() -> flussIcebergCatalog.createTable(tablePath, tableDescriptor))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+    }
+
+    @Test
+    void testCreateLogTable() {
+        String database = "test_db";
+        String tableName = "log_table";
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .column("amount", DataTypes.INT())
+                        .column("address", DataTypes.STRING())
+                        .build();
+
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(3) // no bucket key
+                        .build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        flussIcebergCatalog.createTable(tablePath, td);
+
+        TableIdentifier tableId = TableIdentifier.of(database, tableName);
+        Table createdTable = flussIcebergCatalog.getIcebergCatalog().loadTable(tableId);
+
+        org.apache.iceberg.Schema expectIcebergSchema =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.optional(1, "id", Types.LongType.get()),
+                                Types.NestedField.optional(2, "name", Types.StringType.get()),
+                                Types.NestedField.optional(3, "amount", Types.IntegerType.get()),
+                                Types.NestedField.optional(4, "address", Types.StringType.get()),
+                                Types.NestedField.required(
+                                        5, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                                Types.NestedField.required(
+                                        6, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                                Types.NestedField.required(
+                                        7, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())));
+
+        // Verify iceberg table schema
+        assertThat(createdTable.schema().toString()).isEqualTo(expectIcebergSchema.toString());
+
+        // Verify partition field and transform
+        assertThat(createdTable.spec().fields()).hasSize(1);
+        PartitionField partitionField = createdTable.spec().fields().get(0);
+        assertThat(partitionField.name()).isEqualTo(BUCKET_COLUMN_NAME);
+        assertThat(partitionField.transform().toString()).isEqualTo("identity");
+
+        // Verify sort field and order
+        assertThat(createdTable.sortOrder().fields()).hasSize(1);
+        SortField sortField = createdTable.sortOrder().fields().get(0);
+        assertThat(sortField.sourceId())
+                .isEqualTo(createdTable.schema().findField(OFFSET_COLUMN_NAME).fieldId());
+        assertThat(sortField.direction()).isEqualTo(SortDirection.ASC);
+    }
+
+    @Test
+    void testCreatePartitionedLogTable() {
+        String database = "test_db";
+        String tableName = "partitioned_log_table";
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .column("amount", DataTypes.INT())
+                        .column("order_type", DataTypes.STRING())
+                        .build();
+
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(3)
+                        .partitionedBy("order_type")
+                        .build();
+
+        TablePath path = TablePath.of(database, tableName);
+        flussIcebergCatalog.createTable(path, td);
+
+        Table createdTable =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+
+        org.apache.iceberg.Schema expectIcebergSchema =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.optional(1, "id", Types.LongType.get()),
+                                Types.NestedField.optional(2, "name", Types.StringType.get()),
+                                Types.NestedField.optional(3, "amount", Types.IntegerType.get()),
+                                Types.NestedField.optional(4, "order_type", Types.StringType.get()),
+                                Types.NestedField.required(
+                                        5, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                                Types.NestedField.required(
+                                        6, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                                Types.NestedField.required(
+                                        7, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())));
+
+        // Verify iceberg table schema
+        assertThat(createdTable.schema().toString()).isEqualTo(expectIcebergSchema.toString());
+
+        // Verify partition field and transform
+        assertThat(createdTable.spec().fields()).hasSize(2);
+        PartitionField firstPartitionField = createdTable.spec().fields().get(0);
+        assertThat(firstPartitionField.name()).isEqualTo("order_type");
+        assertThat(firstPartitionField.transform().toString()).isEqualTo("identity");
+
+        PartitionField secondPartitionField = createdTable.spec().fields().get(1);
+        assertThat(secondPartitionField.name()).isEqualTo(BUCKET_COLUMN_NAME);
+        assertThat(secondPartitionField.transform().toString()).isEqualTo("identity");
+
+        // Verify sort field and order
+        assertThat(createdTable.sortOrder().fields()).hasSize(1);
+        SortField sortField = createdTable.sortOrder().fields().get(0);
+        assertThat(sortField.sourceId())
+                .isEqualTo(createdTable.schema().findField(OFFSET_COLUMN_NAME).fieldId());
+        assertThat(sortField.direction()).isEqualTo(SortDirection.ASC);
+    }
+
+    @Test
+    void rejectsLogTableWithMultipleBucketKeys() {
+        String database = "test_db";
+        String tableName = "multi_bucket_log_table";
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .column("amount", DataTypes.INT())
+                        .column("user_type", DataTypes.STRING())
+                        .column("order_type", DataTypes.STRING())
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(3, "user_type", "order_type")
+                        .build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        // Do not allow multiple bucket keys for log table
         assertThatThrownBy(() -> flussIcebergCatalog.createTable(tablePath, tableDescriptor))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Only one bucket key is supported for Iceberg");
