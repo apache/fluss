@@ -35,8 +35,6 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 /** A serializer for the {@link SourceSplitBase}. */
 public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSplitBase> {
 
-    public static final SourceSplitSerializer INSTANCE = new SourceSplitSerializer(null);
-
     private static final int VERSION_0 = 0;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =

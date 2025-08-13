@@ -172,7 +172,7 @@ public class FlinkTableSource
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
         if (isDataLakeEnabled) {
-            lakeSource = createLakeSource(tablePath, tableOptions);
+            this.lakeSource = createLakeSource(tablePath, tableOptions);
         }
     }
 
@@ -406,7 +406,6 @@ public class FlinkTableSource
     public Result applyFilters(List<ResolvedExpression> filters) {
         if (lakeSource != null) {
             // todo: use real filters
-            lakeSource.withFilters(Collections.emptyList());
         }
 
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();

@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -45,6 +46,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -147,9 +149,60 @@ public class LakeSplitGenerator {
             @Nullable FileStoreTable fileStoreTable)
             throws Exception {
         List<SourceSplitBase> splits = new ArrayList<>();
-        for (Map.Entry<Long, String> partitionNameByIdEntry : partitionNameById.entrySet()) {
-            long partitionId = partitionNameByIdEntry.getKey();
-            String partitionName = partitionNameByIdEntry.getValue();
+        Map<String, Long> flussPartitionIdByName =
+                partitionNameById.entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getValue,
+                                        Map.Entry::getKey,
+                                        (existing, replacement) -> existing,
+                                        LinkedHashMap::new));
+        long lakeSplitPartitionId = -1L;
+
+        // iterate lake splits
+        for (Map.Entry<String, Map<Integer, List<LakeSplit>>> lakeSplitEntry :
+                lakeSplits.entrySet()) {
+            String partitionName = lakeSplitEntry.getKey();
+            Map<Integer, List<LakeSplit>> lakeSplitsOfPartition = lakeSplitEntry.getValue();
+            Long partitionId = flussPartitionIdByName.remove(partitionName);
+            if (partitionId != null) {
+                // mean the partition also exist in fluss partition
+                Map<Integer, Long> bucketEndOffset =
+                        stoppingOffsetInitializer.getBucketOffsets(
+                                partitionName,
+                                IntStream.range(0, bucketCount)
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                bucketOffsetsRetriever);
+                splits.addAll(
+                        generateSplit(
+                                lakeSplitsOfPartition,
+                                partitionId,
+                                partitionName,
+                                isLogTable,
+                                tableBucketSnapshotLogOffset,
+                                bucketEndOffset,
+                                fileStoreTable));
+
+            } else {
+                // only lake data
+                splits.addAll(
+                        toLakeSnapshotSplits(
+                                lakeSplitsOfPartition,
+                                partitionName,
+                                // now, we can't get partition id for the partition only
+                                // in lake, set them to a arbitrary partition id, but
+                                // make sure different partition have different partition id
+                                // to enable different partition can be distributed to different
+                                // tasks
+                                lakeSplitPartitionId--));
+            }
+        }
+
+        // iterate remain fluss splits
+        for (Map.Entry<String, Long> partitionIdByNameEntry : flussPartitionIdByName.entrySet()) {
+            String partitionName = partitionIdByNameEntry.getKey();
+            long partitionId = partitionIdByNameEntry.getValue();
             Map<Integer, Long> bucketEndOffset =
                     stoppingOffsetInitializer.getBucketOffsets(
                             partitionName,
@@ -157,11 +210,12 @@ public class LakeSplitGenerator {
                             bucketOffsetsRetriever);
             splits.addAll(
                     generateSplit(
-                            lakeSplits.get(partitionName),
+                            null,
                             partitionId,
                             partitionName,
                             isLogTable,
-                            tableBucketSnapshotLogOffset,
+                            // pass empty map since we won't read lake splits
+                            Collections.emptyMap(),
                             bucketEndOffset,
                             fileStoreTable));
         }
@@ -178,10 +232,9 @@ public class LakeSplitGenerator {
             @Nullable FileStoreTable fileStoreTable) {
         List<SourceSplitBase> splits = new ArrayList<>();
         if (isLogTable) {
-            // it's log table, we don't care about bucket, and we can't get bucket in paimon's
-            // dynamic bucket; so first generate split for the whole paimon snapshot,
-            // then generate log split for each bucket paimon snapshot + fluss log
-            splits.addAll(toLakeSnapshotSplits(lakeSplits, partitionName, partitionId));
+            if (lakeSplits != null) {
+                splits.addAll(toLakeSnapshotSplits(lakeSplits, partitionName, partitionId));
+            }
             for (int bucket = 0; bucket < bucketCount; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
@@ -232,9 +285,10 @@ public class LakeSplitGenerator {
             @Nullable String partitionName,
             @Nullable Long partitionId) {
         List<SourceSplitBase> splits = new ArrayList<>();
-        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, -1);
         for (LakeSplit lakeSplit :
                 lakeSplits.values().stream().flatMap(List::stream).collect(Collectors.toList())) {
+            TableBucket tableBucket =
+                    new TableBucket(tableInfo.getTableId(), partitionId, lakeSplit.bucket());
             splits.add(new LakeSnapshotSplit(tableBucket, partitionName, lakeSplit));
         }
         return splits;

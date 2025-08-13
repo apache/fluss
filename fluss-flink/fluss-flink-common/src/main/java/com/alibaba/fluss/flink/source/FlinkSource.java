@@ -72,7 +72,7 @@ public class FlinkSource<OUT>
 
     private final List<FieldEqual> partitionFilters;
 
-    final @Nullable LakeSource<LakeSplit> lakeSource;
+    private final @Nullable LakeSource<LakeSplit> lakeSource;
 
     public FlinkSource(
             Configuration flussConf,
