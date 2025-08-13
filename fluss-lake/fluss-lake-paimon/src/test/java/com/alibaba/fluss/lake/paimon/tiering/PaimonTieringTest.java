@@ -717,6 +717,12 @@ class PaimonTieringTest {
                     }
 
                     @Override
+                    public Map<String, String> customProperties() {
+                        // don't care about table custom properties for Paimon lake writer
+                        return new HashMap<>();
+                    }
+
+                    @Override
                     public com.alibaba.fluss.metadata.Schema schema() {
                         throw new UnsupportedOperationException(
                                 "The lake writer in Paimon currently uses paimonCatalog to determine the schema.");

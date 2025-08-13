@@ -24,6 +24,8 @@ import com.alibaba.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
+import java.util.Map;
+
 /**
  * The WriterInitContext interface provides the context needed to create a LakeWriter. It includes
  * methods to obtain the table path, table bucket, and an optional partition.
@@ -61,4 +63,11 @@ public interface WriterInitContext {
      * @return the table schema
      */
     Schema schema();
+
+    /**
+     * Returns the table custom properties.
+     *
+     * @return the table custom properties
+     */
+    Map<String, String> customProperties();
 }

@@ -309,7 +309,8 @@ public class TieringSplitReader<WriteResult>
                                     currentTablePath,
                                     bucket,
                                     partitionName,
-                                    currentTable.getTableInfo().getSchema()));
+                                    currentTable.getTableInfo().getSchema(),
+                                    currentTable.getTableInfo().getCustomProperties().toMap()));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;
