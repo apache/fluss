@@ -404,17 +404,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
             ListPartitionInfosRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+
         Map<String, Long> partitionNameAndIds;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
-                    toResolvedPartitionSpec(request.getPartialPartitionSpec());
+                    toResolvedPartitionSpec(request.getPartialPartitionSpec(), partitionKeys);
             partitionNameAndIds =
                     metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
             partitionNameAndIds = metadataManager.listPartitions(tablePath);
         }
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
                 toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
     }
