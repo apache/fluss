@@ -17,19 +17,23 @@
 
 package com.alibaba.fluss.flink.source.split;
 
-import com.alibaba.fluss.flink.lakehouse.LakeSplitSerializer;
+import com.alibaba.fluss.flink.lake.LakeSplitSerializer;
+import com.alibaba.fluss.lake.source.LakeSource;
+import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.TableBucket;
 
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
+
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** A serializer for the {@link SourceSplitBase}. */
 public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSplitBase> {
-
-    public static final SourceSplitSerializer INSTANCE = new SourceSplitSerializer();
 
     private static final int VERSION_0 = 0;
 
@@ -41,7 +45,11 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
 
     private static final int CURRENT_VERSION = VERSION_0;
 
-    private LakeSplitSerializer lakeSplitSerializer;
+    @Nullable private final LakeSource<LakeSplit> lakeSource;
+
+    public SourceSplitSerializer(LakeSource<LakeSplit> lakeSource) {
+        this.lakeSource = lakeSource;
+    }
 
     @Override
     public int getVersion() {
@@ -75,7 +83,9 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                 out.writeLong(logSplit.getStoppingOffset().orElse(LogSplit.NO_STOPPING_OFFSET));
             }
         } else {
-            getLakeSplitSerializer().serialize(out, split);
+            LakeSplitSerializer lakeSplitSerializer =
+                    new LakeSplitSerializer(checkNotNull(lakeSource).getSplitSerializer());
+            lakeSplitSerializer.serialize(out, split);
         }
 
         final byte[] result = out.getCopyOfBuffer();
@@ -135,14 +145,9 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
             long stoppingOffset = in.readLong();
             return new LogSplit(tableBucket, partitionName, startingOffset, stoppingOffset);
         } else {
-            return getLakeSplitSerializer().deserialize(splitKind, tableBucket, partitionName, in);
+            LakeSplitSerializer lakeSplitSerializer =
+                    new LakeSplitSerializer(checkNotNull(lakeSource).getSplitSerializer());
+            return lakeSplitSerializer.deserialize(splitKind, tableBucket, partitionName, in);
         }
-    }
-
-    private LakeSplitSerializer getLakeSplitSerializer() {
-        if (lakeSplitSerializer == null) {
-            lakeSplitSerializer = new LakeSplitSerializer();
-        }
-        return lakeSplitSerializer;
     }
 }

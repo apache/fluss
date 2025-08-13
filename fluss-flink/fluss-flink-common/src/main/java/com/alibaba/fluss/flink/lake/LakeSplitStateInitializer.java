@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.lakehouse;
+package com.alibaba.fluss.flink.lake;
 
+import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
+import com.alibaba.fluss.flink.lake.state.LakeSnapshotSplitState;
 import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplitState;
-import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
-import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplitState;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
 
@@ -28,10 +28,11 @@ import com.alibaba.fluss.flink.source.split.SourceSplitState;
 public class LakeSplitStateInitializer {
 
     public static SourceSplitState initializedState(SourceSplitBase split) {
-        if (split instanceof PaimonSnapshotSplit) {
-            return new PaimonSnapshotSplitState((PaimonSnapshotSplit) split);
-        } else if (split instanceof PaimonSnapshotAndFlussLogSplit) {
+        if (split instanceof PaimonSnapshotAndFlussLogSplit) {
             return new PaimonSnapshotAndFlussLogSplitState((PaimonSnapshotAndFlussLogSplit) split);
+        } else if (split instanceof LakeSnapshotSplit) {
+            return new LakeSnapshotSplitState((LakeSnapshotSplit) split);
+            // TODO support primary key table in https://github.com/apache/fluss/issues/1434
         } else {
             throw new UnsupportedOperationException("Unsupported split type: " + split);
         }

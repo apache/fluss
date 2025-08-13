@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SourceSplitSerializerTest {
 
-    private static final SourceSplitSerializer serializer = SourceSplitSerializer.INSTANCE;
+    private static final SourceSplitSerializer serializer = new SourceSplitSerializer(null);
     private static final TableBucket tableBucket = new TableBucket(1, 2);
     private static final TableBucket partitionedTableBucket = new TableBucket(1, 100L, 2);
 

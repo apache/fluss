@@ -28,6 +28,8 @@ import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import com.alibaba.fluss.flink.utils.FlinkConversions;
 import com.alibaba.fluss.flink.utils.PushdownUtils;
 import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
+import com.alibaba.fluss.lake.source.LakeSource;
+import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
@@ -76,6 +78,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -130,6 +133,10 @@ public class FlinkTableSource
 
     private List<FieldEqual> partitionFilters = Collections.emptyList();
 
+    private final Map<String, String> tableOptions;
+
+    @Nullable private LakeSource<LakeSplit> lakeSource;
+
     public FlinkTableSource(
             TablePath tablePath,
             Configuration flussConfig,
@@ -144,7 +151,8 @@ public class FlinkTableSource
             @Nullable LookupCache cache,
             long scanPartitionDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType) {
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -162,6 +170,10 @@ public class FlinkTableSource
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
         this.mergeEngineType = mergeEngineType;
+        this.tableOptions = tableOptions;
+        if (isDataLakeEnabled) {
+            this.lakeSource = createLakeSource(tablePath, tableOptions);
+        }
     }
 
     @Override
@@ -270,7 +282,8 @@ public class FlinkTableSource
                         scanPartitionDiscoveryIntervalMs,
                         new RowDataDeserializationSchema(),
                         streaming,
-                        partitionFilters);
+                        partitionFilters,
+                        lakeSource);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -359,12 +372,14 @@ public class FlinkTableSource
                         cache,
                         scanPartitionDiscoveryIntervalMs,
                         isDataLakeEnabled,
-                        mergeEngineType);
+                        mergeEngineType,
+                        tableOptions);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
         source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
+        source.lakeSource = lakeSource;
         return source;
     }
 
@@ -382,10 +397,17 @@ public class FlinkTableSource
     public void applyProjection(int[][] projectedFields, DataType producedDataType) {
         this.projectedFields = Arrays.stream(projectedFields).mapToInt(value -> value[0]).toArray();
         this.producedDataType = producedDataType.getLogicalType();
+        if (lakeSource != null) {
+            lakeSource.withProject(projectedFields);
+        }
     }
 
     @Override
     public Result applyFilters(List<ResolvedExpression> filters) {
+        if (lakeSource != null) {
+            // todo: use real filters
+        }
+
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();
         List<ResolvedExpression> remainingFilters = new ArrayList<>();
 

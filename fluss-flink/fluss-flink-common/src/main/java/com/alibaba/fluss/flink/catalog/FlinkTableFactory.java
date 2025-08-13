@@ -20,7 +20,7 @@ package com.alibaba.fluss.flink.catalog;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
-import com.alibaba.fluss.flink.lakehouse.LakeTableFactory;
+import com.alibaba.fluss.flink.lake.LakeTableFactory;
 import com.alibaba.fluss.flink.sink.FlinkTableSink;
 import com.alibaba.fluss.flink.source.FlinkTableSource;
 import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
@@ -143,7 +143,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 cache,
                 partitionDiscoveryIntervalMs,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)));
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                context.getCatalogTable().getOptions());
     }
 
     @Override

@@ -26,13 +26,15 @@ import com.alibaba.fluss.client.table.scanner.log.LogScanner;
 import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.flink.lakehouse.LakeSplitReaderGenerator;
+import com.alibaba.fluss.flink.lake.LakeSplitReaderGenerator;
 import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
 import com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
 import com.alibaba.fluss.flink.source.split.LogSplit;
 import com.alibaba.fluss.flink.source.split.SnapshotSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
+import com.alibaba.fluss.lake.source.LakeSource;
+import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
@@ -99,6 +101,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Table table;
     private final FlinkMetricRegistry flinkMetricRegistry;
 
+    @Nullable private LakeSource<LakeSplit> lakeSource;
+
     // table id, will be null when haven't received any split
     private Long tableId;
 
@@ -116,7 +120,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             TablePath tablePath,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
+            @Nullable LakeSource<LakeSplit> lakeSource) {
         this.flinkMetricRegistry =
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
@@ -131,6 +136,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
+        this.lakeSource = lakeSource;
     }
 
     @Override
@@ -216,7 +222,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private LakeSplitReaderGenerator getLakeSplitReader() {
         if (lakeSplitReaderGenerator == null) {
             lakeSplitReaderGenerator =
-                    new LakeSplitReaderGenerator(table, connection, tablePath, projectedFields);
+                    new LakeSplitReaderGenerator(
+                            table, tablePath, projectedFields, checkNotNull(lakeSource));
         }
         return lakeSplitReaderGenerator;
     }

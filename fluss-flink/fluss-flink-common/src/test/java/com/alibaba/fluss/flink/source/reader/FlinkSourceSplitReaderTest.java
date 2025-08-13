@@ -89,7 +89,8 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                 DataTypes.FIELD("name", DataTypes.STRING()),
                                                 DataTypes.FIELD("age", DataTypes.INT())),
                                         null,
-                                        createMockSourceReaderMetrics()))
+                                        createMockSourceReaderMetrics(),
+                                        null))
                 .isInstanceOf(ValidationException.class)
                 .hasMessage(
                         "The Flink query schema is not matched to Fluss table schema. \n"
@@ -106,7 +107,8 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                         "id", DataTypes.BIGINT().copy(false)),
                                                 DataTypes.FIELD("name", DataTypes.STRING())),
                                         new int[] {1, 0},
-                                        createMockSourceReaderMetrics()))
+                                        createMockSourceReaderMetrics(),
+                                        null))
                 .isInstanceOf(ValidationException.class)
                 .hasMessage(
                         "The Flink query schema is not matched to Fluss table schema. \n"
@@ -394,7 +396,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
-                clientConf, tablePath, rowType, null, createMockSourceReaderMetrics());
+                clientConf, tablePath, rowType, null, createMockSourceReaderMetrics(), null);
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {

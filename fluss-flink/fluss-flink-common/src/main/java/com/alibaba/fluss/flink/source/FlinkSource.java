@@ -31,6 +31,8 @@ import com.alibaba.fluss.flink.source.split.SourceSplitSerializer;
 import com.alibaba.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
 import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
 import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
+import com.alibaba.fluss.lake.source.LakeSource;
+import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.types.RowType;
 
@@ -70,6 +72,8 @@ public class FlinkSource<OUT>
 
     private final List<FieldEqual> partitionFilters;
 
+    private final @Nullable LakeSource<LakeSplit> lakeSource;
+
     public FlinkSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -82,6 +86,34 @@ public class FlinkSource<OUT>
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
             List<FieldEqual> partitionFilters) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                sourceOutputType,
+                projectedFields,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                deserializationSchema,
+                streaming,
+                partitionFilters,
+                null);
+    }
+
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming,
+            List<FieldEqual> partitionFilters,
+            LakeSource<LakeSplit> lakeSource) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -93,6 +125,7 @@ public class FlinkSource<OUT>
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
+        this.lakeSource = lakeSource;
     }
 
     @Override
@@ -112,7 +145,8 @@ public class FlinkSource<OUT>
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                partitionFilters);
+                partitionFilters,
+                lakeSource);
     }
 
     @Override
@@ -130,12 +164,13 @@ public class FlinkSource<OUT>
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                partitionFilters);
+                partitionFilters,
+                lakeSource);
     }
 
     @Override
     public SimpleVersionedSerializer<SourceSplitBase> getSplitSerializer() {
-        return SourceSplitSerializer.INSTANCE;
+        return new SourceSplitSerializer(lakeSource);
     }
 
     @Override
@@ -166,7 +201,8 @@ public class FlinkSource<OUT>
                 context,
                 projectedFields,
                 flinkSourceReaderMetrics,
-                recordEmitter);
+                recordEmitter,
+                lakeSource);
     }
 
     @Override
