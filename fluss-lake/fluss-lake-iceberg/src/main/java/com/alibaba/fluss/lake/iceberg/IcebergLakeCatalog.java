@@ -48,7 +48,7 @@ import java.util.Set;
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static org.apache.iceberg.CatalogUtil.loadCatalog;
+import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
@@ -82,19 +82,10 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private Catalog createIcebergCatalog(Configuration configuration) {
         Map<String, String> icebergProps = configuration.toMap();
 
-        String catalogType = icebergProps.get("type");
-        if (catalogType == null) {
-            throw new IllegalArgumentException(
-                    "Missing required Iceberg catalog type. Set 'iceberg.catalog.type' in your configuration (e.g., 'hive', 'hadoop', or 'rest').");
-        }
-
         String catalogName = icebergProps.getOrDefault("name", "fluss-iceberg-catalog");
 
-        return loadCatalog(
-                catalogType,
-                catalogName,
-                icebergProps,
-                null // Optional: pass Hadoop configuration if available
+        return buildIcebergCatalog(
+                catalogName, icebergProps, null // Optional: pass Hadoop configuration if available
                 );
     }
 
