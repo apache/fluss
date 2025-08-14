@@ -26,12 +26,17 @@ import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Map;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Utils for create lake source. */
 public class LakeSourceUtils {
+
+    public static final Logger LOG = LoggerFactory.getLogger(LakeSourceUtils.class);
 
     @SuppressWarnings("unchecked")
     public static LakeSource<LakeSplit> createLakeSource(
@@ -47,6 +52,13 @@ public class LakeSourceUtils {
         LakeStoragePlugin lakeStoragePlugin =
                 LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
-        return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
+        try {
+            return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
+        } catch (UnsupportedOperationException e) {
+            LOG.info(
+                    "method createLakeSource throw UnsupportedOperationException for datalake format {}, return null as lakeSource to disable reading from lake source.",
+                    dataLake);
+            return null;
+        }
     }
 }
