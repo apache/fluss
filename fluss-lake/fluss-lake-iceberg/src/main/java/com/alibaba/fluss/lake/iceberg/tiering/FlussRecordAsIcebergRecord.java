@@ -37,7 +37,6 @@ import com.alibaba.fluss.types.TimeType;
 import com.alibaba.fluss.types.TimestampType;
 import com.alibaba.fluss.types.TinyIntType;
 import com.alibaba.fluss.utils.DateTimeUtils;
-
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.types.Types;
@@ -58,8 +57,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkState;
  */
 public class FlussRecordAsIcebergRecord implements Record {
 
-    // Lake table for paimon will append three system columns: __bucket, __offset,__timestamp
-    private static final int LAKE_PAIMON_SYSTEM_COLUMNS = 3;
+    // Lake table for iceberg will append three system columns: __bucket, __offset,__timestamp
+    private static final int LAKE_ICEBERG_SYSTEM_COLUMNS = 3;
 
     private LogRecord logRecord;
     private final int bucket;
@@ -82,7 +81,7 @@ public class FlussRecordAsIcebergRecord implements Record {
         this.originRowFieldCount = internalRow.getFieldCount();
         checkState(
                 originRowFieldCount
-                        == icebergSchema.asStruct().fields().size() - LAKE_PAIMON_SYSTEM_COLUMNS,
+                        == icebergSchema.asStruct().fields().size() - LAKE_ICEBERG_SYSTEM_COLUMNS,
                 "The Iceberg table fields count must equals to LogRecord's fields count.");
     }
 
