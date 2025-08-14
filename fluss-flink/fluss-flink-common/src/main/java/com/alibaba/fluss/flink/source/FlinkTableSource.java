@@ -32,6 +32,11 @@ import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.predicate.GreaterThan;
+import com.alibaba.fluss.predicate.LeafPredicate;
+import com.alibaba.fluss.predicate.Predicate;
+import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -78,10 +83,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.flink.utils.LakeSourceUtils.LOG;
 import static com.alibaba.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
+import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** Flink table source to scan Fluss data. */
 public class FlinkTableSource
@@ -251,12 +259,15 @@ public class FlinkTableSource
             flussRowType = flussRowType.project(projectedFields);
         }
         OffsetsInitializer offsetsInitializer;
+        boolean enableLakeSource = true;
         switch (startupOptions.startupMode) {
             case EARLIEST:
                 offsetsInitializer = OffsetsInitializer.earliest();
                 break;
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
+                // since it's scan from latest, don't consider lake data
+                enableLakeSource = false;
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
@@ -264,6 +275,37 @@ public class FlinkTableSource
             case TIMESTAMP:
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
+                if (lakeSource != null) {
+                    if (hasPrimaryKey()) {
+                        //  currently, for primary key table, don't consider lake data
+                        // when read from a given timestamp, todo: consider support it?
+                        enableLakeSource = false;
+                    } else {
+                        // will push timestamp to lake
+                        Predicate timestampFilter =
+                                new LeafPredicate(
+                                        GreaterThan.INSTANCE,
+                                        DataTypes.TIMESTAMP_LTZ(),
+                                        flussRowType.getFieldCount() + 2,
+                                        TIMESTAMP_COLUMN_NAME,
+                                        Collections.singletonList(
+                                                TimestampLtz.fromEpochMillis(
+                                                        startupOptions.startupTimestampMs)));
+                        List<Predicate> acceptedPredicates =
+                                lakeSource
+                                        .withFilters(Collections.singletonList(timestampFilter))
+                                        .acceptedPredicates();
+                        if (acceptedPredicates.isEmpty()) {
+                            LOG.warn(
+                                    "The lake source doesn't accept the filter {}, won't read data from lake.",
+                                    timestampFilter);
+                            enableLakeSource = false;
+                        }
+                        checkState(
+                                acceptedPredicates.size() == 1
+                                        && acceptedPredicates.get(0).equals(timestampFilter));
+                    }
+                }
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -283,7 +325,7 @@ public class FlinkTableSource
                         new RowDataDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        lakeSource);
+                        enableLakeSource ? lakeSource : null);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
