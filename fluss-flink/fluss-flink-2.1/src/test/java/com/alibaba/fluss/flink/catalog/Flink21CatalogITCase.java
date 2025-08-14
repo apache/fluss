@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink;
+package com.alibaba.fluss.flink.catalog;
 
-/** This is an empty package to generate a javadoc jar to make Sonatype OSS happy. */
-public class DummyClass119 {}
+/** IT case for catalog in Flink 2.1. */
+public class Flink21CatalogITCase extends FlinkCatalogITCase {}

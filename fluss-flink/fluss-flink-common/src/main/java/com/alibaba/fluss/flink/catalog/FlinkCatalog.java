@@ -39,7 +39,7 @@ import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.IOUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.AbstractCatalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
@@ -90,8 +90,18 @@ import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isTableNotPart
 import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussDatabase;
 import static org.apache.flink.util.Preconditions.checkArgument;
 
-/** A Flink Catalog for fluss. */
-public class FlinkCatalog implements Catalog {
+/**
+ * A Flink Catalog for fluss.
+ *
+ * <p>Currently, this class must extend the internal Flink class {@link AbstractCatalog} because an
+ * incompatibility bug ( <a
+ * href="https://issues.apache.org/jira/browse/FLINK-38030">FLINK-38030</a>) in flink 2.0.0.
+ *
+ * <p>TODO: Once this issue is resolved in a future version of Flink (likely 2.1+), refactor this
+ * class to implement the public interface {@link org.apache.flink.table.catalog.Catalog} instead of
+ * extending the internal class {@link AbstractCatalog}.
+ */
+public class FlinkCatalog extends AbstractCatalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
 
@@ -111,6 +121,7 @@ public class FlinkCatalog implements Catalog {
             String bootstrapServers,
             ClassLoader classLoader,
             Map<String, String> securityConfigs) {
+        super(name, defaultDatabase);
         this.catalogName = name;
         this.defaultDatabase = defaultDatabase;
         this.bootstrapServers = bootstrapServers;
@@ -137,16 +148,6 @@ public class FlinkCatalog implements Catalog {
     public void close() throws CatalogException {
         IOUtils.closeQuietly(admin, "fluss-admin");
         IOUtils.closeQuietly(connection, "fluss-connection");
-    }
-
-    public String getName() {
-        return catalogName;
-    }
-
-    @Nullable
-    @Override
-    public String getDefaultDatabase() throws CatalogException {
-        return defaultDatabase;
     }
 
     @Override

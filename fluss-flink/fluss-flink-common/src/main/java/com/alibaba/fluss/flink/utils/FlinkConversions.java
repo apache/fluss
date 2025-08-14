@@ -57,6 +57,7 @@ import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static com.alibaba.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
 
 /** Utils for conversion between Flink and Fluss. */
@@ -148,8 +149,7 @@ public class FlinkConversions {
 
         // deserialize watermark
         CatalogPropertiesUtils.deserializeWatermark(newOptions, schemaBuilder);
-
-        return CatalogTable.of(
+        return toCatalogTable(
                 schemaBuilder.build(),
                 tableInfo.getComment().orElse(null),
                 tableInfo.getPartitionKeys(),
