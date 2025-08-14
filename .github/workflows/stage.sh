@@ -23,6 +23,7 @@ STAGE_FLINK="flink"
 MODULES_FLINK="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
+fluss-flink/fluss-flink-2.0,\
 fluss-flink/fluss-flink-1.20,\
 fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18,\

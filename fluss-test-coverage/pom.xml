@@ -70,6 +70,13 @@
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-flink-2.1</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-flink-1.20</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
@@ -158,6 +165,8 @@
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
+                                                <exclude>fluss-flink/**</exclude>
+                                                <exclude>fluss-flink/**/target/classes/com/alibaba/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -330,7 +339,6 @@
                                         <!-- exclude for dummy class -->
                                         <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
                                         <exclude>com.alibaba.fluss.flink.DummyClass120</exclude>
-                                        <exclude>com.alibaba.fluss.flink.DummyClass119</exclude>
                                         <exclude>com.alibaba.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>com.alibaba.fluss.lake.committer.CommittedLakeSnapshot</exclude>
                                         <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
