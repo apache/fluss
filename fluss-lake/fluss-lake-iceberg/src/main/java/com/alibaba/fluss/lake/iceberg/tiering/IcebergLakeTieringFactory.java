@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.tiering;
+package com.alibaba.fluss.lake.iceberg.tiering;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lake.committer.CommitterInitContext;
@@ -27,37 +27,37 @@ import com.alibaba.fluss.lake.writer.WriterInitContext;
 
 import java.io.IOException;
 
-/** Implementation of {@link LakeTieringFactory} for Paimon . */
-public class PaimonLakeTieringFactory
-        implements LakeTieringFactory<PaimonWriteResult, PaimonCommittable> {
+/** Implementation of {@link LakeTieringFactory} for Iceberg. */
+public class IcebergLakeTieringFactory
+        implements LakeTieringFactory<IcebergWriteResult, IcebergCommittable> {
 
     private static final long serialVersionUID = 1L;
 
-    private final PaimonCatalogProvider paimonCatalogProvider;
+    private final IcebergCatalogProvider icebergCatalogProvider;
 
-    public PaimonLakeTieringFactory(Configuration paimonConfig) {
-        this.paimonCatalogProvider = new PaimonCatalogProvider(paimonConfig);
+    public IcebergLakeTieringFactory(Configuration icebergConfig) {
+        this.icebergCatalogProvider = new IcebergCatalogProvider(icebergConfig);
     }
 
     @Override
-    public LakeWriter<PaimonWriteResult> createLakeWriter(WriterInitContext writerInitContext)
+    public LakeWriter<IcebergWriteResult> createLakeWriter(WriterInitContext writerInitContext)
             throws IOException {
-        return new PaimonLakeWriter(paimonCatalogProvider, writerInitContext);
+        return new IcebergLakeWriter(icebergCatalogProvider, writerInitContext);
     }
 
     @Override
-    public SimpleVersionedSerializer<PaimonWriteResult> getWriteResultSerializer() {
-        return new PaimonWriteResultSerializer();
+    public SimpleVersionedSerializer<IcebergWriteResult> getWriteResultSerializer() {
+        return new IcebergWriteResultSerializer();
     }
 
     @Override
-    public LakeCommitter<PaimonWriteResult, PaimonCommittable> createLakeCommitter(
+    public LakeCommitter<IcebergWriteResult, IcebergCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return new PaimonLakeCommitter(paimonCatalogProvider, committerInitContext.tablePath());
+        return new IcebergLakeCommitter(icebergCatalogProvider, committerInitContext.tablePath());
     }
 
     @Override
-    public SimpleVersionedSerializer<PaimonCommittable> getCommittableSerializer() {
-        return new PaimonCommittableSerializer();
+    public SimpleVersionedSerializer<IcebergCommittable> getCommittableSerializer() {
+        return new IcebergCommittableSerializer();
     }
 }

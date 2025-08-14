@@ -37,6 +37,8 @@ import java.io.Serializable;
 @PublicEvolving
 public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializable {
 
+    String FLUSS_LAKE_TIERING_COMMIT_USER = "__fluss_lake_tiering";
+
     /**
      * Creates a lake writer to write Fluss's rows to Paimon/Iceberg rows.
      *

@@ -55,7 +55,6 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
     private FileStoreCommit fileStoreCommit;
-    private final TablePath tablePath;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -63,7 +62,6 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
         this.fileStoreTable = getTable(tablePath);
-        this.tablePath = tablePath;
     }
 
     @Override
