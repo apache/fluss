@@ -18,20 +18,18 @@
 package com.alibaba.fluss.lake.iceberg.tiering;
 
 import com.alibaba.fluss.config.Configuration;
+
 import org.apache.iceberg.catalog.Catalog;
 
 import java.io.Serializable;
 import java.util.Map;
 
-import static org.apache.iceberg.CatalogUtil.loadCatalog;
+import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** A provider for Iceberg catalog. */
 public class IcebergCatalogProvider implements Serializable {
 
     private static final long serialVersionUID = 1L;
-    private static volatile Catalog catalogInstance;
-    private static String lastConfigKey;
-
     private final Configuration icebergConfig;
 
     public IcebergCatalogProvider(Configuration icebergConfig) {
@@ -40,23 +38,13 @@ public class IcebergCatalogProvider implements Serializable {
 
     public Catalog get() {
         Map<String, String> icebergProps = icebergConfig.toMap();
-        String catalogType = icebergProps.get("type");
-        if (catalogType == null) {
-            throw new IllegalArgumentException(
-                    "Missing required Iceberg catalog type. Set 'iceberg.catalog.type' in your configuration (e.g., 'hive', 'hadoop', or 'rest').");
-        }
-
         String catalogName = icebergProps.getOrDefault("name", "fluss-iceberg-catalog");
-        String configKey = catalogType + ":" + catalogName + ":" + icebergProps.get("warehouse");
 
-        if (catalogInstance == null || !configKey.equals(lastConfigKey)) {
-            synchronized (IcebergCatalogProvider.class) {
-                if (catalogInstance == null || !configKey.equals(lastConfigKey)) {
-                    catalogInstance = loadCatalog(catalogType, catalogName, icebergProps, null);
-                    lastConfigKey = configKey;
-                }
-            }
-        }
-        return catalogInstance;
+        return buildIcebergCatalog(
+                catalogName,
+                icebergProps,
+                // todo: current is an empty configuration, need to init from env or fluss
+                // configurations
+                new org.apache.hadoop.conf.Configuration());
     }
 }

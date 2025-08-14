@@ -23,6 +23,7 @@ import com.alibaba.fluss.lake.iceberg.tiering.IcebergCatalogProvider;
 import com.alibaba.fluss.lake.iceberg.tiering.IcebergCommittable;
 import com.alibaba.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory;
 import com.alibaba.fluss.lake.iceberg.tiering.IcebergWriteResult;
+import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
 import com.alibaba.fluss.lake.writer.LakeWriter;
 import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -33,23 +34,35 @@ import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.types.DataTypes;
+
+import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.data.IcebergGenerics;
+import org.apache.iceberg.data.Record;
+import org.apache.iceberg.expressions.Expressions;
+import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.annotation.Nullable;
+
 import java.io.File;
 import java.io.IOException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -65,8 +78,8 @@ class IcebergTieringTest {
     @BeforeEach
     void beforeEach() {
         Configuration configuration = new Configuration();
-        configuration.setString("warehouse", tempWarehouseDir.toString());
-        configuration.setString("type", "org.apache.iceberg.inmemory.InMemoryCatalog");
+        configuration.setString("warehouse", "file://" + tempWarehouseDir);
+        configuration.setString("type", "hadoop");
         configuration.setString("name", "test");
         IcebergCatalogProvider provider = new IcebergCatalogProvider(configuration);
         icebergCatalog = provider.get();
@@ -75,41 +88,61 @@ class IcebergTieringTest {
     }
 
     @Test
-    void testCreateTableOnly() throws Exception {
+    void testTieringWriteTable() throws Exception {
         TablePath tablePath = TablePath.of("iceberg", "test_table");
         createTable(tablePath);
 
-        // Verify table exists
-        TableIdentifier tableId = TableIdentifier.of("iceberg", "test_table");
-        Table table = icebergCatalog.loadTable(tableId);
-        assertThat(table).isNotNull();
-        System.out.println("Table created successfully: " + table.name());
-    }
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
 
-    @Test
-    void testWriterOnly() throws Exception {
-        TablePath tablePath = TablePath.of("iceberg", "test_table");
-        createTable(tablePath);
+        int bucketNum = 3;
 
-        try (LakeWriter<IcebergWriteResult> writer = createLakeWriter(tablePath, 0)) {
-            List<LogRecord> records = genLogTableRecords(0, 5);
-            for (LogRecord record : records) {
-                writer.write(record);
+        Map<Integer, List<LogRecord>> recordsByBucket = new HashMap<>();
+
+        List<IcebergWriteResult> icebergWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
+                icebergLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<IcebergCommittable> committableSerializer =
+                icebergLakeTieringFactory.getCommittableSerializer();
+
+        // first, write data
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LakeWriter<IcebergWriteResult> writer = createLakeWriter(tablePath, bucket)) {
+                List<LogRecord> records = genLogTableRecords(bucket, 5);
+                for (LogRecord record : records) {
+                    writer.write(record);
+                }
+                recordsByBucket.put(bucket, records);
+                IcebergWriteResult result = writer.complete();
+                byte[] serialized = writeResultSerializer.serialize(result);
+                icebergWriteResults.add(
+                        writeResultSerializer.deserialize(
+                                writeResultSerializer.getVersion(), serialized));
             }
-            IcebergWriteResult result = writer.complete();
-            assertThat(result).isNotNull();
         }
-    }
 
-    @Test
-    void testCommitterCreation() throws Exception {
-        TablePath tablePath = TablePath.of("iceberg", "test_table");
-        createTable(tablePath);
-
-        // Test if committer can find the table
-        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> committer =
+        // second, commit data
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
                 createLakeCommitter(tablePath)) {
-            System.out.println("Committer created successfully");
+            // serialize/deserialize committable
+            IcebergCommittable icebergCommittable =
+                    lakeCommitter.toCommittable(icebergWriteResults);
+            byte[] serialized = committableSerializer.serialize(icebergCommittable);
+            icebergCommittable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            long snapshot =
+                    lakeCommitter.commit(icebergCommittable, Collections.singletonMap("k1", "v1"));
+            icebergTable.refresh();
+            Snapshot icebergSnapshot = icebergTable.currentSnapshot();
+            assertThat(snapshot).isEqualTo(icebergSnapshot.snapshotId());
+            assertThat(icebergSnapshot.summary()).containsEntry("k1", "v1");
+        }
+
+        // then, check data
+        for (int bucket = 0; bucket < 3; bucket++) {
+            List<LogRecord> expectRecords = recordsByBucket.get(bucket);
+            CloseableIterator<Record> actualRecords = getIcebergRows(icebergTable, bucket);
+            verifyLogTableRecords(actualRecords, bucket, expectRecords);
         }
     }
 
@@ -135,7 +168,7 @@ class IcebergTieringTest {
 
                     @Override
                     public Map<String, String> customProperties() {
-                        return Map.of();
+                        return Collections.emptyMap();
                     }
 
                     @Override
@@ -192,5 +225,37 @@ class IcebergTieringTest {
         TableIdentifier tableId =
                 TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
         icebergCatalog.createTable(tableId, schema);
+    }
+
+    private CloseableIterator<Record> getIcebergRows(Table table, int bucket) {
+        return IcebergGenerics.read(table)
+                .where(Expressions.equal(BUCKET_COLUMN_NAME, bucket))
+                .build()
+                .iterator();
+    }
+
+    private void verifyLogTableRecords(
+            CloseableIterator<Record> actualRecords,
+            int expectBucket,
+            List<LogRecord> expectRecords) {
+        for (LogRecord expectRecord : expectRecords) {
+            Record actualRecord = actualRecords.next();
+            // check business columns:
+            assertThat(actualRecord.get(0)).isEqualTo(expectRecord.getRow().getInt(0));
+            assertThat(actualRecord.get(1, String.class))
+                    .isEqualTo(expectRecord.getRow().getString(1).toString());
+            assertThat(actualRecord.get(2, String.class))
+                    .isEqualTo(expectRecord.getRow().getString(2).toString());
+            // check system columns: __bucket, __offset, __timestamp
+            assertThat(actualRecord.get(3)).isEqualTo(expectBucket);
+            assertThat(actualRecord.get(4)).isEqualTo(expectRecord.logOffset());
+            assertThat(
+                            actualRecord
+                                    .get(5, OffsetDateTime.class)
+                                    .atZoneSameInstant(ZoneOffset.UTC)
+                                    .toInstant()
+                                    .toEpochMilli())
+                    .isEqualTo(expectRecord.timestamp());
+        }
     }
 }

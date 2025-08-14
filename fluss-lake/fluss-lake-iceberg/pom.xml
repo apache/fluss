@@ -56,7 +56,7 @@
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-flink-common</artifactId>
-            <version>0.8-SNAPSHOT</version>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -110,6 +110,13 @@
                     <groupId>commons-io</groupId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <!-- Flink test dependency -->
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-flink-${flink.major.version}</artifactId>
+            <scope>test</scope>
         </dependency>
 
     </dependencies>

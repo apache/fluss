@@ -44,9 +44,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory.FLUSS_BUCKET_OFFSET_PROPERTY;
-import static com.alibaba.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
+import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static com.alibaba.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Implementation of {@link LakeCommitter} for Iceberg. */
@@ -160,7 +160,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     "Failed to load committed lake snapshot properties from Iceberg.");
         }
 
-        String flussOffsetProperties = properties.get(FLUSS_BUCKET_OFFSET_PROPERTY);
+        String flussOffsetProperties = properties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
         if (flussOffsetProperties == null) {
             throw new IllegalArgumentException(
                     "Cannot resume tiering from snapshot without bucket offset properties. "

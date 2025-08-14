@@ -203,7 +203,7 @@ public class TieringSourceEnumerator
             Long tieringEpoch = tieringTableEpochs.remove(failedTableId);
             LOG.info(
                     "Tiering table {} is failed, fail reason is {}.",
-                    tieringEpoch,
+                    failedTableId,
                     failedEvent.failReason());
             if (tieringEpoch == null) {
                 // shouldn't happen, warn it
