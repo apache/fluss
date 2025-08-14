@@ -35,6 +35,16 @@
     <dependencies>
         <dependency>
             <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-api</artifactId>
+            <version>${iceberg.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-common</artifactId>
+            <version>${iceberg.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-core</artifactId>
             <version>${iceberg.version}</version>
         </dependency>
@@ -49,9 +59,20 @@
             <version>${iceberg.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-orc</artifactId>
+            <version>${iceberg.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-bundled-guava</artifactId>
+            <version>${iceberg.version}</version>
+        </dependency>
+        <dependency>
             <groupId>com.alibaba.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
@@ -136,7 +157,13 @@
                         <configuration>
                             <artifactSet>
                                 <includes>
+                                    <include>org.apache.iceberg:iceberg-api</include>
                                     <include>org.apache.iceberg:iceberg-core</include>
+                                    <include>org.apache.iceberg:iceberg-data</include>
+                                    <include>org.apache.iceberg:iceberg-common</include>
+                                    <include>org.apache.iceberg:iceberg-parquet</include>
+                                    <include>org.apache.iceberg:iceberg-orc</include>
+                                    <include>org.apache.iceberg:iceberg-bundled-guava</include>
                                 </includes>
                             </artifactSet>
                             <filters>
