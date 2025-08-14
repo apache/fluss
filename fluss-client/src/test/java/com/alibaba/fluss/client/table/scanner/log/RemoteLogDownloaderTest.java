@@ -23,9 +23,11 @@ import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
+import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.remote.RemoteLogSegment;
+import com.alibaba.fluss.utils.CloseableRegistry;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.IOUtils;
 
@@ -35,11 +37,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
@@ -72,12 +76,9 @@ class RemoteLogDownloaderTest {
         scannerMetricGroup = TestingScannerMetricGroup.newInstance();
         remoteLogDownloader =
                 new RemoteLogDownloader(
-                        DATA1_TABLE_PATH,
-                        conf,
-                        remoteFileDownloader,
-                        scannerMetricGroup,
-                        // use a short timout for faster testing
-                        10L);
+                        DATA1_TABLE_PATH, conf, remoteFileDownloader, scannerMetricGroup, 10L);
+        // trigger auto download.
+        remoteLogDownloader.start();
     }
 
     @AfterEach
@@ -98,7 +99,7 @@ class RemoteLogDownloaderTest {
                 buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 5, conf);
         FsPath remoteLogTabletDir = remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
         List<RemoteLogDownloadFuture> futures =
-                requestRemoteLogs(remoteLogTabletDir, remoteLogSegments);
+                requestRemoteLogs(remoteLogDownloader, remoteLogTabletDir, remoteLogSegments);
 
         // the first 4 segments should success.
         retry(
@@ -134,11 +135,84 @@ class RemoteLogDownloaderTest {
 
         // test cleanup
         remoteLogDownloader.close();
-        assertThat(FileUtils.listDirectory(localLogDir).length).isEqualTo(0);
+        assertThat(localLogDir.toFile().exists()).isFalse();
+    }
+
+    @Test
+    void testParallelismDownloadLog() throws Exception {
+        class TestRemoteFileDownloader extends RemoteFileDownloader {
+
+            private int expectedDownloadFileNum;
+
+            public TestRemoteFileDownloader(int threadNum) {
+                super(threadNum);
+            }
+
+            public void setExpectedDownloadFileNum(int expectedDownloadFileNum) {
+                this.expectedDownloadFileNum = expectedDownloadFileNum;
+            }
+
+            @Override
+            public void transferAllToDirectory(
+                    List<FsPathAndFileName> fsPathAndFileNames,
+                    Path targetDirectory,
+                    CloseableRegistry closeableRegistry)
+                    throws IOException {
+                assertThat(fsPathAndFileNames.size()).isEqualTo(expectedDownloadFileNum);
+            }
+        }
+
+        TestRemoteFileDownloader testRemoteFileDownloader = new TestRemoteFileDownloader(1);
+        RemoteLogDownloader remoteLogDownloader2 =
+                new RemoteLogDownloader(
+                        DATA1_TABLE_PATH,
+                        conf, // max 4 pre-fetch num
+                        testRemoteFileDownloader,
+                        scannerMetricGroup,
+                        10L);
+
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        List<RemoteLogSegment> remoteLogSegments =
+                buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 10, conf);
+        FsPath remoteLogTabletDir = remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
+        List<RemoteLogDownloadFuture> futures =
+                requestRemoteLogs(remoteLogDownloader2, remoteLogTabletDir, remoteLogSegments);
+
+        // 4 to fetch.
+        Semaphore prefetchSemaphore = remoteLogDownloader2.getPrefetchSemaphore();
+        assertThat(prefetchSemaphore.availablePermits()).isEqualTo(4);
+        testRemoteFileDownloader.setExpectedDownloadFileNum(4);
+        remoteLogDownloader2.fetchOnce();
+        assertThat(prefetchSemaphore.availablePermits()).isEqualTo(0);
+
+        // finish 2 segments.
+        futures.get(0).getRecycleCallback().run();
+        futures.get(1).getRecycleCallback().run();
+
+        // 2 to fetch.
+        assertThat(prefetchSemaphore.availablePermits()).isEqualTo(2);
+        testRemoteFileDownloader.setExpectedDownloadFileNum(2);
+        remoteLogDownloader2.fetchOnce();
+        assertThat(prefetchSemaphore.availablePermits()).isEqualTo(0);
+
+        // finish 4 segments.
+        for (int i = 2; i < 6; i++) {
+            futures.get(i).getRecycleCallback().run();
+        }
+
+        // 4 to fetch.
+        assertThat(prefetchSemaphore.availablePermits()).isEqualTo(4);
+        testRemoteFileDownloader.setExpectedDownloadFileNum(4);
+        remoteLogDownloader2.fetchOnce();
+        assertThat(prefetchSemaphore.availablePermits()).isEqualTo(0);
+
+        remoteLogDownloader.close();
     }
 
     private List<RemoteLogDownloadFuture> requestRemoteLogs(
-            FsPath remoteLogTabletDir, List<RemoteLogSegment> remoteLogSegments) {
+            RemoteLogDownloader remoteLogDownloader,
+            FsPath remoteLogTabletDir,
+            List<RemoteLogSegment> remoteLogSegments) {
         List<RemoteLogDownloadFuture> futures = new ArrayList<>();
         for (RemoteLogSegment segment : remoteLogSegments) {
             RemoteLogDownloadFuture future =
