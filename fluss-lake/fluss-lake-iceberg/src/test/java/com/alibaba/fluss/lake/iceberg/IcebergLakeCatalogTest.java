@@ -55,7 +55,7 @@ class IcebergLakeCatalogTest {
     void setupCatalog() {
         Configuration configuration = new Configuration();
         configuration.setString("warehouse", tempWarehouseDir.toURI().toString());
-        configuration.setString("type", "org.apache.iceberg.inmemory.InMemoryCatalog");
+        configuration.setString("catalog-impl", "org.apache.iceberg.inmemory.InMemoryCatalog");
         configuration.setString("name", "fluss_test_catalog");
 
         this.flussIcebergCatalog = new IcebergLakeCatalog(configuration);
