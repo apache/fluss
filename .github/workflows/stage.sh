@@ -41,30 +41,47 @@ function get_test_modules_for_stage() {
     local jdk_version=$2
 
     local modules_flink=$MODULES_FLINK
-    local modules_core=\!${MODULES_FLINK//,/,\!}
+
 
     local included_modules=""
     local excluded_modules=""
-    if [[ "$jdk_version" == "8" ]]; then
-        excluded_modules="!$JDK_11_ONLY"
-    fi
-
 
     case ${stage} in
         (${STAGE_CORE})
-            included_modules="$modules_core"
+            # For core, we exclude all flink modules
+            excluded_modules="$modules_flink";
         ;;
         (${STAGE_FLINK})
             included_modules="fluss-test-coverage,$modules_flink"
         ;;
     esac
 
-    local result="$included_modules"
-    if [[ -n "$excluded_modules" ]]; then
-        result="$result,$excluded_modules"
+    # Add JDK 11 only modules to exclusion list if we're using JDK 8
+    if [[ "$jdk_version" == "8" ]]; then
+        if [[ -n "$excluded_modules" ]]; then
+            excluded_modules="$excluded_modules,$JDK_11_ONLY"
+        else
+            excluded_modules="$JDK_11_ONLY"
+        fi
     fi
 
-    echo "-pl $result"
+    local result="$included_modules"
+    if [[ -n "$excluded_modules" ]]; then
+        if [[ -n "$result" ]]; then
+            result="$result,\!${excluded_modules//,/,\!}"
+        else
+            result=\!${excluded_modules//,/,\!}
+        fi
+    fi
+
+
+    if [[ -n "$result" ]]; then
+           echo "-pl $result"
+       else
+           # If both included_modules and excluded_modules are empty,
+           # don't specify any module restrictions (build all modules)
+           echo ""
+       fi
 }
 
 get_test_modules_for_stage $1 $2

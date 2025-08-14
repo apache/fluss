@@ -48,11 +48,12 @@ jobs:
           distribution: 'temurin'
       - name: Build
         run: |
-          mvn -T 1C -B clean install -DskipTests ${{ inputs.maven-parameters }}
+          TEST_MODULES=$(./.github/workflows/stage.sh all ${{ inputs.java-version }})
+          mvn -T 1C -B clean install  $TEST_MODULES  -DskipTests ${{ inputs.maven-parameters }}
       - name: Test
         timeout-minutes: 60
         run: |
-          TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }}) ${{ inputs.java-version }}
+          TEST_MODULES=$(./.github/workflows/stage.sh ${{ matrix.module }} ${{ inputs.java-version }})
           echo "github ref: ${{ github.ref }}"
           echo "Start testing modules: $TEST_MODULES"
           mvn -B verify $TEST_MODULES -Ptest-coverage -Ptest-${{ matrix.module }} -Dlog.dir=${{ runner.temp }}/fluss-logs -Dlog4j.configurationFile=${{ github.workspace }}/tools/ci/log4j.properties ${{ inputs.maven-parameters }}

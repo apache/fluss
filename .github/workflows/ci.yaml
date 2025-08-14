@@ -48,7 +48,9 @@ jobs:
           distribution: 'temurin'
       - name: Build
         run: |
-          mvn -T 1C -B clean install -DskipTests -Pjava8
+          TEST_MODULES=$(./.github/workflows/stage.sh all 8)
+          mvn -T 1C -B clean install -DskipTests -Pjava8 $TEST_MODULES
+    
 
   build-on-jdk11:
     name: "Java 11"
