@@ -18,6 +18,7 @@
 package com.alibaba.fluss.memory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
@@ -74,6 +75,11 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
+    public void write(int b) throws IOException {
+        writeByte(b);
+    }
+
+    @Override
     public void write(byte[] b) throws IOException {
         write(b, 0, b.length);
     }
@@ -103,6 +109,16 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
         }
 
         memorySegment.putShort(position, (short) v);
+        position += 2;
+    }
+
+    @Override
+    public void writeChar(int v) throws IOException {
+        if (this.position >= this.memorySegment.size() - 1) {
+            resize(2);
+        }
+
+        memorySegment.putChar(position, (char) v);
         position += 2;
     }
 
@@ -148,6 +164,32 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
 
         memorySegment.putDouble(position, v);
         position += 8;
+    }
+
+    @Override
+    public void writeBytes(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeByte(s.charAt(i));
+        }
+    }
+
+    @Override
+    public void writeChars(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeChar(s.charAt(i));
+        }
+    }
+
+    @Override
+    public void writeUTF(String s) throws IOException {
+        if (s == null) {
+            writeInt(-1);
+            return;
+        }
+
+        byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
+        writeInt(bytes.length);
+        write(bytes);
     }
 
     @Override

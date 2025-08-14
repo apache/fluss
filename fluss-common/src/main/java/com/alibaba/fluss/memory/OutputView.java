@@ -19,6 +19,7 @@ package com.alibaba.fluss.memory;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 
+import java.io.DataOutput;
 import java.io.IOException;
 
 /**
@@ -28,7 +29,7 @@ import java.io.IOException;
  * @since 0.2
  */
 @PublicEvolving
-public interface OutputView {
+public interface OutputView extends DataOutput {
     /**
      * Writes a <code>boolean</code> value to this output stream. If the argument <code>v</code> is
      * <code>true</code>, the value <code>(byte)1</code> is written; if <code>v</code> is <code>

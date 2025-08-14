@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.List;
 
+import static com.alibaba.fluss.types.DataTypeChecks.getFieldCount;
+import static com.alibaba.fluss.types.DataTypeChecks.getFieldTypes;
 import static com.alibaba.fluss.types.DataTypeChecks.getLength;
 import static com.alibaba.fluss.types.DataTypeChecks.getPrecision;
 import static com.alibaba.fluss.types.DataTypeChecks.getScale;
@@ -122,6 +124,88 @@ public class DataTypeChecksTest {
             assertThatThrownBy(() -> getScale(noScaleType))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Invalid use of extractor ScaleExtractor");
+        }
+    }
+
+    @Test
+    void testDataTypeVisitorForLengthExtractWithVarCharAndVarBinary() {
+        // Test VarCharType
+        assertThat(getLength(new VarCharType(10))).isEqualTo(10);
+        assertThat(getLength(new VarCharType(100))).isEqualTo(100);
+        assertThat(getLength(new VarCharType(VarCharType.MAX_LENGTH)))
+                .isEqualTo(VarCharType.MAX_LENGTH);
+
+        // Test VarBinaryType
+        assertThat(getLength(new VarBinaryType(20))).isEqualTo(20);
+        assertThat(getLength(new VarBinaryType(200))).isEqualTo(200);
+        assertThat(getLength(new VarBinaryType(VarBinaryType.MAX_LENGTH)))
+                .isEqualTo(VarBinaryType.MAX_LENGTH);
+    }
+
+    @Test
+    void testDataTypeVisitorForFieldCountExtract() {
+        // Test RowType
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("a", DataTypes.INT()),
+                        DataTypes.FIELD("b", DataTypes.STRING()),
+                        DataTypes.FIELD("c", DataTypes.BOOLEAN()));
+        assertThat(getFieldCount(rowType)).isEqualTo(3);
+
+        // Test empty RowType
+        RowType emptyRowType = DataTypes.ROW(new DataField[0]);
+        assertThat(getFieldCount(emptyRowType)).isEqualTo(0);
+
+        // Test single field RowType
+        RowType singleFieldRowType = DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT()));
+        assertThat(getFieldCount(singleFieldRowType)).isEqualTo(1);
+
+        // Test other types should return 1
+        assertThat(getFieldCount(DataTypes.INT())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.STRING())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.BOOLEAN())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.ARRAY(DataTypes.INT()))).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()))).isEqualTo(1);
+    }
+
+    @Test
+    void testDataTypeVisitorForFieldTypesExtract() {
+        // Test RowType
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("a", DataTypes.INT()),
+                        DataTypes.FIELD("b", DataTypes.STRING()),
+                        DataTypes.FIELD("c", DataTypes.BOOLEAN()));
+        List<DataType> fieldTypes = getFieldTypes(rowType);
+        assertThat(fieldTypes).hasSize(3);
+        assertThat(fieldTypes.get(0)).isInstanceOf(IntType.class);
+        assertThat(fieldTypes.get(1)).isInstanceOf(StringType.class);
+        assertThat(fieldTypes.get(2)).isInstanceOf(BooleanType.class);
+
+        // Test empty RowType
+        RowType emptyRowType = DataTypes.ROW(new DataField[0]);
+        List<DataType> emptyFieldTypes = getFieldTypes(emptyRowType);
+        assertThat(emptyFieldTypes).isEmpty();
+
+        // Test single field RowType
+        RowType singleFieldRowType = DataTypes.ROW(DataTypes.FIELD("a", DataTypes.DOUBLE()));
+        List<DataType> singleFieldTypes = getFieldTypes(singleFieldRowType);
+        assertThat(singleFieldTypes).hasSize(1);
+        assertThat(singleFieldTypes.get(0)).isInstanceOf(DoubleType.class);
+
+        // Test other types should throw exception
+        List<DataType> otherTypes =
+                Arrays.asList(
+                        DataTypes.INT(),
+                        DataTypes.STRING(),
+                        DataTypes.BOOLEAN(),
+                        DataTypes.ARRAY(DataTypes.INT()),
+                        DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()));
+
+        for (DataType otherType : otherTypes) {
+            assertThatThrownBy(() -> getFieldTypes(otherType))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Invalid use of extractor FieldTypesExtractor");
         }
     }
 }
