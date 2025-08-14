@@ -285,6 +285,12 @@ public class ConfigOptions {
                                     + " (“50100,50101”), ranges (“50100-50200”) or a combination of both."
                                     + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
 
+    public static final ConfigOption<Integer> COORDINATOR_ID =
+            key("coordinator.id")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription("The id for the coordinator server.");
+
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()

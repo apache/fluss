@@ -60,7 +60,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -94,7 +94,7 @@ public class CoordinatorServer extends ServerBase {
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
 
     @GuardedBy("lock")
-    private String serverId;
+    private int serverId;
 
     @GuardedBy("lock")
     private MetricRegistry metricRegistry;
@@ -146,6 +146,7 @@ public class CoordinatorServer extends ServerBase {
         super(conf);
         validateConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
+        this.serverId = conf.getInt(ConfigOptions.COORDINATOR_ID);
     }
 
     public static void main(String[] args) {
@@ -157,10 +158,45 @@ public class CoordinatorServer extends ServerBase {
 
     @Override
     protected void startServices() throws Exception {
+        electCoordinatorLeader();
+    }
+
+    private void electCoordinatorLeader() throws Exception {
+        this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
+
+        // Coordinator Server supports high availability. If 3 coordinator servers are alive,
+        // one of them will be elected as leader and the other two will be standby.
+        // When leader fails, one of standby coordinators will be elected as new leader.
+        // All of them register to ZK like tablet servers in path
+        // "/coordinators/ids/1","/coordinators/ids/2","/coordinators/ids/3".
+        // but the leader will be elected in path "/coordinators/leader" additionally.
+        registerCoordinatorServer();
+        ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
+                zkClient, this::registerCoordinatorServer, this);
+
+        // try to register Coordinator leader once
+        if (tryElectCoordinatorLeaderOnce()) {
+            startCoordinatorLeaderService();
+        } else {
+            // standby
+            CoordinatorLeaderElection coordinatorLeaderElection =
+                    new CoordinatorLeaderElection(zkClient.getCuratorClient(), serverId);
+            coordinatorLeaderElection.startElectLeader(
+                    () -> {
+                        try {
+                            startCoordinatorLeaderService();
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        }
+    }
+
+    protected void startCoordinatorLeaderService() throws Exception {
+
         synchronized (lock) {
             LOG.info("Initializing Coordinator services.");
             List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
-            this.serverId = UUID.randomUUID().toString();
 
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
@@ -170,8 +206,6 @@ public class CoordinatorServer extends ServerBase {
                             ServerMetricUtils.validateAndGetClusterId(conf),
                             endpoints.get(0).getHost(),
                             serverId);
-
-            this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
             this.coordinatorContext = new CoordinatorContext();
             this.metadataCache = new CoordinatorMetadataCache();
@@ -279,6 +313,54 @@ public class CoordinatorServer extends ServerBase {
         }
 
         return terminationFuture;
+    }
+
+    private void registerCoordinatorServer() throws Exception {
+        long startTime = System.currentTimeMillis();
+
+        // we need to retry to register since although
+        // zkClient reconnect, the ephemeral node may still exist
+        // for a while time, retry to wait the ephemeral node removed
+        // see ZOOKEEPER-2985
+        while (true) {
+            try {
+                zkClient.registerCoordinatorServer(this.serverId);
+                break;
+            } catch (KeeperException.NodeExistsException nodeExistsException) {
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                if (elapsedTime >= ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS) {
+                    LOG.error(
+                            "Coordinator Server register to Zookeeper exceeded total retry time of {} ms. "
+                                    + "Aborting registration attempts.",
+                            ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS);
+                    throw nodeExistsException;
+                }
+
+                LOG.warn(
+                        "Coordinator server already registered in Zookeeper. "
+                                + "retrying register after {} ms....",
+                        ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
+                try {
+                    Thread.sleep(ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+    }
+
+    private boolean tryElectCoordinatorLeaderOnce() throws Exception {
+        try {
+            zkClient.electCoordinatorLeader();
+            LOG.info("Coordinator server {} win the leader in election now.", serverId);
+            return true;
+        } catch (KeeperException.NodeExistsException nodeExistsException) {
+            LOG.warn(
+                    "Coordinator leader already registered in Zookeeper. Coordinator {} will be standby",
+                    serverId);
+            return false;
+        }
     }
 
     private void registerCoordinatorLeader() throws Exception {
@@ -488,6 +570,11 @@ public class CoordinatorServer extends ServerBase {
     }
 
     @VisibleForTesting
+    public int getServerId() {
+        return serverId;
+    }
+
+    @VisibleForTesting
     public ServerMetadataCache getMetadataCache() {
         return metadataCache;
     }
@@ -498,6 +585,19 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private static void validateConfigs(Configuration conf) {
+        Optional<Integer> serverId = conf.getOptional(ConfigOptions.COORDINATOR_ID);
+        if (!serverId.isPresent()) {
+            throw new IllegalConfigurationException(
+                    String.format("Configuration %s must be set.", ConfigOptions.COORDINATOR_ID));
+        }
+
+        if (serverId.get() < 0) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 0.",
+                            ConfigOptions.COORDINATOR_ID.key()));
+        }
+
         if (conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR) < 1) {
             throw new IllegalConfigurationException(
                     String.format(

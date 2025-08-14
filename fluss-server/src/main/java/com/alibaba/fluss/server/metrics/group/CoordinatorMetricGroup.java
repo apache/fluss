@@ -30,10 +30,10 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
     protected final String clusterId;
     protected final String hostname;
-    protected final String serverId;
+    protected final int serverId;
 
     public CoordinatorMetricGroup(
-            MetricRegistry registry, String clusterId, String hostname, String serverId) {
+            MetricRegistry registry, String clusterId, String hostname, int serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;
@@ -49,6 +49,6 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     protected final void putVariables(Map<String, String> variables) {
         variables.put("cluster_id", clusterId);
         variables.put("host", hostname);
-        variables.put("server_id", serverId);
+        variables.put("server_id", String.valueOf(serverId));
     }
 }
