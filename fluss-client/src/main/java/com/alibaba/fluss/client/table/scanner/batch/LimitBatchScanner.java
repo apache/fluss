@@ -18,6 +18,7 @@
 package com.alibaba.fluss.client.table.scanner.batch;
 
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
+import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
@@ -94,7 +95,11 @@ public class LimitBatchScanner implements BatchScanner {
         // because that rocksdb is not suitable to projection, thus do it in client.
         int leader = metadataUpdater.leaderFor(tableBucket);
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
-
+        if (gateway == null) {
+            // TODO handle this exception, like retry.
+            throw new LeaderNotAvailableException(
+                    "Server " + leader + " is not found in metadata cache.");
+        }
         this.scanFuture = gateway.limitScan(limitScanRequest);
 
         this.kvValueDecoder =

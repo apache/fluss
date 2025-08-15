@@ -22,7 +22,6 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.client.metrics.WriterMetricGroup;
 import com.alibaba.fluss.cluster.BucketLocation;
 import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.FlussRuntimeException;
@@ -56,6 +55,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
@@ -248,7 +248,7 @@ public final class RecordAccumulator {
      * </pre>
      */
     public ReadyCheckResult ready(Cluster cluster) {
-        Set<ServerNode> readyNodes = new HashSet<>();
+        Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = batchTimeoutMs;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
@@ -283,16 +283,16 @@ public final class RecordAccumulator {
      *     the requested maxSize.
      */
     public Map<Integer, List<ReadyWriteBatch>> drain(
-            Cluster cluster, Set<ServerNode> nodes, int maxSize) throws Exception {
+            Cluster cluster, Set<Integer> nodes, int maxSize) throws Exception {
         if (nodes.isEmpty()) {
             return Collections.emptyMap();
         }
 
         Map<Integer, List<ReadyWriteBatch>> batches = new HashMap<>();
-        for (ServerNode node : nodes) {
+        for (Integer node : nodes) {
             List<ReadyWriteBatch> ready = drainBatchesForOneNode(cluster, node, maxSize);
             if (!ready.isEmpty()) {
-                batches.put(node.id(), ready);
+                batches.put(node, ready);
             }
         }
         return batches;
@@ -458,7 +458,7 @@ public final class RecordAccumulator {
     private long bucketReady(
             PhysicalTablePath physicalTablePath,
             BucketAndWriteBatches bucketAndWriteBatches,
-            Set<ServerNode> readyNodes,
+            Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
@@ -508,7 +508,7 @@ public final class RecordAccumulator {
 
             int bucketId = entry.getKey();
             TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
-            ServerNode leader = cluster.leaderFor(tableBucket);
+            Integer leader = cluster.leaderFor(tableBucket);
             if (leader == null) {
                 // This is a bucket for which leader is not known, but messages are
                 // available to send. Note that entries are currently not removed from
@@ -531,10 +531,10 @@ public final class RecordAccumulator {
 
     private long batchReady(
             boolean exhausted,
-            ServerNode leader,
+            int leader,
             long waitedTimeMs,
             boolean full,
-            Set<ServerNode> readyNodes,
+            Set<Integer> readyNodes,
             long nextReadyCheckDelayMs) {
         if (!readyNodes.contains(leader)) {
             // if the wait time larger than lingerMs, we can send this batch even if it is not full.
@@ -653,8 +653,8 @@ public final class RecordAccumulator {
         return null;
     }
 
-    private List<ReadyWriteBatch> drainBatchesForOneNode(
-            Cluster cluster, ServerNode node, int maxSize) throws Exception {
+    private List<ReadyWriteBatch> drainBatchesForOneNode(Cluster cluster, Integer node, int maxSize)
+            throws Exception {
         int size = 0;
         List<BucketLocation> buckets = getAllBucketsInCurrentNode(node, cluster);
         List<ReadyWriteBatch> ready = new ArrayList<>();
@@ -662,13 +662,13 @@ public final class RecordAccumulator {
             return ready;
         }
         // to make starvation less likely each node has its own drainIndex.
-        int drainIndex = getDrainIndex(node.id());
+        int drainIndex = getDrainIndex(node);
         int start = drainIndex = drainIndex % buckets.size();
         do {
             BucketLocation bucket = buckets.get(drainIndex);
             PhysicalTablePath physicalTablePath = bucket.getPhysicalTablePath();
             TableBucket tableBucket = bucket.getTableBucket();
-            updateDrainIndex(node.id(), drainIndex);
+            updateDrainIndex(node, drainIndex);
             drainIndex = (drainIndex + 1) % buckets.size();
 
             Deque<WriteBatch> deque = getReadyDeque(physicalTablePath, tableBucket.getBucket());
@@ -793,8 +793,7 @@ public final class RecordAccumulator {
      * TODO This is a very time-consuming operation, which will be moved to be computed in the
      * Cluster later on.
      */
-    private List<BucketLocation> getAllBucketsInCurrentNode(
-            ServerNode currentNode, Cluster cluster) {
+    private List<BucketLocation> getAllBucketsInCurrentNode(Integer currentNode, Cluster cluster) {
         List<BucketLocation> buckets = new ArrayList<>();
         Set<PhysicalTablePath> physicalTablePaths = cluster.getBucketLocationsByPath().keySet();
         for (PhysicalTablePath path : physicalTablePaths) {
@@ -803,7 +802,7 @@ public final class RecordAccumulator {
             for (BucketLocation bucket : bucketsForTable) {
                 // the bucket leader is always not null in available list,
                 // but we still check here to avoid NPE warning.
-                if (bucket.getLeader() != null && currentNode.id() == bucket.getLeader().id()) {
+                if (bucket.getLeader() != null && Objects.equals(currentNode, bucket.getLeader())) {
                     buckets.add(bucket);
                 }
             }
@@ -904,12 +903,12 @@ public final class RecordAccumulator {
 
     /** The set of nodes that have at leader one complete record batch in the accumulator. */
     public static final class ReadyCheckResult {
-        public final Set<ServerNode> readyNodes;
+        public final Set<Integer> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
 
         public ReadyCheckResult(
-                Set<ServerNode> readyNodes,
+                Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
                 Set<PhysicalTablePath> unknownLeaderTables) {
             this.readyNodes = readyNodes;
