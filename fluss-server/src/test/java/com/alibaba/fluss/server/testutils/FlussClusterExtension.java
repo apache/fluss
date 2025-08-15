@@ -26,6 +26,7 @@ import com.alibaba.fluss.config.MemorySize;
 import com.alibaba.fluss.fs.local.LocalFileSystem;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.rpc.GatewayClientProxy;
@@ -450,6 +451,10 @@ public final class FlussClusterExtension
                                     node.rack());
                         })
                 .collect(Collectors.toList());
+    }
+
+    public TableInfo getTableInfo(TablePath tablePath) {
+        return metadataManager.getTable(tablePath);
     }
 
     public ZooKeeperClient getZooKeeperClient() {
