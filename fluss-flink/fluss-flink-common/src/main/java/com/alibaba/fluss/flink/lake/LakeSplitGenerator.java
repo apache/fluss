@@ -76,8 +76,8 @@ public class LakeSplitGenerator {
         this.bucketOffsetsRetriever = bucketOffsetsRetriever;
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
         this.bucketCount = bucketCount;
-        this.partitionFilters =
-                partitionFilters; // check partition filter is not null in FlinkSourceEnumerator.
+        // check whether partition filters are not null exists in FlinkSourceEnumerator.
+        this.partitionFilters = partitionFilters;
     }
 
     public List<SourceSplitBase> generateHybridLakeSplits() throws Exception {
@@ -95,13 +95,17 @@ public class LakeSplitGenerator {
                                         (LakeSource.PlannerContext) lakeSnapshotInfo::getSnapshotId)
                                 .plan());
 
+        if (lakeSplits.isEmpty()) {
+            return Collections.emptyList();
+        }
+
         // first, filter lake splits by partition filters
         if (!partitionFilters.isEmpty()) {
             List<String> partitionKeys = fileStoreTable.partitionKeys();
             boolean isSinglePartitionKey = partitionKeys.size() == 1;
 
             if (isSinglePartitionKey) {
-                // single key: key == partition value
+                // in single key, name == value
                 Set<String> allowedPartitionNames =
                         partitionFilters.stream()
                                 .map(fieldEqual -> String.valueOf(fieldEqual.equalValue))
@@ -113,19 +117,19 @@ public class LakeSplitGenerator {
             } else {
                 // multi partition key
                 List<DataField> dataFields = tableInfo.getRowType().getFields();
-                Map<Integer, String> partitionPosToValueMap = new java.util.HashMap<>();
+                Map<Integer, String> partitionKeyIdxToValueMap = new java.util.HashMap<>();
 
-                // build position→expectedValue map
+                // build partition key idx to expected value map
                 for (FieldEqual fieldEqual : partitionFilters) {
                     String fieldName = dataFields.get(fieldEqual.fieldIndex).getName();
-                    int partitionPos = partitionKeys.indexOf(fieldName);
-                    if (partitionPos >= 0) {
-                        partitionPosToValueMap.put(
-                                partitionPos, String.valueOf(fieldEqual.equalValue));
+                    int partitionKeyIdx = partitionKeys.indexOf(fieldName);
+                    if (partitionKeyIdx >= 0) {
+                        partitionKeyIdxToValueMap.put(
+                                partitionKeyIdx, String.valueOf(fieldEqual.equalValue));
                     }
                 }
 
-                if (!partitionPosToValueMap.isEmpty()) {
+                if (!partitionKeyIdxToValueMap.isEmpty()) {
                     lakeSplits
                             .entrySet()
                             .removeIf(
@@ -133,18 +137,19 @@ public class LakeSplitGenerator {
                                         String partitionName = entry.getKey(); // e.g. "20250815$08"
                                         String[] partitionValues =
                                                 partitionName.split(
-                                                        Pattern.quote(PARTITION_SPEC_SEPARATOR));
+                                                        Pattern.quote(
+                                                                PARTITION_SPEC_SEPARATOR)); // ["20250815", "08"]
 
-                                        // check if all partition key positions match
-                                        // their expected values
-                                        for (Map.Entry<Integer, String> posEntry :
-                                                partitionPosToValueMap.entrySet()) {
-                                            int pos = posEntry.getKey();
-                                            String expectedValue = posEntry.getValue();
+                                        // check if all partition key idx match to expected values
+                                        for (Map.Entry<Integer, String> mapEntry :
+                                                partitionKeyIdxToValueMap.entrySet()) {
+                                            int partitionKeyIdx = mapEntry.getKey();
+                                            String expectedValue = mapEntry.getValue();
 
-                                            if (pos >= partitionValues.length
+                                            // idx out of bounds or value not match
+                                            if (partitionKeyIdx >= partitionValues.length
                                                     || !expectedValue.equals(
-                                                            partitionValues[pos])) {
+                                                            partitionValues[partitionKeyIdx])) {
                                                 return true; // remove this partition
                                             }
                                         }
