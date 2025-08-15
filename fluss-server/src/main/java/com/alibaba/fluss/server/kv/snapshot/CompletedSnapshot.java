@@ -71,6 +71,8 @@ public class CompletedSnapshot {
     /** The location where the snapshot is stored. */
     private final FsPath snapshotLocation;
 
+    public static final String SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE = "No such file or directory";
+
     public CompletedSnapshot(
             TableBucket tableBucket,
             long snapshotID,
