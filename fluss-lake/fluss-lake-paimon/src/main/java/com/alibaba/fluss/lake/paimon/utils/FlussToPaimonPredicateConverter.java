@@ -49,6 +49,7 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
 
     public FlussToPaimonPredicateConverter(RowType rowType) {
         this.builder = new PredicateBuilder(rowType);
+        this.paimonRowType = rowType;
     }
 
     public static Optional<Predicate> convert(
