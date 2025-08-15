@@ -87,6 +87,14 @@ public class CompletedSnapshotStore {
         addSnapshotAndSubsumeOldestOne(completedSnapshot, snapshotsCleaner, () -> {});
     }
 
+    public long getPhysicalStorageRemoteKvSize() {
+        return sharedKvFileRegistry.getFileSize();
+    }
+
+    public long getNumSnapshots() {
+        return sharedKvFileRegistry.getNumSnapshots();
+    }
+
     /**
      * Synchronously writes the new snapshots to snapshot handle store and asynchronously removes
      * older ones.

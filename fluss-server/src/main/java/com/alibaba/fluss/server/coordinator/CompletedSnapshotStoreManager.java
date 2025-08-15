@@ -18,12 +18,17 @@
 package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import com.alibaba.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
+import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 
 import org.slf4j.Logger;
@@ -55,20 +60,47 @@ public class CompletedSnapshotStoreManager {
     private final ZooKeeperClient zooKeeperClient;
     private final Map<TableBucket, CompletedSnapshotStore> bucketCompletedSnapshotStores;
     private final Executor ioExecutor;
+    private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
-            ZooKeeperClient zooKeeperClient) {
+            ZooKeeperClient zooKeeperClient,
+            CoordinatorMetricGroup coordinatorMetricGroup) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new HashMap<>();
         this.ioExecutor = ioExecutor;
+        this.coordinatorMetricGroup = coordinatorMetricGroup;
+
+        registerMetrics();
     }
 
-    public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(TableBucket tableBucket) {
+    private void registerMetrics() {
+        MetricGroup physicalStorage = coordinatorMetricGroup.addGroup("physicalStorage");
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE,
+                this::physicalStorageRemoteKvSize);
+    }
+
+    private long physicalStorageRemoteKvSize() {
+        return bucketCompletedSnapshotStores.values().stream()
+                .map(CompletedSnapshotStore::getPhysicalStorageRemoteKvSize)
+                .reduce(0L, Long::sum);
+    }
+
+    private long getNumSnapshots(TableBucket tableBucket) {
+        return bucketCompletedSnapshotStores.get(tableBucket).getNumSnapshots();
+    }
+
+    private long getAllSnapshotSize(TableBucket tableBucket) {
+        return bucketCompletedSnapshotStores.get(tableBucket).getPhysicalStorageRemoteKvSize();
+    }
+
+    public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(
+            TablePath tablePath, TableBucket tableBucket) {
         return bucketCompletedSnapshotStores.computeIfAbsent(
                 tableBucket,
                 (bucket) -> {
@@ -82,6 +114,18 @@ public class CompletedSnapshotStoreManager {
                                 "Created snapshot store for table bucket {} in {} ms.",
                                 bucket,
                                 end - start);
+
+                        BucketMetricGroup bucketMetricGroup =
+                                coordinatorMetricGroup.getTableBucketMetricGroup(
+                                        tablePath, tableBucket);
+                        if (bucketMetricGroup != null) {
+                            LOG.info("ADDED bucketMetricGroup for tableBucket {}.", bucket);
+                            bucketMetricGroup.gauge(
+                                    MetricNames.KV_NUM_SNAPSHOTS, () -> getNumSnapshots(bucket));
+                            bucketMetricGroup.gauge(
+                                    MetricNames.KV_ALL_SNAPSHOT_SIZE,
+                                    () -> getAllSnapshotSize(bucket));
+                        }
                         return snapshotStore;
                     } catch (Exception e) {
                         throw new RuntimeException(

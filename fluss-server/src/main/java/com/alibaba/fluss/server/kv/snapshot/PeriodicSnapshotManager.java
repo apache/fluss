@@ -21,8 +21,6 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.fs.FileSystemSafetyNet;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.utils.MathUtils;
 import com.alibaba.fluss.utils.concurrent.Executors;
@@ -124,8 +122,6 @@ public class PeriodicSnapshotManager implements Closeable {
                 periodicSnapshotDelay > 0
                         ? MathUtils.murmurHash(tableBucket.hashCode()) % periodicSnapshotDelay
                         : 0;
-
-        registerMetrics(bucketMetricGroup);
     }
 
     public static PeriodicSnapshotManager create(
@@ -156,9 +152,8 @@ public class PeriodicSnapshotManager implements Closeable {
         }
     }
 
-    private void registerMetrics(BucketMetricGroup bucketMetricGroup) {
-        MetricGroup metricGroup = bucketMetricGroup.addGroup("kv").addGroup("snapshot");
-        metricGroup.gauge(MetricNames.KV_LATEST_SNAPSHOT_SIZE, target::getSnapshotSize);
+    public long getSnapshotSize() {
+        return target.getSnapshotSize();
     }
 
     // schedule thread and asyncOperationsThreadPool can access this method

@@ -47,6 +47,11 @@ public class MetricNames {
     public static final String EVENT_QUEUE_TIME_MS = "eventQueueTimeMs";
     public static final String EVENT_PROCESSING_TIME_MS = "eventProcessingTimeMs";
 
+    // for kv tablet which reported by coordinator
+    public static final String KV_NUM_SNAPSHOTS = "numKvSnapshots";
+    public static final String KV_ALL_SNAPSHOT_SIZE = "allKvSnapshotSize";
+    public static final String SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE = "remoteKvSize";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------
@@ -62,6 +67,11 @@ public class MetricNames {
             "delayedFetchFromFollowerExpiresPerSecond";
     public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
             "delayedFetchFromClientExpiresPerSecond";
+
+    public static final String SERVER_LOGICAL_STORAGE_LOG_SIZE = "logSize";
+    public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
+    public static final String SERVER_PHYSICAL_STORAGE_LOCAL_SIZE = "localSize";
+    public static final String SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE = "remoteLogSize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table
@@ -121,10 +131,11 @@ public class MetricNames {
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";
     public static final String LOG_END_OFFSET = "endOffset";
-    public static final String LOG_SIZE = "size";
+    public static final String REMOTE_LOG_SIZE = "size";
 
-    // for kv tablet
-    public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
+    // for logic storage
+    public static final String LOCAL_STORAGE_LOG_SIZE = "logSize";
+    public static final String LOCAL_STORAGE_KV_SIZE = "kvSize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
