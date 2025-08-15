@@ -160,6 +160,10 @@ public final class NettyServer implements RpcServer {
                 ChannelOption.RCVBUF_ALLOCATOR,
                 new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
         bootstrap.channel(NettyUtils.getServerSocketChannelClass(selectorGroup));
+        bootstrap.option(
+                ChannelOption.SO_BACKLOG,
+                conf.getInt(ConfigOptions.NETTY_SERVER_CONNECTION_QUEUE_SIZE));
+        bootstrap.childOption(ChannelOption.SO_KEEPALIVE, true);
 
         // child channel pipeline for accepted connections
         final ChannelHandler channelHandler;
