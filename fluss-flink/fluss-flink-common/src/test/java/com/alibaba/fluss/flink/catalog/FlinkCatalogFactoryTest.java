@@ -31,6 +31,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -129,10 +130,18 @@ abstract class FlinkCatalogFactoryTest {
         FlinkCatalogFactory factory = new FlinkCatalogFactory();
 
         // Test that optionalOptions() correctly declares DEFAULT_DATABASE
-        Set<ConfigOption<?>> optionalOptions = factory.optionalOptions();
+        Set<String> optionalOptions =
+                factory.optionalOptions().stream()
+                        .map(ConfigOption::key)
+                        .collect(Collectors.toSet());
         assertThat(optionalOptions)
-                .hasSize(1)
-                .containsExactly(FlinkCatalogOptions.DEFAULT_DATABASE);
+                .hasSize(5)
+                .containsExactlyInAnyOrder(
+                        FlinkCatalogOptions.DEFAULT_DATABASE.key(),
+                        com.alibaba.fluss.config.ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(),
+                        com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM.key(),
+                        com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_USERNAME.key(),
+                        com.alibaba.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_PASSWORD.key());
 
         ConfigOption<?> defaultDbOption = FlinkCatalogOptions.DEFAULT_DATABASE;
         assertThat(defaultDbOption.key()).isEqualTo("default-database");
