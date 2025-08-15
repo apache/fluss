@@ -24,6 +24,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.record.LogTestBase;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.server.log.LocalLog.SegmentDeletionReason;
+import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -408,6 +409,7 @@ final class LocalLogTest extends LogTestBase {
         return new LocalLog(
                 dir,
                 logConf,
+                TestingMetricGroups.TABLET_SERVER_METRICS,
                 segments,
                 recoverPoint,
                 nextOffsetMetadata,

@@ -25,11 +25,10 @@ import com.alibaba.fluss.exception.LogStorageException;
 import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
 import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.SimpleCounter;
 import com.alibaba.fluss.record.FileLogProjection;
 import com.alibaba.fluss.record.MemoryLogRecords;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 
@@ -90,6 +89,7 @@ public final class LocalLog {
     public LocalLog(
             File logTabletDir,
             Configuration config,
+            TabletServerMetricGroup serverMetricGroup,
             LogSegments segments,
             long recoveryPoint,
             LogOffsetMetadata nextOffsetMetadata,
@@ -105,9 +105,8 @@ public final class LocalLog {
         this.logFormat = logFormat;
 
         lastFlushedTime = new AtomicLong(System.currentTimeMillis());
-        flushCount = new SimpleCounter();
-        // consider won't flush frequently, we set a small window size
-        flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
+        flushCount = serverMetricGroup.logFlushCount();
+        flushLatencyHistogram = serverMetricGroup.logFlushLatencyHistogram();
         localLogStartOffset = segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
         localMaxTimestamp =
                 segments.isEmpty() ? 0L : segments.lastSegment().get().maxTimestampSoFar();

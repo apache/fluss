@@ -529,7 +529,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
+      <th rowspan="38"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table</td>
@@ -631,12 +631,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
-      <td rowspan="7">table_bucket</td>
-      <td>inSyncReplicasCount</td>
-      <td>The inSync replicas count of this table bucket.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
+      <td rowspan="6">table_bucket</td>
       <td>underMinIsr</td>
       <td>If this bucket is under min isr, this value is 1, otherwise 0.</td>
       <td>Gauge</td>

@@ -17,13 +17,17 @@
 
 package com.alibaba.fluss.server.metrics.group;
 
-import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
+import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
+import com.alibaba.fluss.metrics.Histogram;
 import com.alibaba.fluss.metrics.MeterView;
 import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.metrics.SimpleCounter;
 import com.alibaba.fluss.metrics.ThreadSafeSimpleCounter;
 import com.alibaba.fluss.metrics.groups.AbstractMetricGroup;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.metrics.registry.MetricRegistry;
 import com.alibaba.fluss.utils.MapUtils;
 
@@ -33,8 +37,9 @@ import java.util.Map;
 public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     private static final String NAME = "tabletserver";
+    private static final int WINDOW_SIZE = 1024;
 
-    private final Map<PhysicalTablePath, PhysicalTableMetricGroup> metricGroupByPhysicalTable =
+    private final Map<TablePath, TableMetricGroup> metricGroupByTable =
             MapUtils.newConcurrentHashMap();
 
     protected final String clusterId;
@@ -48,6 +53,26 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter delayedWriteExpireCount;
     private final Counter delayedFetchFromFollowerExpireCount;
     private final Counter delayedFetchFromClientExpireCount;
+
+    // aggregated metrics
+    private final Counter messagesIn;
+    private final Counter bytesIn;
+    private final Counter bytesOut;
+
+    // aggregated log metrics
+    private final Counter logFlushCount;
+    private final Histogram logFlushLatencyHistogram;
+
+    // aggregated kv metrics
+    private final Counter kvFlushCount;
+    private final Histogram kvFlushLatencyHistogram;
+    private final Counter kvTruncateAsDuplicatedCount;
+    private final Counter kvTruncateAsErrorCount;
+
+    // aggregated replica metrics
+    private final Counter isrShrinks;
+    private final Counter isrExpands;
+    private final Counter failedIsrUpdates;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -72,6 +97,42 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(
                 MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
                 new MeterView(delayedFetchFromClientExpireCount));
+
+        messagesIn = new ThreadSafeSimpleCounter();
+        meter(MetricNames.MESSAGES_IN_RATE, new MeterView(messagesIn));
+        bytesIn = new ThreadSafeSimpleCounter();
+        meter(MetricNames.BYTES_IN_RATE, new MeterView(bytesIn));
+        bytesOut = new ThreadSafeSimpleCounter();
+        meter(MetricNames.BYTES_OUT_RATE, new MeterView(bytesOut));
+
+        MetricGroup logMetricGroup = this.addGroup("log");
+        // about flush
+        logFlushCount = new SimpleCounter();
+        logMetricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(logFlushCount));
+        logFlushLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        logMetricGroup.histogram(MetricNames.LOG_FLUSH_LATENCY_MS, logFlushLatencyHistogram);
+
+        // about pre-write buffer.
+        kvFlushCount = new SimpleCounter();
+        meter(MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_RATE, new MeterView(kvFlushCount));
+        kvFlushLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        histogram(MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS, kvFlushLatencyHistogram);
+        kvTruncateAsDuplicatedCount = new SimpleCounter();
+        meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE,
+                new MeterView(kvTruncateAsDuplicatedCount));
+        kvTruncateAsErrorCount = new SimpleCounter();
+        meter(
+                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE,
+                new MeterView(kvTruncateAsErrorCount));
+
+        // replica metrics
+        isrExpands = new SimpleCounter();
+        meter(MetricNames.ISR_EXPANDS_RATE, new MeterView(isrExpands));
+        isrShrinks = new SimpleCounter();
+        meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
+        failedIsrUpdates = new SimpleCounter();
+        meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
     }
 
     @Override
@@ -112,33 +173,78 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         return delayedFetchFromClientExpireCount;
     }
 
+    public Counter messageIn() {
+        return messagesIn;
+    }
+
+    public Counter bytesIn() {
+        return bytesIn;
+    }
+
+    public Counter bytesOut() {
+        return bytesOut;
+    }
+
+    public Counter logFlushCount() {
+        return logFlushCount;
+    }
+
+    public Histogram logFlushLatencyHistogram() {
+        return logFlushLatencyHistogram;
+    }
+
+    public Counter kvFlushCount() {
+        return kvFlushCount;
+    }
+
+    public Histogram kvFlushLatencyHistogram() {
+        return kvFlushLatencyHistogram;
+    }
+
+    public Counter kvTruncateAsDuplicatedCount() {
+        return kvTruncateAsDuplicatedCount;
+    }
+
+    public Counter kvTruncateAsErrorCount() {
+        return kvTruncateAsErrorCount;
+    }
+
+    public Counter isrShrinks() {
+        return isrShrinks;
+    }
+
+    public Counter isrExpands() {
+        return isrExpands;
+    }
+
+    public Counter failedIsrUpdates() {
+        return failedIsrUpdates;
+    }
+
     // ------------------------------------------------------------------------
     //  table buckets groups
     // ------------------------------------------------------------------------
-    public BucketMetricGroup addPhysicalTableBucketMetricGroup(
-            PhysicalTablePath physicalTablePath, int bucket, boolean isKvTable) {
-        PhysicalTableMetricGroup physicalTableMetricGroup =
-                metricGroupByPhysicalTable.computeIfAbsent(
-                        physicalTablePath,
-                        table ->
-                                new PhysicalTableMetricGroup(
-                                        registry, physicalTablePath, isKvTable, this));
-        return physicalTableMetricGroup.addBucketMetricGroup(bucket);
+    public BucketMetricGroup addTableBucketMetricGroup(
+            TablePath tablePath, int bucket, boolean isKvTable) {
+        TableMetricGroup tableMetricGroup =
+                metricGroupByTable.computeIfAbsent(
+                        tablePath,
+                        table -> new TableMetricGroup(registry, tablePath, isKvTable, this));
+        return tableMetricGroup.addBucketMetricGroup(bucket);
     }
 
-    public void removeTableBucketMetricGroup(PhysicalTablePath physicalTablePath, int bucket) {
-        // get the metric group of the physical table
-        PhysicalTableMetricGroup physicalTableMetricGroup =
-                metricGroupByPhysicalTable.get(physicalTablePath);
-        // if get the physical table metric group
-        if (physicalTableMetricGroup != null) {
+    public void removeTableBucketMetricGroup(TablePath tablePath, int bucket) {
+        // get the metric group of the table
+        TableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
+        // if get the table metric group
+        if (tableMetricGroup != null) {
             // remove the bucket metric group
-            physicalTableMetricGroup.removeBucketMetricGroup(bucket);
+            tableMetricGroup.removeBucketMetricGroup(bucket);
             // if no any bucket groups remain in the physical table metrics group,
             // close and remove the physical table metric group
-            if (physicalTableMetricGroup.bucketGroupsCount() == 0) {
-                physicalTableMetricGroup.close();
-                metricGroupByPhysicalTable.remove(physicalTablePath);
+            if (tableMetricGroup.bucketGroupsCount() == 0) {
+                tableMetricGroup.close();
+                metricGroupByTable.remove(tablePath);
             }
         }
     }

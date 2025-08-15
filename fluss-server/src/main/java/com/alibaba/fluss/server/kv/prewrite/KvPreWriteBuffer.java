@@ -20,10 +20,9 @@ package com.alibaba.fluss.server.kv.prewrite;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
 import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.SimpleCounter;
 import com.alibaba.fluss.server.kv.KvBatchWriter;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.utils.MurmurHashUtils;
 
 import javax.annotation.Nullable;
@@ -104,14 +103,14 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
 
-    public KvPreWriteBuffer(KvBatchWriter kvBatchWriter) {
+    public KvPreWriteBuffer(
+            KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
         this.kvBatchWriter = kvBatchWriter;
 
-        flushCount = new SimpleCounter();
-        // consider won't flush frequently, we set a small window size
-        flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
-        truncateAsDuplicatedCount = new SimpleCounter();
-        truncateAsErrorCount = new SimpleCounter();
+        flushCount = serverMetricGroup.kvFlushCount();
+        flushLatencyHistogram = serverMetricGroup.kvFlushLatencyHistogram();
+        truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
+        truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
     }
 
     /**

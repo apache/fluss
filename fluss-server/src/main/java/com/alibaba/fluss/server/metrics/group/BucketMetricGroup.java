@@ -30,7 +30,7 @@ public class BucketMetricGroup extends AbstractMetricGroup {
 
     private final int bucket;
 
-    public BucketMetricGroup(MetricRegistry registry, int bucket, PhysicalTableMetricGroup parent) {
+    public BucketMetricGroup(MetricRegistry registry, int bucket, TableMetricGroup parent) {
         super(registry, makeScope(parent, String.valueOf(bucket)), parent);
         this.bucket = bucket;
     }
@@ -45,7 +45,7 @@ public class BucketMetricGroup extends AbstractMetricGroup {
         return "bucket";
     }
 
-    public PhysicalTableMetricGroup getPhysicalTableMetricGroup() {
-        return (PhysicalTableMetricGroup) parent;
+    public TableMetricGroup getTableMetricGroup() {
+        return (TableMetricGroup) parent;
     }
 }

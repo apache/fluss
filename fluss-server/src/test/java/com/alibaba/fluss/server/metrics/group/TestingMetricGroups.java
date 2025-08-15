@@ -17,7 +17,6 @@
 
 package com.alibaba.fluss.server.metrics.group;
 
-import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.registry.NOPMetricRegistry;
 
@@ -30,10 +29,10 @@ public class TestingMetricGroups {
     public static final CoordinatorMetricGroup COORDINATOR_METRICS =
             new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
 
-    public static final PhysicalTableMetricGroup TABLE_METRICS =
-            new PhysicalTableMetricGroup(
+    public static final TableMetricGroup TABLE_METRICS =
+            new TableMetricGroup(
                     NOPMetricRegistry.INSTANCE,
-                    PhysicalTablePath.of(TablePath.of("mydb", "mytable"), null),
+                    TablePath.of("mydb", "mytable"),
                     false,
                     TABLET_SERVER_METRICS);
 

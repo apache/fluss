@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.kv.prewrite;
 
 import com.alibaba.fluss.server.kv.KvBatchWriter;
 import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 
 import org.junit.jupiter.api.Test;
 
@@ -32,7 +33,9 @@ class KvPreWriteBufferTest {
 
     @Test
     void testIllegalLSN() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(new NopKvBatchWriter());
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
         bufferPut(buffer, "key1", "value1", 1);
         bufferDelete(buffer, "key1", 3);
 
@@ -51,7 +54,9 @@ class KvPreWriteBufferTest {
 
     @Test
     void testWriteAndFlush() throws Exception {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(new NopKvBatchWriter());
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
         int elementCount = 0;
 
         // put a series of kv entries
@@ -132,7 +137,9 @@ class KvPreWriteBufferTest {
 
     @Test
     void testTruncate() {
-        KvPreWriteBuffer buffer = new KvPreWriteBuffer(new NopKvBatchWriter());
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
         int elementCount = 0;
 
         // put a series of kv entries

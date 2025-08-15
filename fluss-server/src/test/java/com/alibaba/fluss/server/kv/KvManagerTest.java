@@ -32,6 +32,7 @@ import com.alibaba.fluss.record.TestData;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.server.log.LogManager;
 import com.alibaba.fluss.server.log.LogTablet;
+import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
@@ -110,8 +111,15 @@ final class KvManagerTest {
         // we need a log manager for kv manager
 
         logManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
-        kvManager = KvManager.create(conf, zkClient, logManager);
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
+        kvManager =
+                KvManager.create(
+                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
         kvManager.startup();
     }
 
@@ -171,7 +179,9 @@ final class KvManagerTest {
 
         // restart
         kvManager.shutdown();
-        kvManager = KvManager.create(conf, zkClient, logManager);
+        kvManager =
+                KvManager.create(
+                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
         kvManager.startup();
         kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
         kv2 = getOrCreateKv(tablePath2, partitionName, tableBucket2);
