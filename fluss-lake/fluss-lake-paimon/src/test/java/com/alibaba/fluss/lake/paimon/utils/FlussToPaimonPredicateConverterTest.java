@@ -21,7 +21,6 @@ import com.alibaba.fluss.predicate.PredicateBuilder;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
-
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -59,12 +58,11 @@ class FlussToPaimonPredicateConverterTest {
         return Stream.of(
                 // Leaf Predicates
                 Arguments.of(FLUSS_BUILDER.equal(0, 12L), PAIMON_BUILDER.equal(0, 12L)),
-                Arguments.of(FLUSS_BUILDER.notEqual(2, "test"), PAIMON_BUILDER.notEqual(2, "test")),
-                Arguments.of(
-                        FLUSS_BUILDER.greaterThan(1, 99.9d), PAIMON_BUILDER.greaterThan(1, 99.9d)),
                 Arguments.of(
                         FLUSS_BUILDER.notEqual(2, fromString("test")),
                         PAIMON_BUILDER.notEqual(2, "test")),
+                Arguments.of(
+                        FLUSS_BUILDER.greaterThan(1, 99.9d), PAIMON_BUILDER.greaterThan(1, 99.9d)),
                 Arguments.of(
                         FLUSS_BUILDER.greaterOrEqual(0, 100L),
                         PAIMON_BUILDER.greaterOrEqual(0, 100L)),
