@@ -40,6 +40,7 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.AlterTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
@@ -234,6 +235,19 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return gateway.createTable(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> alterTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
+        tablePath.validate();
+        AlterTableRequest request = new AlterTableRequest();
+        request.setTableJson(tableDescriptor.toJsonBytes())
+                .setIgnoreIfNotExists(ignoreIfNotExists)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.alterTable(request).thenApply(r -> null);
     }
 
     @Override
